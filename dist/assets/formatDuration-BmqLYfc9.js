@@ -1,1 +1,0 @@
-function i(u){const n=Math.max(0,Math.round(Number(u)||0));if(n===0)return"0m";const o=Math.floor(n/1440),s=Math.floor(n%1440/60),r=n%60,t=[];return o>0&&t.push(`${o}d`),s>0&&t.push(`${s}h`),(r>0||t.length===0)&&t.push(`${r}m`),t.join(" ")}export{i as f};

@@ -38,6 +38,7 @@ const env = {
     from: process.env.SMTP_FROM || "TaskControl <no-reply@taskcontrol.local>",
   },
   db: {
+    connectionString: process.env.DATABASE_URL || "",
     user: process.env.PGUSER || "postgres",
     host: process.env.PGHOST || "localhost",
     database: process.env.PGDATABASE || "task_tracking",

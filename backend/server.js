@@ -48,3 +48,7 @@ if (require.main === module) {
 module.exports = {
   startServer,
 };
+
+app.get("/", (req, res) => {
+  res.send("Backend is running");
+});

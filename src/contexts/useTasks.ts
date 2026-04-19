@@ -1,0 +1,45 @@
+import { createContext, useContext } from "react";
+import { Task, TaskStatus, VerificationStatus } from "@/types";
+
+export interface NewTaskInput {
+  description: string;
+  assigned_to: string;
+  assignee_ids?: string[];
+  priority: Task["priority"];
+  deadline: string;
+  planned_minutes?: number;
+  machine_id?: string;
+  machine_name?: string;
+  location_tag?: string;
+  recurrence_rule?: string;
+  dependency_ids?: number[];
+  project_no?: string;
+  project_name?: string;
+  customer_name?: string;
+  scope_name?: string;
+  quantity_index?: string;
+  instance_count?: number;
+  rework_date?: string | null;
+}
+
+export interface TaskContextType {
+  tasks: Task[];
+  updateTaskStatus: (taskId: number, status: TaskStatus) => Promise<void>;
+  verifyTask: (taskId: number, status: VerificationStatus, remarks?: string) => Promise<void>;
+  cancelTask: (taskId: number, reason?: string) => Promise<void>;
+  addTask: (task: NewTaskInput) => Promise<void>;
+  uploadProof: (taskId: number, proofUrl: string, proofType: string) => Promise<void>;
+  refreshTasks: () => Promise<void>;
+}
+
+export const TaskContext = createContext<TaskContextType | null>(null);
+
+export function useTasks() {
+  const ctx = useContext(TaskContext);
+
+  if (!ctx) {
+    throw new Error("useTasks must be used within TaskProvider");
+  }
+
+  return ctx;
+}

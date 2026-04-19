@@ -1,0 +1,230 @@
+﻿[93m[4mUnused files[24m[39m (123)
+eslint.config - Copy.js                               
+postcss.config - Copy.js                              
+backend/app.js                                        
+backend/auth.js                                       
+backend/db.js                                         
+backend/migrations.js                                 
+backend/seedData.js                                   
+backend/seedWorkflows.js                              
+backend/server.js                                     
+src/App.css                                           
+backend/config/constants.js                           
+backend/config/env.js                                 
+backend/lib/AppError.js                               
+backend/lib/asyncHandler.js                           
+backend/lib/designDepartment.js                       
+backend/lib/response.js                               
+backend/lib/taskProofUpload.js                        
+backend/lib/uuid.js                                   
+backend/middleware/authenticate.js                    
+backend/middleware/authorize.js                       
+backend/middleware/errorHandler.js                    
+backend/middleware/requirePermission.js               
+backend/routes/adminRoutes.js                         
+backend/routes/analyticsRoutes.js                     
+backend/routes/authRoutes.js                          
+backend/routes/designRoutes.js                        
+backend/routes/notificationRoutes.js                  
+backend/routes/reportRoutes.js                        
+backend/routes/taskRoutes.js                          
+backend/services/accessControlService.js              
+backend/services/adminService.js                      
+backend/services/analyticsService.js                  
+backend/services/authService.js                       
+backend/services/bootstrapService.js                  
+backend/services/escalationService.js                 
+backend/services/escalationWorkerService.js           
+backend/services/jobService.js                        
+backend/services/notificationService.js               
+backend/services/projectCatalogService.js             
+backend/services/reportService.js                     
+backend/services/taskService.js                       
+backend/services/workflowAdminService.js              
+backend/services/workflowService.js                   
+backend/repositories/auditRepository.js               
+backend/repositories/bootstrapRepository.js           
+backend/repositories/departmentsRepository.js         
+backend/repositories/designProjectCatalogRepository.js
+backend/repositories/designSchemaRepository.js        
+backend/repositories/machinesRepository.js            
+backend/repositories/mappers.js                       
+backend/repositories/notificationsRepository.js       
+backend/repositories/permissionRepository.js          
+backend/repositories/projectsRepository.js            
+backend/repositories/referenceRepository.js           
+backend/repositories/rolesRepository.js               
+backend/repositories/shiftsRepository.js              
+backend/repositories/sqlFragments.js                  
+backend/repositories/tasksRepository.js               
+backend/repositories/usersRepository.js               
+backend/repositories/workflowAdminRepository.js       
+dist/assets/adminApi-Ddcj32SZ.js                      
+dist/assets/AdminPanel-D5jVIplN.js                    
+dist/assets/Analytics-D5OmLEfM.js                     
+dist/assets/AuditTab-BZESpV1V.js                      
+dist/assets/badge-dGB7s1Q6.js                         
+dist/assets/checkbox-Crd2xLTJ.js                      
+dist/assets/Dashboard-B7-zAf9Y.js                     
+dist/assets/DepartmentsTab-CHN8J8Ay.js                
+dist/assets/formatDuration-BmqLYfc9.js                
+dist/assets/index-B86qVAcc.js                         
+dist/assets/index-BmIpXqml.css                        
+dist/assets/MachinesTab-ywcQ2tCD.js                   
+dist/assets/MetricCard-D2m86ND0.js                    
+dist/assets/MyTasks-C0iyejmI.js                       
+dist/assets/NotFound-VXiyrbpO.js                      
+dist/assets/Notifications-T-LVLG1l.js                 
+dist/assets/query-YGCrx6D_.js                         
+dist/assets/react-D7kWznLr.js                         
+dist/assets/Reports-De2cbi3_.js                       
+dist/assets/RolesTab-CWzTHHvm.js                      
+dist/assets/ShiftsTab-og5oiCmU.js                     
+dist/assets/StatusChip-DuscgMBQ.js                    
+dist/assets/tabs-Bt0_0dOz.js                          
+dist/assets/TaskAssignmentBar-CkhoCXSt.js             
+dist/assets/TaskCard-BPDCCW6t.js                      
+dist/assets/TeamTasks-CZOy9TRG.js                     
+dist/assets/textarea-B2YJLA8s.js                      
+dist/assets/ui-BFTkQUcC.js                            
+dist/assets/UsersTab-D3HgcEY4.js                      
+dist/assets/uuid-DSiVGN2e.js                          
+dist/assets/Verifications-CgAlHxwV.js                 
+dist/assets/WorkflowsTab-DvskvMzT.js                  
+src/data/mock.ts                                      
+src/lib/queryClient.ts                                
+src/pages/Index.tsx                                   
+src/components/ui/accordion.tsx                       
+src/components/ui/alert-dialog.tsx                    
+src/components/ui/alert.tsx                           
+src/components/ui/aspect-ratio.tsx                    
+src/components/ui/breadcrumb.tsx                      
+src/components/ui/calendar.tsx                        
+src/components/ui/carousel.tsx                        
+src/components/ui/chart.tsx                           
+src/components/ui/collapsible.tsx                     
+src/components/ui/command.tsx                         
+src/components/ui/context-menu.tsx                    
+src/components/ui/drawer.tsx                          
+src/components/ui/form.tsx                            
+src/components/ui/hover-card.tsx                      
+src/components/ui/input-otp.tsx                       
+src/components/ui/menubar.tsx                         
+src/components/ui/navigation-menu.tsx                 
+src/components/ui/pagination.tsx                      
+src/components/ui/progress.tsx                        
+src/components/ui/radio-group.tsx                     
+src/components/ui/resizable.tsx                       
+src/components/ui/slider.tsx                          
+src/components/ui/switch.tsx                          
+src/components/ui/toggle-group.tsx                    
+src/components/ui/toggle-variants.ts                  
+src/components/ui/toggle.tsx                          
+src/components/ui/use-toast.ts                        
+src/hooks/queries/useAdminDataQuery.ts                
+[93m[4mUnused dependencies[24m[39m (28)
+@hookform/resolvers              package.json:16:6
+@radix-ui/react-accordion        package.json:17:6
+@radix-ui/react-alert-dialog     package.json:18:6
+@radix-ui/react-aspect-ratio     package.json:19:6
+@radix-ui/react-collapsible      package.json:22:6
+@radix-ui/react-context-menu     package.json:23:6
+@radix-ui/react-hover-card       package.json:26:6
+@radix-ui/react-menubar          package.json:28:6
+@radix-ui/react-navigation-menu  package.json:29:6
+@radix-ui/react-progress         package.json:31:6
+@radix-ui/react-radio-group      package.json:32:6
+@radix-ui/react-slider           package.json:36:6
+@radix-ui/react-switch           package.json:38:6
+@radix-ui/react-toggle           package.json:41:6
+@radix-ui/react-toggle-group     package.json:42:6
+bcrypt                           package.json:45:6
+cmdk                             package.json:48:6
+date-fns                         package.json:49:6
+embla-carousel-react             package.json:50:6
+input-otp                        package.json:51:6
+jsonwebtoken                     package.json:52:6
+pg                               package.json:55:6
+react-day-picker                 package.json:57:6
+react-hook-form                  package.json:59:6
+react-resizable-panels           package.json:60:6
+recharts                         package.json:62:6
+vaul                             package.json:67:6
+zod                              package.json:68:6
+[93m[4mUnused devDependencies[24m[39m (2)
+@tailwindcss/typography  package.json:72:6
+@testing-library/react   package.json:74:6
+[93m[4mUnused exports[24m[39m (60)
+reducer                             src/hooks/use-toast.ts:71:14             
+ToastAction                         src/components/ui/toast.tsx:110:3        
+PERMISSION_ALIASES                  src/lib/permissions.ts:3:14              
+normalizePermissionId     function  src/lib/permissions.ts:32:17             
+buildRolePermissionSet    function  src/lib/permissions.ts:36:17             
+SidebarGroupAction                  src/components/ui/sidebar.tsx:599:3      
+SidebarHeader                       src/components/ui/sidebar.tsx:602:3      
+SidebarInput                        src/components/ui/sidebar.tsx:603:3      
+SidebarInset                        src/components/ui/sidebar.tsx:604:3      
+SidebarMenuAction                   src/components/ui/sidebar.tsx:606:3      
+SidebarMenuBadge                    src/components/ui/sidebar.tsx:607:3      
+SidebarMenuSkeleton                 src/components/ui/sidebar.tsx:610:3      
+SidebarMenuSub                      src/components/ui/sidebar.tsx:611:3      
+SidebarMenuSubButton                src/components/ui/sidebar.tsx:612:3      
+SidebarMenuSubItem                  src/components/ui/sidebar.tsx:613:3      
+SidebarRail                         src/components/ui/sidebar.tsx:615:3      
+SidebarSeparator                    src/components/ui/sidebar.tsx:616:3      
+CardFooter                          src/components/ui/card.tsx:43:28         
+CardDescription                     src/components/ui/card.tsx:43:51         
+ScrollBar                           src/components/ui/scroll-area.tsx:38:22  
+fetchKpiDefinitions       function  src/api/adminApi.ts:116:17               
+saveKpiDefinition         function  src/api/adminApi.ts:120:17               
+fetchEscalationRules      function  src/api/adminApi.ts:127:17               
+saveEscalationRule        function  src/api/adminApi.ts:131:17               
+createWorkflowStage       function  src/api/adminApi.ts:168:17               
+updateWorkflowStage       function  src/api/adminApi.ts:175:17               
+deleteWorkflowStage       function  src/api/adminApi.ts:186:17               
+createWorkflowTransition  function  src/api/adminApi.ts:192:17               
+updateWorkflowTransition  function  src/api/adminApi.ts:199:17               
+deleteWorkflowTransition  function  src/api/adminApi.ts:210:17               
+TableFooter                         src/components/ui/table.tsx:72:41        
+TableCaption                        src/components/ui/table.tsx:72:86        
+SelectGroup                         src/components/ui/select.tsx:134:3       
+SelectLabel                         src/components/ui/select.tsx:138:3       
+SelectSeparator                     src/components/ui/select.tsx:140:3       
+SelectScrollUpButton                src/components/ui/select.tsx:141:3       
+SelectScrollDownButton              src/components/ui/select.tsx:142:3       
+SheetClose                          src/components/ui/sheet.tsx:98:3         
+SheetFooter                         src/components/ui/sheet.tsx:101:3        
+SheetOverlay                        src/components/ui/sheet.tsx:103:3        
+SheetPortal                         src/components/ui/sheet.tsx:104:3        
+AvatarImage                         src/components/ui/avatar.tsx:38:18       
+DropdownMenuCheckboxItem            src/components/ui/dropdown-menu.tsx:168:3
+DropdownMenuRadioItem               src/components/ui/dropdown-menu.tsx:169:3
+DropdownMenuLabel                   src/components/ui/dropdown-menu.tsx:170:3
+DropdownMenuSeparator               src/components/ui/dropdown-menu.tsx:171:3
+DropdownMenuShortcut                src/components/ui/dropdown-menu.tsx:172:3
+DropdownMenuGroup                   src/components/ui/dropdown-menu.tsx:173:3
+DropdownMenuPortal                  src/components/ui/dropdown-menu.tsx:174:3
+DropdownMenuSub                     src/components/ui/dropdown-menu.tsx:175:3
+DropdownMenuSubContent              src/components/ui/dropdown-menu.tsx:176:3
+DropdownMenuSubTrigger              src/components/ui/dropdown-menu.tsx:177:3
+DropdownMenuRadioGroup              src/components/ui/dropdown-menu.tsx:178:3
+fetchDepartmentProjects   function  src/api/designApi.ts:46:17               
+uploadDepartmentProject   function  src/api/designApi.ts:66:17               
+DialogPortal                        src/components/ui/dialog.tsx:86:3        
+DialogOverlay                       src/components/ui/dialog.tsx:87:3        
+DialogClose                         src/components/ui/dialog.tsx:88:3        
+DialogFooter                        src/components/ui/dialog.tsx:92:3        
+DialogDescription                   src/components/ui/dialog.tsx:94:3        
+[93m[4mUnused exported types[24m[39m (11)
+MetricCard                        interface  src/types/index.ts:267:18          
+TaskContextType                   interface  src/contexts/useTasks.ts:25:18     
+ButtonProps                       interface  src/components/ui/button.tsx:8:18  
+TextareaProps                     type       src/components/ui/textarea.tsx:5:13
+TaskReportRow                     interface  src/api/reportApi.ts:15:18         
+BadgeProps                        interface  src/components/ui/badge.tsx:23:18  
+TaskAttachmentUploadResponse      interface  src/api/taskApi.ts:121:18          
+DepartmentWorkflowPreview         interface  src/api/designApi.ts:4:18          
+DepartmentProjectPayload          interface  src/api/designApi.ts:11:18         
+CreateDesignTaskPayload           interface  src/api/designApi.ts:20:18         
+UploadDepartmentProjectsResponse  interface  src/api/designApi.ts:32:18         
+[33m[4mConfiguration hints[24m (1)[39m

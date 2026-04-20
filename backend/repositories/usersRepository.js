@@ -10,7 +10,7 @@ async function findAuthRecordByEmployeeId(employeeId, client = pool) {
     `
       SELECT employee_id, password_hash
       FROM users
-      WHERE employee_id = $1
+      WHERE employee_id = $1 OR email = $1
       LIMIT 1
     `,
     [employeeId],
@@ -27,7 +27,7 @@ async function findUserByEmployeeId(employeeId, client = pool) {
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
-      WHERE u.employee_id = $1
+      WHERE u.employee_id = $1 OR u.email = $1
       LIMIT 1
     `,
     [employeeId],

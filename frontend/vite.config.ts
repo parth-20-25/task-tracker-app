@@ -18,20 +18,22 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: "autoUpdate",
+      includeAssets: ['icon-192.png', 'icon-512.png'],
       manifest: {
         name: "Task Tracker",
-        short_name: "TaskTracker",
-        theme_color: "#ffffff",
+        short_name: "Tasks",
+        start_url: "/",
+        theme_color: "#000000",
         background_color: "#ffffff",
         display: "standalone",
         icons: [
           {
-            src: "pwa-192x192.png",
+            src: "/icon-192.png",
             sizes: "192x192",
             type: "image/png",
           },
           {
-            src: "pwa-512x512.png",
+            src: "/icon-512.png",
             sizes: "512x512",
             type: "image/png",
           },

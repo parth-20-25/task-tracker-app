@@ -1,4 +1,5 @@
 const express = require("express");
+const multer = require("multer");
 const { PERMISSIONS } = require("../config/constants");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { sendSuccess } = require("../lib/response");
@@ -6,16 +7,17 @@ const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
 const { resolveWorkflowForDepartment } = require("../services/taskService");
 const { getStageById } = require("../services/workflowService");
+const { parseAndPreviewUpload, confirmUpload } = require("../services/designExcelService");
 const {
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
-  listDesignInstancesForUser,
+  listDesignFixturesForUser,
   listDesignProjectsForUser,
   listDesignScopesForUser,
-  uploadProjectForUser,
 } = require("../services/projectCatalogService");
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 router.use(authenticate);
 
@@ -44,10 +46,10 @@ router.get(
 );
 
 router.get(
-  "/design/instances",
+  "/design/fixtures",
   asyncHandler(async (req, res) => {
-    const instances = await listDesignInstancesForUser(req.user, req.query.scope_id);
-    return sendSuccess(res, instances);
+    const fixtures = await listDesignFixturesForUser(req.user, req.query.scope_id);
+    return sendSuccess(res, fixtures);
   }),
 );
 
@@ -66,11 +68,21 @@ router.get(
 );
 
 router.post(
-  "/department-projects",
+  "/design/upload",
+  authorize(PERMISSIONS.UPLOAD_DATA),
+  upload.single("file"),
+  asyncHandler(async (req, res) => {
+    const result = await parseAndPreviewUpload(req.user, req.file);
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
+  "/design/upload/confirm",
   authorize(PERMISSIONS.UPLOAD_DATA),
   asyncHandler(async (req, res) => {
-    const project = await uploadProjectForUser(req.user, req.body);
-    return sendSuccess(res, project, 201);
+    const result = await confirmUpload(req.user, req.body);
+    return sendSuccess(res, result, 200);
   }),
 );
 

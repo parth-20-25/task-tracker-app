@@ -4,7 +4,7 @@ import { Plus, Search, Sparkles, X } from "lucide-react";
 import {
   createDesignTask,
   fetchDepartmentWorkflowPreview,
-  fetchDesignInstances,
+  fetchDesignFixtures,
   fetchDesignProjects,
   fetchDesignScopes,
 } from "@/api/designApi";
@@ -49,7 +49,7 @@ export function DesignTaskAssignmentBar() {
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [scopeId, setScopeId] = useState("");
-  const [instanceId, setInstanceId] = useState("");
+  const [fixtureId, setFixtureId] = useState("");
   const [description, setDescription] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [priority, setPriority] = useState<DesignPriority>("P2");
@@ -63,16 +63,16 @@ export function DesignTaskAssignmentBar() {
     enabled: Boolean(projectId),
   });
 
-  const instancesQuery = useQuery({
-    queryKey: projectQueryKeys.designInstances(scopeId || "unselected"),
-    queryFn: () => fetchDesignInstances(scopeId),
+  const fixturesQuery = useQuery({
+    queryKey: ["designFixtures", scopeId || "unselected"],
+    queryFn: () => fetchDesignFixtures(scopeId),
     enabled: Boolean(scopeId),
   });
 
   const assignableUsers = assignableUsersQuery.data ?? [];
   const projects = projectsQuery.data ?? [];
   const scopes = scopesQuery.data ?? [];
-  const instances = instancesQuery.data ?? [];
+  const fixtures = fixturesQuery.data ?? [];
 
   const filteredUsers = useMemo(
     () =>
@@ -86,7 +86,7 @@ export function DesignTaskAssignmentBar() {
   const selectedUser = assignableUsers.find((user) => user.employee_id === assignedTo);
   const selectedProject = projects.find((project) => project.id === projectId);
   const selectedScope = scopes.find((scope) => scope.id === scopeId);
-  const selectedInstance = instances.find((instance) => instance.id === instanceId);
+  const selectedFixture = fixtures.find((fixture) => fixture.id === fixtureId);
 
   const createTaskMutation = useMutation({
     mutationFn: createDesignTask,
@@ -100,7 +100,7 @@ export function DesignTaskAssignmentBar() {
 
       setProjectId("");
       setScopeId("");
-      setInstanceId("");
+      setFixtureId("");
       setDescription("");
       setAssignedTo("");
       setPriority("P2");
@@ -110,7 +110,7 @@ export function DesignTaskAssignmentBar() {
 
       toast({
         title: "Design task assigned",
-        description: "The task has been created with the selected project, scope, and instance.",
+        description: "The task has been created with the selected project, scope, and fixture.",
       });
     },
     onError: (error) => {
@@ -125,23 +125,23 @@ export function DesignTaskAssignmentBar() {
   const handleProjectChange = (value: string) => {
     setProjectId(value);
     setScopeId("");
-    setInstanceId("");
+    setFixtureId("");
   };
 
   const handleScopeChange = (value: string) => {
     setScopeId(value);
-    setInstanceId("");
+    setFixtureId("");
   };
 
   const handleSubmit = () => {
-    if (!projectId || !scopeId || !instanceId || !description || !assignedTo || !deadline) {
+    if (!projectId || !scopeId || !fixtureId || !assignedTo || !deadline) {
       return;
     }
 
     createTaskMutation.mutate({
       project_id: projectId,
       scope_id: scopeId,
-      instance_id: instanceId,
+      fixture_id: fixtureId,
       description,
       assigned_to: assignedTo,
       assignee_ids: [assignedTo],
@@ -164,36 +164,36 @@ export function DesignTaskAssignmentBar() {
         ? "Select scope"
         : "No scopes available";
 
-  const instancePlaceholder = !scopeId
+  const fixturePlaceholder = !scopeId
     ? "Select scope first"
-    : instancesQuery.isLoading
-      ? "Loading instances..."
-      : instances.length > 0
-        ? "Select instance"
-        : "No instances available";
+    : fixturesQuery.isLoading
+      ? "Loading fixtures..."
+      : fixtures.length > 0
+        ? "Select fixture"
+        : "No fixtures available";
 
   return (
-    <Card className="animate-fade-in border-primary/20">
-      <CardHeader className="flex flex-row items-center justify-between p-4 pb-2">
+    <Card className="animate-fade-in border-primary/20 bg-background/50 backdrop-blur-sm shadow-md transition-all">
+      <CardHeader className="flex flex-row items-center justify-between p-4 pb-2 border-b">
         <div>
-          <h3 className="flex items-center gap-2 text-sm font-semibold">
-            <Sparkles className="h-4 w-4 text-primary" />
+          <h3 className="flex items-center gap-2 text-sm font-bold text-primary">
+            <Sparkles className="h-4 w-4" />
             Design Task Assignment
           </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Department-scoped project, scope, and instance selection for design assignments.
+          <p className="mt-1 text-xs text-muted-foreground font-medium">
+            Deploy deterministic tasks based on validated fixture ingestion.
           </p>
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setOpen((current) => !current)}>
+        <Button variant="outline" size="icon" className="h-8 w-8 rounded-full border-primary/20 hover:bg-primary/10" onClick={() => setOpen((current) => !current)}>
           {open ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
         </Button>
       </CardHeader>
 
       {open && (
-        <CardContent className="space-y-4 p-4 pt-2">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <CardContent className="space-y-4 p-4 pt-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="space-y-1.5">
-              <Label className="text-xs">Project *</Label>
+              <Label className="text-xs font-semibold">Project *</Label>
               <Select value={projectId} onValueChange={handleProjectChange}>
                 <SelectTrigger className="h-9 text-sm" disabled={projectsQuery.isLoading || projects.length === 0}>
                   <SelectValue placeholder={projectPlaceholder} />
@@ -209,7 +209,7 @@ export function DesignTaskAssignmentBar() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Scope *</Label>
+              <Label className="text-xs font-semibold">Scope *</Label>
               <Select value={scopeId} onValueChange={handleScopeChange}>
                 <SelectTrigger className="h-9 text-sm" disabled={!projectId || scopesQuery.isLoading || scopes.length === 0}>
                   <SelectValue placeholder={scopePlaceholder} />
@@ -225,15 +225,15 @@ export function DesignTaskAssignmentBar() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Instance *</Label>
-              <Select value={instanceId} onValueChange={setInstanceId}>
-                <SelectTrigger className="h-9 text-sm" disabled={!scopeId || instancesQuery.isLoading || instances.length === 0}>
-                  <SelectValue placeholder={instancePlaceholder} />
+              <Label className="text-xs font-semibold">Fixture *</Label>
+              <Select value={fixtureId} onValueChange={setFixtureId}>
+                <SelectTrigger className="h-9 text-sm border-primary/40 focus:border-primary" disabled={!scopeId || fixturesQuery.isLoading || fixtures.length === 0}>
+                  <SelectValue placeholder={fixturePlaceholder} />
                 </SelectTrigger>
                 <SelectContent>
-                  {instances.map((instance) => (
-                    <SelectItem key={instance.id} value={instance.id}>
-                      {instance.instance_code}
+                  {fixtures.map((fixture) => (
+                    <SelectItem key={fixture.id} value={fixture.id}>
+                      {fixture.fixture_no} - {fixture.part_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -241,7 +241,7 @@ export function DesignTaskAssignmentBar() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Priority *</Label>
+              <Label className="text-xs font-semibold">Priority *</Label>
               <Select value={priority} onValueChange={(value) => setPriority(value as DesignPriority)}>
                 <SelectTrigger className="h-9 text-sm">
                   <SelectValue />
@@ -257,34 +257,48 @@ export function DesignTaskAssignmentBar() {
             </div>
           </div>
 
-          {(selectedProject || selectedScope || selectedInstance) && (
-            <div className="grid gap-3 rounded-lg border bg-muted/30 p-3 text-xs md:grid-cols-3">
-              <div>
-                <p className="text-muted-foreground">Project</p>
-                <p className="mt-1 font-medium text-foreground">
-                  {selectedProject ? `${selectedProject.project_no} · ${selectedProject.project_name}` : "Not selected"}
+          {(selectedProject || selectedScope || selectedFixture) && (
+            <div className="grid gap-3 rounded-xl border bg-gradient-to-r from-muted/50 to-muted/20 p-4 text-xs md:grid-cols-4 shadow-inner">
+              <div className="md:col-span-1">
+                <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold">Project Selection</p>
+                <p className="mt-1 font-medium text-foreground truncate">
+                  {selectedProject ? selectedProject.project_no : "-"}
                 </p>
+                <p className="text-muted-foreground truncate">{selectedScope ? selectedScope.scope_name : "-"}</p>
               </div>
-              <div>
-                <p className="text-muted-foreground">Scope</p>
-                <p className="mt-1 font-medium text-foreground">{selectedScope?.scope_name || "Not selected"}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Instance</p>
-                <p className="mt-1 font-medium text-foreground">{selectedInstance?.instance_code || "Not selected"}</p>
+              <div className="md:col-span-3 border-l pl-4">
+                <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold mb-2">Fixture Details (Read-only)</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <div>
+                    <div className="text-[10px] text-muted-foreground">PART NAME</div>
+                    <div className="font-semibold">{selectedFixture?.part_name || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground">OP.NO</div>
+                    <div className="font-semibold">{selectedFixture?.op_no || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground">TYPE</div>
+                    <div className="font-semibold">{selectedFixture?.fixture_type || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground">QTY</div>
+                    <div className="font-semibold text-primary">{selectedFixture?.qty || "-"}</div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
 
           {!projectsQuery.isLoading && projects.length === 0 && (
-            <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-              Upload project data first. Only project records from your department are exposed here.
+            <div className="rounded-xl border-2 border-dashed p-4 text-sm text-center text-muted-foreground bg-muted/10">
+              Upload project data first using the Excel ingestion system.
             </div>
           )}
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
-              <Label className="text-xs">Deadline *</Label>
+              <Label className="text-xs font-semibold">Deadline *</Label>
               <Input
                 type="datetime-local"
                 value={deadline}
@@ -294,19 +308,19 @@ export function DesignTaskAssignmentBar() {
             </div>
             
             <div className="space-y-1.5">
-              <Label className="text-xs">Workflow Stage (Auto)</Label>
+              <Label className="text-xs font-semibold">Workflow Stage (Auto)</Label>
               <Input
                 readOnly
                 disabled
                 value={workflowPreviewQuery.isLoading ? "Loading..." : workflowPreviewQuery.data?.first_stage_name || "Not configured"}
-                className="h-9 text-sm bg-muted/50 cursor-not-allowed"
+                className="h-9 text-sm bg-muted/50 cursor-not-allowed text-muted-foreground"
               />
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
-              <Label className="text-xs">Assign To *</Label>
+              <Label className="text-xs font-semibold">Assign To *</Label>
               <Popover open={showSearch} onOpenChange={setShowSearch}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="h-9 w-full justify-start text-sm font-normal">
@@ -328,7 +342,7 @@ export function DesignTaskAssignmentBar() {
                       <button
                         key={user.employee_id}
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+                        className="w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-primary/10"
                         onClick={() => {
                           setAssignedTo(user.employee_id);
                           setShowSearch(false);
@@ -350,32 +364,31 @@ export function DesignTaskAssignmentBar() {
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs">Task Description *</Label>
+            <Label className="text-xs font-semibold">Task Description (Optional)</Label>
             <Textarea
               placeholder="Add execution notes for the design team..."
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={2}
-              className="text-sm"
+              className="text-sm resize-none"
             />
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end pt-2 border-t mt-4">
             <Button
               onClick={handleSubmit}
-              className="h-9 text-sm"
+              className="h-10 px-6 text-sm font-semibold shadow-sm hover:translate-y-[-1px] transition-all"
               disabled={
                 !projectId
                 || !scopeId
-                || !instanceId
-                || !description
+                || !fixtureId
                 || !assignedTo
                 || !deadline
                 || createTaskMutation.isPending
               }
             >
-              <Plus className="mr-1 h-4 w-4" />
-              {createTaskMutation.isPending ? "Assigning..." : "Assign Design Task"}
+              <Plus className="mr-2 h-4 w-4 text-white" />
+              {createTaskMutation.isPending ? "Deploying..." : "Deploy Design Task"}
             </Button>
           </div>
         </CardContent>

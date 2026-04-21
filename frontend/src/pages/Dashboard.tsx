@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
 import { MetricCard } from '@/components/MetricCard';
 import { TaskCard } from '@/components/TaskCard';
-import { ProjectUploadCard } from '@/components/ProjectUploadCard';
+import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
 import { DesignTaskAssignmentBar } from '@/components/DesignTaskAssignmentBar';
 import { ClipboardList, PlayCircle, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
 import { isDesignDepartment } from '@/lib/departments';
@@ -55,7 +55,7 @@ export default function Dashboard() {
         {isSupervisor && <MetricCard label="Pending Review" value={metrics.pendingVerification} icon={Clock} color="text-warning" />}
       </div>
 
-      {canUploadDesignProjectData && <ProjectUploadCard />}
+      {canUploadDesignProjectData && <DesignExcelUploadModal />}
 
       {isSupervisor && (isDesignUser ? <DesignTaskAssignmentBar /> : <TaskAssignmentBar />)}
 

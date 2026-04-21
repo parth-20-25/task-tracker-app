@@ -300,9 +300,54 @@ export interface DesignScopeOption {
   scope_name: string;
 }
 
-export interface DesignInstanceOption {
+export interface DesignFixtureOption {
   id: string;
   scope_id: string;
-  instance_code: string;
-  instance_index?: number | null;
+  fixture_no: string;
+  op_no: string;
+  part_name: string;
+  fixture_type: string;
+  qty: number;
+}
+
+export interface DesignExcelPreviewRow {
+  row_number: number;
+  fixture_no: string;
+  op_no: string;
+  part_name: string;
+  fixture_type: string;
+  qty: number;
+}
+
+export interface DesignExcelUploadResponse {
+  file_info: {
+    project_code: string;
+    scope_name_display: string;
+    company_name: string;
+  };
+  preview: {
+    accepted: Array<{
+      type: "NEW" | "UPDATE_QTY";
+      incoming: DesignExcelPreviewRow;
+      existing?: DesignExcelPreviewRow;
+    }>;
+    conflicts: Array<{
+      type: "CONFLICT_PART_NAME" | "CONFLICT_OTHER";
+      incoming: DesignExcelPreviewRow;
+      existing: DesignExcelPreviewRow;
+    }>;
+    rejected: Array<{
+      row_number: number;
+      error_message: string;
+      raw_data: Record<string, any>;
+    }>;
+  };
+}
+
+export interface ConfirmDesignUploadPayload {
+  file_info: DesignExcelUploadResponse["file_info"];
+  resolved_items: Array<{
+    data: DesignExcelPreviewRow;
+  }>;
+  rejected_items: DesignExcelUploadResponse["preview"]["rejected"];
 }

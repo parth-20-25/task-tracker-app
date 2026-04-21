@@ -1,5 +1,5 @@
 import { apiRequest } from "@/api/http";
-import { DepartmentProject, DesignInstanceOption, DesignProjectOption, DesignScopeOption, Task } from "@/types";
+import { DepartmentProject, DesignFixtureOption, DesignProjectOption, DesignScopeOption, Task, DesignExcelUploadResponse, ConfirmDesignUploadPayload } from "@/types";
 
 export interface DepartmentWorkflowPreview {
   id: string;
@@ -20,7 +20,7 @@ export interface DepartmentProjectPayload {
 export interface CreateDesignTaskPayload {
   project_id: string;
   scope_id?: string;
-  instance_id?: string;
+  fixture_id?: string;
   description: string;
   assigned_to: string;
   assignee_ids?: string[];
@@ -55,8 +55,8 @@ export function fetchDesignScopes(projectId: string) {
   return apiRequest<DesignScopeOption[]>(`/design/scopes?project_id=${encodeURIComponent(projectId)}`);
 }
 
-export function fetchDesignInstances(scopeId: string) {
-  return apiRequest<DesignInstanceOption[]>(`/design/instances?scope_id=${encodeURIComponent(scopeId)}`);
+export function fetchDesignFixtures(scopeId: string) {
+  return apiRequest<DesignFixtureOption[]>(`/design/fixtures?scope_id=${encodeURIComponent(scopeId)}`);
 }
 
 export function fetchDepartmentWorkflowPreview() {
@@ -79,6 +79,22 @@ export function uploadDepartmentProjects(payload: DepartmentProjectPayload[]) {
 
 export function createDesignTask(payload: CreateDesignTaskPayload) {
   return apiRequest<Task>("/design/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function uploadDesignExcel(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiRequest<DesignExcelUploadResponse>("/design/upload", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function confirmDesignUpload(payload: ConfirmDesignUploadPayload) {
+  return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/design/upload/confirm", {
     method: "POST",
     body: JSON.stringify(payload),
   });

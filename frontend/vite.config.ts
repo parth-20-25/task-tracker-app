@@ -7,7 +7,7 @@ import { VitePWA } from "vite-plugin-pwa";
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const runtimeEnv = loadEnv(mode, __dirname, "");
-  const nextPublicApiUrl = runtimeEnv.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_URL || "";
+  const viteApiUrl = runtimeEnv.VITE_API_URL || process.env.VITE_API_URL || "";
 
   return {
     server: {
@@ -18,7 +18,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      "process.env.NEXT_PUBLIC_API_URL": JSON.stringify(nextPublicApiUrl),
+      "process.env.VITE_API_URL": JSON.stringify(viteApiUrl),
     },
     plugins: [
       react(),

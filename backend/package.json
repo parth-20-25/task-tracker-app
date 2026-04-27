@@ -1,12 +1,29 @@
 {
-  "name": "tasktracker-backend",
+  "name": "backend",
   "version": "1.0.0",
+  "description": "Backend API for TaskTracker application",
   "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "pg": "^8.20.0"
-  }
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.8",
+    "pg": "^8.20.0",
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "license": "ISC"
 }

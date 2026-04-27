@@ -2,6 +2,6 @@
 
 declare const process: {
   env: {
-    NEXT_PUBLIC_API_URL?: string;
+    VITE_API_URL?: string;
   };
 };

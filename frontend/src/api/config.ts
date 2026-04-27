@@ -3,10 +3,10 @@ function normalizeBaseUrl(value: string) {
 }
 
 function resolveApiBaseUrl() {
-  const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL;
+  const configuredApiUrl = process.env.VITE_API_URL;
 
   if (!configuredApiUrl || !configuredApiUrl.trim()) {
-    throw new Error("NEXT_PUBLIC_API_URL is required for frontend API requests.");
+    throw new Error("VITE_API_URL is required for frontend API requests.");
   }
 
   const normalizedApiUrl = normalizeBaseUrl(configuredApiUrl);

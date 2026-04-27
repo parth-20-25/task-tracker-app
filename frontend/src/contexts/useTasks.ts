@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { Task, TaskStatus, VerificationStatus } from "@/types";
+import { Task } from "@/types";
 
 export interface NewTaskInput {
   description: string;
@@ -24,8 +24,8 @@ export interface NewTaskInput {
 
 export interface TaskContextType {
   tasks: Task[];
-  updateTaskStatus: (taskId: number, status: TaskStatus) => Promise<void>;
-  verifyTask: (taskId: number, status: VerificationStatus, remarks?: string) => Promise<void>;
+  executeTaskAction: (taskId: number, action: "start" | "resume" | "hold" | "submit") => Promise<void>;
+  verifyTask: (taskId: number, action: "approve" | "reject", remarks?: string) => Promise<void>;
   cancelTask: (taskId: number, reason?: string) => Promise<void>;
   addTask: (task: NewTaskInput) => Promise<void>;
   uploadProof: (taskId: number, proofUrl: string, proofType: string) => Promise<void>;

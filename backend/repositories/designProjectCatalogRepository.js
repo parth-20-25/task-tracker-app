@@ -1,8 +1,10 @@
 const { pool } = require("../db");
+const { instrumentModuleExports } = require("../lib/observability");
 
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
-    s.id,
+    p.id AS project_id,
+    s.id AS scope_id,
     p.project_no,
     p.project_name,
     p.customer_name,
@@ -34,10 +36,11 @@ function mapDepartmentProjectRow(row) {
   }
 
   return {
-    id: row.id,
-    project_no: row.project_no,
+    project_id: row.project_id || row.id || null,
+    scope_id: row.scope_id || null,
+    project_code: row.project_no,
     project_name: row.project_name,
-    customer_name: row.customer_name,
+    company_name: row.customer_name,
     project_description: row.project_description,
     scope_name: row.scope_name,
     quantity_index: row.quantity_index,
@@ -53,12 +56,15 @@ function mapDepartmentProjectRow(row) {
 }
 
 function mapDesignProjectRow(row) {
-  if (!row) return null;
+  if (!row) {
+    return null;
+  }
+
   return {
-    id: row.id,
-    project_no: row.project_no,
+    project_id: row.project_id || row.id,
+    project_code: row.project_no,
     project_name: row.project_name,
-    customer_name: row.customer_name,
+    company_name: row.customer_name,
     department_id: row.department_id,
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
@@ -67,55 +73,89 @@ function mapDesignProjectRow(row) {
 }
 
 function mapProjectOptionRow(row) {
-  if (!row) return null;
+  if (!row) {
+    return null;
+  }
+
   return {
-    id: row.id,
-    project_no: row.project_no,
+    project_id: row.project_id || row.id,
+    project_code: row.project_no,
     project_name: row.project_name,
-    customer_name: row.customer_name,
+    company_name: row.customer_name,
     department_id: row.department_id,
   };
 }
 
 function mapScopeOptionRow(row) {
-  if (!row) return null;
+  if (!row) {
+    return null;
+  }
+
   return {
-    id: row.id,
+    scope_id: row.scope_id || row.id,
     project_id: row.project_id,
     scope_name: row.scope_name,
   };
 }
 
 function mapFixtureOptionRow(row) {
-  if (!row) return null;
+  if (!row) {
+    return null;
+  }
+
   return {
-    id: row.id,
+    fixture_id: row.fixture_id || row.id,
+    project_id: row.project_id || null,
+    batch_id: row.batch_id || null,
     scope_id: row.scope_id,
     fixture_no: row.fixture_no,
     op_no: row.op_no,
     part_name: row.part_name,
     fixture_type: row.fixture_type,
     qty: Number(row.qty),
+    image_1_url: row.image_1_url || null,
+    image_2_url: row.image_2_url || null,
   };
+}
+
+function requireRow(result, errorMessage) {
+  const row = result?.rows?.[0];
+
+  if (!row) {
+    throw new Error(errorMessage);
+  }
+
+  return row;
 }
 
 async function listProjectOptionsByDepartment(departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT id, project_no, project_name, customer_name, department_id
-      FROM design.projects
-      WHERE department_id = $1
-      ORDER BY updated_at DESC, created_at DESC, project_no ASC
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        p.project_name,
+        p.customer_name,
+        p.department_id
+      FROM design.projects p
+      WHERE p.department_id = $1
+      ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
     `,
     [departmentId],
   );
+
   return result.rows.map(mapProjectOptionRow);
 }
 
 async function findProjectByIdForDepartment(projectId, departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT id, project_no, project_name, customer_name, department_id
+      SELECT
+        id AS project_id,
+        project_no,
+        project_name,
+        customer_name,
+        department_id
       FROM design.projects
       WHERE id = $1
         AND department_id = $2
@@ -123,13 +163,22 @@ async function findProjectByIdForDepartment(projectId, departmentId, client = po
     `,
     [projectId, departmentId],
   );
+
   return mapProjectOptionRow(result.rows[0]);
 }
 
 async function findProjectByNumberForDepartment(projectNo, departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT *
+      SELECT
+        id AS project_id,
+        project_no,
+        project_name,
+        customer_name,
+        department_id,
+        uploaded_by,
+        created_at,
+        updated_at
       FROM design.projects
       WHERE project_no = $1
         AND department_id = $2
@@ -137,13 +186,17 @@ async function findProjectByNumberForDepartment(projectNo, departmentId, client 
     `,
     [projectNo, departmentId],
   );
+
   return mapDesignProjectRow(result.rows[0]);
 }
 
 async function listScopesByProjectForDepartment(projectId, departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT s.id, s.project_id, s.scope_name
+      SELECT
+        s.id AS scope_id,
+        s.project_id,
+        s.scope_name
       FROM design.scopes s
       JOIN design.projects p
         ON p.id = s.project_id
@@ -153,13 +206,17 @@ async function listScopesByProjectForDepartment(projectId, departmentId, client 
     `,
     [projectId, departmentId],
   );
+
   return result.rows.map(mapScopeOptionRow);
 }
 
 async function findScopeByIdForDepartment(scopeId, departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT s.id, s.project_id, s.scope_name
+      SELECT
+        s.id AS scope_id,
+        s.project_id,
+        s.scope_name
       FROM design.scopes s
       JOIN design.projects p
         ON p.id = s.project_id
@@ -169,6 +226,7 @@ async function findScopeByIdForDepartment(scopeId, departmentId, client = pool) 
     `,
     [scopeId, departmentId],
   );
+
   return mapScopeOptionRow(result.rows[0]);
 }
 
@@ -181,10 +239,11 @@ async function listDepartmentProjectsByDepartment(departmentId, client = pool) {
     `,
     [departmentId],
   );
+
   return result.rows.map(mapDepartmentProjectRow);
 }
 
-async function findDepartmentProjectByIdForDepartment(projectId, departmentId, client = pool) {
+async function findDepartmentProjectByIdForDepartment(scopeId, departmentId, client = pool) {
   const result = await client.query(
     `
       ${DEPARTMENT_PROJECT_SELECT}
@@ -192,8 +251,9 @@ async function findDepartmentProjectByIdForDepartment(projectId, departmentId, c
         AND p.department_id = $2
       LIMIT 1
     `,
-    [projectId, departmentId],
+    [scopeId, departmentId],
   );
+
   return mapDepartmentProjectRow(result.rows[0]);
 }
 
@@ -210,8 +270,20 @@ async function upsertProjectByNumber(project, client = pool) {
         updated_at
       )
       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-      ON CONFLICT (project_no, department_id) DO NOTHING
-      RETURNING *
+      ON CONFLICT (project_no, department_id) DO UPDATE
+      SET project_name = EXCLUDED.project_name,
+          customer_name = EXCLUDED.customer_name,
+          uploaded_by = EXCLUDED.uploaded_by,
+          updated_at = NOW()
+      RETURNING
+        id AS project_id,
+        project_no,
+        project_name,
+        customer_name,
+        department_id,
+        uploaded_by,
+        created_at,
+        updated_at
     `,
     [
       project.project_no,
@@ -222,11 +294,7 @@ async function upsertProjectByNumber(project, client = pool) {
     ],
   );
 
-  if (insertedProject.rows[0]) {
-    return mapDesignProjectRow(insertedProject.rows[0]);
-  }
-
-  return findProjectByNumberForDepartment(project.project_no, project.department_id, client);
+  return mapDesignProjectRow(insertedProject.rows[0]);
 }
 
 async function findOrCreateScope(projectId, scopeName, client = pool) {
@@ -238,7 +306,7 @@ async function findOrCreateScope(projectId, scopeName, client = pool) {
       )
       VALUES ($1, $2)
       ON CONFLICT (project_id, scope_name) DO NOTHING
-      RETURNING id, project_id, scope_name
+      RETURNING id AS scope_id, project_id, scope_name
     `,
     [projectId, scopeName],
   );
@@ -249,21 +317,36 @@ async function findOrCreateScope(projectId, scopeName, client = pool) {
 
   const result = await client.query(
     `
-      SELECT id, project_id, scope_name
+      SELECT
+        id AS scope_id,
+        project_id,
+        scope_name
       FROM design.scopes
       WHERE project_id = $1
         AND scope_name = $2
       LIMIT 1
     `,
-    [projectId, scopeName]
+    [projectId, scopeName],
   );
+
   return mapScopeOptionRow(result.rows[0]);
 }
 
 async function listFixturesByScopeForDepartment(scopeId, departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT di.id, di.scope_id, di.fixture_no, di.op_no, di.part_name, di.fixture_type, di.qty
+      SELECT
+        di.id AS fixture_id,
+        di.project_id,
+        di.batch_id,
+        di.scope_id,
+        di.fixture_no,
+        di.op_no,
+        di.part_name,
+        di.fixture_type,
+        di.qty,
+        di.image_1_url,
+        di.image_2_url
       FROM design.fixtures di
       JOIN design.scopes ds
         ON ds.id = di.scope_id
@@ -271,6 +354,7 @@ async function listFixturesByScopeForDepartment(scopeId, departmentId, client = 
         ON dp.id = ds.project_id
       WHERE di.scope_id = $1
         AND dp.department_id = $2
+        AND di.is_workflow_complete = FALSE
       ORDER BY di.fixture_no ASC, di.id ASC
     `,
     [scopeId, departmentId],
@@ -282,7 +366,18 @@ async function listFixturesByScopeForDepartment(scopeId, departmentId, client = 
 async function findFixtureByIdForDepartment(fixtureId, departmentId, client = pool) {
   const result = await client.query(
     `
-      SELECT di.id, di.scope_id, di.fixture_no, di.op_no, di.part_name, di.fixture_type, di.qty
+      SELECT
+        di.id AS fixture_id,
+        di.project_id,
+        di.batch_id,
+        di.scope_id,
+        di.fixture_no,
+        di.op_no,
+        di.part_name,
+        di.fixture_type,
+        di.qty,
+        di.image_1_url,
+        di.image_2_url
       FROM design.fixtures di
       JOIN design.scopes ds
         ON ds.id = di.scope_id
@@ -310,63 +405,142 @@ async function touchProject(projectId, client = pool) {
 }
 
 async function createUploadBatch(batchData, client = pool) {
-  const res = await client.query(`
-    INSERT INTO design.upload_batches (project_id, scope_id, uploaded_by, total_rows, accepted_rows, rejected_rows)
-    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-  `, [batchData.project_id, batchData.scope_id, batchData.uploaded_by, batchData.total_rows, batchData.accepted_rows, batchData.rejected_rows]);
-  return res.rows[0].id;
+  const result = await client.query(
+    `
+      INSERT INTO design.upload_batches (
+        project_id,
+        scope_id,
+        uploaded_by,
+        total_rows,
+        accepted_rows,
+        rejected_rows
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id
+    `,
+    [
+      batchData.project_id,
+      batchData.scope_id,
+      batchData.uploaded_by,
+      batchData.total_rows,
+      batchData.accepted_rows,
+      batchData.rejected_rows,
+    ],
+  );
+
+  return requireRow(result, "Upload batch insert did not return an id").id;
 }
 
 async function createUploadErrors(batchId, errors, client = pool) {
-  if (!errors || errors.length === 0) return;
-  // chunk inserts might be better but assuming errors array is not huge
-  for (const err of errors) {
-    await client.query(`
-      INSERT INTO design.upload_errors (batch_id, row_number, error_message)
-      VALUES ($1, $2, $3)
-    `, [batchId, err.row_number, err.error_message]);
+  if (!errors || errors.length === 0) {
+    return;
+  }
+
+  for (const error of errors) {
+    await client.query(
+      `
+        INSERT INTO design.upload_errors (batch_id, row_number, error_message)
+        VALUES ($1, $2, $3)
+      `,
+      [batchId, error.row_number, error.error_message],
+    );
   }
 }
 
 async function findFixturesByScopeForDedupe(scopeId, client = pool) {
-  const result = await client.query(`
-    SELECT id, fixture_no, op_no, part_name, fixture_type, qty 
-    FROM design.fixtures 
-    WHERE scope_id = $1
-  `, [scopeId]);
+  const result = await client.query(
+    `
+      SELECT
+        id AS fixture_id,
+        project_id,
+        batch_id,
+        scope_id,
+        fixture_no,
+        op_no,
+        part_name,
+        fixture_type,
+        qty,
+        image_1_url,
+        image_2_url
+      FROM design.fixtures
+      WHERE scope_id = $1
+    `,
+    [scopeId],
+  );
+
   return result.rows.map(mapFixtureOptionRow);
 }
 
 async function upsertFixture(fixtureData, client = pool) {
-  const res = await client.query(`
-    INSERT INTO design.fixtures (scope_id, fixture_no, op_no, part_name, fixture_type, qty)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    ON CONFLICT (scope_id, fixture_no) DO UPDATE
-    SET 
-      op_no = EXCLUDED.op_no,
-      part_name = EXCLUDED.part_name,
-      fixture_type = EXCLUDED.fixture_type,
-      qty = EXCLUDED.qty
-    RETURNING *
-  `, [fixtureData.scope_id, fixtureData.fixture_no, fixtureData.op_no, fixtureData.part_name, fixtureData.fixture_type, fixtureData.qty]);
-  return mapFixtureOptionRow(res.rows[0]);
+  const result = await client.query(
+    `
+      INSERT INTO design.fixtures (
+        project_id,
+        scope_id,
+        fixture_no,
+        op_no,
+        part_name,
+        fixture_type,
+        qty,
+        image_1_url,
+        image_2_url,
+        batch_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (scope_id, fixture_no) DO UPDATE
+      SET project_id = EXCLUDED.project_id,
+          op_no = EXCLUDED.op_no,
+          part_name = EXCLUDED.part_name,
+          fixture_type = EXCLUDED.fixture_type,
+          qty = EXCLUDED.qty,
+          image_1_url = EXCLUDED.image_1_url,
+          image_2_url = EXCLUDED.image_2_url,
+          batch_id = EXCLUDED.batch_id
+      RETURNING
+        id AS fixture_id,
+        project_id,
+        batch_id,
+        scope_id,
+        fixture_no,
+        op_no,
+        part_name,
+        fixture_type,
+        qty,
+        image_1_url,
+        image_2_url
+    `,
+    [
+      fixtureData.project_id,
+      fixtureData.scope_id,
+      fixtureData.fixture_no,
+      fixtureData.op_no,
+      fixtureData.part_name,
+      fixtureData.fixture_type,
+      fixtureData.qty,
+      fixtureData.image_1_url || null,
+      fixtureData.image_2_url || null,
+      fixtureData.batch_id || null,
+    ],
+  );
+
+  return mapFixtureOptionRow(result.rows[0]);
 }
 
-module.exports = {
+module.exports = instrumentModuleExports("repository.designProjectCatalogRepository", {
+  createUploadBatch,
+  createUploadErrors,
   findDepartmentProjectByIdForDepartment,
   findFixtureByIdForDepartment,
+  findFixturesByScopeForDedupe,
+  findOrCreateScope,
   findProjectByIdForDepartment,
   findProjectByNumberForDepartment,
-  findOrCreateScope,
   findScopeByIdForDepartment,
   listDepartmentProjectsByDepartment,
   listFixturesByScopeForDepartment,
   listProjectOptionsByDepartment,
   listScopesByProjectForDepartment,
   touchProject,
+  upsertFixture,
   upsertProjectByNumber,
-  createUploadBatch,
-  createUploadErrors,
-  findFixturesByScopeForDedupe,
-  upsertFixture
-};
+});

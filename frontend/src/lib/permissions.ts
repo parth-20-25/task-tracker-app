@@ -27,6 +27,12 @@ export const PERMISSION_OPTIONS = [
   "can_manage_escalation_rules",
   "can_view_reports",
   "can_export_reports",
+  "view_self_user",
+  "view_self_department",
+  "view_department_comparison",
+  "view_user_comparison",
+  "scope_department_only",
+  "scope_all_departments",
 ] as const;
 
 export function normalizePermissionId(permission: string) {

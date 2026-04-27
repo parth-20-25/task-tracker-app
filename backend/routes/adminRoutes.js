@@ -1,6 +1,8 @@
 const express = require("express");
 const { PERMISSIONS, USER_SCOPES } = require("../config/constants");
 const { asyncHandler } = require("../lib/asyncHandler");
+const { AppError } = require("../lib/AppError");
+const { logger } = require("../lib/logger");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize, requireAdmin } = require("../middleware/authorize");
@@ -240,7 +242,16 @@ router.post(
 router.get(
   "/workflows/:workflowId",
   authorize(PERMISSIONS.MANAGE_WORKFLOWS),
-  asyncHandler(async (req, res) => sendSuccess(res, await getWorkflow(req.params.workflowId))),
+  asyncHandler(async (req, res) => {
+    const { workflowId } = req.params;
+
+    if (!workflowId || !String(workflowId).trim()) {
+      throw new AppError(400, "Workflow ID is required");
+    }
+
+    const workflow = await getWorkflow(workflowId);
+    return sendSuccess(res, workflow);
+  }),
 );
 
 router.put(

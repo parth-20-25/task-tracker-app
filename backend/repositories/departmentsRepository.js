@@ -8,6 +8,22 @@ async function listDepartments(client = pool) {
     WHERE is_active = true
     ORDER BY name
   `);
+  if (result.rows.length === 0) {
+    const { departments: seedDepartmentsData } = require("../seedData");
+    for (const dep of seedDepartmentsData) {
+      await upsertDepartment(dep, client);
+    }
+    await upsertDepartment({ id: "design", name: "Design", is_active: true }, client);
+    
+    const reFetched = await client.query(`
+      SELECT id, name
+      FROM departments
+      WHERE is_active = true
+      ORDER BY name
+    `);
+    return reFetched.rows;
+  }
+
   return result.rows;
 }
 
@@ -17,6 +33,24 @@ async function listAllDepartments(client = pool) {
     FROM departments
     ORDER BY COALESCE(is_active, TRUE) DESC, name
   `);
+  if (result.rows.length === 0) {
+    const { departments: seedDepartmentsData } = require("../seedData");
+    for (const dep of seedDepartmentsData) {
+      await upsertDepartment(dep, client);
+    }
+    await upsertDepartment({ id: "design", name: "Design", is_active: true }, client);
+    
+    const reFetched = await client.query(`
+      SELECT *
+      FROM departments
+      ORDER BY COALESCE(is_active, TRUE) DESC, name
+    `);
+    return reFetched.rows.map((row) => ({
+      ...row,
+      is_active: row.is_active !== false,
+    }));
+  }
+
   return result.rows.map((row) => ({
     ...row,
     is_active: row.is_active !== false,
@@ -36,7 +70,16 @@ async function upsertDepartment(department, client = pool) {
     [department.id, department.name, department.parent_department || null, department.is_active !== false],
   );
 
-  return listDepartments(client);
+  const result = await client.query(
+    `
+      SELECT id, name
+      FROM departments
+      WHERE id = $1
+    `,
+    [department.id],
+  );
+
+  return result.rows[0];
 }
 
 async function deleteDepartment(departmentId, client = pool) {

@@ -3,6 +3,8 @@ import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog, TaskStatus,
 
 
 interface UpdateTaskPayload {
+  action?: "start" | "resume" | "hold" | "submit";
+  verification_action?: "approve" | "reject";
   status?: TaskStatus;
   verification_status?: VerificationStatus;
   remarks?: string;
@@ -45,6 +47,10 @@ interface CreateTaskPayload {
 
 export function fetchTasks() {
   return apiRequest<Task[]>("/tasks");
+}
+
+export function fetchVerificationTasks() {
+  return apiRequest<Task[]>("/tasks/verification-queue");
 }
 
 export function createTask(task: CreateTaskPayload) {

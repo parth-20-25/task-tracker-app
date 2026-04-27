@@ -1,5 +1,7 @@
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
+const { logger } = require("../lib/logger");
+const { instrumentModuleExports } = require("../lib/observability");
 const { TASK_STATUSES } = require("../config/constants");
 const { listTasksByAccess } = require("../repositories/tasksRepository");
 const { getTaskAccess, isAdmin } = require("./accessControlService");
@@ -121,6 +123,212 @@ function formatReworkHistory(reworkDates = []) {
         : `~~${formattedDate}~~`
     ))
     .join("\n");
+}
+
+const NORMALIZED_STAGE_KEYS = ["concept", "dap", "finish3d", "finish2d"];
+const EMPTY_NORMALIZED_STAGE = Object.freeze({
+  assigned_at: null,
+  completed_at: null,
+  duration_minutes: null,
+});
+
+function cloneEmptyStage() {
+  return {
+    assigned_at: EMPTY_NORMALIZED_STAGE.assigned_at,
+    completed_at: EMPTY_NORMALIZED_STAGE.completed_at,
+    duration_minutes: EMPTY_NORMALIZED_STAGE.duration_minutes,
+  };
+}
+
+function parseNormalizedDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function dedupeStrings(values = []) {
+  return [...new Set(
+    values
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  )];
+}
+
+function normalizeStagePayload(stage) {
+  const assignedAt = stage?.assigned_at || null;
+  const completedAt = stage?.completed_at || null;
+  const assignedDate = parseNormalizedDate(assignedAt);
+  const completedDate = parseNormalizedDate(completedAt);
+  let durationMinutes = Number.isFinite(stage?.duration_minutes)
+    ? Math.max(0, Math.round(Number(stage.duration_minutes)))
+    : null;
+
+  if (assignedDate && completedDate) {
+    durationMinutes = Math.max(0, Math.round((completedDate.getTime() - assignedDate.getTime()) / 60000));
+  }
+
+  return {
+    assigned_at: assignedAt,
+    completed_at: completedAt,
+    duration_minutes: durationMinutes,
+  };
+}
+
+function buildFixtureKey(projectNo, scopeName, fixtureNo) {
+  const normalizedProjectNo = String(projectNo || "").trim();
+  const normalizedScopeName = String(scopeName || "").trim();
+  const normalizedFixtureNo = String(fixtureNo || "").trim();
+
+  if (!normalizedProjectNo || !normalizedScopeName || !normalizedFixtureNo) {
+    throw new Error("Invalid fixture identity");
+  }
+
+  return `${normalizedProjectNo}::${normalizedScopeName}::${normalizedFixtureNo}`;
+}
+
+function deriveNormalizedStatus(row) {
+  const taskStatus = String(row?.task_status || "").trim().toLowerCase();
+  const workflowStatus = String(row?.workflow_status || row?.current_workflow_status || "").trim().toLowerCase();
+  const now = Date.now();
+  const deadline = parseNormalizedDate(row?.task_deadline || row?.deadline);
+  const stages = row?.stages || {};
+  const stageList = NORMALIZED_STAGE_KEYS.map((stageKey) => stages[stageKey] || cloneEmptyStage());
+  const hasAssignedStage = stageList.some((stage) => Boolean(stage.assigned_at));
+  const hasActiveStage = stageList.some((stage) => Boolean(stage.assigned_at) && !stage.completed_at);
+  const allCompleted = hasAssignedStage && stageList.every((stage) => !stage.assigned_at || Boolean(stage.completed_at));
+  const isRejected = taskStatus === "rework" || workflowStatus === "rejected" || String(row?.current_stage_status || "").trim().toUpperCase() === "REJECTED";
+
+  if (taskStatus === "on_hold" || taskStatus === "paused") {
+    return "HOLD";
+  }
+
+  if (deadline && deadline.getTime() < now && taskStatus !== "closed" && taskStatus !== "approved") {
+    return "DELAY";
+  }
+
+  if (isRejected) {
+    return "REWORK";
+  }
+
+  if (taskStatus === "closed" || taskStatus === "approved" || workflowStatus === "approved" || allCompleted) {
+    return "COMPLETE";
+  }
+
+  if (taskStatus === "in_progress" || workflowStatus === "in_progress" || hasActiveStage) {
+    return "IN_PROGRESS";
+  }
+
+  if (hasAssignedStage) {
+    return "IN_PROGRESS";
+  }
+
+  return "ASSIGNED";
+}
+
+function normalizeScopeReportData(rawRows = []) {
+  if (!Array.isArray(rawRows)) {
+    return [];
+  }
+
+  return rawRows.reduce((normalizedRows, rawRow, index) => {
+    try {
+      const projectNo = String(rawRow?.project_no || "").trim();
+      const scopeName = String(rawRow?.scope_name || "").trim();
+      const fixtureNo = String(rawRow?.fixture_no || "").trim();
+      const stages = rawRow?.stages || {};
+
+      const normalizedRow = {
+        fixture_key: buildFixtureKey(projectNo, scopeName, fixtureNo),
+        project_no: projectNo,
+        scope_name: scopeName,
+        fixture_no: fixtureNo,
+        op_no: String(rawRow?.op_no || "").trim(),
+        part_name: String(rawRow?.part_name || "").trim(),
+        fixture_type: String(rawRow?.fixture_type || "").trim(),
+        qty: Number(rawRow?.qty) || 0,
+        designer: String(rawRow?.designer || "").trim(),
+        stages: {
+          concept: normalizeStagePayload(stages.concept),
+          dap: normalizeStagePayload(stages.dap),
+          finish3d: normalizeStagePayload(stages.finish3d),
+          finish2d: normalizeStagePayload(stages.finish2d),
+        },
+        proof_urls: dedupeStrings([
+          ...(Array.isArray(rawRow?.task_proof_url_array) ? rawRow.task_proof_url_array : []),
+          ...(Array.isArray(rawRow?.attachments) ? rawRow.attachments.map((attachment) => attachment?.file_url) : []),
+          ...(Array.isArray(rawRow?.proof_urls) ? rawRow.proof_urls : []),
+        ]),
+        status: "ASSIGNED",
+      };
+
+      normalizedRow.status = deriveNormalizedStatus({
+        ...rawRow,
+        stages: normalizedRow.stages,
+      });
+
+      normalizedRows.push(normalizedRow);
+    } catch (error) {
+      logger.warn("Scope report normalization skipped invalid row", {
+        index,
+        error: error.message,
+        project_no: rawRow?.project_no || null,
+        scope_name: rawRow?.scope_name || null,
+        fixture_no: rawRow?.fixture_no || null,
+      });
+    }
+
+    return normalizedRows;
+  }, []);
+}
+
+function validateNormalizedRow(row) {
+  const errors = [];
+
+  if (!row?.fixture_key) {
+    errors.push("missing fixture_key");
+  }
+
+  if (!row?.stages || typeof row.stages !== "object") {
+    errors.push("missing stage object");
+  }
+
+  NORMALIZED_STAGE_KEYS.forEach((stageKey) => {
+    const stage = row?.stages?.[stageKey];
+
+    if (!stage || typeof stage !== "object") {
+      errors.push(`missing stage object: ${stageKey}`);
+      return;
+    }
+
+    const assignedDate = parseNormalizedDate(stage.assigned_at);
+    const completedDate = parseNormalizedDate(stage.completed_at);
+
+    if (stage.assigned_at && !assignedDate) {
+      errors.push(`invalid assigned_at for ${stageKey}`);
+    }
+
+    if (stage.completed_at && !completedDate) {
+      errors.push(`invalid completed_at for ${stageKey}`);
+    }
+
+    if (assignedDate && completedDate && completedDate.getTime() < assignedDate.getTime()) {
+      errors.push(`completed_at before assigned_at for ${stageKey}`);
+    }
+  });
+
+  if (!Array.isArray(row?.proof_urls)) {
+    errors.push("proof_urls must be an array");
+  } else if (row.proof_urls.some((proofUrl) => proofUrl === null || proofUrl === undefined || String(proofUrl).trim() === "")) {
+    errors.push("proof_urls contains null");
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+  };
 }
 
 function buildReworkHistoryKey(row) {
@@ -378,7 +586,8 @@ async function listWorkflowCompletionSummary(user) {
         COALESCE(t.project_name, t.project_description, '') AS project_name,
         COALESCE(t.customer_name, '') AS customer_name,
         COALESCE(t.scope_name, '') AS scope_name,
-        COALESCE(t.instance_count::text, t.quantity_index, t.id::text) AS instance_key,
+        COALESCE(fixture.fixture_no, NULLIF(t.quantity_index, '')) AS fixture_no,
+        COALESCE(fixture.fixture_no, NULLIF(t.quantity_index, ''), t.instance_count::text, t.id::text) AS instance_key,
         COALESCE(t.lifecycle_status, 'assigned') AS lifecycle_status,
         COALESCE(current_stage.sequence_order, 0) AS current_stage_order,
         COALESCE(first_stage.sequence_order, 0) AS first_stage_order,
@@ -386,6 +595,19 @@ async function listWorkflowCompletionSummary(user) {
       FROM tasks t
       LEFT JOIN departments department
         ON department.id = t.department_id
+      LEFT JOIN design.projects project
+        ON project.project_no = NULLIF(t.project_no, '')
+        AND project.department_id = t.department_id
+      LEFT JOIN design.scopes project_scope
+        ON project_scope.project_id = project.id
+        AND project_scope.scope_name = NULLIF(t.scope_name, '')
+      LEFT JOIN design.fixtures fixture
+        ON fixture.id = t.fixture_id
+        OR (
+          t.fixture_id IS NULL
+          AND fixture.scope_id = project_scope.id
+          AND fixture.fixture_no = NULLIF(t.quantity_index, '')
+        )
       LEFT JOIN workflow_stages current_stage
         ON current_stage.id = t.current_stage_id
       LEFT JOIN LATERAL (
@@ -455,6 +677,21 @@ async function listWorkflowCompletionSummary(user) {
       project.scopes.push(scope);
     }
 
+    const normalizedFixtureNo = typeof row.fixture_no === "string" && row.fixture_no.trim()
+      ? row.fixture_no.trim()
+      : null;
+
+    if (normalizedFixtureNo) {
+      if (scope.fixture_no_conflict) {
+        scope.fixture_no = null;
+      } else if (!scope.fixture_no) {
+        scope.fixture_no = normalizedFixtureNo;
+      } else if (scope.fixture_no !== normalizedFixtureNo) {
+        scope.fixture_no = null;
+        scope.fixture_no_conflict = true;
+      }
+    }
+
     project.total_instances += 1;
     scope.total_instances += 1;
 
@@ -487,7 +724,13 @@ async function listWorkflowCompletionSummary(user) {
           : "RED";
 
       return {
-        ...scope,
+        scope_key: scope.scope_key,
+        scope_name: scope.scope_name,
+        total_instances: scope.total_instances,
+        completed_instances: scope.completed_instances,
+        any_instance_started: scope.any_instance_started,
+        any_instance_beyond_first_stage: scope.any_instance_beyond_first_stage,
+        fixture_no: scope.fixture_no || null,
         is_complete: isComplete,
         status,
       };
@@ -529,7 +772,7 @@ async function buildReport(user, reportType) {
     identifier: task.title,
     department: task.department_id,
     assignee: task.assignee?.name || task.assigned_to,
-    workflow_stage: task.current_stage_id || "",
+    workflow_stage: task.workflow_stage || task.current_stage_id || "",
     priority: task.priority,
     status: task.status,
     verification_status: task.verification_status,
@@ -575,10 +818,12 @@ async function buildReport(user, reportType) {
   };
 }
 
-module.exports = {
+module.exports = instrumentModuleExports("service.reportService", {
   buildReport,
   exportTaskReport,
   formatReworkHistory,
   listTaskReportRows,
   listWorkflowCompletionSummary,
-};
+  normalizeScopeReportData,
+  validateNormalizedRow,
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckSquare, FileImage, History, Loader2, NotebookText, Trash2, Upload } from "lucide-react";
 import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
 import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog } from "@/types";
@@ -9,8 +9,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@/contexts/useAuth";
+import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
+import { getTaskCardDisplay } from "@/lib/taskDisplay";
 
+
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const API_ROOT = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/api$/, "");
 const MAX_TASK_PROOF_SIZE_MB = 10;
 const MAX_TASK_PROOF_SIZE_BYTES = MAX_TASK_PROOF_SIZE_MB * 1024 * 1024;
@@ -49,6 +54,9 @@ function isAllowedTaskProofFile(file: File) {
 }
 
 export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
+  const { user } = useAuth();
+  const { refreshTasks } = useTasks();
+  const taskDisplay = getTaskCardDisplay(task);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activity, setActivity] = useState<TaskActivity[]>([]);
@@ -59,26 +67,40 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const [logNotes, setLogNotes] = useState("");
   const [checklistText, setChecklistText] = useState("");
   const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const isAssignee = user?.employee_id === task.assigned_to;
+  const proofUrls = task.proof_url ?? [];
 
   const latestProof = useMemo(() => {
     if (attachments.length > 0) {
       return attachments[0];
     }
 
-    if (!task.proof_url) {
+    if (proofUrls.length === 0) {
       return null;
     }
 
     return {
       id: "legacy-proof",
       task_id: task.id,
-      file_url: task.proof_url,
+      file_url: proofUrls[proofUrls.length - 1],
       file_name: task.proof_name || task.title,
       mime_type: task.proof_mime || "image/*",
       file_size: task.proof_size || 0,
       uploaded_at: task.completed_at || task.created_at,
     } as TaskAttachment;
-  }, [attachments, task]);
+  }, [attachments, proofUrls, task]);
+
+  const resetProofInputs = useCallback(() => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = "";
+    }
+  }, []);
 
   const loadExecutionData = useCallback(async () => {
     setLoading(true);
@@ -106,6 +128,52 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     }
   }, [task.id]);
 
+  const handleProofSelection = useCallback(async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+
+    if (!isAllowedTaskProofFile(file)) {
+      toast({
+        title: "Only image files are allowed",
+        description: "Please upload a JPEG, PNG, WEBP, GIF, BMP, HEIC, or HEIF image.",
+        variant: "destructive",
+      });
+      resetProofInputs();
+      return;
+    }
+
+    if (file.size > MAX_TASK_PROOF_SIZE_BYTES) {
+      toast({
+        title: "Image too large",
+        description: `Proof images must be ${MAX_TASK_PROOF_SIZE_MB} MB or smaller.`,
+        variant: "destructive",
+      });
+      resetProofInputs();
+      return;
+    }
+
+    setUploading(true);
+
+    try {
+      await uploadTaskAttachment(task.id, file);
+      await Promise.all([loadExecutionData(), refreshTasks()]);
+    } catch (error) {
+      toast({ title: "Could not upload proof", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setUploading(false);
+      resetProofInputs();
+    }
+  }, [loadExecutionData, refreshTasks, resetProofInputs, task.id]);
+
+  const handleFileUpload = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    void handleProofSelection(event.target.files?.[0] || null);
+  }, [handleProofSelection]);
+
+  const handleCameraCapture = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    void handleProofSelection(event.target.files?.[0] || null);
+  }, [handleProofSelection]);
+
   useEffect(() => {
     if (open) {
       loadExecutionData().catch(() => undefined);
@@ -122,7 +190,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
       </DialogTrigger>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{task.title}</DialogTitle>
+          <DialogTitle>{taskDisplay.title}</DialogTitle>
         </DialogHeader>
 
         {loading ? (
@@ -261,59 +329,55 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
             </TabsContent>
 
             <TabsContent value="proof" className="space-y-4 mt-4">
+              {task.status === 'closed' && (
+                <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-sm text-primary mb-4">
+                  This task is completed. Proof documents are locked and available for viewing only.
+                </div>
+              )}
+              {!isAssignee && (
+                <div className="bg-muted border rounded-lg p-3 text-sm text-muted-foreground">
+                  Only the assignee can upload or remove proof for this task.
+                </div>
+              )}
               <div className="flex items-center gap-3">
-                <label className="inline-flex">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
+                <input
+                  type="file"
+                  accept="image/*"
+                  ref={fileInputRef}
+                  style={{ display: "none" }}
+                  onChange={handleFileUpload}
+                />
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  ref={cameraInputRef}
+                  style={{ display: "none" }}
+                  onChange={handleCameraCapture}
+                />
+                <Button
+                  disabled={!isAssignee || uploading || task.status === 'closed'}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Upload from Device
+                </Button>
+                <Button
+                  disabled={!isAssignee || uploading || task.status === 'closed' || !isMobile}
+                  onClick={() => {
+                    if (!isMobile) {
+                      toast({
+                        title: "Camera not supported",
+                        description: "Use a mobile device to capture images directly.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
 
-                      if (!file) {
-                        return;
-                      }
-
-                      if (!isAllowedTaskProofFile(file)) {
-                        toast({
-                          title: "Only image files are allowed",
-                          description: "Please upload a JPEG, PNG, WEBP, GIF, BMP, HEIC, or HEIF image.",
-                          variant: "destructive",
-                        });
-                        event.target.value = "";
-                        return;
-                      }
-
-                      if (file.size > MAX_TASK_PROOF_SIZE_BYTES) {
-                        toast({
-                          title: "Image too large",
-                          description: `Proof images must be ${MAX_TASK_PROOF_SIZE_MB} MB or smaller.`,
-                          variant: "destructive",
-                        });
-                        event.target.value = "";
-                        return;
-                      }
-
-                      setUploading(true);
-                      uploadTaskAttachment(task.id, file)
-                        .then(() => loadExecutionData())
-                        .catch((error) => {
-                          toast({ title: "Could not upload proof", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
-                        })
-                        .finally(() => {
-                          setUploading(false);
-                          event.target.value = "";
-                        });
-                    }}
-                  />
-                  <Button asChild disabled={uploading}>
-                    <span>
-                      {uploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
-                      Upload Image / Camera
-                    </span>
-                  </Button>
-                </label>
+                    cameraInputRef.current?.click();
+                  }}
+                >
+                  Open Camera
+                </Button>
                 {latestProof && (
                   <a href={fileUrl(latestProof.file_url)} target="_blank" rel="noreferrer" className="text-sm text-primary underline">
                     Open latest proof
@@ -321,7 +385,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Images only. Max {MAX_TASK_PROOF_SIZE_MB} MB. Camera capture is supported on compatible mobile browsers.
+                Images only. Max {MAX_TASK_PROOF_SIZE_MB} MB. Use Upload from Device for files and Open Camera for direct capture.
               </p>
 
               {attachments.length === 0 && !latestProof ? (
@@ -338,13 +402,13 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                           {new Date(attachment.uploaded_at).toLocaleString()}
                         </p>
                       </div>
-                      {attachment.id !== "legacy-proof" && (
+                      {attachment.id !== "legacy-proof" && task.status !== 'closed' && isAssignee && (
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => {
                             deleteTaskAttachment(task.id, attachment.id)
-                              .then(() => loadExecutionData())
+                              .then(() => Promise.all([loadExecutionData(), refreshTasks()]))
                               .catch((error) => {
                                 toast({ title: "Could not delete attachment", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
                               });

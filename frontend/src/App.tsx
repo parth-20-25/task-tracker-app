@@ -16,14 +16,16 @@ const TeamTasks = React.lazy(() => import("./pages/TeamTasks"));
 const Verifications = React.lazy(() => import("./pages/Verifications"));
 const AdminPanel = React.lazy(() => import("./pages/AdminPanel"));
 const Notifications = React.lazy(() => import("./pages/Notifications"));
-const Analytics = React.lazy(() => import("./pages/Analytics"));
+const Analytics = React.lazy(() => import("./pages/Analytics/AnalyticsDashboard"));
 const Reports = React.lazy(() => import("./pages/Reports"));
+const Batches = React.lazy(() => import("./pages/Batches"));
+const Issues = React.lazy(() => import("./pages/Issues"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
 
 function AuthenticatedApp() {
-  const { isAuthenticated, isReady, role } = useAuth();
+  const { isAuthenticated, isReady, role, hasPermission } = useAuth();
 
   if (!isReady) {
     return null;
@@ -42,9 +44,11 @@ function AuthenticatedApp() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/tasks" element={<MyTasks />} />
             <Route path="/notifications" element={<Notifications />} />
+            <Route path="/issues" element={<Issues />} />
+            <Route path="/batches" element={<Batches />} />
             {isSupervisor && <Route path="/team-tasks" element={<TeamTasks />} />}
             {isSupervisor && <Route path="/verifications" element={<Verifications />} />}
-            {isSupervisor && <Route path="/analytics" element={<Analytics />} />}
+            <Route path="/analytics/*" element={<Analytics />} />
             {isSupervisor && <Route path="/reports" element={<Reports />} />}
             {isAdmin && <Route path="/admin/*" element={<AdminPanel />} />}
             <Route path="*" element={<NotFound />} />

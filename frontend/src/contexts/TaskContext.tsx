@@ -1,22 +1,21 @@
 import React, { useCallback } from "react";
 import { useTaskMutations } from "@/hooks/mutations/useTaskMutations";
 import { useTasksQuery } from "@/hooks/queries/useTasksQuery";
-import { TaskStatus, VerificationStatus } from "@/types";
 import { NewTaskInput, TaskContext } from "@/contexts/useTasks";
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const tasksQuery = useTasksQuery();
   const { cancelTaskMutation, createTaskMutation, updateTaskMutation } = useTaskMutations();
-  const tasks = tasksQuery.data ?? [];
+  const tasks = (tasksQuery.data ?? []).filter((task) => task.status !== "cancelled");
 
-  const updateTaskStatus = useCallback(async (taskId: number, status: TaskStatus) => {
-    await updateTaskMutation.mutateAsync({ taskId, status });
+  const executeTaskAction = useCallback(async (taskId: number, action: "start" | "resume" | "hold" | "submit") => {
+    await updateTaskMutation.mutateAsync({ taskId, action });
   }, [updateTaskMutation]);
 
-  const verifyTask = useCallback(async (taskId: number, verificationStatus: VerificationStatus, remarks?: string) => {
+  const verifyTask = useCallback(async (taskId: number, verificationAction: "approve" | "reject", remarks?: string) => {
     await updateTaskMutation.mutateAsync({
       taskId,
-      verification_status: verificationStatus,
+      verification_action: verificationAction,
       remarks,
     });
   }, [updateTaskMutation]);
@@ -45,7 +44,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     <TaskContext.Provider
       value={{
         tasks,
-        updateTaskStatus,
+        executeTaskAction,
         verifyTask,
         cancelTask,
         addTask,

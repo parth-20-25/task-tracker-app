@@ -152,13 +152,26 @@ async function updateWorkflow(user, workflowId, payload) {
 }
 
 async function getWorkflow(workflowId) {
+  if (!workflowId || !String(workflowId).trim()) {
+    throw new AppError(400, "Workflow ID is required");
+  }
+
   const workflow = await findWorkflowById(workflowId);
   if (!workflow) {
     throw new AppError(404, "Workflow not found");
   }
 
-  const stages = await listWorkflowStages(workflowId);
-  const transitions = await listWorkflowTransitions(workflowId);
+  // Fetch stages and transitions with safe fallbacks to prevent partial crashes
+  const [stages, transitions] = await Promise.all([
+    listWorkflowStages(workflowId).catch((err) => {
+      console.error("Failed to load workflow stages:", { workflowId, error: err.message });
+      return [];
+    }),
+    listWorkflowTransitions(workflowId).catch((err) => {
+      console.error("Failed to load workflow transitions:", { workflowId, error: err.message });
+      return [];
+    }),
+  ]);
 
   return {
     ...workflow,

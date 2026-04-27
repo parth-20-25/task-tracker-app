@@ -30,6 +30,11 @@ const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",
   corsOrigin: process.env.CORS_ORIGIN || "*",
   uploadsDir: process.env.UPLOADS_DIR || "uploads",
+  designExtraction: {
+    serviceUrl: process.env.DESIGN_EXTRACTION_SERVICE_URL || "http://127.0.0.1:8000",
+    token: process.env.DESIGN_EXTRACTION_SERVICE_TOKEN || "design-extraction-local-token",
+    timeoutMs: parseNumber(process.env.DESIGN_EXTRACTION_TIMEOUT_MS, 30000),
+  },
   smtp: {
     host: process.env.SMTP_HOST || "",
     port: parseNumber(process.env.SMTP_PORT, 587),

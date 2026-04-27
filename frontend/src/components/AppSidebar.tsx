@@ -1,5 +1,6 @@
 import {
   LayoutDashboard, ClipboardList, Users, Settings, Shield, Building2, FileText, LogOut, ChevronDown, Bell, BarChart3,
+  MessageSquareWarning, PackageCheck,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/useAuth';
@@ -15,24 +16,39 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export function AppSidebar() {
-  const { user, role, logout } = useAuth();
+  const { user, role, logout, hasPermission } = useAuth();
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const isAdmin = role?.hierarchy_level === 1;
   const isSupervisor = (role?.hierarchy_level ?? 99) <= 4;
+  const canAccessAnalytics = [
+    'view_self_user',
+    'view_self_department',
+    'view_department_comparison',
+    'view_user_comparison',
+  ].some((permissionId) => hasPermission(permissionId));
 
   const mainItems = [
     { title: 'Dashboard', url: '/', icon: LayoutDashboard },
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
     { title: 'Notifications', url: '/notifications', icon: Bell },
+    { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
+    { title: 'Batches', url: '/batches', icon: PackageCheck },
   ];
 
-  const supervisorItems = [
-    { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList },
-    { title: 'Verifications', url: '/verifications', icon: Shield },
-    { title: 'Analytics', url: '/analytics', icon: BarChart3 },
-    { title: 'Reports', url: '/reports', icon: FileText },
-  ];
+  const supervisorItems = [];
+
+  if (isSupervisor) {
+    supervisorItems.push(
+      { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList },
+      { title: 'Verifications', url: '/verifications', icon: Shield },
+      { title: 'Reports', url: '/reports', icon: FileText },
+    );
+  }
+
+  if (canAccessAnalytics) {
+    supervisorItems.splice(Math.min(2, supervisorItems.length), 0, { title: 'Analytics', url: '/analytics', icon: BarChart3 });
+  }
 
   const adminItems = [
     { title: 'Users', url: '/admin/users', icon: Users },
@@ -72,9 +88,9 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {isSupervisor && (
+        {supervisorItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>Supervisor</SidebarGroupLabel>
+            <SidebarGroupLabel>{isSupervisor ? 'Supervisor' : 'Analytics'}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {supervisorItems.map(item => (

@@ -47,7 +47,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   });
 
   const text = await response.text();
-  let payload: { error?: string; message?: string; details?: unknown; errorCode?: string } | null = null;
+  let payload: { success?: boolean; data?: T; error?: string; message?: string; details?: unknown; errorCode?: string } | null = null;
   
   if (text) {
     try {
@@ -64,6 +64,10 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       payload?.details,
       payload?.errorCode
     );
+  }
+
+  if (payload && payload.success === true && Object.prototype.hasOwnProperty.call(payload, "data")) {
+    return payload.data as T;
   }
 
   return payload as T;

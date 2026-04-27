@@ -1,6 +1,45 @@
 import { apiRequest } from "@/api/http";
 import { DepartmentProject, DesignFixtureOption, DesignProjectOption, DesignScopeOption, Task, DesignExcelUploadResponse, ConfirmDesignUploadPayload } from "@/types";
 
+// ── Fixture Workflow Types ────────────────────────────────────────────────────
+
+export type FixtureStageStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED" | "REJECTED";
+
+export interface FixtureCurrentStage {
+  stage: string | null;
+  status: FixtureStageStatus | "APPROVED";
+  stage_order: number | null;
+  is_complete: boolean;
+}
+
+export interface FixtureProgressStage {
+  stage_name: string;
+  stage_order: number;
+  status: FixtureStageStatus;
+  assigned_to: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_minutes: number | null;
+  updated_at: string;
+}
+
+export interface FixtureFullProgress {
+  workflow_name: string;
+  stages: FixtureProgressStage[];
+}
+
+export interface WorkflowDefinition {
+  stages: string[];
+}
+
+export interface AssignmentValidation {
+  canAssign: boolean;
+  reason: string | null;
+  currentStage: FixtureProgressStage | null;
+}
+
+
 export interface DepartmentWorkflowPreview {
   id: string;
   name: string;
@@ -43,24 +82,48 @@ export interface UploadDepartmentProjectsResponse {
   }>;
 }
 
+function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined),
+  ) as T;
+}
+
 export function fetchDepartmentProjects() {
   return apiRequest<DepartmentProject[]>("/department-projects");
 }
 
-export function fetchDesignProjects() {
-  return apiRequest<DesignProjectOption[]>("/design/projects");
+export function fetchDesignProjects(departmentId?: string) {
+  const url = departmentId
+    ? `/design/projects?department_id=${encodeURIComponent(departmentId)}`
+    : "/design/projects";
+  return apiRequest<DesignProjectOption[]>(url);
 }
 
-export function fetchDesignScopes(projectId: string) {
-  return apiRequest<DesignScopeOption[]>(`/design/scopes?project_id=${encodeURIComponent(projectId)}`);
+export function fetchDesignScopes(projectId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  params.set("project_id", projectId);
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<DesignScopeOption[]>(`/design/scopes?${params.toString()}`);
 }
 
-export function fetchDesignFixtures(scopeId: string) {
-  return apiRequest<DesignFixtureOption[]>(`/design/fixtures?scope_id=${encodeURIComponent(scopeId)}`);
+export function fetchDesignFixtures(scopeId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  params.set("scope_id", scopeId);
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<DesignFixtureOption[]>(`/design/fixtures?${params.toString()}`);
 }
 
-export function fetchDepartmentWorkflowPreview() {
-  return apiRequest<DepartmentWorkflowPreview>("/design/workflow-preview");
+export function fetchDepartmentWorkflowPreview(projectId?: string) {
+  const url = projectId ? `/design/workflow-preview?project_id=${encodeURIComponent(projectId)}` : "/design/workflow-preview";
+  return apiRequest<DepartmentWorkflowPreview>(url);
 }
 
 export function uploadDepartmentProject(payload: DepartmentProjectPayload) {
@@ -80,21 +143,71 @@ export function uploadDepartmentProjects(payload: DepartmentProjectPayload[]) {
 export function createDesignTask(payload: CreateDesignTaskPayload) {
   return apiRequest<Task>("/design/tasks", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(stripUndefined(payload)),
   });
 }
 
 export function uploadDesignExcel(file: File) {
   const formData = new FormData();
   formData.append("file", file);
-  return apiRequest<DesignExcelUploadResponse>("/design/upload", {
+
+  return apiRequest<DesignExcelUploadResponse>("/upload/design-excel", {
     method: "POST",
     body: formData,
   });
 }
 
 export function confirmDesignUpload(payload: ConfirmDesignUploadPayload) {
-  return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/design/upload/confirm", {
+  return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/upload/design-excel/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── Fixture Workflow Engine API ───────────────────────────────────────────────
+
+export function fetchWorkflowByDepartment() {
+  return apiRequest<WorkflowDefinition>("/workflows/by-department");
+}
+
+export function fetchFixtureCurrentStage(fixtureId: string) {
+  return apiRequest<FixtureCurrentStage | null>(`/workflows/current-stage?fixture_id=${encodeURIComponent(fixtureId)}`);
+}
+
+export function fetchFixtureFullProgress(fixtureId: string) {
+  return apiRequest<FixtureFullProgress>(`/workflows/progress?fixture_id=${encodeURIComponent(fixtureId)}`);
+}
+
+export function validateFixtureAssignment(fixtureId: string) {
+  return apiRequest<AssignmentValidation>("/workflows/validate-assignment", {
+    method: "POST",
+    body: JSON.stringify({ fixture_id: fixtureId }),
+  });
+}
+
+export function assignFixtureStage(payload: { fixture_id: string; assigned_to: string }) {
+  return apiRequest<FixtureCurrentStage>("/workflows/assign", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function completeFixtureStage(payload: { fixture_id: string }) {
+  return apiRequest<FixtureCurrentStage>("/workflows/complete", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveFixtureStage(payload: { fixture_id: string }) {
+  return apiRequest<FixtureCurrentStage>("/workflows/approve", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function rejectFixtureStage(payload: { fixture_id: string }) {
+  return apiRequest<FixtureCurrentStage>("/workflows/reject", {
     method: "POST",
     body: JSON.stringify(payload),
   });

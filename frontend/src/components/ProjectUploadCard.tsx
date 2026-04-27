@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, UploadCloud } from "lucide-react";
+import { Plus, Trash2, UploadCloud, CheckCircle2, AlertCircle, Tag } from "lucide-react";
 import { uploadDepartmentProjects } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -20,13 +20,17 @@ import { toast } from "@/hooks/use-toast";
 import { adminQueryKeys, analyticsQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { generateUUID } from "@/lib/uuid";
 import { cn } from "@/lib/utils";
+import { parseWBSHeader, WBSParseOutcome } from "@/lib/wbsParser";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type ProjectSheetRow = {
   id: string;
-  project_no: string;
+  wbs_header: string;       // raw WBS input — drives project_no, customer_name, scope_name
+  project_no: string;       // parsed (read-only in UI)
   project_name: string;
-  customer_name: string;
-  scope_name: string;
+  customer_name: string;    // parsed (read-only in UI)
+  scope_name: string;       // parsed (read-only in UI)
   instance_count: string;
   rework_date: string;
 };
@@ -34,11 +38,16 @@ type ProjectSheetRow = {
 type ProjectField = Exclude<keyof ProjectSheetRow, "id">;
 type ProjectRowErrors = Partial<Record<ProjectField, string>>;
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
 const MINIMUM_VISIBLE_ROWS = 6;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function createEmptyRow(): ProjectSheetRow {
   return {
     id: generateUUID(),
+    wbs_header: "",
     project_no: "",
     project_name: "",
     customer_name: "",
@@ -107,20 +116,18 @@ function isValidDateInput(value: string) {
 function validateRow(row: ProjectSheetRow): ProjectRowErrors {
   const errors: ProjectRowErrors = {};
 
-  if (!row.project_no.trim()) {
-    errors.project_no = "Required";
+  // WBS header must parse successfully before anything else
+  if (!row.wbs_header.trim()) {
+    errors.wbs_header = "Required";
+  } else {
+    const result = parseWBSHeader(row.wbs_header);
+    if (!result.valid) {
+      errors.wbs_header = result.message;
+    }
   }
 
   if (!row.project_name.trim()) {
     errors.project_name = "Required";
-  }
-
-  if (!row.customer_name.trim()) {
-    errors.customer_name = "Required";
-  }
-
-  if (!row.scope_name.trim()) {
-    errors.scope_name = "Required";
   }
 
   if (!row.instance_count.trim()) {
@@ -160,6 +167,7 @@ function parseExcelRows(text: string) {
 
   return dataRows.map((columns) => ({
     id: generateUUID(),
+    wbs_header: "",
     project_no: columns[0] || "",
     project_name: columns[1] || "",
     customer_name: columns[2] || "",
@@ -169,19 +177,64 @@ function parseExcelRows(text: string) {
   }));
 }
 
+// ─── WBS Preview Chip ─────────────────────────────────────────────────────────
+
+function WBSPreviewChip({ result }: { result: WBSParseOutcome | null }) {
+  if (!result) return null;
+
+  if (!result.valid) {
+    return (
+      <div className="flex items-start gap-1.5 mt-1.5 px-2 py-1.5 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-xs">
+        <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+        <span>{result.message}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 px-2 py-1.5 rounded-md bg-primary/8 border border-primary/20 text-xs space-y-0.5">
+      <div className="flex items-center gap-1 text-primary font-medium mb-1">
+        <CheckCircle2 className="h-3 w-3" />
+        <span>Parsed</span>
+      </div>
+      <div className="grid grid-cols-1 gap-0.5 text-foreground/80">
+        <div>
+          <span className="text-muted-foreground">Project: </span>
+          <span className="font-semibold text-foreground">{result.project_code}</span>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Scope: </span>
+          <span className="font-semibold text-foreground">{result.scope_name}</span>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Company: </span>
+          <span className="font-semibold text-foreground">{result.company_name}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export function ProjectUploadCard() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [pasteBuffer, setPasteBuffer] = useState("");
   const [rows, setRows] = useState<ProjectSheetRow[]>(createInitialRows);
   const [rowErrors, setRowErrors] = useState<Record<string, ProjectRowErrors>>({});
+  /**
+   * Live WBS parse results per row — computed on every keystroke for instant inline preview.
+   * Key = row.id
+   */
+  const [wbsResults, setWbsResults] = useState<Record<string, WBSParseOutcome | null>>({});
 
   const uploadMutation = useMutation({
     mutationFn: uploadDepartmentProjects,
     onSuccess: async (uploadSummary) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjects }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
         queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs }),
         queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
@@ -190,13 +243,15 @@ export function ProjectUploadCard() {
       setRows(createInitialRows());
       setPasteBuffer("");
       setRowErrors({});
+      setWbsResults({});
       setOpen(false);
 
       toast({
         title: "Design projects uploaded",
-        description: uploadSummary.skipped_rows.length > 0
-          ? `${uploadSummary.success_count} row${uploadSummary.success_count === 1 ? "" : "s"} processed, ${uploadSummary.skipped_rows.length} skipped. ${uploadSummary.skipped_rows[0].reason}`
-          : `${uploadSummary.success_count} row${uploadSummary.success_count === 1 ? "" : "s"} processed for the Design department.`,
+        description:
+          uploadSummary.skipped_rows.length > 0
+            ? `${uploadSummary.success_count} row${uploadSummary.success_count === 1 ? "" : "s"} processed, ${uploadSummary.skipped_rows.length} skipped. ${uploadSummary.skipped_rows[0].reason}`
+            : `${uploadSummary.success_count} row${uploadSummary.success_count === 1 ? "" : "s"} processed for the Design department.`,
       });
     },
     onError: (error) => {
@@ -210,11 +265,32 @@ export function ProjectUploadCard() {
 
   const nonEmptyRows = rows.filter((row) => !isBlankRow(row));
 
+  // ── Cell change handler ───────────────────────────────────────────────────
+
   const handleCellChange = (rowId: string, field: ProjectField, value: string) => {
     setRows((currentRows) =>
       currentRows.map((row) => {
-        if (row.id !== rowId) {
-          return row;
+        if (row.id !== rowId) return row;
+
+        if (field === "wbs_header") {
+          // Parse WBS and auto-fill derived fields
+          const result = value.trim() ? parseWBSHeader(value) : null;
+          setWbsResults((prev) => ({ ...prev, [rowId]: result }));
+
+          const derived =
+            result && result.valid
+              ? {
+                  project_no: result.project_code,
+                  customer_name: result.company_name,
+                  scope_name: result.scope_name,
+                }
+              : {
+                  project_no: "",
+                  customer_name: "",
+                  scope_name: "",
+                };
+
+          return { ...row, wbs_header: value, ...derived };
         }
 
         return {
@@ -224,20 +300,17 @@ export function ProjectUploadCard() {
       }),
     );
 
+    // Clear field-level error on change
     setRowErrors((currentErrors) => {
-      if (!currentErrors[rowId]?.[field]) {
-        return currentErrors;
-      }
-
+      if (!currentErrors[rowId]?.[field]) return currentErrors;
       return {
         ...currentErrors,
-        [rowId]: {
-          ...currentErrors[rowId],
-          [field]: undefined,
-        },
+        [rowId]: { ...currentErrors[rowId], [field]: undefined },
       };
     });
   };
+
+  // ── Paste import (legacy tab-delimited paste) ─────────────────────────────
 
   const handlePasteImport = () => {
     const parsedRows = parseExcelRows(pasteBuffer);
@@ -258,6 +331,7 @@ export function ProjectUploadCard() {
 
     setRows(nextRows);
     setRowErrors({});
+    setWbsResults({});
     setPasteBuffer("");
 
     toast({
@@ -265,6 +339,8 @@ export function ProjectUploadCard() {
       description: `${parsedRows.length} row${parsedRows.length === 1 ? "" : "s"} loaded into the sheet.`,
     });
   };
+
+  // ── Row management ────────────────────────────────────────────────────────
 
   const handleAddRow = () => {
     setRows((currentRows) => [...currentRows, createEmptyRow()]);
@@ -275,15 +351,16 @@ export function ProjectUploadCard() {
       const remainingRows = currentRows.filter((row) => row.id !== rowId);
       return remainingRows.length > 0 ? remainingRows : [createEmptyRow()];
     });
-
     setRowErrors((currentErrors) => {
-      if (!currentErrors[rowId]) {
-        return currentErrors;
-      }
-
+      if (!currentErrors[rowId]) return currentErrors;
       const nextErrors = { ...currentErrors };
       delete nextErrors[rowId];
       return nextErrors;
+    });
+    setWbsResults((prev) => {
+      const next = { ...prev };
+      delete next[rowId];
+      return next;
     });
   };
 
@@ -291,7 +368,10 @@ export function ProjectUploadCard() {
     setRows(createInitialRows());
     setPasteBuffer("");
     setRowErrors({});
+    setWbsResults({});
   };
+
+  // ── Submit ────────────────────────────────────────────────────────────────
 
   const handleSubmit = () => {
     if (nonEmptyRows.length === 0) {
@@ -305,11 +385,9 @@ export function ProjectUploadCard() {
 
     const nextErrors = nonEmptyRows.reduce<Record<string, ProjectRowErrors>>((errors, row) => {
       const rowValidation = validateRow(row);
-
       if (Object.keys(rowValidation).length > 0) {
         errors[row.id] = rowValidation;
       }
-
       return errors;
     }, {});
 
@@ -318,7 +396,7 @@ export function ProjectUploadCard() {
     if (Object.keys(nextErrors).length > 0) {
       toast({
         title: "Validation failed",
-        description: "Complete every required cell before uploading.",
+        description: "Fix all WBS header errors before uploading.",
         variant: "destructive",
       });
       return;
@@ -336,6 +414,8 @@ export function ProjectUploadCard() {
     );
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+
   return (
     <Card className="animate-fade-in border-primary/20">
       <CardHeader className="p-4 pb-2">
@@ -343,7 +423,7 @@ export function ProjectUploadCard() {
           <div>
             <h3 className="font-semibold text-sm">Design Project Intake</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              Upload Design department project rows in a sheet layout with Excel paste support.
+              Upload Design department project rows using WBS Header format with Excel paste support.
             </p>
           </div>
           <Sheet open={open} onOpenChange={setOpen}>
@@ -357,16 +437,23 @@ export function ProjectUploadCard() {
             <SheetContent side="bottom" className="h-[92vh] max-h-[92vh] overflow-hidden px-0">
               <div className="flex h-full flex-col">
                 <SheetHeader className="border-b px-6 pb-4">
-                  <SheetTitle>Upload Design Project</SheetTitle>
+                  <SheetTitle className="flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-primary" />
+                    Upload Design Project
+                  </SheetTitle>
                   <SheetDescription>
-                    Paste rows from Excel or edit directly in the sheet. Required columns are Project No, Project Name,
-                    Customer Name, Scope Name, and Instance.
+                    Enter a WBS Header per row — it auto-parses into Project Code, Scope, and Company.
+                    Format:{" "}
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                      WBS-&#123;ProjectCode&#125;-&#123;ScopeName&#125;_&#123;CompanyName&#125;
+                    </code>
                   </SheetDescription>
                 </SheetHeader>
 
+                {/* Legacy paste area */}
                 <div className="grid gap-4 border-b px-6 py-4 lg:grid-cols-[1.4fr_auto]">
                   <div className="space-y-2">
-                    <Label className="text-xs">Paste From Excel</Label>
+                    <Label className="text-xs">Paste From Excel (Legacy Tab-Delimited)</Label>
                     <Textarea
                       value={pasteBuffer}
                       onChange={(event) => setPasteBuffer(event.target.value)}
@@ -384,73 +471,112 @@ export function ProjectUploadCard() {
                   </div>
                 </div>
 
+                {/* Sheet table */}
                 <div className="flex-1 overflow-auto px-6 py-4">
                   <div className="rounded-xl border bg-background">
                     <Table>
                       <TableHeader className="sticky top-0 z-10 bg-muted/70 backdrop-blur">
                         <TableRow>
-                          <TableHead className="w-14">#</TableHead>
-                          <TableHead>Project No.</TableHead>
-                          <TableHead>Project Name</TableHead>
-                          <TableHead>Customer Name</TableHead>
-                          <TableHead>Scope Name</TableHead>
-                          <TableHead className="w-36">Instance</TableHead>
-                          <TableHead className="w-40">Rework Date</TableHead>
-                          <TableHead className="w-16 text-right"> </TableHead>
+                          <TableHead className="w-10">#</TableHead>
+                          <TableHead className="min-w-[320px]">
+                            <span className="flex items-center gap-1">
+                              <Tag className="h-3 w-3 text-primary" />
+                              WBS Header *
+                            </span>
+                          </TableHead>
+                          <TableHead className="w-48">Project Name *</TableHead>
+                          <TableHead className="w-28">Instance *</TableHead>
+                          <TableHead className="w-36">Rework Date</TableHead>
+                          <TableHead className="w-12 text-right"> </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {rows.map((row, index) => {
                           const errors = rowErrors[row.id] || {};
+                          const wbsResult = wbsResults[row.id] ?? null;
 
                           return (
-                            <TableRow key={row.id}>
-                              <TableCell className="text-xs text-muted-foreground">{index + 1}</TableCell>
+                            <TableRow
+                              key={row.id}
+                              className={cn(
+                                "align-top",
+                                errors.wbs_header && "bg-destructive/5",
+                              )}
+                            >
+                              {/* Row number */}
+                              <TableCell className="text-xs text-muted-foreground pt-3">{index + 1}</TableCell>
+
+                              {/* WBS Header cell — main input */}
                               <TableCell className="p-2">
                                 <Input
-                                  value={row.project_no}
-                                  onChange={(event) => handleCellChange(row.id, "project_no", event.target.value)}
-                                  className={cn("h-9 text-sm", errors.project_no && "border-destructive focus-visible:ring-destructive")}
+                                  id={`wbs-header-${row.id}`}
+                                  value={row.wbs_header}
+                                  onChange={(event) => handleCellChange(row.id, "wbs_header", event.target.value)}
+                                  placeholder="WBS-PARC2600M001-Fuel Tank weld Line_Belrise Industries Limited"
+                                  className={cn(
+                                    "h-9 text-sm font-mono",
+                                    errors.wbs_header && "border-destructive focus-visible:ring-destructive",
+                                    wbsResult?.valid && "border-primary/50 focus-visible:ring-primary/50",
+                                  )}
+                                  aria-describedby={`wbs-preview-${row.id}`}
                                 />
+                                <div id={`wbs-preview-${row.id}`}>
+                                  <WBSPreviewChip result={wbsResult} />
+                                </div>
                               </TableCell>
-                              <TableCell className="p-2">
+
+                              {/* Project Name */}
+                              <TableCell className="p-2 pt-3">
                                 <Input
+                                  id={`project-name-${row.id}`}
                                   value={row.project_name}
                                   onChange={(event) => handleCellChange(row.id, "project_name", event.target.value)}
-                                  className={cn("h-9 text-sm", errors.project_name && "border-destructive focus-visible:ring-destructive")}
+                                  className={cn(
+                                    "h-9 text-sm",
+                                    errors.project_name && "border-destructive focus-visible:ring-destructive",
+                                  )}
                                 />
+                                {errors.project_name && (
+                                  <p className="text-destructive text-xs mt-1">{errors.project_name}</p>
+                                )}
                               </TableCell>
-                              <TableCell className="p-2">
+
+                              {/* Instance count */}
+                              <TableCell className="p-2 pt-3">
                                 <Input
-                                  value={row.customer_name}
-                                  onChange={(event) => handleCellChange(row.id, "customer_name", event.target.value)}
-                                  className={cn("h-9 text-sm", errors.customer_name && "border-destructive focus-visible:ring-destructive")}
-                                />
-                              </TableCell>
-                              <TableCell className="p-2">
-                                <Input
-                                  value={row.scope_name}
-                                  onChange={(event) => handleCellChange(row.id, "scope_name", event.target.value)}
-                                  className={cn("h-9 text-sm", errors.scope_name && "border-destructive focus-visible:ring-destructive")}
-                                />
-                              </TableCell>
-                              <TableCell className="p-2">
-                                <Input
+                                  id={`instance-count-${row.id}`}
                                   value={row.instance_count}
                                   onChange={(event) => handleCellChange(row.id, "instance_count", event.target.value)}
                                   inputMode="numeric"
-                                  className={cn("h-9 text-sm", errors.instance_count && "border-destructive focus-visible:ring-destructive")}
+                                  className={cn(
+                                    "h-9 text-sm",
+                                    errors.instance_count && "border-destructive focus-visible:ring-destructive",
+                                  )}
                                 />
+                                {errors.instance_count && (
+                                  <p className="text-destructive text-xs mt-1">{errors.instance_count}</p>
+                                )}
                               </TableCell>
-                              <TableCell className="p-2">
+
+                              {/* Rework date */}
+                              <TableCell className="p-2 pt-3">
                                 <Input
+                                  id={`rework-date-${row.id}`}
                                   value={row.rework_date}
                                   onChange={(event) => handleCellChange(row.id, "rework_date", event.target.value)}
                                   placeholder="DD/MM/YYYY"
-                                  className={cn("h-9 text-sm", errors.rework_date && "border-destructive focus-visible:ring-destructive")}
+                                  className={cn(
+                                    "h-9 text-sm",
+                                    errors.rework_date && "border-destructive focus-visible:ring-destructive",
+                                  )}
                                 />
+                                {errors.rework_date && (
+                                  <p className="text-destructive text-xs mt-1">{errors.rework_date}</p>
+                                )}
                               </TableCell>
-                              <TableCell className="p-2">
+
+                              {/* Remove row */}
+                              <TableCell className="p-2 pt-3">
                                 <Button
                                   type="button"
                                   size="icon"
@@ -470,6 +596,7 @@ export function ProjectUploadCard() {
                   </div>
                 </div>
 
+                {/* Footer */}
                 <div className="border-t px-6 py-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div className="text-xs text-muted-foreground">
@@ -500,7 +627,7 @@ export function ProjectUploadCard() {
       </CardHeader>
       <CardContent className="p-4 pt-2">
         <p className="text-xs text-muted-foreground">
-          Rework Date is optional. All other columns must be completed before Design project rows can be submitted.
+          WBS Header auto-fills Project Code, Scope, and Company. Rework Date is optional.
         </p>
       </CardContent>
     </Card>

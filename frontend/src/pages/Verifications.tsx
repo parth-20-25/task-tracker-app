@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchVerificationTasks } from '@/api/taskApi';
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -7,15 +9,30 @@ import { StatusChip } from '@/components/StatusChip';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 import { CheckCircle2, XCircle, Calendar, User, FileText } from 'lucide-react';
+import { getTaskCardDisplay } from '@/lib/taskDisplay';
+import { taskQueryKeys } from '@/lib/queryKeys';
+
+const API_ROOT = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/api$/, "");
+
+function toProofUrl(path: string) {
+  return path.startsWith("http://") || path.startsWith("https://")
+    ? path
+    : `${API_ROOT}${path}`;
+}
 
 export default function Verifications() {
   const { user, role } = useAuth();
-  const { tasks, verifyTask } = useTasks();
+  const { verifyTask } = useTasks();
   const [remarks, setRemarks] = useState<Record<string, string>>({});
+  const verificationQuery = useQuery({
+    queryKey: taskQueryKeys.verificationQueue,
+    queryFn: fetchVerificationTasks,
+    enabled: !!user?.employee_id,
+  });
 
   const isAdmin = role?.hierarchy_level === 1;
   const isQuality = role?.id === 'r5' || role?.name?.toLowerCase().includes('quality');
-  const pending = tasks.filter(t =>
+  const pending = (verificationQuery.data ?? []).filter(task => task.assigned_to !== user?.employee_id).filter(t =>
     t.status === 'under_review' &&
     (t.verification_status === 'pending' || t.verification_status === 'quality_pending') &&
     (isAdmin || t.department_id === user?.department_id)
@@ -36,9 +53,11 @@ export default function Verifications() {
       ) : (
         <div className="space-y-4">
           {pending.map(task => {
-            const handleVerify = async (status: 'approved' | 'rejected') => {
+            const taskDisplay = getTaskCardDisplay(task);
+
+            const handleVerify = async (action: 'approve' | 'reject') => {
               try {
-                await verifyTask(task.id, status, remarks[task.id]);
+                await verifyTask(task.id, action, remarks[task.id]);
               } catch (error) {
                 toast({
                   title: 'Verification failed',
@@ -53,7 +72,10 @@ export default function Verifications() {
                 <CardHeader className="p-4 pb-2">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <h3 className="font-medium">{task.title}</h3>
+                      <h3 className="font-medium">{taskDisplay.title}</h3>
+                      {taskDisplay.subtitle && (
+                        <p className="text-sm text-muted-foreground mt-1">{taskDisplay.subtitle}</p>
+                      )}
                       <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
                     </div>
                     <StatusChip type="priority" value={task.priority} />
@@ -63,9 +85,18 @@ export default function Verifications() {
                   <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                     <span className="flex items-center gap-1"><User className="h-3 w-3" />{task.assignee?.name}</span>
                     <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />Submitted {task.completed_at ? new Date(task.completed_at).toLocaleDateString() : '—'}</span>
-                    {task.proof_url && <span className="flex items-center gap-1"><FileText className="h-3 w-3" />Proof attached ({task.proof_type})</span>}
+                    {task.proof_url?.length ? <span className="flex items-center gap-1"><FileText className="h-3 w-3" />{task.proof_url.length} proof file(s)</span> : null}
                     {task.requires_quality_approval && <span>Quality approval required</span>}
                   </div>
+                  {task.proof_url?.length ? (
+                    <div className="flex flex-wrap gap-3 text-xs">
+                      {task.proof_url.map((url, i) => (
+                        <a key={i} href={toProofUrl(url)} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                          View Proof {i + 1}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
                   <Textarea
                     placeholder="Add remarks (optional for approval, required for rejection)..."
                     className="text-sm"
@@ -74,12 +105,12 @@ export default function Verifications() {
                     onChange={e => setRemarks(prev => ({ ...prev, [task.id]: e.target.value }))}
                   />
                   <div className="flex gap-2">
-                    <Button size="sm" onClick={() => { handleVerify('approved').catch(() => undefined); }}>
+                    <Button size="sm" onClick={() => { handleVerify('approve').catch(() => undefined); }}>
                       <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
                     </Button>
                     <Button size="sm" variant="destructive" onClick={() => {
                       if (!remarks[task.id]?.trim()) return;
-                      handleVerify('rejected').catch(() => undefined);
+                      handleVerify('reject').catch(() => undefined);
                     }}>
                       <XCircle className="h-4 w-4 mr-1" /> Reject
                     </Button>

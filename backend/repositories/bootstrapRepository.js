@@ -1,7 +1,8 @@
 const bcrypt = require("bcrypt");
-const { departments, roles, tasks } = require("../seedData");
+const { departments, roles } = require("../seedData");
 const { PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
 const { assignPermissionsToRole, seedPermissions } = require("./permissionRepository");
+const { ensurePerformanceAnalyticsTables } = require("./performanceAnalyticsRepository");
 
 function buildSeedRolePermissions(role) {
   if (role.permissions?.all === true) {
@@ -21,6 +22,14 @@ function buildSeedRolePermissions(role) {
     permissionMap[permissionId] = true;
     return permissionMap;
   }, {});
+}
+
+async function safeCreateIndex(client, statement, indexName) {
+  try {
+    await client.query(statement);
+  } catch (error) {
+    console.warn(`Index skipped${indexName ? ` (${indexName})` : ""}: ${error.message}`);
+  }
 }
 
 async function ensureUsersTable(client) {
@@ -65,7 +74,7 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP`,
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_url TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_url TEXT[] DEFAULT '{}'::text[]`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_type TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remarks TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
@@ -99,11 +108,45 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS instance_count INTEGER`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS rework_date DATE`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'assigned'`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_user_id VARCHAR(50)`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS sla_due_date TIMESTAMPTZ`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS rejection_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id UUID`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope_id UUID`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fixture_id UUID`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fixture_no TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stage TEXT`,
   ];
 
   for (const statement of taskColumnStatements) {
     await client.query(statement);
   }
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tasks'
+          AND column_name = 'proof_url'
+          AND udt_name = 'text'
+      ) THEN
+        ALTER TABLE tasks
+        ALTER COLUMN proof_url TYPE TEXT[]
+        USING CASE
+          WHEN proof_url IS NULL OR btrim(proof_url) = '' THEN '{}'::text[]
+          ELSE ARRAY[proof_url]
+        END;
+      END IF;
+    END $$;
+  `);
+
+  await client.query(`ALTER TABLE tasks ALTER COLUMN proof_url SET DEFAULT '{}'::text[]`);
 
   await client.query(`
     DO $$
@@ -136,15 +179,41 @@ async function ensureTasksTable(client) {
       AND COALESCE(quantity_index, '') ~ '^-?[0-9]+$'
   `);
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_tasks_status_next_escalation_at
     ON tasks (status, next_escalation_at)
-  `);
+  `, "idx_tasks_status_next_escalation_at");
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_tasks_status_deadline
     ON tasks (status, deadline)
-  `);
+  `, "idx_tasks_status_deadline");
+
+  await safeCreateIndex(client, `
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_task_per_stage
+    ON tasks (fixture_id, stage)
+    WHERE status NOT IN ('closed','cancelled')
+  `, "uniq_active_task_per_stage");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_approved_at
+    ON tasks (approved_at)
+  `, "idx_tasks_approved_at");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_department_approved_at
+    ON tasks (department_id, approved_at)
+  `, "idx_tasks_department_approved_at");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_assigned_user_approved_at
+    ON tasks (assigned_user_id, approved_at)
+  `, "idx_tasks_assigned_user_approved_at");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_project_scope_fixture_identity
+    ON tasks (project_id, scope_id, fixture_no)
+  `, "idx_tasks_project_scope_fixture_identity");
 
   await client.query(`
     UPDATE tasks
@@ -157,6 +226,53 @@ async function ensureTasksTable(client) {
     UPDATE tasks
     SET assigned_at = COALESCE(assigned_at, created_at, NOW())
     WHERE assigned_at IS NULL
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET assigned_user_id = COALESCE(NULLIF(assigned_user_id, ''), assigned_to)
+    WHERE assigned_user_id IS NULL OR assigned_user_id = ''
+  `);
+
+  await client.query(`
+    UPDATE tasks t
+    SET project_id = COALESCE(t.project_id, f.project_id),
+        scope_id = COALESCE(t.scope_id, f.scope_id),
+        fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
+    FROM design.fixtures f
+    WHERE t.fixture_id = f.id
+      AND (
+        t.project_id IS NULL
+        OR t.scope_id IS NULL
+        OR COALESCE(t.fixture_no, '') = ''
+      )
+  `);
+
+  await client.query(`
+    UPDATE tasks t
+    SET project_id = COALESCE(t.project_id, p.id),
+        scope_id = COALESCE(t.scope_id, s.id),
+        fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
+    FROM design.projects p
+    JOIN design.scopes s
+      ON s.project_id = p.id
+    JOIN design.fixtures f
+      ON f.scope_id = s.id
+    WHERE t.project_id IS NULL
+      AND t.scope_id IS NULL
+      AND COALESCE(t.fixture_no, '') = ''
+      AND p.department_id = t.department_id
+      AND p.project_no = t.project_no
+      AND s.scope_name = t.scope_name
+      AND f.fixture_no = t.quantity_index
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET due_date = COALESCE(due_date, deadline),
+        sla_due_date = COALESCE(sla_due_date, due_date, deadline)
+    WHERE due_date IS NULL
+       OR sla_due_date IS NULL
   `);
 
   await client.query(`UPDATE tasks SET status = 'assigned' WHERE status = 'not_started'`);
@@ -176,9 +292,46 @@ async function ensureTasksTable(client) {
        OR lifecycle_status = ''
   `);
 
+  await client.query(`
+    UPDATE tasks
+    SET submitted_at = COALESCE(
+      submitted_at,
+      completed_at,
+      CASE WHEN status IN ('under_review', 'rework', 'closed') THEN updated_at END,
+      created_at
+    )
+    WHERE submitted_at IS NULL
+      AND status IN ('under_review', 'rework', 'closed')
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET approved_at = COALESCE(approved_at, closed_at, verified_at)
+    WHERE approved_at IS NULL
+      AND (
+        status = 'closed'
+        OR verification_status = 'approved'
+        OR closed_at IS NOT NULL
+        OR verified_at IS NOT NULL
+      )
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET rejection_count = GREATEST(
+      COALESCE(rejection_count, 0),
+      CASE
+        WHEN status = 'rework' OR verification_status = 'rejected' THEN 1
+        ELSE 0
+      END
+    )
+  `);
+
 }
 
 async function ensureReferenceTables(client) {
+  await ensurePerformanceAnalyticsTables(client);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS roles (
       id VARCHAR(20) PRIMARY KEY,
@@ -197,6 +350,19 @@ async function ensureReferenceTables(client) {
       name TEXT NOT NULL,
       parent_department TEXT,
       is_active BOOLEAN NOT NULL DEFAULT TRUE
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS workflow_definitions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      department_id TEXT NOT NULL,
+      workflow_name TEXT NOT NULL,
+      stage_name TEXT NOT NULL,
+      stage_order INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(department_id, workflow_name, stage_name)
     )
   `);
 
@@ -226,6 +392,52 @@ async function ensureReferenceTables(client) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS issues (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      assigned_to VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      department_id TEXT REFERENCES departments(id),
+      priority TEXT NOT NULL DEFAULT 'MEDIUM',
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT issues_priority_check CHECK (priority IN ('LOW', 'MEDIUM', 'HIGH')),
+      CONSTRAINT issues_status_check CHECK (status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'))
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_issues_created_by_created_at
+    ON issues (created_by, created_at DESC)
+  `, "idx_issues_created_by_created_at");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_issues_assigned_to_created_at
+    ON issues (assigned_to, created_at DESC)
+  `, "idx_issues_assigned_to_created_at");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_issues_department_status
+    ON issues (department_id, status)
+  `, "idx_issues_department_status");
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS issue_comments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      issue_id UUID NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+      user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_issue_comments_issue_created_at
+    ON issue_comments (issue_id, created_at ASC)
+  `, "idx_issue_comments_issue_created_at");
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS notifications (
@@ -290,11 +502,11 @@ async function ensureReferenceTables(client) {
     )
   `);
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_department_unique
     ON workflows (department_id)
     WHERE department_id IS NOT NULL
-  `);
+  `, "idx_workflows_department_unique");
 
   await client.query(`
     DO $$
@@ -327,9 +539,152 @@ async function ensureReferenceTables(client) {
   `);
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS fixture_workflow_progress (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      department_id TEXT NOT NULL REFERENCES departments(id),
+      stage_name TEXT NOT NULL,
+      stage_order INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      assigned_to VARCHAR(50),
+      assigned_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      duration_minutes INTEGER,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT fwp_status_check CHECK (status IN ('PENDING','IN_PROGRESS','APPROVED','REJECTED')),
+      CONSTRAINT fwp_unique_fixture_stage UNIQUE (fixture_id, stage_name)
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_fwp_fixture_department
+    ON fixture_workflow_progress (fixture_id, department_id)
+  `, "idx_fwp_fixture_department");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_fwp_department_status
+    ON fixture_workflow_progress (department_id, status)
+  `, "idx_fwp_department_status");
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_progress
+    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_progress
+    ADD COLUMN IF NOT EXISTS duration_minutes INTEGER
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_progress
+    SET assigned_at = COALESCE(assigned_at, started_at)
+    WHERE assigned_at IS NULL
+      AND started_at IS NOT NULL
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_progress
+    SET duration_minutes = GREATEST(
+      1,
+      ROUND(EXTRACT(EPOCH FROM (completed_at - COALESCE(assigned_at, started_at))) / 60.0)::INTEGER
+    )
+    WHERE duration_minutes IS NULL
+      AND completed_at IS NOT NULL
+      AND COALESCE(assigned_at, started_at) IS NOT NULL
+      AND completed_at >= COALESCE(assigned_at, started_at)
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_progress
+    SET status = 'IN_PROGRESS'
+    WHERE status = 'COMPLETED'
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_progress
+    DROP CONSTRAINT IF EXISTS fwp_status_check
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_progress
+    ADD CONSTRAINT fwp_status_check
+    CHECK (status IN ('PENDING','IN_PROGRESS','APPROVED','REJECTED'))
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS fixture_workflow_stage_attempts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      department_id TEXT NOT NULL REFERENCES departments(id),
+      stage_name TEXT NOT NULL,
+      attempt_no INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+      assigned_to VARCHAR(50),
+      assigned_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      duration_minutes INTEGER,
+      approved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT fwsa_status_check CHECK (status IN ('IN_PROGRESS', 'COMPLETED', 'APPROVED', 'REJECTED')),
+      CONSTRAINT fwsa_unique_fixture_stage_attempt UNIQUE (fixture_id, stage_name, attempt_no)
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS fixture_workflow (
+      fixture_id UUID PRIMARY KEY,
+      current_stage TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_fwsa_fixture_stage_attempt
+    ON fixture_workflow_stage_attempts (fixture_id, stage_name, attempt_no)
+  `, "idx_fwsa_fixture_stage_attempt");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_fwsa_department_status
+    ON fixture_workflow_stage_attempts (department_id, status)
+  `, "idx_fwsa_department_status");
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_stage_attempts
+    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_stage_attempts
+    ADD COLUMN IF NOT EXISTS duration_minutes INTEGER
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_stage_attempts
+    SET assigned_at = COALESCE(assigned_at, started_at)
+    WHERE assigned_at IS NULL
+      AND started_at IS NOT NULL
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_stage_attempts
+    SET duration_minutes = GREATEST(
+      1,
+      ROUND(EXTRACT(EPOCH FROM (completed_at - COALESCE(assigned_at, started_at))) / 60.0)::INTEGER
+    )
+    WHERE duration_minutes IS NULL
+      AND completed_at IS NOT NULL
+      AND COALESCE(assigned_at, started_at) IS NOT NULL
+      AND completed_at >= COALESCE(assigned_at, started_at)
+  `);
+
+  await safeCreateIndex(client, `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_transitions_unique_action
     ON workflow_transitions (workflow_id, from_stage_id, action_name)
-  `);
+  `, "idx_workflow_transitions_unique_action");
 
   await client.query(`
     ALTER TABLE workflow_stages
@@ -387,10 +742,10 @@ async function ensureReferenceTables(client) {
   await client.query(`ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS status TEXT`);
   await client.query(`ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS updated_by VARCHAR(50)`);
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_task_logs_task_timestamp
     ON task_logs (task_id, timestamp DESC)
-  `);
+  `, "idx_task_logs_task_timestamp");
 
   await client.query(`
     CREATE OR REPLACE FUNCTION prevent_task_logs_mutation()
@@ -468,15 +823,15 @@ async function ensureReferenceTables(client) {
     ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
   `);
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_escalation_rules_priority_after_minutes
     ON escalation_rules (priority, after_minutes)
-  `);
+  `, "idx_escalation_rules_priority_after_minutes");
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_escalation_rules_department_priority_after_minutes
     ON escalation_rules (department_id, priority, after_minutes)
-  `);
+  `, "idx_escalation_rules_department_priority_after_minutes");
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS kpi_definitions (
@@ -575,10 +930,10 @@ async function ensureReferenceTables(client) {
     END $$;
   `);
 
-  await client.query(`
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_users_role_department
     ON users (role, department_id)
-  `);
+  `, "idx_users_role_department");
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS projects (
@@ -599,14 +954,18 @@ async function ensureReferenceTables(client) {
   `);
 
   await client.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_department_unique_record
-    ON projects (department_id, project_no, scope_name, quantity_index)
+    DROP INDEX IF EXISTS public.idx_projects_department_unique_record
   `);
 
-  await client.query(`
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_projects_department_project_scope
+    ON projects (department_id, project_no, scope_name)
+  `, "idx_projects_department_project_scope");
+
+  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_projects_department_created_at
       ON projects (department_id, created_at DESC)
-    `);
+    `, "idx_projects_department_created_at");
 
   await client.query(`
     ALTER TABLE projects
@@ -616,6 +975,16 @@ async function ensureReferenceTables(client) {
   await client.query(`
     ALTER TABLE projects
     ADD COLUMN IF NOT EXISTS customer_name TEXT NOT NULL DEFAULT ''
+  `);
+
+  await client.query(`
+    ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS scope_name TEXT NOT NULL DEFAULT ''
+  `);
+
+  await client.query(`
+    ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS quantity_index TEXT NOT NULL DEFAULT ''
   `);
 
   await client.query(`
@@ -706,6 +1075,28 @@ async function seedPermissionsAndWorkflows(client) {
       source: "bootstrapRepository.seedPermissionsAndWorkflows",
     });
   }
+
+  // Seed default Design workflow
+  const designStages = [
+    ["design", "Design Workflow", "Concept", 10],
+    ["design", "Design Workflow", "DAP", 20],
+    ["design", "Design Workflow", "3D Finish", 30],
+    ["design", "Design Workflow", "2D Finish", 40],
+    ["design", "Design Workflow", "Release", 50],
+  ];
+
+  for (const [deptId, workflowName, stageName, stageOrder] of designStages) {
+    await client.query(
+      `
+        INSERT INTO workflow_definitions (department_id, workflow_name, stage_name, stage_order)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (department_id, workflow_name, stage_name) DO UPDATE
+        SET stage_order = EXCLUDED.stage_order,
+            updated_at = NOW()
+      `,
+      [deptId, workflowName, stageName, stageOrder]
+    );
+  }
 }
 
 async function seedUsersIfNeeded(client) {
@@ -778,88 +1169,6 @@ async function normalizeSeedUserPasswords(client) {
     `,
     [defaultPasswordHash, expectedEmployeeIds],
   );
-}
-
-async function seedTasksIfNeeded(client) {
-  const existingTasks = await client.query(`SELECT COUNT(*)::int AS count FROM tasks`);
-
-  if (existingTasks.rows[0].count > 0) {
-    return;
-  }
-
-  for (const task of tasks) {
-    const status =
-      task.status === "not_started"
-        ? "assigned"
-        : task.status === "completed" && task.verification_status === "pending"
-          ? "under_review"
-          : task.status === "completed" && task.verification_status === "approved"
-            ? "closed"
-            : task.verification_status === "rejected"
-              ? "rework"
-              : task.status;
-
-    await client.query(
-      `
-        INSERT INTO tasks (
-          internal_identifier,
-          description,
-          assigned_to,
-          assigned_by,
-          department_id,
-          status,
-          priority,
-          deadline,
-          created_at,
-          assigned_at,
-          verification_status,
-          started_at,
-          completed_at,
-          verified_at,
-          proof_url,
-          proof_type,
-          remarks,
-          assignee_ids,
-          planned_minutes,
-          actual_minutes,
-          requires_quality_approval,
-          approval_stage,
-          closed_at,
-          updated_at
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17::jsonb, $18, $19, $20, $21, $22, NOW()
-        )
-      `,
-      [
-        task.title || `TASK-${Date.now()}`,
-        task.description,
-        task.assigned_to,
-        task.assigned_by,
-        task.department_id,
-        status,
-        task.priority,
-        task.deadline,
-        task.created_at,
-        task.verification_status,
-        task.started_at,
-        task.completed_at,
-        task.verified_at,
-        task.proof_url,
-        task.proof_type,
-        task.remarks,
-        JSON.stringify([task.assigned_to]),
-        60,
-        task.completed_at && task.started_at
-          ? Math.max(1, Math.round((new Date(task.completed_at).getTime() - new Date(task.started_at).getTime()) / 60000))
-          : 0,
-        false,
-        status === "closed" ? "closed" : status === "under_review" ? "manager" : "execution",
-        status === "closed" ? task.verified_at || task.completed_at : null,
-      ],
-    );
-  }
 }
 
 async function syncTaskWorkflowState(client) {
@@ -938,7 +1247,6 @@ module.exports = {
   normalizeSeedUserPasswords,
   seedPermissionsAndWorkflows,
   seedReferenceData,
-  seedTasksIfNeeded,
   seedUsersIfNeeded,
   syncTaskEscalationSchedule,
   syncTaskWorkflowState,

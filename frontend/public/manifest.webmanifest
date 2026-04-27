@@ -1,6 +1,6 @@
 {
-  "name": "Task Tracker",
-  "short_name": "Tasks",
+  "name": "Parc Control Systems",
+  "short_name": "Parc Systems",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

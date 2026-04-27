@@ -3,6 +3,8 @@ export type VerificationStatus = 'pending' | 'manager_approved' | 'quality_pendi
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type RoleScope = 'global' | 'department' | 'team' | 'self';
 export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed' | 'cancelled';
+export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
+export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 
 export interface Role {
   id: string;
@@ -40,6 +42,7 @@ export interface Task {
   title: string;
   description: string;
   assigned_to: string;
+  assigned_user_id?: string;
   assignee_ids: string[];
   assigned_by: string;
   department_id: string;
@@ -47,13 +50,17 @@ export interface Task {
   verification_status: VerificationStatus;
   priority: Priority;
   deadline: string;
+  due_date?: string | null;
+  sla_due_date?: string | null;
   created_at: string;
+  submitted_at?: string | null;
+  approved_at?: string | null;
   started_at?: string;
   completed_at?: string;
   verified_at?: string;
   closed_at?: string;
   lifecycle_status?: LifecycleStatus | null;
-  proof_url?: string;
+  proof_url?: string[];
   proof_type?: string;
   proof_name?: string;
   proof_mime?: string;
@@ -66,14 +73,21 @@ export interface Task {
   machine_id?: string;
   machine_name?: string;
   location_tag?: string;
+  project_id?: string | null;
+  scope_id?: string | null;
+  fixture_id?: string | null;
   project_no?: string | null;
+  fixture_no?: string | null;
+  project_code?: string | null;
   project_name?: string | null;
   customer_name?: string | null;
+  company_name?: string | null;
   project_description?: string | null;
   scope_name?: string | null;
   quantity_index?: string | null;
   instance_count?: number | null;
   rework_date?: string | null;
+  rejection_count?: number;
   recurrence_rule?: string;
   dependency_ids: number[];
   escalation_level: number;
@@ -84,6 +98,7 @@ export interface Task {
   workflow_id?: string;
   current_stage_id?: string;
   workflow_stage?: string | null;
+  workflow_status?: string | null;
   activity_count?: number;
   assignee?: User;
   assigner?: User;
@@ -111,6 +126,53 @@ export interface AuditLog {
   user?: User;
 }
 
+export interface UploadBatch {
+  id: string;
+  batch_id: string;
+  project_id: string;
+  scope_id: string;
+  project_no: string;
+  project_name: string;
+  customer_name: string;
+  department_id: string;
+  scope_name: string;
+  uploaded_by?: string | null;
+  uploaded_at: string;
+  created_at: string;
+  accepted_rows: number;
+  rejected_rows: number;
+  total_fixtures: number;
+  active_count: number;
+  status_summary: string;
+  deletion_blocked: boolean;
+  delete_blocked_reason?: string | null;
+}
+
+export interface IssueComment {
+  id: string;
+  issue_id: string;
+  user_id: string;
+  user_name?: string | null;
+  message: string;
+  created_at: string;
+}
+
+export interface Issue {
+  id: string;
+  title: string;
+  description: string;
+  created_by: string;
+  assigned_to: string;
+  department_id?: string | null;
+  priority: IssuePriority;
+  status: IssueStatus;
+  created_at: string;
+  creator?: User | null;
+  assignee?: User | null;
+  department?: Department | null;
+  comments?: IssueComment[];
+}
+
 export interface Notification {
   id: string;
   user_employee_id?: string | null;
@@ -124,35 +186,159 @@ export interface Notification {
   created_at: string;
 }
 
-export interface AnalyticsSummary {
-  total: number;
-  assigned: number;
-  in_progress: number;
-  under_review: number;
-  rework: number;
-  closed: number;
-  overdue: number;
-  on_time_closure_rate: number;
-  rework_rate: number;
-  average_planned_minutes: number;
-  average_actual_minutes: number;
+export interface PerformanceAnalyticsContext {
+  scope: "department_only" | "all_departments";
+  default_department_id: string | null;
+  minimum_approved_tasks: number;
+  department_penalty_factor: number;
+  user: {
+    employee_id: string;
+    name: string;
+    department_id: string | null;
+    department_name: string | null;
+  };
+  permissions: {
+    view_self_user: boolean;
+    view_self_department: boolean;
+    view_department_comparison: boolean;
+    view_user_comparison: boolean;
+  };
+  departments: Array<{
+    id: string;
+    name: string;
+  }>;
 }
 
-export interface AnalyticsPayload {
-  summary: AnalyticsSummary;
-  department_performance: Array<{
-    department: string;
-    total: number;
-    closed: number;
-    overdue: number;
-    rework: number;
+export interface PerformanceOverviewPayload {
+  total_tasks: number;
+  approved_tasks: number;
+  approval_rate: number | null;
+  overdue_rate: number | null;
+  rework_rate: number | null;
+  last_updated: string | null;
+  has_data: boolean;
+  selected_department_id: string | null;
+  selected_department_name: string | null;
+}
+
+export interface UserPerformanceRow {
+  user_id: string;
+  user_name: string;
+  department_id: string;
+  department_name: string;
+  approved_tasks: number;
+  on_time_count: number;
+  overdue_count: number;
+  rework_count: number;
+  score: number | null;
+  rank: number | null;
+  last_updated: string;
+}
+
+export interface UserPerformanceListPayload {
+  department_id: string;
+  department_name: string;
+  minimum_approved_tasks: number;
+  items: UserPerformanceRow[];
+  last_updated: string | null;
+}
+
+export interface DepartmentPerformanceRow {
+  department_id: string;
+  department_name: string;
+  total_tasks: number;
+  approved_tasks: number;
+  completion_rate: number | null;
+  rework_rate: number | null;
+  overdue_rate: number | null;
+  avg_completion_time: number | null;
+  score: number | null;
+  rank: number | null;
+  eligible_users: number;
+  last_updated: string;
+}
+
+export interface DepartmentPerformanceListPayload {
+  items: DepartmentPerformanceRow[];
+  last_updated: string | null;
+  departments: Array<{
+    id: string;
+    name: string;
   }>;
-  downtime: Array<{
-    machine: string;
-    tasks: number;
-    downtime_minutes: number;
-  }>;
-  overdue_tasks: Task[];
+}
+
+export interface UserDrilldownTask {
+  task_id: number;
+  title: string;
+  status: string;
+  priority: string | null;
+  project_name: string | null;
+  scope_name: string | null;
+  remarks: string | null;
+  due_date: string | null;
+  submitted_at: string | null;
+  approved_at: string | null;
+  rejection_count: number;
+  completion_minutes: number | null;
+  is_on_time: boolean;
+  is_overdue: boolean;
+  delay_hours: number | null;
+}
+
+export interface UserApprovalTimelineEntry {
+  task_id: number;
+  title: string;
+  approved_at: string | null;
+  due_date: string | null;
+  outcome: "on_time" | "overdue" | "no_due_date";
+  delay_hours: number | null;
+}
+
+export interface UserReworkHistoryEntry {
+  task_id: number;
+  title: string;
+  rejection_count: number;
+  approved_at: string | null;
+  remarks: string | null;
+  project_name: string | null;
+  scope_name: string | null;
+}
+
+export interface DelayPatternBucket {
+  label: string;
+  count: number;
+}
+
+export interface UserPerformanceDrilldownPayload {
+  user: {
+    employee_id: string;
+    name: string;
+    department_id: string | null;
+    department_name: string | null;
+    is_active: boolean;
+  };
+  performance: UserPerformanceRow | null;
+  summary: {
+    approved_tasks: number;
+    on_time_count: number;
+    overdue_count: number;
+    rework_count: number;
+    score: number | null;
+    rank: number | null;
+    average_completion_minutes: number | null;
+    average_delay_hours: number | null;
+    tasks_without_due_date: number;
+  };
+  tasks: UserDrilldownTask[];
+  approval_timeline: UserApprovalTimelineEntry[];
+  rework_history: UserReworkHistoryEntry[];
+  delay_patterns: {
+    overdue_tasks: number;
+    on_time_tasks: number;
+    tasks_without_due_date: number;
+    by_weekday: DelayPatternBucket[];
+    by_priority: DelayPatternBucket[];
+  };
 }
 
 export interface KpiDefinition {
@@ -273,10 +459,11 @@ export interface MetricCard {
 }
 
 export interface DepartmentProject {
-  id: string;
-  project_no: string;
+  project_id: string;
+  scope_id: string;
+  project_code: string;
   project_name: string;
-  customer_name: string;
+  company_name: string;
   project_description: string;
   scope_name: string;
   quantity_index: string;
@@ -289,25 +476,31 @@ export interface DepartmentProject {
 }
 
 export interface DesignProjectOption {
-  id: string;
-  project_no: string;
+  project_id: string;
+  project_code: string;
   project_name: string;
+  company_name: string;
+  department_id: string;
 }
 
 export interface DesignScopeOption {
-  id: string;
+  scope_id: string;
   project_id: string;
   scope_name: string;
 }
 
 export interface DesignFixtureOption {
-  id: string;
+  fixture_id: string;
+  project_id: string | null;
+  batch_id?: string | null;
   scope_id: string;
   fixture_no: string;
   op_no: string;
   part_name: string;
   fixture_type: string;
   qty: number;
+  image_1_url?: string | null;
+  image_2_url?: string | null;
 }
 
 export interface DesignExcelPreviewRow {
@@ -317,6 +510,8 @@ export interface DesignExcelPreviewRow {
   part_name: string;
   fixture_type: string;
   qty: number;
+  image_1_url?: string | null;
+  image_2_url?: string | null;
 }
 
 export interface DesignExcelUploadResponse {
@@ -324,6 +519,7 @@ export interface DesignExcelUploadResponse {
     project_code: string;
     scope_name_display: string;
     company_name: string;
+    metadata_source?: string;
   };
   preview: {
     accepted: Array<{
@@ -332,7 +528,7 @@ export interface DesignExcelUploadResponse {
       existing?: DesignExcelPreviewRow;
     }>;
     conflicts: Array<{
-      type: "CONFLICT_PART_NAME" | "CONFLICT_OTHER";
+      type: "CONFLICT_PART_NAME" | "CONFLICT_OTHER" | "CONFLICT_IMAGES";
       incoming: DesignExcelPreviewRow;
       existing: DesignExcelPreviewRow;
     }>;

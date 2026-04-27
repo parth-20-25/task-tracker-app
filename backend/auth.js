@@ -9,20 +9,39 @@ function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
-    return res.status(401).json({ error: "No token provided", details: null });
+    return res.status(401).json({
+      success: false,
+      error: "No token provided",
+      details: null,
+    });
   }
 
-  const [, token] = authHeader.split(" ");
+  const [scheme, token] = authHeader.split(" ");
 
-  if (!token) {
-    return res.status(401).json({ error: "Malformed authorization header", details: null });
+  if (scheme !== "Bearer" || !token) {
+    return res.status(401).json({
+      success: false,
+      error: "Malformed authorization header",
+      details: null,
+    });
   }
 
   try {
     req.auth = jwt.verify(token, env.jwtSecret);
+    if (!req.auth || typeof req.auth.employee_id !== "string" || !req.auth.employee_id.trim()) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid token",
+        details: null,
+      });
+    }
     return next();
   } catch (_error) {
-    return res.status(403).json({ error: "Invalid token", details: null });
+    return res.status(401).json({
+      success: false,
+      error: "Invalid token",
+      details: null,
+    });
   }
 }
 

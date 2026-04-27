@@ -31,6 +31,33 @@ function parseJsonArray(value) {
   }
 }
 
+function parseProofUrls(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim();
+
+    if (!normalized) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(normalized);
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [normalized];
+    } catch (_error) {
+      return [normalized];
+    }
+  }
+
+  return [];
+}
+
 function mapRoleRow(row, prefix = "") {
   const id = row[`${prefix}role_id`];
 
@@ -85,11 +112,19 @@ function mapUserRow(row, prefix = "") {
 }
 
 function mapTaskRow(row) {
+  const projectNo = row.resolved_project_no || row.project_no || null;
+  const fixtureNo = row.resolved_fixture_no || row.fixture_no || row.quantity_index || null;
+  const projectName = row.resolved_project_name || row.project_name || row.project_description || null;
+  const customerName = row.resolved_customer_name || row.customer_name || null;
+  const scopeName = row.resolved_scope_name || row.scope_name || null;
+
   return {
     id: row.id,
+    title: row.title || row.internal_identifier || row.description || `Task #${row.id}`,
     internal_identifier: row.internal_identifier,
     description: row.description,
     assigned_to: row.assigned_to,
+    assigned_user_id: row.assigned_user_id || row.assigned_to,
     assignee_ids: parseJsonArray(row.assignee_ids),
     assigned_by: row.assigned_by,
     department_id: row.department_id,
@@ -97,11 +132,15 @@ function mapTaskRow(row) {
     verification_status: row.verification_status,
     priority: row.priority,
     deadline: row.deadline,
+    due_date: row.due_date || row.deadline || null,
+    sla_due_date: row.sla_due_date || row.due_date || row.deadline || null,
     created_at: row.created_at,
+    submitted_at: row.submitted_at || null,
+    approved_at: row.approved_at || null,
     started_at: row.started_at,
     completed_at: row.completed_at,
     verified_at: row.verified_at,
-    proof_url: row.proof_url,
+    proof_url: parseProofUrls(row.proof_url),
     proof_type: row.proof_type,
     proof_name: row.proof_name,
     proof_mime: row.proof_mime,
@@ -115,16 +154,23 @@ function mapTaskRow(row) {
     machine_name: row.machine_name,
     location_tag: row.location_tag,
     recurrence_rule: row.recurrence_rule,
-    project_no: row.project_no || null,
-    project_name: row.project_name || row.project_description || null,
-    customer_name: row.customer_name || null,
+    project_id: row.resolved_project_id || null,
+    scope_id: row.resolved_scope_id || null,
+    fixture_id: row.resolved_fixture_id || null,
+    project_no: projectNo,
+    fixture_no: fixtureNo,
+    project_code: projectNo,
+    project_name: projectName,
+    customer_name: customerName,
+    company_name: customerName,
     project_description: row.project_description || null,
-    scope_name: row.scope_name || null,
+    scope_name: scopeName,
     quantity_index: row.quantity_index || null,
     instance_count: row.instance_count === null || row.instance_count === undefined
       ? null
       : Number(row.instance_count),
     rework_date: row.rework_date || null,
+    rejection_count: Number(row.rejection_count || 0),
     dependency_ids: parseJsonArray(row.dependency_ids),
     escalation_level: row.escalation_level || 0,
     next_escalation_at: row.next_escalation_at,
@@ -136,6 +182,7 @@ function mapTaskRow(row) {
     workflow_id: row.workflow_id,
     current_stage_id: row.current_stage_id,
     workflow_stage: row.workflow_stage || null,
+    workflow_status: row.workflow_status || null,
     lifecycle_status: row.lifecycle_status || null,
     activity_count: Number(row.activity_count || 0),
     assignee: mapUserRow(row, "assignee_"),
@@ -163,5 +210,6 @@ module.exports = {
   mapTaskRow,
   mapUserRow,
   parseJsonArray,
+  parseProofUrls,
   parsePermissions,
 };

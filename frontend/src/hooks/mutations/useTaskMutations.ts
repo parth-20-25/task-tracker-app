@@ -26,6 +26,8 @@ interface CreateTaskInput {
 
 interface UpdateTaskInput {
   taskId: number;
+  action?: "start" | "resume" | "hold" | "submit";
+  verification_action?: "approve" | "reject";
   status?: TaskStatus;
   verification_status?: VerificationStatus;
   remarks?: string;

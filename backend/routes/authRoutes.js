@@ -10,22 +10,17 @@ router.post(
   "/login",
   asyncHandler(async (req, res) => {
     try {
-      const identifier = req.body.employee_id || req.body.email || req.body.username;
-      const password = req.body.password;
-
-      console.log(`[AUTH] Login attempt received. Identifier: ${identifier ? identifier : 'MISSING'}, Password length: ${password ? password.length : 0}`);
+      const body = req.body || {};
+      const identifier = body.employee_id || body.employeeId || body.email || body.username || body.identifier;
+      const password = typeof body.password === "string" ? body.password : "";
 
       if (!identifier || !password) {
-        console.log(`[AUTH] Login failed: Missing credentials`);
         return res.status(400).json({ success: false, reason: "missing_credentials" });
       }
 
       const result = await loginUser(identifier, password);
-      console.log(`[AUTH] Login successful for user: ${identifier}`);
       return sendSuccess(res, result);
     } catch (error) {
-      console.log(`[AUTH] Login error for request body ${JSON.stringify(req.body)}:`, error.message);
-      
       const status = error.statusCode || 500;
       let reason = "internal_error";
       

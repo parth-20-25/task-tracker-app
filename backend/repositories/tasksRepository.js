@@ -1,4 +1,6 @@
 const { pool } = require("../db");
+const { logger } = require("../lib/logger");
+const { getExecutionMetadata, instrumentModuleExports, safeSerialize } = require("../lib/observability");
 const { mapTaskRow } = require("./mappers");
 const { buildUserColumns } = require("./sqlFragments");
 
@@ -32,10 +34,19 @@ function taskSelectQuery(whereClause = "") {
   return `
     SELECT
       t.*,
+      project.id AS resolved_project_id,
+      scope.id AS resolved_scope_id,
+      fixture.id AS resolved_fixture_id,
+      COALESCE(project.project_no, NULLIF(t.project_no, '')) AS resolved_project_no,
+      COALESCE(project.project_name, NULLIF(t.project_name, ''), NULLIF(t.project_description, '')) AS resolved_project_name,
+      COALESCE(project.customer_name, NULLIF(t.customer_name, '')) AS resolved_customer_name,
+      COALESCE(scope.scope_name, NULLIF(t.scope_name, '')) AS resolved_scope_name,
+      COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
       t.workflow_id,
       t.current_stage_id,
       t.lifecycle_status,
-      stage.name AS workflow_stage,
+      COALESCE(stage.stage_name, stage.name) AS workflow_stage,
+      workflow_progress.status AS workflow_status,
       (
         SELECT COUNT(*)::int
         FROM task_activity_logs activity
@@ -45,6 +56,35 @@ function taskSelectQuery(whereClause = "") {
       ${buildUserColumns({ userAlias: "assigner", roleAlias: "assigner_role", departmentAlias: "assigner_department", prefix: "assigner_" })}
     FROM tasks t
     LEFT JOIN workflow_stages stage ON stage.id = t.current_stage_id
+    LEFT JOIN fixture_workflow_progress workflow_progress
+      ON workflow_progress.fixture_id = t.fixture_id
+      AND workflow_progress.department_id = t.department_id
+      AND workflow_progress.stage_name = COALESCE(stage.stage_name, stage.name)
+    LEFT JOIN design.projects project
+      ON (
+        t.project_id IS NOT NULL
+        AND project.id = t.project_id
+      ) OR (
+        t.project_id IS NULL
+        AND project.project_no = NULLIF(t.project_no, '')
+        AND project.department_id = t.department_id
+      )
+    LEFT JOIN design.scopes scope
+      ON (
+        t.scope_id IS NOT NULL
+        AND scope.id = t.scope_id
+      ) OR (
+        t.scope_id IS NULL
+        AND scope.project_id = project.id
+        AND scope.scope_name = NULLIF(t.scope_name, '')
+      )
+    LEFT JOIN design.fixtures fixture
+      ON fixture.id = t.fixture_id
+      OR (
+        t.fixture_id IS NULL
+        AND fixture.scope_id = COALESCE(t.scope_id, scope.id)
+        AND fixture.fixture_no = COALESCE(NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, ''))
+      )
     LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id
@@ -55,10 +95,68 @@ function taskSelectQuery(whereClause = "") {
   `;
 }
 
+function requireRow(result, errorMessage) {
+  const row = result?.rows?.[0];
+
+  if (!row) {
+    throw new Error(errorMessage);
+  }
+
+  return row;
+}
+
+function hasOwn(values, key) {
+  return Object.prototype.hasOwnProperty.call(values || {}, key);
+}
+
+async function executeRepositoryQuery(operation, client, queryText, params = []) {
+  const metadata = getExecutionMetadata({
+    layer: "repository.tasksRepository",
+    operation,
+    query: queryText.trim(),
+    params: safeSerialize(params),
+  });
+
+  logger.info("tasksRepository query start", metadata);
+
+  try {
+    const result = await client.query(queryText, params);
+    logger.info("tasksRepository query success", {
+      ...metadata,
+      rowCount: result?.rowCount ?? result?.rows?.length ?? 0,
+    });
+    return result;
+  } catch (error) {
+    logger.error("tasksRepository query failed", {
+      ...metadata,
+      errorMessage: error?.message || "Unknown database error",
+      errorDetail: error?.detail || null,
+      errorCode: error?.code || null,
+      constraint: error?.constraint || null,
+      stack: error?.stack || null,
+    });
+    throw error;
+  }
+}
+
 async function listTasksByAccess({ clause = "", params = [] }, client = pool) {
   const result = await client.query(
     `${taskSelectQuery(clause)} ORDER BY t.created_at DESC, t.id DESC`,
     params,
+  );
+
+  return result.rows.map((row) => mapTaskRow(row));
+}
+
+async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool) {
+  const nextParams = [...params, currentUserEmployeeId];
+  const verificationClause = clause
+    ? `${clause} AND t.status = 'under_review' AND t.assigned_to <> $${nextParams.length}`
+    : `WHERE t.status = 'under_review' AND t.assigned_to <> $${nextParams.length}`;
+
+  const result = await client.query(
+    `${taskSelectQuery(verificationClause)} ORDER BY t.created_at DESC, t.id DESC`,
+    nextParams,
   );
 
   return result.rows.map((row) => mapTaskRow(row));
@@ -116,8 +214,7 @@ async function insertTask(task, client = pool) {
     throw new Error("System configuration error: Tasks must be bound to a workflow and an active stage.");
   }
 
-  const result = await client.query(
-    `
+  const insertQuery = `
       INSERT INTO tasks (
         internal_identifier,
         description,
@@ -144,6 +241,10 @@ async function insertTask(task, client = pool) {
         workflow_id,
         current_stage_id,
         lifecycle_status,
+        project_id,
+        scope_id,
+        fixture_id,
+        fixture_no,
         project_no,
         project_name,
         customer_name,
@@ -152,77 +253,111 @@ async function insertTask(task, client = pool) {
         quantity_index,
         instance_count,
         rework_date,
+        assigned_user_id,
+        due_date,
+        sla_due_date,
+        rejection_count,
+        stage,
         updated_at
       )
       VALUES (
         $1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, NOW(), NOW(), $10,
-        $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, NOW()
+        $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, NOW()
       )
       RETURNING id
-    `,
-    [
-      task.internal_identifier,
-      task.description,
-      task.assigned_to,
-      JSON.stringify(task.assignee_ids || [task.assigned_to]),
-      task.assigned_by,
-      task.department_id,
-      task.status,
-      task.priority,
-      task.deadline,
-      task.verification_status,
-      task.planned_minutes,
-      task.machine_id,
-      task.machine_name,
-      task.location_tag,
-      task.recurrence_rule,
-      JSON.stringify(task.dependency_ids || []),
-      task.requires_quality_approval,
-      task.next_escalation_at || null,
-      task.last_escalated_at || null,
-      task.approval_stage,
-      task.workflow_id,
-      task.current_stage_id,
-      task.lifecycle_status || deriveLifecycleStatus(task.status),
-      task.project_no || null,
-      task.project_name || null,
-      task.customer_name || null,
-      task.project_description || null,
-      task.scope_name || null,
-      task.quantity_index || null,
-      task.instance_count ?? null,
-      task.rework_date || null,
-    ],
-  );
+    `;
+  const insertParams = [
+    task.internal_identifier,
+    task.description,
+    task.assigned_to,
+    JSON.stringify(task.assignee_ids || [task.assigned_to]),
+    task.assigned_by,
+    task.department_id,
+    task.status,
+    task.priority,
+    task.deadline,
+    task.verification_status,
+    task.planned_minutes,
+    task.machine_id,
+    task.machine_name,
+    task.location_tag,
+    task.recurrence_rule,
+    JSON.stringify(task.dependency_ids || []),
+    task.requires_quality_approval,
+    task.next_escalation_at || null,
+    task.last_escalated_at || null,
+    task.approval_stage,
+    task.workflow_id,
+    task.current_stage_id,
+    task.lifecycle_status || deriveLifecycleStatus(task.status),
+    task.project_id || null,
+    task.scope_id || null,
+    task.fixture_id || null,
+    task.fixture_no || null,
+    task.project_no || null,
+    task.project_name || null,
+    task.customer_name || null,
+    task.project_description || null,
+    task.scope_name || null,
+    task.quantity_index || null,
+    task.instance_count ?? null,
+    task.rework_date || null,
+    task.assigned_user_id || task.assigned_to,
+    task.due_date || task.deadline || null,
+    task.sla_due_date || task.due_date || task.deadline || null,
+    task.rejection_count || 0,
+    task.stage || null
+  ];
 
-  return result.rows[0].id;
+  const result = await executeRepositoryQuery("insertTask", client, insertQuery, insertParams);
+
+  return requireRow(result, "Task insert did not return an id").id;
 }
 
-async function updateTaskStatus(taskId, values, client = pool) {
+async function updateTaskStatus(taskId, incomingValues, client = pool) {
+  const hasSubmittedAt = hasOwn(incomingValues, "submitted_at");
+  const hasApprovedAt = hasOwn(incomingValues, "approved_at");
+  const values = {
+    status: incomingValues.status,
+    started_at: incomingValues.started_at ?? null,
+    completed_at: incomingValues.completed_at ?? null,
+    verification_status: incomingValues.verification_status ?? null,
+    actual_minutes: incomingValues.actual_minutes ?? null,
+    approval_stage: incomingValues.approval_stage ?? null,
+    closed_at: incomingValues.closed_at ?? null,
+    current_stage_id: incomingValues.current_stage_id ?? null,
+    lifecycle_status: incomingValues.lifecycle_status ?? null,
+    submitted_at: incomingValues.submitted_at ?? null,
+    approved_at: incomingValues.approved_at ?? null,
+  };
+
   await client.query(
     `
       UPDATE tasks
-      SET status = $1,
-          started_at = $2,
-          completed_at = $3,
-          verification_status = $4,
-          actual_minutes = $5,
-          approval_stage = $6,
-          closed_at = $7,
-          current_stage_id = COALESCE($8, current_stage_id),
-          lifecycle_status = COALESCE(
-            $9,
-            CASE
-              WHEN $1 = 'closed' THEN 'completed'
-              WHEN $1 = 'cancelled' THEN 'cancelled'
-              WHEN $1 = 'rework' THEN 'rework'
-              WHEN $1 IN ('in_progress', 'on_hold', 'under_review') THEN 'in_progress'
-              WHEN $1 = 'assigned' THEN 'assigned'
-              ELSE lifecycle_status
-            END
-          ),
+      SET status = $1::text,
+          started_at = $2::timestamp,
+          completed_at = $3::timestamp,
+          verification_status = $4::text,
+          actual_minutes = $5::int,
+          approval_stage = $6::text,
+          closed_at = $7::timestamp,
+          current_stage_id = COALESCE($8::text, current_stage_id),
+          lifecycle_status = CASE
+            WHEN $9::text IS NOT NULL THEN $9::text
+            WHEN $1::text IN ('closed', 'completed') THEN 'completed'
+            WHEN $1::text = 'cancelled' THEN 'cancelled'
+            WHEN $1::text = 'rework' THEN 'rework'
+            WHEN $1::text IN ('in_progress', 'on_hold', 'under_review') THEN 'in_progress'
+            WHEN $1::text = 'assigned' THEN 'assigned'
+            ELSE lifecycle_status
+          END,
+          assigned_user_id = COALESCE(assigned_user_id, assigned_to),
+          due_date = COALESCE(due_date, deadline),
+          sla_due_date = COALESCE(sla_due_date, due_date, deadline),
+          submitted_at = CASE WHEN $10::boolean THEN $11::timestamp ELSE submitted_at END,
+          approved_at = CASE WHEN $12::boolean THEN $13::timestamp ELSE approved_at END,
           updated_at = NOW()
-      WHERE id = $10
+      WHERE id = $14::int
     `,
     [
       values.status,
@@ -232,8 +367,12 @@ async function updateTaskStatus(taskId, values, client = pool) {
       values.actual_minutes,
       values.approval_stage,
       values.closed_at,
-      values.current_stage_id || null,
+      values.current_stage_id ?? null,
       values.lifecycle_status || null,
+      hasSubmittedAt,
+      values.submitted_at ?? null,
+      hasApprovedAt,
+      values.approved_at ?? null,
       taskId,
     ],
   );
@@ -243,49 +382,65 @@ async function updateTaskVerification(taskId, values, client = pool) {
   const hasActualMinutes = Object.prototype.hasOwnProperty.call(values, "actual_minutes");
   const hasKpiTarget = Object.prototype.hasOwnProperty.call(values, "kpi_target");
   const hasKpiStatus = Object.prototype.hasOwnProperty.call(values, "kpi_status");
+  const hasApprovedAt = Object.prototype.hasOwnProperty.call(values, "approved_at");
+  const hasSubmittedAt = Object.prototype.hasOwnProperty.call(values, "submitted_at");
+  const hasVerifiedAt = Object.prototype.hasOwnProperty.call(values, "verified_at");
+  const hasClosedAt = Object.prototype.hasOwnProperty.call(values, "closed_at");
+  const rejectionCountIncrement = Number(values.rejection_count_increment || 0);
 
   await client.query(
     `
       UPDATE tasks
-      SET verification_status = $1,
-          remarks = $2,
-          verified_at = $3,
-          status = $4,
-          approval_stage = $5,
-          closed_at = $6,
-          actual_minutes = CASE WHEN $7 THEN $8 ELSE actual_minutes END,
-          kpi_target = CASE WHEN $9 THEN $10 ELSE kpi_target END,
-          kpi_status = CASE WHEN $11 THEN $12 ELSE kpi_status END,
-          current_stage_id = COALESCE($13, current_stage_id),
-          lifecycle_status = COALESCE(
-            $14,
-            CASE
-              WHEN $4 = 'closed' THEN 'completed'
-              WHEN $4 = 'cancelled' THEN 'cancelled'
-              WHEN $4 = 'rework' THEN 'rework'
-              WHEN $4 IN ('in_progress', 'on_hold', 'under_review') THEN 'in_progress'
-              WHEN $4 = 'assigned' THEN 'assigned'
-              ELSE lifecycle_status
-            END
-          ),
+      SET verification_status = $1::text,
+          remarks = $2::text,
+          verified_at = CASE WHEN $3::boolean THEN $4::timestamp ELSE verified_at END,
+          status = $5::text,
+          approval_stage = $6::text,
+          closed_at = CASE WHEN $7::boolean THEN $8::timestamp ELSE closed_at END,
+          actual_minutes = CASE WHEN $9::boolean THEN $10::int ELSE actual_minutes END,
+          kpi_target = CASE WHEN $11::boolean THEN $12 ELSE kpi_target END,
+          kpi_status = CASE WHEN $13::boolean THEN $14::text ELSE kpi_status END,
+          current_stage_id = COALESCE($15::text, current_stage_id),
+          lifecycle_status = CASE
+            WHEN $16::text IS NOT NULL THEN $16::text
+            WHEN $5::text IN ('closed', 'completed') THEN 'completed'
+            WHEN $5::text = 'cancelled' THEN 'cancelled'
+            WHEN $5::text = 'rework' THEN 'rework'
+            WHEN $5::text IN ('in_progress', 'on_hold', 'under_review') THEN 'in_progress'
+            WHEN $5::text = 'assigned' THEN 'assigned'
+            ELSE lifecycle_status
+          END,
+          assigned_user_id = COALESCE(assigned_user_id, assigned_to),
+          due_date = COALESCE(due_date, deadline),
+          sla_due_date = COALESCE(sla_due_date, due_date, deadline),
+          approved_at = CASE WHEN $17::boolean THEN $18::timestamp ELSE approved_at END,
+          submitted_at = CASE WHEN $19::boolean THEN $20::timestamp ELSE submitted_at END,
+          rejection_count = COALESCE(rejection_count, 0) + $21::int,
           updated_at = NOW()
-      WHERE id = $15
+      WHERE id = $22::int
     `,
     [
-      values.verification_status,
-      values.remarks,
-      values.verified_at,
-      values.status,
-      values.approval_stage,
-      values.closed_at,
+      values.verification_status ?? null,
+      values.remarks ?? null,
+      hasVerifiedAt,
+      values.verified_at ?? null,
+      values.status ?? null,
+      values.approval_stage ?? null,
+      hasClosedAt,
+      values.closed_at ?? null,
       hasActualMinutes,
-      values.actual_minutes,
+      values.actual_minutes ?? null,
       hasKpiTarget,
-      values.kpi_target,
+      values.kpi_target ?? null,
       hasKpiStatus,
-      values.kpi_status,
-      values.current_stage_id || null,
+      values.kpi_status ?? null,
+      values.current_stage_id ?? null,
       values.lifecycle_status || null,
+      hasApprovedAt,
+      values.approved_at ?? null,
+      hasSubmittedAt,
+      values.submitted_at ?? null,
+      rejectionCountIncrement,
       taskId,
     ],
   );
@@ -297,21 +452,32 @@ async function updateTaskProof(taskId, values, client = pool) {
   const hasProofName = Object.prototype.hasOwnProperty.call(values, "proof_name");
   const hasProofMime = Object.prototype.hasOwnProperty.call(values, "proof_mime");
   const hasProofSize = Object.prototype.hasOwnProperty.call(values, "proof_size");
+  const normalizedProofUrl = typeof values.proof_url === "string" ? values.proof_url.trim() : "";
+  const shouldAppendProofUrl = hasProofUrl && Boolean(normalizedProofUrl);
+
+  if (shouldAppendProofUrl) {
+    await client.query(`
+      UPDATE tasks
+      SET proof_url = COALESCE(proof_url, '{}') || $1
+      WHERE id = $2
+    `, [[normalizedProofUrl], taskId]);
+  }
+
+  if (!hasProofType && !hasProofName && !hasProofMime && !hasProofSize && !shouldAppendProofUrl) {
+    return;
+  }
 
   await client.query(
     `
       UPDATE tasks
-      SET proof_url = CASE WHEN $1 THEN $2 ELSE proof_url END,
-          proof_type = CASE WHEN $3 THEN $4 ELSE proof_type END,
-          proof_name = CASE WHEN $5 THEN $6 ELSE proof_name END,
-          proof_mime = CASE WHEN $7 THEN $8 ELSE proof_mime END,
-          proof_size = CASE WHEN $9 THEN $10 ELSE proof_size END,
+      SET proof_type = CASE WHEN $1::boolean THEN $2::text ELSE proof_type END,
+          proof_name = CASE WHEN $3::boolean THEN $4::text ELSE proof_name END,
+          proof_mime = CASE WHEN $5::boolean THEN $6::text ELSE proof_mime END,
+          proof_size = CASE WHEN $7::boolean THEN $8::int ELSE proof_size END,
           updated_at = NOW()
-      WHERE id = $11
+      WHERE id = $9::int
     `,
     [
-      hasProofUrl,
-      values.proof_url ?? null,
       hasProofType,
       values.proof_type ?? null,
       hasProofName,
@@ -326,39 +492,75 @@ async function updateTaskProof(taskId, values, client = pool) {
 }
 
 async function updateTaskDetails(taskId, values, client = pool) {
+  const hasDescription = hasOwn(values, "description");
+  const hasPriority = hasOwn(values, "priority");
+  const hasDeadline = hasOwn(values, "deadline");
+  const hasPlannedMinutes = hasOwn(values, "planned_minutes");
+  const hasMachineId = hasOwn(values, "machine_id");
+  const hasMachineName = hasOwn(values, "machine_name");
+  const hasLocationTag = hasOwn(values, "location_tag");
+  const hasRecurrenceRule = hasOwn(values, "recurrence_rule");
+  const hasDependencyIds = hasOwn(values, "dependency_ids");
+  const hasRequiresQualityApproval = hasOwn(values, "requires_quality_approval");
+  const hasAssignedTo = hasOwn(values, "assigned_to");
+  const hasAssigneeIds = hasOwn(values, "assignee_ids");
+  const hasAssignedUserId = hasOwn(values, "assigned_user_id");
+
   await client.query(
     `
       UPDATE tasks
-      SET description = COALESCE($1, description),
-          priority = COALESCE($2, priority),
-          deadline = COALESCE($3, deadline),
-          planned_minutes = COALESCE($4, planned_minutes),
-          machine_id = COALESCE($5, machine_id),
-          machine_name = COALESCE($6, machine_name),
-          location_tag = COALESCE($7, location_tag),
-          recurrence_rule = COALESCE($8, recurrence_rule),
-          dependency_ids = COALESCE($9::jsonb, dependency_ids),
-          requires_quality_approval = COALESCE($10, requires_quality_approval),
-          next_escalation_at = CASE WHEN $11 THEN $12 ELSE next_escalation_at END,
-          last_escalated_at = CASE WHEN $13 THEN $14 ELSE last_escalated_at END,
+      SET description = CASE WHEN $1::boolean THEN $2::text ELSE description END,
+          priority = CASE WHEN $3::boolean THEN $4::text ELSE priority END,
+          deadline = CASE WHEN $5::boolean THEN $6::timestamp ELSE deadline END,
+          due_date = CASE WHEN $5::boolean THEN COALESCE($6::timestamp, due_date, deadline) ELSE due_date END,
+          sla_due_date = CASE WHEN $5::boolean THEN COALESCE($6::timestamp, sla_due_date, due_date, deadline) ELSE sla_due_date END,
+          planned_minutes = CASE WHEN $7::boolean THEN $8::int ELSE planned_minutes END,
+          machine_id = CASE WHEN $9::boolean THEN $10::text ELSE machine_id END,
+          machine_name = CASE WHEN $11::boolean THEN $12::text ELSE machine_name END,
+          location_tag = CASE WHEN $13::boolean THEN $14::text ELSE location_tag END,
+          recurrence_rule = CASE WHEN $15::boolean THEN $16::text ELSE recurrence_rule END,
+          dependency_ids = CASE WHEN $17::boolean THEN $18::jsonb ELSE dependency_ids END,
+          requires_quality_approval = CASE WHEN $19::boolean THEN $20::boolean ELSE requires_quality_approval END,
+          assigned_to = CASE WHEN $21::boolean THEN $22::text ELSE assigned_to END,
+          assignee_ids = CASE WHEN $23::boolean THEN $24::jsonb ELSE assignee_ids END,
+          assigned_user_id = CASE WHEN $25::boolean THEN $26::text ELSE assigned_user_id END,
+          assigned_at = CASE WHEN $21::boolean OR $23::boolean THEN NOW() ELSE assigned_at END,
+          next_escalation_at = CASE WHEN $27::boolean THEN $28::timestamp ELSE next_escalation_at END,
+          last_escalated_at = CASE WHEN $29::boolean THEN $30::timestamp ELSE last_escalated_at END,
           updated_at = NOW()
-      WHERE id = $15
+      WHERE id = $31::int
     `,
     [
-      values.description,
-      values.priority,
-      values.deadline,
-      values.planned_minutes,
-      values.machine_id,
-      values.machine_name,
-      values.location_tag,
-      values.recurrence_rule,
-      values.dependency_ids ? JSON.stringify(values.dependency_ids) : null,
-      values.requires_quality_approval,
+      hasDescription,
+      values.description ?? null,
+      hasPriority,
+      values.priority ?? null,
+      hasDeadline,
+      values.deadline ?? null,
+      hasPlannedMinutes,
+      values.planned_minutes ?? null,
+      hasMachineId,
+      values.machine_id ?? null,
+      hasMachineName,
+      values.machine_name ?? null,
+      hasLocationTag,
+      values.location_tag ?? null,
+      hasRecurrenceRule,
+      values.recurrence_rule ?? null,
+      hasDependencyIds,
+      hasDependencyIds ? JSON.stringify(values.dependency_ids ?? []) : null,
+      hasRequiresQualityApproval,
+      values.requires_quality_approval ?? null,
+      hasAssignedTo,
+      values.assigned_to ?? null,
+      hasAssigneeIds,
+      hasAssigneeIds ? JSON.stringify(values.assignee_ids ?? []) : null,
+      hasAssignedUserId,
+      values.assigned_user_id ?? null,
       Boolean(values.has_next_escalation_at),
-      values.next_escalation_at,
+      values.next_escalation_at ?? null,
       Boolean(values.has_last_escalated_at),
-      values.last_escalated_at,
+      values.last_escalated_at ?? null,
       taskId,
     ],
   );
@@ -674,7 +876,7 @@ async function deleteTaskAttachment(taskId, attachmentId, client = pool) {
   return mapTaskAttachmentRow(result.rows[0], { includeFilePath: true });
 }
 
-module.exports = {
+module.exports = instrumentModuleExports("repository.tasksRepository", {
   addTaskAttachment,
   addTaskLog,
   advanceTaskEscalation,
@@ -693,9 +895,10 @@ module.exports = {
   listTasksByAccess,
   listTasksDueForEscalation,
   listTasksForWorkflowInstance,
+  listVerificationTasksByAccess,
   updateTaskChecklist,
   updateTaskDetails,
   updateTaskProof,
   updateTaskStatus,
   updateTaskVerification,
-};
+});

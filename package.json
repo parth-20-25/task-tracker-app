@@ -13,8 +13,10 @@
     "workspace:frontend": "cd frontend && npm run build",
     "workspace:python": "cd python-service && uvicorn app.main:app --host 0.0.0.0 --port 8000"
   },
-  "devDependencies": {},
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "vite-plugin-pwa": "^1.2.0"
   }
 }

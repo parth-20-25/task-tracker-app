@@ -1,12 +1,4 @@
-const { Pool } = require('pg');
-const { env } = require('./config/env');
-const pool = new Pool({
-  user: env.db.user,
-  host: env.db.host,
-  database: env.db.database,
-  password: env.db.password,
-  port: env.db.port,
-});
+const pool = require("./db");
 async function backfill() {
   const client = await pool.connect();
   try {

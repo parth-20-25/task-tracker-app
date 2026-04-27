@@ -126,6 +126,24 @@ async function extractDesignWorkbook(file) {
     throw new AppError(400, "No Excel file uploaded");
   }
 
+  if (!env.designExtraction.serviceUrl) {
+    throw new AppError(
+      500,
+      "Failed to process file",
+      "DESIGN_EXTRACTION_SERVICE_URL is not configured",
+      "DESIGN_EXTRACTION_NOT_CONFIGURED",
+    );
+  }
+
+  if (!env.designExtraction.token) {
+    throw new AppError(
+      500,
+      "Failed to process file",
+      "DESIGN_EXTRACTION_SERVICE_TOKEN is not configured",
+      "DESIGN_EXTRACTION_NOT_CONFIGURED",
+    );
+  }
+
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), env.designExtraction.timeoutMs);
 

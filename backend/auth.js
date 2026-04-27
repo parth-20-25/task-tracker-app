@@ -1,8 +1,16 @@
 const jwt = require("jsonwebtoken");
 const { env } = require("./config/env");
 
+function getJwtSecret() {
+  if (!env.jwtSecret) {
+    throw new Error("JWT_SECRET is required for authentication.");
+  }
+
+  return env.jwtSecret;
+}
+
 function generateToken(employeeId) {
-  return jwt.sign({ employee_id: employeeId }, env.jwtSecret, { expiresIn: env.jwtExpiresIn });
+  return jwt.sign({ employee_id: employeeId }, getJwtSecret(), { expiresIn: env.jwtExpiresIn });
 }
 
 function verifyToken(req, res, next) {
@@ -27,7 +35,7 @@ function verifyToken(req, res, next) {
   }
 
   try {
-    req.auth = jwt.verify(token, env.jwtSecret);
+    req.auth = jwt.verify(token, getJwtSecret());
     if (!req.auth || typeof req.auth.employee_id !== "string" || !req.auth.employee_id.trim()) {
       return res.status(401).json({
         success: false,

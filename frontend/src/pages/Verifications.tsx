@@ -11,13 +11,12 @@ import { toast } from '@/hooks/use-toast';
 import { CheckCircle2, XCircle, Calendar, User, FileText } from 'lucide-react';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { taskQueryKeys } from '@/lib/queryKeys';
-
-const API_ROOT = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/api$/, "");
+import { API_ROOT_URL } from '@/api/config';
 
 function toProofUrl(path: string) {
   return path.startsWith("http://") || path.startsWith("https://")
     ? path
-    : `${API_ROOT}${path}`;
+    : `${API_ROOT_URL}${path}`;
 }
 
 export default function Verifications() {

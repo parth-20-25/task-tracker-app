@@ -14,8 +14,9 @@ ALLOWED_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadshee
 ALLOWED_EXTENSION = ".xlsx"
 ALLOWED_IMAGE_COLUMNS = {6: "image_1_url", 9: "image_2_url"}
 MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTION_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
-SERVICE_TOKEN = os.getenv("EXTRACTION_SERVICE_TOKEN") or os.getenv("DESIGN_EXTRACTION_SERVICE_TOKEN", "design-extraction-local-token")
-PUBLIC_UPLOAD_BASE_URL = os.getenv("PUBLIC_UPLOAD_BASE_URL", "http://localhost:5000/uploads/design-excel")
+SERVICE_TOKEN = (os.getenv("EXTRACTION_SERVICE_TOKEN") or os.getenv("DESIGN_EXTRACTION_SERVICE_TOKEN") or "").strip()
+BACKEND_API_URL = (os.getenv("BACKEND_API_URL") or "").strip()
+PUBLIC_UPLOAD_BASE_URL = (os.getenv("PUBLIC_UPLOAD_BASE_URL") or "").strip()
 DEFAULT_IMAGE_DIR = Path(__file__).resolve().parents[2] / "backend" / "uploads" / "design-excel"
 IMAGE_OUTPUT_DIR = Path(os.getenv("EXTRACTED_IMAGE_DIR", str(DEFAULT_IMAGE_DIR))).resolve()
 
@@ -25,6 +26,38 @@ app = FastAPI()
 @app.get("/")
 def root() -> dict[str, str]:
     return {"status": "running"}
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def normalize_base_url(value: str) -> str:
+    return value.strip().rstrip("/")
+
+
+def resolve_public_upload_base_url() -> str:
+    configured_public_url = normalize_base_url(PUBLIC_UPLOAD_BASE_URL)
+    if configured_public_url:
+        return configured_public_url
+
+    configured_backend_api_url = normalize_base_url(BACKEND_API_URL)
+    if not configured_backend_api_url:
+        raise RuntimeError("BACKEND_API_URL or PUBLIC_UPLOAD_BASE_URL must be configured.")
+
+    backend_origin = configured_backend_api_url[:-4] if configured_backend_api_url.endswith("/api") else configured_backend_api_url
+    return f"{backend_origin}/uploads/design-excel"
+
+
+def get_database_connection():
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        return None
+
+    import psycopg2
+
+    return psycopg2.connect(database_url, sslmode="require")
 
 
 def normalize_text(value: Any) -> str:
@@ -143,7 +176,7 @@ def resolve_header_map(worksheet, header_row_index: int) -> dict[str, int]:
 
 
 def build_public_image_url(file_name: str) -> str:
-    return f"{PUBLIC_UPLOAD_BASE_URL.rstrip('/')}/{file_name}"
+    return f"{resolve_public_upload_base_url()}/{file_name}"
 
 
 def save_image_bytes(image_bytes: bytes, excel_row: int, slot_name: str, extension: str) -> str:
@@ -242,6 +275,9 @@ async def extract_workbook(
     file: UploadFile = File(...),
     x_extraction_token: str | None = Header(default=None),
 ):
+    if not SERVICE_TOKEN:
+        return build_error_response(500, "Service is not configured", [build_error("EXTRACTION_SERVICE_TOKEN is required.")])
+
     if x_extraction_token != SERVICE_TOKEN:
         return build_error_response(401, "Unauthorized", [build_error("Invalid extraction token.")])
 
@@ -292,6 +328,6 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app.main:app",
-        host=os.getenv("HOST", "127.0.0.1"),
+        host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8000")),
     )

@@ -1,22 +1,17 @@
 const { Pool } = require("pg");
-const { env } = require("./config/env");
 const { logger } = require("./lib/logger");
 const { getExecutionMetadata, safeSerialize, summarizeQuery } = require("./lib/observability");
 
-const poolConfig = env.db.connectionString
-  ? {
-      connectionString: env.db.connectionString,
-      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-    }
-  : {
-      user: env.db.user,
-      host: env.db.host,
-      database: env.db.database,
-      password: env.db.password,
-      port: env.db.port,
-    };
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL is required for PostgreSQL connectivity.");
+}
 
-const pool = new Pool(poolConfig);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 function normalizeQueryText(query) {
   if (typeof query === "string") {
@@ -153,6 +148,5 @@ pool.connect = (...args) => {
   return originalConnect(...args).then((client) => instrumentQueryable(client, "client"));
 };
 
-module.exports = {
-  pool,
-};
+module.exports = pool;
+module.exports.pool = pool;

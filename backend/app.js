@@ -19,13 +19,13 @@ const { env } = require("./config/env");
 function createApp() {
   const app = express();
 
-  app.use(cors({ origin: env.corsOrigin }));
+  app.use(cors({ origin: process.env.CORS_ORIGIN }));
   app.use(express.json());
   app.use(requestLogger);
   app.use("/uploads", express.static(path.join(__dirname, env.uploadsDir)));
 
   app.get("/api/health", (_req, res) => {
-    res.json({ success: true });
+    res.status(200).json({ status: "ok" });
   });
 
   app.get("/", (_req, res) => {

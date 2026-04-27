@@ -1,18 +1,10 @@
 const { pool } = require("../db");
 const { ensureDesignDepartmentSchema } = require("../repositories/designSchemaRepository");
-const { alignPermissionData } = require("../repositories/permissionRepository");
-const {
-  ensureDefaultWorkflowsForAllDepartments,
-  repairOrphanDesignProjects,
-} = require("./workflowRecoveryService");
+const { repairOrphanDesignProjects } = require("./workflowRecoveryService");
 const {
   ensureReferenceTables,
   ensureTasksTable,
   ensureUsersTable,
-  normalizeSeedUserPasswords,
-  seedPermissionsAndWorkflows,
-  seedReferenceData,
-  seedUsersIfNeeded,
   syncTaskEscalationSchedule,
   syncTaskWorkflowState,
 } = require("../repositories/bootstrapRepository");
@@ -25,34 +17,30 @@ async function initDatabase() {
 
   try {
     console.log("[bootstrap] Starting database initialization...");
-    await client.query("BEGIN");
-    
+
+    // Acquire an advisory lock so only one bootstrap runs at a time
+    await client.query("SELECT pg_advisory_lock(987654321)");
+
+    // Ensure a default schema is selected so unqualified CREATE TABLE statements work
+    await client.query("SET search_path TO public");
+
     await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
-    
+
     console.log("[bootstrap] Ensuring tables exist...");
     await ensureUsersTable(client);
     await ensureTasksTable(client);
     await ensureReferenceTables(client);
     await ensurePerformanceAnalyticsTables(client);
-    
-    console.log("[bootstrap] Seeding reference data...");
-    await seedReferenceData(client);
     await ensureDesignDepartmentSchema(client);
-    await seedPermissionsAndWorkflows(client);
-    await alignPermissionData(client);
-    
-    console.log("[bootstrap] Ensuring users and workflows...");
-    await seedUsersIfNeeded(client);
-    await normalizeSeedUserPasswords(client);
+
+    console.log("[bootstrap] Skipping seed and demo data initialization.");
     await repairOrphanDesignProjects(null, client);
-    await ensureDefaultWorkflowsForAllDepartments(client);
-    
+
     console.log("[bootstrap] Syncing task states...");
     await syncTaskWorkflowState(client);
     await syncTaskEscalationSchedule(client);
-    
-    await client.query("COMMIT");
-    console.log("[bootstrap] Core database bootstrap committed.");
+
+    console.log("[bootstrap] Core database bootstrap completed.");
 
     try {
       console.log("[bootstrap] Refreshing performance analytics snapshots...");
@@ -62,13 +50,17 @@ async function initDatabase() {
     } catch (refreshError) {
       console.error("[bootstrap] Initial performance analytics refresh failed:", refreshError?.message || refreshError);
     }
-    
+
     console.log(`[bootstrap] Database initialization completed in ${Date.now() - startTime}ms`);
   } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("[bootstrap] FATAL: Database initialization failed. Transaction rolled back.", error);
+    console.error("[bootstrap] FATAL: Database initialization failed.", error);
     throw error;
   } finally {
+    try {
+      await client.query("SELECT pg_advisory_unlock(987654321)");
+    } catch (unlockErr) {
+      // ignore unlock errors
+    }
     client.release();
   }
 }

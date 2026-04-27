@@ -11,6 +11,7 @@ import { formatDurationMinutes } from '@/lib/formatDuration';
 import { TaskExecutionDialog } from '@/components/TaskExecutionDialog';
 import { hasUserPermission } from '@/lib/permissions';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
+import { API_ROOT_URL } from '@/api/config';
 
 interface TaskCardProps {
   task: Task;
@@ -18,12 +19,10 @@ interface TaskCardProps {
   compact?: boolean;
 }
 
-const API_ROOT = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/api$/, "");
-
 function toProofUrl(path: string) {
   return path.startsWith("http://") || path.startsWith("https://")
     ? path
-    : `${API_ROOT}${path}`;
+    : `${API_ROOT_URL}${path}`;
 }
 
 export function TaskCard({ task, showActions = true, compact = false }: TaskCardProps) {

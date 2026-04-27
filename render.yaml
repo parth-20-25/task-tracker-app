@@ -16,3 +16,27 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      - key: ENABLE_TASK_SEED
+        value: "false"
+      - key: DESIGN_EXTRACTION_SERVICE_URL
+        sync: false
+      - key: DESIGN_EXTRACTION_SERVICE_TOKEN
+        sync: false
+
+  - type: web
+    name: tasktracker-python-service
+    env: python
+    rootDir: python-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: DATABASE_URL
+        sync: false
+      - key: BACKEND_API_URL
+        sync: false
+      - key: EXTRACTION_SERVICE_TOKEN
+        sync: false
+      - key: PUBLIC_UPLOAD_BASE_URL
+        sync: false

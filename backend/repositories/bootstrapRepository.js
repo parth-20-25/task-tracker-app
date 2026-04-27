@@ -33,6 +33,7 @@ async function safeCreateIndex(client, statement, indexName) {
 }
 
 async function ensureUsersTable(client) {
+  await client.query(`SET search_path TO public`);
   await client.query(`
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -53,6 +54,7 @@ async function ensureUsersTable(client) {
 }
 
 async function ensureTasksTable(client) {
+  await client.query(`SET search_path TO public`); 
   await client.query(`
     CREATE TABLE IF NOT EXISTS tasks (
       id SERIAL PRIMARY KEY,
@@ -235,37 +237,42 @@ async function ensureTasksTable(client) {
   `);
 
   await client.query(`
-    UPDATE tasks t
-    SET project_id = COALESCE(t.project_id, f.project_id),
-        scope_id = COALESCE(t.scope_id, f.scope_id),
-        fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
-    FROM design.fixtures f
-    WHERE t.fixture_id = f.id
-      AND (
-        t.project_id IS NULL
-        OR t.scope_id IS NULL
-        OR COALESCE(t.fixture_no, '') = ''
-      )
-  `);
+  DO $$
+  BEGIN
+    IF EXISTS (
+      SELECT 1 FROM information_schema.tables 
+      WHERE table_schema = 'design' AND table_name = 'projects'
+    )
+    AND EXISTS (
+      SELECT 1 FROM information_schema.tables 
+      WHERE table_schema = 'design' AND table_name = 'scopes'
+    )
+    AND EXISTS (
+      SELECT 1 FROM information_schema.tables 
+      WHERE table_schema = 'design' AND table_name = 'fixtures'
+    )
+    THEN
 
-  await client.query(`
-    UPDATE tasks t
-    SET project_id = COALESCE(t.project_id, p.id),
-        scope_id = COALESCE(t.scope_id, s.id),
-        fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
-    FROM design.projects p
-    JOIN design.scopes s
-      ON s.project_id = p.id
-    JOIN design.fixtures f
-      ON f.scope_id = s.id
-    WHERE t.project_id IS NULL
-      AND t.scope_id IS NULL
-      AND COALESCE(t.fixture_no, '') = ''
-      AND p.department_id = t.department_id
-      AND p.project_no = t.project_no
-      AND s.scope_name = t.scope_name
-      AND f.fixture_no = t.quantity_index
+      UPDATE tasks t
+      SET project_id = COALESCE(t.project_id, p.id),
+          scope_id = COALESCE(t.scope_id, s.id),
+          fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
+      FROM design.projects p
+      JOIN design.scopes s ON s.project_id = p.id
+      JOIN design.fixtures f ON f.scope_id = s.id
+      WHERE t.project_id IS NULL
+        AND t.scope_id IS NULL
+        AND COALESCE(t.fixture_no, '') = ''
+        AND p.department_id = t.department_id
+        AND p.project_no = t.project_no
+        AND s.scope_name = t.scope_name
+        AND f.fixture_no = t.quantity_index;
+
+    END IF;
+  END $$;
   `);
+  // Duplicate unguarded update referencing design.* removed.
+  // The guarded DO $$ block above performs this update only when design tables exist.
 
   await client.query(`
     UPDATE tasks
@@ -330,6 +337,7 @@ async function ensureTasksTable(client) {
 }
 
 async function ensureReferenceTables(client) {
+  await client.query(`SET search_path TO public`);
   await ensurePerformanceAnalyticsTables(client);
 
   await client.query(`
@@ -541,7 +549,7 @@ async function ensureReferenceTables(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS fixture_workflow_progress (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      fixture_id UUID NOT NULL,
       department_id TEXT NOT NULL REFERENCES departments(id),
       stage_name TEXT NOT NULL,
       stage_order INTEGER NOT NULL,
@@ -616,7 +624,7 @@ async function ensureReferenceTables(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS fixture_workflow_stage_attempts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      fixture_id UUID NOT NULL,
       department_id TEXT NOT NULL REFERENCES departments(id),
       stage_name TEXT NOT NULL,
       attempt_no INTEGER NOT NULL,

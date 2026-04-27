@@ -13,10 +13,10 @@ import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
+import { API_ROOT_URL } from "@/api/config";
 
 
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-const API_ROOT = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/api$/, "");
 const MAX_TASK_PROOF_SIZE_MB = 10;
 const MAX_TASK_PROOF_SIZE_BYTES = MAX_TASK_PROOF_SIZE_MB * 1024 * 1024;
 const ALLOWED_TASK_PROOF_MIME_TYPES = new Set([
@@ -39,7 +39,7 @@ function fileUrl(path: string) {
     return path;
   }
 
-  return `${API_ROOT}${path}`;
+  return `${API_ROOT_URL}${path}`;
 }
 
 function isAllowedTaskProofFile(file: File) {

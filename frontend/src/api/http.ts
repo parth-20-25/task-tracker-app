@@ -1,6 +1,5 @@
 import { ApiError } from "@/lib/api/ApiError";
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+import { API_BASE_URL } from "@/api/config";
 
 export function getStoredToken() {
   return localStorage.getItem("token");
@@ -41,7 +40,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers,
   });
@@ -81,7 +80,7 @@ export async function apiDownload(path: string, options: { filename: string }, i
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
 
   if (!response.ok) {
     const text = await response.text();

@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const { env } = require("../config/env");
 const { seedTasksIfNeeded } = require("../repositories/taskSeedRepository");
 
 async function main() {
@@ -8,7 +9,7 @@ async function main() {
     process.exit(1);
   }
 
-  if (process.env.ENABLE_TASK_SEED !== "true") {
+  if (!env.enableTaskSeed) {
     console.error('Task seeding is disabled. Set ENABLE_TASK_SEED="true" to run this script.');
     process.exitCode = 1;
     return;

@@ -1,10 +1,11 @@
+require("dotenv").config();
 const express = require("express");
 const app = express();
 
 const cors = require("cors");
 const path = require("path");
 
-const { env } = require("./config/env");
+const { env, validateBackendEnv } = require("./config/env");
 const { registerProcessErrorHandlers } = require("./lib/observability");
 
 // Routes
@@ -40,13 +41,13 @@ console.log("PORT:", process.env.PORT);
 registerProcessErrorHandlers();
 
 // App configuration (middlewares)
-app.use(cors({ origin: env.corsOrigin }));
+app.use(cors({ origin: process.env.CORS_ORIGIN }));
 app.use(express.json());
 app.use(requestLogger);
 app.use("/uploads", express.static(path.join(__dirname, env.uploadsDir)));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ success: true });
+  res.status(200).json({ status: "ok" });
 });
 
 app.get("/", (_req, res) => {
@@ -82,10 +83,11 @@ async function safeProcessJobs() {
 }
 
 async function startServer() {
+  validateBackendEnv();
   await initDatabase();
 
   return new Promise((resolve) => {
-    const PORT = process.env.PORT || 5000;
+    const PORT = env.port;
     const server = app.listen(PORT, () => {
       startEscalationWorker();
       startPerformanceAnalyticsWorker();

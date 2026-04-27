@@ -1,15 +1,6 @@
-const { Pool } = require("pg");
-const { env } = require("./config/env");
+const pool = require("./db");
 const { ensureDesignDepartmentSchema } = require("./repositories/designSchemaRepository");
 const { seedPermissions } = require("./repositories/permissionRepository");
-
-const pool = new Pool({
-  user: env.db.user,
-  host: env.db.host,
-  database: env.db.database,
-  password: env.db.password,
-  port: env.db.port,
-});
 
 async function runMigrations() {
   const client = await pool.connect();

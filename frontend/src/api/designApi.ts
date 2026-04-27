@@ -66,6 +66,7 @@ export interface CreateDesignTaskPayload {
   priority: Task["priority"];
   deadline: string;
   planned_minutes?: number;
+  [key: string]: unknown;
 }
 
 export interface UploadDepartmentProjectsResponse {

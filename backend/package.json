@@ -1,29 +1,12 @@
 {
-  "name": "backend",
+  "name": "tasktracker-backend",
   "version": "1.0.0",
-  "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "backfill:design-project-relations": "node scripts/backfillDesignProjectRelations.js",
-    "seed:bootstrap": "node scripts/bootstrapReferenceData.js",
-    "seed:tasks": "node scripts/seedTasks.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "bcrypt": "^6.0.0",
-    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "exceljs": "^4.4.0",
-    "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.8",
-    "pg": "^8.20.0",
-    "uuid": "^13.0.0",
-    "xlsx": "^0.18.5"
+    "pg": "^8.20.0"
   }
 }

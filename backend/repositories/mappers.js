@@ -105,6 +105,7 @@ function mapUserRow(row, prefix = "") {
     role_id: role,
     parent_id: row[`${prefix}parent_id`] || null,
     department_id: row[`${prefix}department_id`],
+    parent_id: row[`${prefix}parent_id`],
     is_active: row[`${prefix}is_active`],
     created_at: row[`${prefix}created_at`],
     role: mapRoleRow(row, prefix),

@@ -4,7 +4,7 @@ const { logger } = require("../lib/logger");
 const { instrumentModuleExports } = require("../lib/observability");
 const { TASK_STATUSES } = require("../config/constants");
 const { listTasksByAccess } = require("../repositories/tasksRepository");
-const { getTaskAccess, isAdmin } = require("./accessControlService");
+const { getTaskAccess, getVisibleUserIds, isAdmin } = require("./accessControlService");
 
 const REPORTABLE_STATUSES = new Set([
   TASK_STATUSES.ASSIGNED,
@@ -432,12 +432,23 @@ function buildReportAccessClause(user, params) {
     return "";
   }
 
-  if (!user?.department_id) {
+  const visibleUserIds = getVisibleUserIds(user);
+
+  if (visibleUserIds.length === 0) {
     return "1 = 0";
   }
 
-  params.push(user.department_id);
-  return `t.department_id = $${params.length}`;
+  params.push(visibleUserIds);
+  return `
+    (
+      COALESCE(t.assigned_user_id, t.assigned_to) = ANY($${params.length}::text[])
+      OR EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+        WHERE task_assignee.employee_id = ANY($${params.length}::text[])
+      )
+    )
+  `;
 }
 
 async function listTaskReportRows(user, filters = {}) {

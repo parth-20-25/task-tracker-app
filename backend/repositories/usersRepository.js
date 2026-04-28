@@ -76,6 +76,48 @@ async function listUsersByRoleAndDepartment(roleId, departmentId, client = pool)
   return result.rows.map((row) => mapUserRow(row));
 }
 
+async function getVisibleUserIdsForEmployee(employeeId, client = pool) {
+  if (!employeeId) {
+    return [];
+  }
+
+  const result = await client.query(
+    `
+      WITH RECURSIVE viewer AS (
+        SELECT
+          u.employee_id,
+          u.department_id
+        FROM users u
+        WHERE u.employee_id = $1
+        LIMIT 1
+      ),
+      visible_users AS (
+        SELECT
+          viewer.employee_id
+        FROM viewer
+
+        UNION
+
+        SELECT
+          child.employee_id
+        FROM users child
+        JOIN visible_users parent_tree
+          ON child.parent_id = parent_tree.employee_id
+        JOIN viewer
+          ON child.department_id = viewer.department_id
+        WHERE viewer.department_id IS NOT NULL
+          AND child.department_id = viewer.department_id
+      )
+      SELECT employee_id
+      FROM visible_users
+      ORDER BY employee_id ASC
+    `,
+    [employeeId],
+  );
+
+  return result.rows.map((row) => row.employee_id).filter(Boolean);
+}
+
 async function createUser(user, client = pool) {
   try {
     await client.query(
@@ -85,19 +127,21 @@ async function createUser(user, client = pool) {
           employee_id,
           email,
           role,
+          parent_id,
           department_id,
           password_hash,
           is_active,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
       `,
       [
         user.name,
         user.employee_id,
         user.email || null,
         user.role,
+        user.parent_id || null,
         user.department_id || null,
         user.password_hash,
         user.is_active,
@@ -115,6 +159,7 @@ async function createUser(user, client = pool) {
 }
 
 async function updateUser(employeeId, user, client = pool) {
+  const hasParentId = Object.prototype.hasOwnProperty.call(user || {}, "parent_id");
   const result = await client.query(
     `
       UPDATE users
@@ -122,6 +167,7 @@ async function updateUser(employeeId, user, client = pool) {
           role = $3,
           department_id = $4,
           is_active = $5,
+          parent_id = CASE WHEN $6::boolean THEN $7 ELSE parent_id END,
           updated_at = NOW()
       WHERE employee_id = $1
       RETURNING employee_id
@@ -132,6 +178,8 @@ async function updateUser(employeeId, user, client = pool) {
       user.role,
       user.department_id || null,
       user.is_active,
+      hasParentId,
+      user.parent_id || null,
     ],
   );
 
@@ -213,6 +261,7 @@ module.exports = {
   getActiveTaskDependencies,
   listUsers,
   listUsersByRoleAndDepartment,
+  getVisibleUserIdsForEmployee,
   setUserActiveStatus,
   updateUser,
 };

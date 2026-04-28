@@ -76,6 +76,42 @@ function isSupervisor(user) {
   return (getRoleLevel(user) ?? Number.MAX_SAFE_INTEGER) <= 4;
 }
 
+function getVisibleUserIds(user) {
+  if (!user) {
+    return [];
+  }
+
+  if (isAdmin(user)) {
+    return null;
+  }
+
+  const visibleUserIds = Array.isArray(user.visible_user_ids)
+    ? user.visible_user_ids.filter(Boolean)
+    : [];
+
+  if (user.employee_id) {
+    visibleUserIds.push(user.employee_id);
+  }
+
+  return [...new Set(visibleUserIds)];
+}
+
+function canAccessUser(user, target) {
+  const targetEmployeeId = typeof target === "string"
+    ? target
+    : target?.employee_id || null;
+
+  if (!targetEmployeeId) {
+    return false;
+  }
+
+  if (isAdmin(user)) {
+    return true;
+  }
+
+  return getVisibleUserIds(user).includes(targetEmployeeId);
+}
+
 function canAccessDepartment(user, departmentId) {
   if (isAdmin(user)) {
     return true;
@@ -93,7 +129,18 @@ function canAccessTask(user, task) {
     return false;
   }
 
-  return canAccessDepartment(user, task.department_id);
+  if (isAdmin(user)) {
+    return true;
+  }
+
+  const visibleUserIds = getVisibleUserIds(user);
+  const taskAssigneeIds = [
+    task.assigned_user_id,
+    task.assigned_to,
+    ...(Array.isArray(task.assignee_ids) ? task.assignee_ids : []),
+  ].filter(Boolean);
+
+  return taskAssigneeIds.some((employeeId) => visibleUserIds.includes(employeeId));
 }
 
 function canAssignTo(assigner, assignee) {
@@ -112,7 +159,7 @@ function canAssignTo(assigner, assignee) {
     return false;
   }
 
-  if (!canAccessDepartment(assigner, assignee.department_id)) {
+  if (!canAccessUser(assigner, assignee)) {
     return false;
   }
 
@@ -152,13 +199,25 @@ function getTaskAccess(user) {
     return { clause: "WHERE t.status <> 'cancelled'", params: [] };
   }
 
-  if (!user?.department_id) {
+  const visibleUserIds = getVisibleUserIds(user);
+
+  if (visibleUserIds.length === 0) {
     return { clause: "WHERE 1 = 0", params: [] };
   }
 
   return {
-    clause: "WHERE t.department_id = $1 AND t.status <> 'cancelled'",
-    params: [user.department_id],
+    clause: `
+      WHERE t.status <> 'cancelled'
+        AND (
+          COALESCE(t.assigned_user_id, t.assigned_to) = ANY($1::text[])
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+            WHERE task_assignee.employee_id = ANY($1::text[])
+          )
+        )
+    `,
+    params: [visibleUserIds],
   };
 }
 
@@ -171,14 +230,11 @@ function filterUsersForScope(currentUser, users, scope = USER_SCOPES.ACCESSIBLE)
     return users;
   }
 
-  if (isSupervisor(currentUser)) {
-    return users.filter((candidate) => candidate.department_id === currentUser.department_id);
-  }
-
-  return users.filter((candidate) => candidate.employee_id === currentUser.employee_id);
+  return users.filter((candidate) => canAccessUser(currentUser, candidate));
 }
 
 module.exports = {
+  canAccessUser,
   canAccessDepartment,
   canAccessTask,
   canAssignTo,
@@ -187,6 +243,7 @@ module.exports = {
   getRoleId,
   getRoleLevel,
   getTaskAccess,
+  getVisibleUserIds,
   hasPermission,
   isAdmin,
   isSupervisor,

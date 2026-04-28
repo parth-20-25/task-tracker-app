@@ -74,10 +74,12 @@ function requireFields(payload, fields) {
 }
 
 async function saveUser(actor, payload) {
+  const hasParentId = Object.prototype.hasOwnProperty.call(payload || {}, "parent_id");
   const normalizedPayload = {
     employee_id: payload.employee_id?.trim(),
     name: payload.name?.trim(),
     role: (payload.role ?? payload.role_id)?.trim(),
+    parent_id: hasParentId ? (payload.parent_id?.trim() || null) : undefined,
     department_id: payload.department_id?.trim() || null,
     password: payload.password?.trim(),
     is_active: payload.is_active !== false,
@@ -95,6 +97,7 @@ async function saveUser(actor, payload) {
       employee_id: normalizedPayload.employee_id,
       name: normalizedPayload.name,
       role: normalizedPayload.role,
+      parent_id: normalizedPayload.parent_id ?? null,
       department_id: normalizedPayload.department_id,
       password_hash: await bcrypt.hash(normalizedPayload.password, 10),
       is_active: normalizedPayload.is_active,
@@ -107,6 +110,7 @@ async function saveUser(actor, payload) {
     user = await updateUser(normalizedPayload.employee_id, {
       name: normalizedPayload.name,
       role: normalizedPayload.role,
+      ...(hasParentId ? { parent_id: normalizedPayload.parent_id } : {}),
       department_id: normalizedPayload.department_id,
       is_active: normalizedPayload.is_active,
     });
@@ -119,6 +123,7 @@ async function saveUser(actor, payload) {
     targetId: normalizedPayload.employee_id,
     metadata: {
       role: normalizedPayload.role,
+      ...(hasParentId ? { parent_id: normalizedPayload.parent_id } : {}),
       department_id: normalizedPayload.department_id,
       is_active: normalizedPayload.is_active,
     },

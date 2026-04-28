@@ -4,6 +4,7 @@ function buildUserColumns({ userAlias, roleAlias, departmentAlias, prefix = "" }
     ${userAlias}.name AS ${prefix}name,
     ${userAlias}.email AS ${prefix}email,
     ${userAlias}.role AS ${prefix}role,
+    ${userAlias}.parent_id AS ${prefix}parent_id,
     ${userAlias}.department_id AS ${prefix}department_id,
     COALESCE(${userAlias}.is_active, TRUE) AS ${prefix}is_active,
     ${userAlias}.created_at AS ${prefix}created_at,

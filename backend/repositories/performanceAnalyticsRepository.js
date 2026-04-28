@@ -422,7 +422,7 @@ async function getPerformanceAnalyticsState(scopeKey = "global", client = pool) 
   return result.rows[0] || null;
 }
 
-async function listUserPerformance(departmentId, client = pool) {
+async function listUserPerformance(departmentId, visibleUserIds = null, client = pool) {
   const result = await client.query(
     `
       SELECT
@@ -443,9 +443,10 @@ async function listUserPerformance(departmentId, client = pool) {
       JOIN departments d
         ON d.id = up.department_id
       WHERE ($1::text IS NULL OR up.department_id = $1::text)
+        AND ($2::text[] IS NULL OR up.user_id = ANY($2::text[]))
       ORDER BY up.rank ASC NULLS LAST, up.score DESC, u.name ASC
     `,
-    [departmentId || null],
+    [departmentId || null, visibleUserIds],
   );
 
   return result.rows.map((row) => ({
@@ -506,6 +507,78 @@ async function findUserPerformance(userId, client = pool) {
     score: roundNumber(row.score),
     rank: row.rank === null || row.rank === undefined ? null : Number(row.rank),
     last_updated: row.last_updated,
+  };
+}
+
+async function getPerformanceOverviewForUsers(departmentId = null, visibleUserIds = [], client = pool) {
+  if (!Array.isArray(visibleUserIds) || visibleUserIds.length === 0) {
+    return {
+      total_tasks: 0,
+      approved_tasks: 0,
+      approval_rate: null,
+      overdue_rate: null,
+      rework_rate: null,
+      last_updated: null,
+      has_data: false,
+    };
+  }
+
+  const result = await client.query(
+    `
+      SELECT
+        COUNT(*)::int AS total_tasks,
+        COUNT(*) FILTER (
+          WHERE (
+            t.status = 'closed'
+            OR t.verification_status = 'approved'
+            OR t.approved_at IS NOT NULL
+          )
+        )::int AS approved_tasks,
+        COUNT(*) FILTER (
+          WHERE COALESCE(t.rejection_count, 0) > 0
+            AND (
+              t.status = 'closed'
+              OR t.verification_status = 'approved'
+              OR t.approved_at IS NOT NULL
+            )
+        )::int AS rework_tasks,
+        COUNT(*) FILTER (
+          WHERE t.due_date IS NOT NULL
+            AND (
+              t.status = 'closed'
+              OR t.verification_status = 'approved'
+              OR t.approved_at IS NOT NULL
+            )
+        )::int AS timed_approved_tasks,
+        COUNT(*) FILTER (
+          WHERE t.due_date IS NOT NULL
+            AND COALESCE(t.approved_at, t.closed_at, t.verified_at) IS NOT NULL
+            AND COALESCE(t.approved_at, t.closed_at, t.verified_at) > t.due_date
+        )::int AS overdue_tasks,
+        MAX(COALESCE(t.approved_at, t.closed_at, t.verified_at, t.updated_at, t.created_at)) AS last_updated
+      FROM tasks t
+      WHERE COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to) = ANY($1::text[])
+        AND ($2::text IS NULL OR t.department_id = $2::text)
+        AND t.status <> 'cancelled'
+    `,
+    [visibleUserIds, departmentId || null],
+  );
+
+  const row = result.rows[0] || {};
+  const totalTasks = Number(row.total_tasks || 0);
+  const approvedTasks = Number(row.approved_tasks || 0);
+  const reworkTasks = Number(row.rework_tasks || 0);
+  const overdueTasks = Number(row.overdue_tasks || 0);
+  const timedApprovedTasks = Number(row.timed_approved_tasks || 0);
+
+  return {
+    total_tasks: totalTasks,
+    approved_tasks: approvedTasks,
+    approval_rate: totalTasks > 0 ? roundNumber((approvedTasks / totalTasks) * 100) : null,
+    overdue_rate: timedApprovedTasks > 0 ? roundNumber((overdueTasks / timedApprovedTasks) * 100) : null,
+    rework_rate: approvedTasks > 0 ? roundNumber((reworkTasks / approvedTasks) * 100) : null,
+    last_updated: row.last_updated || null,
+    has_data: totalTasks > 0,
   };
 }
 
@@ -683,6 +756,7 @@ module.exports = {
   findUserPerformance,
   getPerformanceAnalyticsState,
   getPerformanceOverview,
+  getPerformanceOverviewForUsers,
   getUserDrilldownFacts,
   listDepartmentPerformance,
   listUserPerformance,

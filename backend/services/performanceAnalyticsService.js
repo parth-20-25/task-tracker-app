@@ -7,12 +7,13 @@ const {
   findUserPerformance,
   getPerformanceAnalyticsState,
   getPerformanceOverview: getPerformanceOverviewSnapshot,
+  getPerformanceOverviewForUsers,
   getUserDrilldownFacts,
   listDepartmentPerformance,
   listUserPerformance,
   refreshPerformanceAnalytics,
 } = require("../repositories/performanceAnalyticsRepository");
-const { hasPermission, isAdmin } = require("./accessControlService");
+const { canAccessUser, getVisibleUserIds, hasPermission, isAdmin } = require("./accessControlService");
 
 const DEFAULT_MINIMUM_APPROVED_TASKS = Number(process.env.PERFORMANCE_MIN_APPROVED_TASKS || 5);
 const DEFAULT_OVERDUE_PENALTY_FACTOR = Number(process.env.DEPARTMENT_OVERDUE_PENALTY_FACTOR || 1);
@@ -140,15 +141,15 @@ async function resolveUserForDrilldown(scopeContext, viewer, requestedUserId) {
     throw new AppError(404, "User not found");
   }
 
-  if (scopeContext.scope === "department_only" && targetUser.department_id !== scopeContext.department_id) {
-    throw new AppError(403, "You do not have access to another department user");
-  }
-
   const isSelf = targetUser.employee_id === viewer.employee_id;
   const canViewOtherUsers = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_USER_COMPARISON);
   const canViewSelf = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_SELF_USER_ANALYTICS) || canViewOtherUsers;
 
   if ((isSelf && !canViewSelf) || (!isSelf && !canViewOtherUsers)) {
+    throw new AppError(403, "You do not have access to this user performance");
+  }
+
+  if (!canAccessUser(viewer, targetUser)) {
     throw new AppError(403, "You do not have access to this user performance");
   }
 
@@ -277,7 +278,12 @@ async function getPerformanceOverview(user, query = {}) {
   const selectedDepartment = selectedDepartmentId
     ? departments.find((department) => department.id === selectedDepartmentId) || null
     : null;
-  const overview = await getPerformanceOverviewSnapshot(selectedDepartmentId);
+  const overview = isAdmin(user)
+    ? await getPerformanceOverviewSnapshot(selectedDepartmentId)
+    : await getPerformanceOverviewForUsers(
+      selectedDepartmentId || scopeContext.department_id,
+      getVisibleUserIds(user),
+    );
 
   return {
     ...overview,
@@ -306,7 +312,10 @@ async function getUserPerformanceRankings(user, query = {}) {
   await ensurePerformanceAnalyticsFresh(selectedDepartmentId);
 
   const department = visibleDepartments.find((item) => item.id === selectedDepartmentId) || null;
-  const items = await listUserPerformance(selectedDepartmentId);
+  const items = await listUserPerformance(
+    selectedDepartmentId,
+    isAdmin(user) ? null : getVisibleUserIds(user),
+  );
 
   return {
     department_id: selectedDepartmentId,
@@ -336,7 +345,33 @@ async function getDepartmentPerformanceRankings(user, query = {}) {
 
   await ensurePerformanceAnalyticsFresh(selectedDepartmentId || "global");
 
-  const items = await listDepartmentPerformance(selectedDepartmentId || null);
+  let items;
+
+  if (isAdmin(user)) {
+    items = await listDepartmentPerformance(selectedDepartmentId || null);
+  } else {
+    const overview = await getPerformanceOverviewForUsers(
+      selectedDepartmentId || scopeContext.department_id,
+      getVisibleUserIds(user),
+    );
+
+    items = [{
+      department_id: selectedDepartmentId || scopeContext.department_id,
+      department_name: visibleDepartments.find((department) => department.id === (selectedDepartmentId || scopeContext.department_id))?.name
+        || selectedDepartmentId
+        || scopeContext.department_id,
+      total_tasks: overview.total_tasks,
+      approved_tasks: overview.approved_tasks,
+      completion_rate: overview.approval_rate,
+      rework_rate: overview.rework_rate,
+      overdue_rate: overview.overdue_rate,
+      avg_completion_time: null,
+      score: null,
+      rank: 1,
+      eligible_users: getVisibleUserIds(user).length,
+      last_updated: overview.last_updated,
+    }];
+  }
 
   const filteredItems = canCompareDepartments
     ? items

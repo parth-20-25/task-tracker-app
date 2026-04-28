@@ -1,6 +1,6 @@
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
-const { hasPermission } = require("./accessControlService");
+const { canAccessUser, getVisibleUserIds, hasPermission, isAdmin } = require("./accessControlService");
 const {
   getFixturesForScope,
   getFixturesForProject,
@@ -165,22 +165,9 @@ async function getAnalyticsOverview(filters, user) {
 
   // Filter dataset based on permissions
   let filteredDataset = dataset;
-  if (!hasPermission(user, "view_all_users_analytics")) {
-    const currentUserId = user.employee_id;
-    // We always keep self
-    const selfData = dataset.filter(d => d.user_id === currentUserId);
-    
-    if (hasPermission(user, "view_department_analytics")) {
-      // Get User Performance to find top 5
-      const performance = await getUserPerformance({ departmentId: resolvedDepartmentId || user.department_id }, user);
-      const top5UserIds = performance.designers.slice(0, 5).map(d => d.user_id);
-      
-      filteredDataset = dataset.filter(d => 
-        d.user_id === currentUserId || top5UserIds.includes(d.user_id)
-      );
-    } else {
-      filteredDataset = selfData;
-    }
+  if (!isAdmin(user)) {
+    const visibleUserIds = new Set(getVisibleUserIds(user));
+    filteredDataset = dataset.filter((entry) => visibleUserIds.has(entry.user_id));
   }
 
   if (isOverall) {
@@ -324,8 +311,9 @@ async function getDeadlineHonesty(filters, user) {
 
   // Filter based on permissions if needed
   let filteredDataset = dataset;
-  if (!hasPermission(user, "view_all_users_analytics") && !hasPermission(user, "view_department_analytics")) {
-    filteredDataset = dataset.filter(d => d.user_id === user.employee_id);
+  if (!isAdmin(user)) {
+    const visibleUserIds = new Set(getVisibleUserIds(user));
+    filteredDataset = dataset.filter((entry) => visibleUserIds.has(entry.user_id));
   }
 
   // Only fixtures with both a deadline and an actual completion timestamp are measurable
@@ -441,7 +429,11 @@ async function getUserPerformance(filters, user) {
   const workflowStages = await getWorkflowStages(filters.departmentId || user.department_id || 'design');
   const stageNames = workflowStages.map(s => s.stage_name);
 
-  if (!dataset.length) {
+  const filteredDataset = isAdmin(user)
+    ? dataset
+    : dataset.filter((entry) => canAccessUser(user, entry.user_id));
+
+  if (!filteredDataset.length) {
     return {
       designers: [],
       users: [],
@@ -457,7 +449,7 @@ async function getUserPerformance(filters, user) {
   const userStats = new Map();
 
   // 1. Group metrics by user
-  dataset.forEach((d) => {
+  filteredDataset.forEach((d) => {
     const userId = d.user_id;
     const userName = d.user_name || "Unknown";
     if (!userStats.has(userId)) {
@@ -683,8 +675,9 @@ async function getWorkflowHealth(filters, user, precomputedDataset = null) {
 
   // Filter based on permissions
   let filteredDataset = dataset;
-  if (!precomputedDataset && !hasPermission(user, "view_all_users_analytics") && !hasPermission(user, "view_department_analytics")) {
-    filteredDataset = dataset.filter(d => d.user_id === user.employee_id);
+  if (!precomputedDataset && !isAdmin(user)) {
+    const visibleUserIds = new Set(getVisibleUserIds(user));
+    filteredDataset = dataset.filter((entry) => visibleUserIds.has(entry.user_id));
   }
 
   // Only completed fixtures contribute meaningful signal

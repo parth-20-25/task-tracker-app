@@ -41,6 +41,7 @@ async function ensureUsersTable(client) {
       employee_id VARCHAR(50) UNIQUE NOT NULL,
       email TEXT,
       role VARCHAR(20) NOT NULL,
+      parent_id VARCHAR(50),
       department_id TEXT,
       password_hash TEXT NOT NULL,
       is_active BOOLEAN DEFAULT TRUE,
@@ -50,7 +51,13 @@ async function ensureUsersTable(client) {
   `);
 
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id VARCHAR(50)`);
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_users_parent_id
+    ON users (parent_id)
+  `, "idx_users_parent_id");
 }
 
 async function ensureTasksTable(client) {

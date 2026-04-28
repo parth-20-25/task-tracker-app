@@ -6,6 +6,13 @@ const { loginUser } = require("../services/authService");
 
 const router = express.Router();
 
+router.get("/login", (_req, res) => {
+  return res.status(405).json({
+    success: false,
+    error: "Use POST /api/login to authenticate",
+  });
+});
+
 router.post(
   "/login",
   asyncHandler(async (req, res) => {

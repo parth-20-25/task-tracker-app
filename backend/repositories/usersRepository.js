@@ -40,6 +40,27 @@ async function findUserByEmployeeId(employeeId, client = pool) {
   return mapUserRow(result.rows[0]);
 }
 
+async function findUserByIdOrEmployeeId(identifier, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        ${buildUserColumns({ userAlias: "u", roleAlias: "r", departmentAlias: "d" })}
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role
+      LEFT JOIN departments d ON d.id = u.department_id
+      WHERE u.id::text = $1 OR u.employee_id = $1 OR u.email = $1
+      LIMIT 1
+    `,
+    [identifier],
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return mapUserRow(result.rows[0]);
+}
+
 async function listUsers(client = pool) {
   const result = await client.query(
     `
@@ -83,30 +104,25 @@ async function getVisibleUserIdsForEmployee(employeeId, client = pool) {
 
   const result = await client.query(
     `
-      WITH RECURSIVE viewer AS (
+      WITH RECURSIVE visible_users AS (
         SELECT
+          u.id::text AS user_uuid,
           u.employee_id,
           u.department_id
         FROM users u
         WHERE u.employee_id = $1
-        LIMIT 1
-      ),
-      visible_users AS (
-        SELECT
-          viewer.employee_id
-        FROM viewer
 
         UNION
 
         SELECT
-          child.employee_id
+          child.id::text AS user_uuid,
+          child.employee_id,
+          child.department_id
         FROM users child
         JOIN visible_users parent_tree
-          ON child.parent_id = parent_tree.employee_id
-        JOIN viewer
-          ON child.department_id = viewer.department_id
-        WHERE viewer.department_id IS NOT NULL
-          AND child.department_id = viewer.department_id
+          ON child.parent_id::text IN (parent_tree.user_uuid, parent_tree.employee_id)
+        WHERE parent_tree.department_id IS NOT NULL
+          AND child.department_id = parent_tree.department_id
       )
       SELECT employee_id
       FROM visible_users
@@ -257,6 +273,7 @@ module.exports = {
   createUser,
   deleteUser,
   findAuthRecordByEmployeeId,
+  findUserByIdOrEmployeeId,
   findUserByEmployeeId,
   getActiveTaskDependencies,
   listUsers,

@@ -24,6 +24,7 @@ const { syncTaskEscalationSchedule } = require("../repositories/bootstrapReposit
 const {
   createUser,
   deleteUser: deleteUserRecord,
+  findUserByIdOrEmployeeId,
   findUserByEmployeeId,
   listUsers,
   setUserActiveStatus,
@@ -73,6 +74,37 @@ function requireFields(payload, fields) {
   }
 }
 
+async function resolveParentId(parentIdentifier, { currentEmployeeId, currentUserId } = {}) {
+  if (parentIdentifier === undefined) {
+    return undefined;
+  }
+
+  if (parentIdentifier === null) {
+    return null;
+  }
+
+  const normalizedParentIdentifier = String(parentIdentifier).trim();
+
+  if (!normalizedParentIdentifier) {
+    return null;
+  }
+
+  const parentUser = await findUserByIdOrEmployeeId(normalizedParentIdentifier);
+
+  if (!parentUser) {
+    throw new AppError(400, "Parent user not found");
+  }
+
+  if (
+    parentUser.employee_id === currentEmployeeId
+    || (currentUserId && parentUser.id === currentUserId)
+  ) {
+    throw new AppError(400, "User cannot be their own parent");
+  }
+
+  return parentUser.id;
+}
+
 async function saveUser(actor, payload) {
   const hasParentId = Object.prototype.hasOwnProperty.call(payload || {}, "parent_id");
   const normalizedPayload = {
@@ -87,6 +119,12 @@ async function saveUser(actor, payload) {
 
   requireFields(normalizedPayload, ["employee_id", "name", "role"]);
   const existing = await findUserByEmployeeId(normalizedPayload.employee_id);
+  const resolvedParentId = hasParentId
+    ? await resolveParentId(normalizedPayload.parent_id, {
+      currentEmployeeId: normalizedPayload.employee_id,
+      currentUserId: existing?.id || null,
+    })
+    : undefined;
 
   let user;
 
@@ -97,7 +135,7 @@ async function saveUser(actor, payload) {
       employee_id: normalizedPayload.employee_id,
       name: normalizedPayload.name,
       role: normalizedPayload.role,
-      parent_id: normalizedPayload.parent_id ?? null,
+      parent_id: resolvedParentId ?? null,
       department_id: normalizedPayload.department_id,
       password_hash: await bcrypt.hash(normalizedPayload.password, 10),
       is_active: normalizedPayload.is_active,
@@ -110,7 +148,7 @@ async function saveUser(actor, payload) {
     user = await updateUser(normalizedPayload.employee_id, {
       name: normalizedPayload.name,
       role: normalizedPayload.role,
-      ...(hasParentId ? { parent_id: normalizedPayload.parent_id } : {}),
+      ...(hasParentId ? { parent_id: resolvedParentId } : {}),
       department_id: normalizedPayload.department_id,
       is_active: normalizedPayload.is_active,
     });
@@ -123,7 +161,7 @@ async function saveUser(actor, payload) {
     targetId: normalizedPayload.employee_id,
     metadata: {
       role: normalizedPayload.role,
-      ...(hasParentId ? { parent_id: normalizedPayload.parent_id } : {}),
+      ...(hasParentId ? { parent_id: resolvedParentId } : {}),
       department_id: normalizedPayload.department_id,
       is_active: normalizedPayload.is_active,
     },

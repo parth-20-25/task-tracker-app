@@ -1,12 +1,12 @@
 function buildUserColumns({ userAlias, roleAlias, departmentAlias, prefix = "" }) {
   return `
+    ${userAlias}.id AS ${prefix}id,
     ${userAlias}.employee_id AS ${prefix}employee_id,
     ${userAlias}.name AS ${prefix}name,
     ${userAlias}.email AS ${prefix}email,
     ${userAlias}.role AS ${prefix}role,
     ${userAlias}.parent_id AS ${prefix}parent_id,
     ${userAlias}.department_id AS ${prefix}department_id,
-    ${userAlias}.parent_id AS ${prefix}parent_id,
     COALESCE(${userAlias}.is_active, TRUE) AS ${prefix}is_active,
     ${userAlias}.created_at AS ${prefix}created_at,
     ${roleAlias}.id AS ${prefix}role_id,

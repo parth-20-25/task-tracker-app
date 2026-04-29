@@ -27,8 +27,8 @@ export default defineConfig(({ mode }) => {
         registerType: "autoUpdate",
         includeAssets: ["icon-192.png", "icon-512.png"],
         manifest: {
-          name: "Task Tracker",
-          short_name: "Tasks",
+          name: "PARC SYSTEMS",
+          short_name: "PARC SYSTEMS",
           start_url: "/",
           theme_color: "#000000",
           background_color: "#ffffff",

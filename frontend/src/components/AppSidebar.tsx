@@ -16,17 +16,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export function AppSidebar() {
-  const { user, role, logout, hasPermission } = useAuth();
+  const { user, role, access, logout } = useAuth();
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
-  const isAdmin = role?.hierarchy_level === 1;
-  const isSupervisor = (role?.hierarchy_level ?? 99) <= 4;
-  const canAccessAnalytics = [
-    'view_self_user',
-    'view_self_department',
-    'view_department_comparison',
-    'view_user_comparison',
-  ].some((permissionId) => hasPermission(permissionId));
 
   const mainItems = [
     { title: 'Dashboard', url: '/', icon: LayoutDashboard },
@@ -36,27 +28,22 @@ export function AppSidebar() {
     { title: 'Batches', url: '/batches', icon: PackageCheck },
   ];
 
-  const supervisorItems = [];
-
-  if (isSupervisor) {
-    supervisorItems.push(
-      { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList },
-      { title: 'Verifications', url: '/verifications', icon: Shield },
-      { title: 'Reports', url: '/reports', icon: FileText },
-    );
-  }
-
-  if (canAccessAnalytics) {
-    supervisorItems.splice(Math.min(2, supervisorItems.length), 0, { title: 'Analytics', url: '/analytics', icon: BarChart3 });
-  }
+  const workItems = [
+    access.canViewTeamTasks ? { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList } : null,
+    access.canViewVerifications ? { title: 'Verifications', url: '/verifications', icon: Shield } : null,
+    access.canViewAnalytics ? { title: 'Analytics', url: '/analytics', icon: BarChart3 } : null,
+    access.canViewReports ? { title: 'Reports', url: '/reports', icon: FileText } : null,
+  ].filter(Boolean);
 
   const adminItems = [
-    { title: 'Users', url: '/admin/users', icon: Users },
-    { title: 'Roles', url: '/admin/roles', icon: Shield },
-    { title: 'Departments', url: '/admin/departments', icon: Building2 },
-    { title: 'Workflow Rules', url: '/admin/workflows', icon: Settings },
-    { title: 'Audit Logs', url: '/admin/audit', icon: FileText },
-  ];
+    access.canManageUsers ? { title: 'Users', url: '/admin/users', icon: Users } : null,
+    access.canManageRoles ? { title: 'Roles', url: '/admin/roles', icon: Shield } : null,
+    access.canManageDepartments ? { title: 'Departments', url: '/admin/departments', icon: Building2 } : null,
+    access.canManageShifts ? { title: 'Shifts', url: '/admin/shifts', icon: Settings } : null,
+    access.canManageMachines ? { title: 'Machines', url: '/admin/machines', icon: Building2 } : null,
+    access.canManageWorkflows ? { title: 'Workflow Rules', url: '/admin/workflows', icon: Settings } : null,
+    access.canViewAuditLogs ? { title: 'Audit Logs', url: '/admin/audit', icon: FileText } : null,
+  ].filter(Boolean);
 
   const initials = user?.name?.split(' ').map(n => n[0]).join('') || '?';
 
@@ -88,12 +75,12 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {supervisorItems.length > 0 && (
+        {workItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>{isSupervisor ? 'Supervisor' : 'Analytics'}</SidebarGroupLabel>
+            <SidebarGroupLabel>Work</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {supervisorItems.map(item => (
+                {workItems.map(item => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild>
                       <NavLink to={item.url} end className="hover:bg-sidebar-accent" activeClassName="bg-sidebar-accent text-sidebar-primary font-medium">
@@ -108,9 +95,9 @@ export function AppSidebar() {
           </SidebarGroup>
         )}
 
-        {isAdmin && (
+        {adminItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupLabel>Management</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {adminItems.map(item => (

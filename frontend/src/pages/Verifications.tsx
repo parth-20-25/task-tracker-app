@@ -20,7 +20,7 @@ function toProofUrl(path: string) {
 }
 
 export default function Verifications() {
-  const { user, role } = useAuth();
+  const { user, access } = useAuth();
   const { verifyTask } = useTasks();
   const [remarks, setRemarks] = useState<Record<string, string>>({});
   const verificationQuery = useQuery({
@@ -29,14 +29,12 @@ export default function Verifications() {
     enabled: !!user?.employee_id,
   });
 
-  const isAdmin = role?.hierarchy_level === 1;
-  const isQuality = role?.id === 'r5' || role?.name?.toLowerCase().includes('quality');
   const pending = (verificationQuery.data ?? []).filter(task => task.assigned_to !== user?.employee_id).filter(t =>
     t.status === 'under_review' &&
     (t.verification_status === 'pending' || t.verification_status === 'quality_pending') &&
-    (isAdmin || t.department_id === user?.department_id)
+    (access.canViewAllTasks || t.department_id === user?.department_id)
   ).filter(t =>
-    t.verification_status !== 'quality_pending' || isAdmin || isQuality
+    t.verification_status !== 'quality_pending' || access.canApproveQuality
   );
 
   return (

@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import { Role, User } from "@/types";
+import type { UiAccess } from "@/lib/permissions";
 
 interface LoginResult {
   success: boolean;
@@ -9,6 +10,7 @@ interface LoginResult {
 export interface AuthContextType {
   user: User | null;
   role: Role | null;
+  access: UiAccess;
   login: (employeeId: string, password: string) => Promise<LoginResult>;
   logout: () => void;
   isAuthenticated: boolean;

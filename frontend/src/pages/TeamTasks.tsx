@@ -14,11 +14,10 @@ const columns: { status: TaskStatus; label: string; color: string }[] = [
 ];
 
 export default function TeamTasks() {
-  const { user, role } = useAuth();
+  const { access } = useAuth();
   const { tasks } = useTasks();
 
-  const isAdmin = role?.hierarchy_level === 1;
-  const teamTasks = isAdmin ? tasks : tasks.filter(t => t.department_id === user?.department_id);
+  const teamTasks = access.canViewAllTasks ? tasks : [];
   const groupedTasks = columns.reduce((acc, col) => {
     acc[col.status] = teamTasks.filter(t => t.status === col.status);
     return acc;

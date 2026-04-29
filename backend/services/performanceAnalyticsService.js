@@ -30,10 +30,10 @@ function roundNumber(value, decimals = 2) {
 
 function ensureAnyAnalyticsAccess(user) {
   const allowed = isAdmin(user) || [
-    PERMISSIONS.VIEW_SELF_USER_ANALYTICS,
-    PERMISSIONS.VIEW_SELF_DEPARTMENT_ANALYTICS,
-    PERMISSIONS.VIEW_DEPARTMENT_COMPARISON,
-    PERMISSIONS.VIEW_USER_COMPARISON,
+    PERMISSIONS.VIEW_SELF_ANALYTICS,
+    PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
+    PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
+    PERMISSIONS.VIEW_ALL_USERS_ANALYTICS,
   ].some((permissionId) => hasPermission(user, permissionId));
 
   if (!allowed) {
@@ -44,8 +44,8 @@ function ensureAnyAnalyticsAccess(user) {
 function getScopeContext(user) {
   ensureAnyAnalyticsAccess(user);
 
-  const hasAllDepartmentsScope = isAdmin(user) || hasPermission(user, PERMISSIONS.ANALYTICS_SCOPE_ALL_DEPARTMENTS);
-  const hasDepartmentScope = hasPermission(user, PERMISSIONS.ANALYTICS_SCOPE_DEPARTMENT_ONLY) || Boolean(user?.department_id);
+  const hasAllDepartmentsScope = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
+  const hasDepartmentScope = hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS) || Boolean(user?.department_id);
 
   if (!hasAllDepartmentsScope && !hasDepartmentScope) {
     throw new AppError(403, "A department analytics scope is required");
@@ -142,8 +142,8 @@ async function resolveUserForDrilldown(scopeContext, viewer, requestedUserId) {
   }
 
   const isSelf = targetUser.employee_id === viewer.employee_id;
-  const canViewOtherUsers = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_USER_COMPARISON);
-  const canViewSelf = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_SELF_USER_ANALYTICS) || canViewOtherUsers;
+  const canViewOtherUsers = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
+  const canViewSelf = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_SELF_ANALYTICS) || canViewOtherUsers;
 
   if ((isSelf && !canViewSelf) || (!isSelf && !canViewOtherUsers)) {
     throw new AppError(403, "You do not have access to this user performance");
@@ -256,10 +256,10 @@ async function getPerformanceAnalyticsContext(user) {
       department_name: user.department?.name || null,
     },
     permissions: {
-      view_self_user: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_SELF_USER_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_USER_COMPARISON),
-      view_self_department: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_SELF_DEPARTMENT_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_COMPARISON),
-      view_department_comparison: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_COMPARISON),
-      view_user_comparison: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_USER_COMPARISON),
+      view_self_user: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_SELF_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS),
+      view_self_department: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS),
+      view_department_comparison: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS),
+      view_user_comparison: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS),
     },
     departments: departments.map((department) => ({
       id: department.id,
@@ -294,7 +294,7 @@ async function getPerformanceOverview(user, query = {}) {
 
 async function getUserPerformanceRankings(user, query = {}) {
   const scopeContext = getScopeContext(user);
-  const canViewRankings = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_USER_COMPARISON);
+  const canViewRankings = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
 
   if (!canViewRankings) {
     throw new AppError(403, "User performance rankings require comparison access");
@@ -329,9 +329,9 @@ async function getUserPerformanceRankings(user, query = {}) {
 async function getDepartmentPerformanceRankings(user, query = {}) {
   const scopeContext = getScopeContext(user);
   const visibleDepartments = await getVisibleDepartments(scopeContext);
-  const canCompareDepartments = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_COMPARISON);
+  const canCompareDepartments = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const canViewOwnDepartment = isAdmin(user)
-    || hasPermission(user, PERMISSIONS.VIEW_SELF_DEPARTMENT_ANALYTICS)
+    || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS)
     || canCompareDepartments;
 
   if (!canViewOwnDepartment) {

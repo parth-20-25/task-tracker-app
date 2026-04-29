@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
         includeAssets: ["icon-192.png", "icon-512.png"],
         manifest: {
           name: "PARC SYSTEMS",
-          short_name: "PARC SYSTEMS",
+          short_name: "PARC",
           start_url: "/",
           theme_color: "#000000",
           background_color: "#ffffff",
@@ -47,6 +47,7 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
+          cleanupOutdatedCaches: true,
           globPatterns: ["**/*.{js,css,html,ico,png,svg}"],
           runtimeCaching: [
             {

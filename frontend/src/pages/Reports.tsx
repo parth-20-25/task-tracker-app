@@ -22,9 +22,9 @@ function sanitizeFileNamePart(value: string) {
 }
 
 export default function Reports() {
-  const { user, hasPermission } = useAuth();
-  const isAdmin = user?.role?.hierarchy_level === 1;
-  const canExportReports = hasPermission("can_export_reports");
+  const { user, access } = useAuth();
+  const canSelectDepartments = access.canManageDepartments;
+  const canExportReports = access.canExportReports;
   const [workflowSummary, setWorkflowSummary] = useState<WorkflowProjectSummary[]>([]);
   const [reportDepartmentOptions, setReportDepartmentOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedReportDepartmentId, setSelectedReportDepartmentId] = useState("");
@@ -38,7 +38,7 @@ export default function Reports() {
   const [reportScopesLoading, setReportScopesLoading] = useState(false);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (canSelectDepartments) {
       return;
     }
 
@@ -47,10 +47,10 @@ export default function Reports() {
     setReportDepartmentOptions(fixedDepartmentId
       ? [{ id: fixedDepartmentId, name: user?.department?.name || fixedDepartmentId }]
       : []);
-  }, [isAdmin, user?.department?.name, user?.department_id]);
+  }, [canSelectDepartments, user?.department?.name, user?.department_id]);
 
   useEffect(() => {
-    if (!canExportReports || !isAdmin) {
+    if (!canExportReports || !canSelectDepartments) {
       return undefined;
     }
 
@@ -87,7 +87,7 @@ export default function Reports() {
     return () => {
       active = false;
     };
-  }, [canExportReports, isAdmin]);
+  }, [canExportReports, canSelectDepartments]);
 
   useEffect(() => {
     if (!canExportReports || !selectedReportDepartmentId) {
@@ -288,7 +288,7 @@ export default function Reports() {
       <div className="grid md:grid-cols-3 gap-4">
         <ReportFilters
           canExportReports={canExportReports}
-          isAdmin={isAdmin}
+          canSelectDepartments={canSelectDepartments}
           departmentOptions={reportDepartmentOptions}
           selectedDepartmentId={selectedReportDepartmentId}
           onDepartmentChange={setSelectedReportDepartmentId}

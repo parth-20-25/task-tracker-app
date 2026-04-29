@@ -40,10 +40,21 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw new ApiError(
+      `Network request failed while reaching ${API_BASE_URL}`,
+      0,
+      error instanceof Error ? { cause: error.message } : undefined,
+      "network_error",
+    );
+  }
 
   const text = await response.text();
   let payload: { success?: boolean; data?: T; error?: string; message?: string; details?: unknown; errorCode?: string } | null = null;

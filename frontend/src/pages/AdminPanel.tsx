@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   fetchAuditLogs,
@@ -22,6 +22,7 @@ import {
 import { AuditLog, Department, Machine, Role, Shift, User } from "@/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/useAuth";
 import { Building2, FileText, Settings, Shield, Users, Wrench, Clock3 } from "lucide-react";
 
 const UsersTab = lazy(() => import("./admin/UsersTab"));
@@ -36,10 +37,21 @@ const validTabs = ["users", "roles", "departments", "shifts", "machines", "workf
 type AdminTab = typeof validTabs[number];
 
 export default function AdminPanel() {
+  const { access } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const routeTab = location.pathname.split("/")[2];
-  const currentTab = validTabs.includes(routeTab as AdminTab) ? (routeTab as AdminTab) : "users";
+  const availableTabs = useMemo(() => ([
+    access.canManageUsers ? "users" : null,
+    access.canManageRoles ? "roles" : null,
+    access.canManageDepartments ? "departments" : null,
+    access.canManageShifts ? "shifts" : null,
+    access.canManageMachines ? "machines" : null,
+    access.canManageWorkflows ? "workflows" : null,
+    access.canViewAuditLogs ? "audit" : null,
+  ].filter(Boolean) as AdminTab[]), [access]);
+  const defaultTab = availableTabs[0] || "users";
+  const currentTab = availableTabs.includes(routeTab as AdminTab) ? (routeTab as AdminTab) : defaultTab;
 
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -47,6 +59,12 @@ export default function AdminPanel() {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  useEffect(() => {
+    if (!availableTabs.includes(currentTab)) {
+      navigate(defaultTab === "users" ? "/admin/users" : `/admin/${defaultTab}`, { replace: true });
+    }
+  }, [availableTabs, currentTab, defaultTab, navigate]);
 
   useEffect(() => {
     fetchRoles().then(setRoles).catch(() => undefined);
@@ -86,16 +104,16 @@ export default function AdminPanel() {
         onValueChange={(value) => navigate(value === "users" ? "/admin/users" : `/admin/${value}`)}
       >
         <TabsList>
-          <TabsTrigger value="users"><Users className="h-3.5 w-3.5 mr-1.5" />Users</TabsTrigger>
-          <TabsTrigger value="roles"><Shield className="h-3.5 w-3.5 mr-1.5" />Roles</TabsTrigger>
-          <TabsTrigger value="departments"><Building2 className="h-3.5 w-3.5 mr-1.5" />Departments</TabsTrigger>
-          <TabsTrigger value="shifts"><Clock3 className="h-3.5 w-3.5 mr-1.5" />Shifts</TabsTrigger>
-          <TabsTrigger value="machines"><Wrench className="h-3.5 w-3.5 mr-1.5" />Machines</TabsTrigger>
-          <TabsTrigger value="workflows"><Settings className="h-3.5 w-3.5 mr-1.5" />Workflows</TabsTrigger>
-          <TabsTrigger value="audit"><FileText className="h-3.5 w-3.5 mr-1.5" />Audit Logs</TabsTrigger>
+          {access.canManageUsers && <TabsTrigger value="users"><Users className="h-3.5 w-3.5 mr-1.5" />Users</TabsTrigger>}
+          {access.canManageRoles && <TabsTrigger value="roles"><Shield className="h-3.5 w-3.5 mr-1.5" />Roles</TabsTrigger>}
+          {access.canManageDepartments && <TabsTrigger value="departments"><Building2 className="h-3.5 w-3.5 mr-1.5" />Departments</TabsTrigger>}
+          {access.canManageShifts && <TabsTrigger value="shifts"><Clock3 className="h-3.5 w-3.5 mr-1.5" />Shifts</TabsTrigger>}
+          {access.canManageMachines && <TabsTrigger value="machines"><Wrench className="h-3.5 w-3.5 mr-1.5" />Machines</TabsTrigger>}
+          {access.canManageWorkflows && <TabsTrigger value="workflows"><Settings className="h-3.5 w-3.5 mr-1.5" />Workflows</TabsTrigger>}
+          {access.canViewAuditLogs && <TabsTrigger value="audit"><FileText className="h-3.5 w-3.5 mr-1.5" />Audit Logs</TabsTrigger>}
         </TabsList>
 
-        <TabsContent value="users" className="mt-4">
+        {access.canManageUsers && <TabsContent value="users" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <UsersTab
               users={users}
@@ -133,9 +151,9 @@ export default function AdminPanel() {
               }}
             />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="roles" className="mt-4">
+        {access.canManageRoles && <TabsContent value="roles" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <RolesTab
               roles={roles}
@@ -160,9 +178,9 @@ export default function AdminPanel() {
               }}
             />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="departments" className="mt-4">
+        {access.canManageDepartments && <TabsContent value="departments" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <DepartmentsTab
               departments={departments}
@@ -187,9 +205,9 @@ export default function AdminPanel() {
               }}
             />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="shifts" className="mt-4">
+        {access.canManageShifts && <TabsContent value="shifts" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <ShiftsTab
               shifts={shifts}
@@ -214,9 +232,9 @@ export default function AdminPanel() {
               }}
             />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="machines" className="mt-4">
+        {access.canManageMachines && <TabsContent value="machines" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <MachinesTab
               machines={machines}
@@ -242,19 +260,19 @@ export default function AdminPanel() {
               }}
             />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="workflows" className="mt-4">
+        {access.canManageWorkflows && <TabsContent value="workflows" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <WorkflowsTab />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="audit" className="mt-4">
+        {access.canViewAuditLogs && <TabsContent value="audit" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>
             <AuditTab auditLogs={auditLogs} />
           </Suspense>
-        </TabsContent>
+        </TabsContent>}
       </Tabs>
     </div>
   );

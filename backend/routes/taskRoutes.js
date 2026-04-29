@@ -36,6 +36,7 @@ const {
   deleteTaskAttachment,
 } = require("../repositories/tasksRepository");
 const { authorize } = require("../middleware/authorize");
+const { requireAnyPermission } = require("../middleware/requirePermission");
 const { canAccessTask } = require("../services/accessControlService");
 
 const router = express.Router();
@@ -66,7 +67,7 @@ router.get(
 
 router.get(
   "/tasks/verification-queue",
-  authorize(PERMISSIONS.VERIFY_TASK),
+  requireAnyPermission([PERMISSIONS.VERIFY_TASK, PERMISSIONS.APPROVE_QUALITY]),
   asyncHandler(async (req, res) => {
     const tasks = await listVerificationTasksForUser(req.user);
     return sendSuccess(res, tasks);
@@ -85,7 +86,7 @@ router.post(
 
 router.patch(
   "/tasks/:taskId",
-  authorize("can_edit_task"),
+  requireAnyPermission([PERMISSIONS.EDIT_TASK, PERMISSIONS.VERIFY_TASK, PERMISSIONS.APPROVE_QUALITY]),
   asyncHandler(async (req, res) => {
     const task = await updateTaskForUser(req.user, req.params.taskId, req.body);
     return sendSuccess(res, task);

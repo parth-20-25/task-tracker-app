@@ -15,18 +15,15 @@ const TaskAssignmentBar = React.lazy(() =>
 );
 
 export default function Dashboard() {
-  const { user, role, hasPermission } = useAuth();
+  const { user, role, access } = useAuth();
   const { tasks } = useTasks();
 
-  const isAdmin = role?.hierarchy_level === 1;
-  const isSupervisor = (role?.hierarchy_level ?? 99) <= 4;
   const isDesignUser = isDesignDepartment(user);
-  const canUploadProjectData = hasPermission('can_upload_data') && !!user?.department_id;
+  const canUploadProjectData = access.canUploadData && !!user?.department_id;
   const canUploadDesignProjectData = canUploadProjectData && isDesignUser;
 
   const myTasks = tasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
-  const deptTasks = tasks.filter(t => t.department_id === user?.department_id);
-  const viewTasks = isAdmin ? tasks : isSupervisor ? deptTasks : myTasks;
+  const viewTasks = access.canViewAllTasks ? tasks : myTasks;
 
   const metrics = {
     total: viewTasks.length,
@@ -52,12 +49,12 @@ export default function Dashboard() {
         <MetricCard label="In Progress" value={metrics.inProgress} icon={PlayCircle} color="text-info" />
         <MetricCard label="Completed" value={metrics.completed} icon={CheckCircle2} color="text-success" />
         <MetricCard label="Overdue" value={metrics.overdue} icon={AlertTriangle} color="text-destructive" />
-        {isSupervisor && <MetricCard label="Pending Review" value={metrics.pendingVerification} icon={Clock} color="text-warning" />}
+        {access.canViewVerifications && <MetricCard label="Pending Review" value={metrics.pendingVerification} icon={Clock} color="text-warning" />}
       </div>
 
       {canUploadDesignProjectData && <DesignExcelUploadModal />}
 
-      {isSupervisor && (isDesignUser ? <DesignTaskAssignmentBar /> : <TaskAssignmentBar />)}
+      {access.canAssignTasks && (isDesignUser ? <DesignTaskAssignmentBar /> : <TaskAssignmentBar />)}
 
       <div>
         <h2 className="text-lg font-semibold mb-3">Recent Tasks</h2>

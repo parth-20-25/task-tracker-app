@@ -26,6 +26,8 @@ function requestLogger(req, res, next) {
       route,
       method: req.method,
       url: req.originalUrl,
+      origin: req.get("origin") || null,
+      userAgent: req.get("user-agent") || null,
       payload: sanitizeRequestPayload(req),
     });
 
@@ -39,6 +41,7 @@ function requestLogger(req, res, next) {
         route: currentContext.route,
         method: req.method,
         url: req.originalUrl,
+        origin: req.get("origin") || null,
         statusCode: res.statusCode,
         userId: currentContext.userId,
       });
@@ -58,6 +61,7 @@ function requestLogger(req, res, next) {
         route: currentContext.route,
         method: req.method,
         url: req.originalUrl,
+        origin: req.get("origin") || null,
         payload: safeSerialize(sanitizeRequestPayload(req)),
       });
     });

@@ -4,7 +4,7 @@ import { loginRequest } from "@/api/authApi";
 import { getStoredToken, setToken } from "@/api/http";
 import { useCurrentUserQuery } from "@/hooks/queries/useCurrentUserQuery";
 import { authQueryKeys } from "@/lib/queryKeys";
-import { hasUserPermission } from "@/lib/permissions";
+import { buildUiAccess, hasUserPermission } from "@/lib/permissions";
 import { AuthContext, type AuthContextType } from "@/contexts/useAuth";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -14,6 +14,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const hasToken = !!getStoredToken();
 
   const role = currentUser?.role || null;
+  const access = buildUiAccess(currentUser);
 
   const refreshSession = useCallback(async () => {
     if (!getStoredToken()) {
@@ -59,6 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user: currentUser,
         role,
+        access,
         login,
         logout,
         isAuthenticated: !!currentUser,

@@ -12,7 +12,7 @@ const reportTypeOptions = [
 
 interface ReportFiltersProps {
   canExportReports: boolean;
-  isAdmin: boolean;
+  canSelectDepartments: boolean;
   departmentOptions: Array<{ id: string; name: string }>;
   selectedDepartmentId: string;
   onDepartmentChange: (value: string) => void;
@@ -36,7 +36,7 @@ interface ReportFiltersProps {
 
 export function ReportFilters({
   canExportReports,
-  isAdmin,
+  canSelectDepartments,
   departmentOptions,
   selectedDepartmentId,
   onDepartmentChange,
@@ -86,13 +86,13 @@ export function ReportFilters({
             <Select
               value={selectedDepartmentId || "__none__"}
               onValueChange={(value) => onDepartmentChange(value === "__none__" ? "" : value)}
-              disabled={!isAdmin || projectsLoading || exportLoading}
+              disabled={!canSelectDepartments || projectsLoading || exportLoading}
             >
               <SelectTrigger className="h-9 text-sm">
                 <SelectValue placeholder="Select department" />
               </SelectTrigger>
               <SelectContent>
-                {isAdmin ? <SelectItem value="__none__">Select department</SelectItem> : null}
+                {canSelectDepartments ? <SelectItem value="__none__">Select department</SelectItem> : null}
                 {departmentOptions.map((department) => (
                   <SelectItem key={department.id} value={department.id}>
                     {department.name}

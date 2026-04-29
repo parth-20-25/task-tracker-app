@@ -25,16 +25,13 @@ const NotFound = React.lazy(() => import("./pages/NotFound"));
 const queryClient = new QueryClient();
 
 function AuthenticatedApp() {
-  const { isAuthenticated, isReady, role, hasPermission } = useAuth();
+  const { isAuthenticated, isReady, access } = useAuth();
 
   if (!isReady) {
     return null;
   }
 
   if (!isAuthenticated) return <Login />;
-
-  const isAdmin = role?.hierarchy_level === 1;
-  const isSupervisor = (role?.hierarchy_level ?? 99) <= 4;
 
   return (
     <TaskProvider>
@@ -46,11 +43,11 @@ function AuthenticatedApp() {
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/issues" element={<Issues />} />
             <Route path="/batches" element={<Batches />} />
-            {isSupervisor && <Route path="/team-tasks" element={<TeamTasks />} />}
-            {isSupervisor && <Route path="/verifications" element={<Verifications />} />}
-            <Route path="/analytics/*" element={<Analytics />} />
-            {isSupervisor && <Route path="/reports" element={<Reports />} />}
-            {isAdmin && <Route path="/admin/*" element={<AdminPanel />} />}
+            {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}
+            {access.canViewVerifications && <Route path="/verifications" element={<Verifications />} />}
+            {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}
+            {access.canViewReports && <Route path="/reports" element={<Reports />} />}
+            {access.canAccessAdminPanel && <Route path="/admin/*" element={<AdminPanel />} />}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

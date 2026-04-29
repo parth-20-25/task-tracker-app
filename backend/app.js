@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const { buildCorsOptions } = require("./config/cors");
 const { requestLogger } = require("./middleware/requestLogger");
 const { errorHandler } = require("./middleware/errorHandler");
 const { adminRoutes } = require("./routes/adminRoutes");
@@ -18,8 +19,10 @@ const { env } = require("./config/env");
 
 function createApp() {
   const app = express();
+  const corsOptions = buildCorsOptions(env.corsOrigin);
 
-  app.use(cors({ origin: process.env.CORS_ORIGIN }));
+  app.use(cors(corsOptions));
+  app.options(/.*/, cors(corsOptions));
   app.use(express.json());
   app.use(requestLogger);
   app.use("/uploads", express.static(path.join(__dirname, env.uploadsDir)));

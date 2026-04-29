@@ -6,6 +6,7 @@ const cors = require("cors");
 const path = require("path");
 
 const { env, validateBackendEnv } = require("./config/env");
+const { buildCorsOptions } = require("./config/cors");
 const { registerProcessErrorHandlers } = require("./lib/observability");
 
 // Routes
@@ -41,7 +42,9 @@ console.log("PORT:", process.env.PORT);
 registerProcessErrorHandlers();
 
 // App configuration (middlewares)
-app.use(cors({ origin: process.env.CORS_ORIGIN }));
+const corsOptions = buildCorsOptions(env.corsOrigin);
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 app.use(requestLogger);
 app.use("/uploads", express.static(path.join(__dirname, env.uploadsDir)));

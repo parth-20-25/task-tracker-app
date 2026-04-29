@@ -47,6 +47,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { hasUserPermission, PERMISSIONS } from "@/lib/permissions";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -381,12 +382,8 @@ export function DesignTaskAssignmentBar() {
   const scopes = scopesQuery.data ?? [];
   const fixtures = fixturesQuery.data ?? [];
 
-  const canVerify = Boolean(
-    currentUser?.permissions?.includes("can_verify_task") ||
-    currentUser?.role === "supervisor" ||
-    currentUser?.role === "manager" ||
-    currentUser?.role === "admin",
-  );
+  const canVerify = hasUserPermission(currentUser, PERMISSIONS.VERIFY_TASK)
+    || hasUserPermission(currentUser, PERMISSIONS.APPROVE_QUALITY);
 
   const validation = validationQuery.data;
   const currentStage = workflow;

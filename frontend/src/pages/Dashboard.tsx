@@ -1,12 +1,20 @@
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
-import { DepartmentAssignmentFlow } from '@/components/DepartmentAssignmentFlow';
+import { AdminDashboardDepartmentExperience } from '@/components/AdminDashboardDepartmentExperience';
+import { DesignDepartmentTaskAssignmentBar } from '@/components/DesignDepartmentTaskAssignmentBar';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { TaskCard } from '@/components/TaskCard';
 import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
 import { ClipboardList, PlayCircle, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
 import { isDesignDepartment } from '@/lib/departments';
+import React from "react";
+
+const TaskAssignmentBar = React.lazy(() =>
+  import('@/components/TaskAssignmentBar').then(module => ({
+    default: module.TaskAssignmentBar
+  }))
+);
 
 export default function Dashboard() {
   const { user, role, access } = useAuth();
@@ -49,7 +57,11 @@ export default function Dashboard() {
 
       {canUploadDesignProjectData && <DesignExcelUploadModal />}
 
-      {access.canAssignTasks && <DepartmentAssignmentFlow allowDepartmentSelection={isAdminUser} />}
+      {access.canAssignTasks && (
+        isAdminUser
+          ? <AdminDashboardDepartmentExperience />
+          : (isDesignUser ? <DesignDepartmentTaskAssignmentBar /> : <TaskAssignmentBar />)
+      )}
 
       <div>
         <h2 className="text-lg font-semibold mb-3">Recent Tasks</h2>

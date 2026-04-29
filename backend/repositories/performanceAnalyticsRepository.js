@@ -131,6 +131,7 @@ async function refreshPerformanceAnalytics(
           ON au.user_id = COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)
          AND au.department_id = t.department_id
         WHERE t.status <> 'cancelled'
+          AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'
           AND COALESCE(t.approved_at, t.closed_at, t.verified_at) IS NOT NULL
           AND (
             t.status = 'closed'
@@ -265,6 +266,7 @@ async function refreshPerformanceAnalytics(
           ON au.user_id = COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)
          AND au.department_id = t.department_id
         WHERE t.status <> 'cancelled'
+          AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'
           AND COALESCE(t.approved_at, t.closed_at, t.verified_at) IS NOT NULL
           AND (
             t.status = 'closed'
@@ -560,6 +562,7 @@ async function getPerformanceOverviewForUsers(departmentId = null, visibleUserId
       WHERE COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to) = ANY($1::text[])
         AND ($2::text IS NULL OR t.department_id = $2::text)
         AND t.status <> 'cancelled'
+        AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'
     `,
     [visibleUserIds, departmentId || null],
   );
@@ -717,6 +720,7 @@ async function getUserDrilldownFacts(userId, client = pool) {
       WHERE u.employee_id = $1::text
         AND COALESCE(u.is_active, TRUE) = TRUE
         AND t.status <> 'cancelled'
+        AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'
         AND COALESCE(t.approved_at, t.closed_at, t.verified_at) IS NOT NULL
         AND (
           t.status = 'closed'

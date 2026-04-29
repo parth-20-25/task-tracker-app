@@ -1,4 +1,10 @@
-const { TASK_STATUSES, TASK_TRANSITIONS, VERIFICATION_STATUSES } = require("../config/constants");
+const {
+  TASK_SOURCES,
+  TASK_STATUSES,
+  TASK_TRANSITIONS,
+  TASK_TYPES,
+  VERIFICATION_STATUSES,
+} = require("../config/constants");
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
 const { getAdjacentWorkflowStage, getWorkflow, getStageById } = require("./workflowService");
@@ -19,7 +25,15 @@ const {
   updateTaskStatus,
   updateTaskVerification,
 } = require("../repositories/tasksRepository");
-const { findUserByEmployeeId } = require("../repositories/usersRepository");
+const {
+  findUserByEmployeeId,
+  listUsers,
+} = require("../repositories/usersRepository");
+const { listDepartments } = require("../repositories/departmentsRepository");
+const {
+  findWorkflowTemplateById,
+  listWorkflowTemplates,
+} = require("../repositories/workflowTemplatesRepository");
 const { canAccessTask, canAssignTo, canVerifyTask, getTaskAccess, isTaskAssignee } = require("./accessControlService");
 const { getEscalationSchedule } = require("./escalationService");
 const { notifyDepartment, notifyTaskAssignees } = require("./notificationService");
@@ -87,6 +101,68 @@ function hasOwn(payload, key) {
   return Object.prototype.hasOwnProperty.call(payload || {}, key);
 }
 
+function normalizeTaskType(taskType) {
+  if (!taskType) {
+    return null;
+  }
+
+  const normalized = String(taskType).trim().toLowerCase();
+  if (Object.values(TASK_TYPES).includes(normalized)) {
+    return normalized;
+  }
+
+  throw new AppError(400, `Unsupported task_type "${taskType}"`);
+}
+
+function normalizeTaskSource(source, fallback = TASK_SOURCES.ADMIN_MANUAL) {
+  const normalized = String(source || fallback).trim().toLowerCase();
+  if (Object.values(TASK_SOURCES).includes(normalized)) {
+    return normalized;
+  }
+
+  throw new AppError(400, `Unsupported task source "${source}"`);
+}
+
+function normalizeTags(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((tag) => String(tag || "").trim()).filter(Boolean))];
+  }
+
+  return [...new Set(
+    String(value)
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+  )];
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function resolveTaskTypeFromPayload(payload) {
+  const normalizedTaskType = normalizeTaskType(payload.task_type);
+  if (normalizedTaskType) {
+    return normalizedTaskType;
+  }
+
+  if (payload.workflow_template_id || payload.project_id || payload.scope_id || payload.fixture_id || payload.current_stage_id) {
+    return TASK_TYPES.DEPARTMENT_WORKFLOW;
+  }
+
+  if (payload.title) {
+    return TASK_TYPES.CUSTOM;
+  }
+
+  return TASK_TYPES.CUSTOM;
+}
+
 function getTaskProofUrls(task) {
   if (Array.isArray(task?.proof_url)) {
     return task.proof_url.filter(Boolean);
@@ -103,6 +179,14 @@ function taskHasProof(task) {
   return getTaskProofUrls(task).length > 0;
 }
 
+function isApprovalRequired(task) {
+  return task?.approval_required !== false;
+}
+
+function isProofRequired(task) {
+  return task?.proof_required === true;
+}
+
 function ensureTaskProofUpdateAllowed(user, task) {
   if (task.assigned_to !== user.employee_id) {
     throw new AppError(403, "Only assignee can upload proof");
@@ -115,9 +199,11 @@ function ensureTaskProofUpdateAllowed(user, task) {
 
 function hasTaskDetailUpdate(payload) {
   return [
+    "title",
     "description",
     "priority",
     "deadline",
+    "department_id",
     "planned_minutes",
     "machine_id",
     "machine_name",
@@ -125,6 +211,9 @@ function hasTaskDetailUpdate(payload) {
     "recurrence_rule",
     "dependency_ids",
     "requires_quality_approval",
+    "approval_required",
+    "proof_required",
+    "tags",
     "assigned_to",
     "assignee_ids",
   ].some((field) => hasOwn(payload, field));
@@ -263,7 +352,7 @@ function mapExecutionPayloadToStatus(task, payload) {
     case "hold":
       return TASK_STATUSES.ON_HOLD;
     case "submit":
-      return TASK_STATUSES.UNDER_REVIEW;
+      return isApprovalRequired(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
     default:
       return null;
   }
@@ -281,6 +370,9 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
   let nextApprovalStage = task.approval_stage;
   let nextLifecycleStatus = task.lifecycle_status || TASK_STATUSES.ASSIGNED;
   let completedAt = task.completed_at;
+  let closedAt = task.closed_at;
+  let approvedAt = task.approved_at;
+  let approvedBy = task.approved_by || null;
 
   switch (action) {
     case "start":
@@ -315,14 +407,19 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       if (task.status !== TASK_STATUSES.IN_PROGRESS) {
         throw new AppError(400, `Invalid action "${action}" for current task state "${task.status}"`);
       }
-      if (!taskHasProof(task)) {
+      if (isProofRequired(task) && !taskHasProof(task)) {
         throw new AppError(400, "Proof is required before completing the task");
       }
-      nextStatus = TASK_STATUSES.UNDER_REVIEW;
-      nextLifecycleStatus = TASK_STATUSES.IN_PROGRESS;
-      nextVerificationStatus = VERIFICATION_STATUSES.PENDING;
-      nextApprovalStage = "manager";
+      nextStatus = isApprovalRequired(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
+      nextLifecycleStatus = nextStatus === TASK_STATUSES.CLOSED ? "completed" : TASK_STATUSES.IN_PROGRESS;
+      nextVerificationStatus = nextStatus === TASK_STATUSES.CLOSED
+        ? VERIFICATION_STATUSES.APPROVED
+        : VERIFICATION_STATUSES.PENDING;
+      nextApprovalStage = nextStatus === TASK_STATUSES.CLOSED ? "closed" : "manager";
       completedAt = eventTime;
+      closedAt = nextStatus === TASK_STATUSES.CLOSED ? eventTime : null;
+      approvedAt = nextStatus === TASK_STATUSES.CLOSED ? eventTime : null;
+      approvedBy = nextStatus === TASK_STATUSES.CLOSED ? user.employee_id : null;
       break;
     default:
       throw new AppError(400, `Unsupported workflow action "${action}"`);
@@ -342,11 +439,12 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
     verification_status: nextVerificationStatus,
     actual_minutes: actualMinutes,
     approval_stage: nextApprovalStage,
-    closed_at: null,
+    closed_at: closedAt,
     current_stage_id: task.current_stage_id,
     lifecycle_status: nextLifecycleStatus,
-    submitted_at: nextStatus === TASK_STATUSES.UNDER_REVIEW ? eventTime : task.submitted_at,
-    approved_at: null,
+    submitted_at: nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED ? eventTime : task.submitted_at,
+    approved_at: approvedAt,
+    approved_by: approvedBy,
   });
 
   await appendTaskActivity(task.id, {
@@ -474,11 +572,19 @@ async function resolveFixtureContextForTask({
 
 async function createTaskForUser(user, payload = {}) {
   const {
+    title,
     description,
     assigned_to: assignedTo,
     assignee_ids: requestedAssigneeIds,
     priority,
     deadline,
+    task_type: ignoredTaskType,
+    department_id: requestedDepartmentId = null,
+    workflow_template_id: workflowTemplateId = null,
+    approval_required: requestedApprovalRequired,
+    proof_required: requestedProofRequired,
+    source: requestedSource = null,
+    tags: requestedTags = [],
     machine_id: machineId = null,
     machine_name: machineName = null,
     location_tag: locationTag = null,
@@ -500,19 +606,17 @@ async function createTaskForUser(user, payload = {}) {
   } = payload;
 
   const assigneeIds = [...new Set([assignedTo, ...(requestedAssigneeIds || [])].filter(Boolean))];
+  const taskType = resolveTaskTypeFromPayload({ ...payload, task_type: ignoredTaskType });
+  const normalizedTags = normalizeTags(requestedTags);
+  const normalizedSource = normalizeTaskSource(
+    requestedSource,
+    taskType === TASK_TYPES.DEPARTMENT_WORKFLOW && (projectId || scopeId || payloadFixtureId || currentStageId)
+      ? TASK_SOURCES.WORKFLOW_AUTO
+      : TASK_SOURCES.ADMIN_MANUAL,
+  );
 
-  if (
-    Object.prototype.hasOwnProperty.call(payload, "title")
-  ) {
-    throw new AppError(400, "Task title is generated automatically and cannot be provided");
-  }
-
-  if (assigneeIds.length === 0 || !priority || !deadline) {
-    throw new AppError(400, "Assignee, priority, and deadline are required");
-  }
-
-  if (!user.department_id) {
-    throw new AppError(403, "A department is required to create tasks");
+  if (assigneeIds.length === 0) {
+    throw new AppError(400, "Assignee is required");
   }
 
   const assignees = await Promise.all(assigneeIds.map((employeeId) => findUserByEmployeeId(employeeId)));
@@ -526,29 +630,109 @@ async function createTaskForUser(user, payload = {}) {
   }
 
   const primaryAssignee = assignees[0];
-  const workflow = await resolveWorkflowForDepartment(user.department_id);
-  const resolvedCurrentStageId = String(currentStageId || workflow.first_stage_id || "").trim();
   const resolvedTaskStatus = TASK_STATUSES.ASSIGNED;
+  const legacyWorkflowManaged = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+    && !workflowTemplateId
+    && Boolean(projectId || scopeId || payloadFixtureId || currentStageId || projectNo || scopeName || quantityIndex);
+  const resolvedDepartmentId = String(
+    requestedDepartmentId
+    || (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW ? primaryAssignee.department_id || user.department_id || "" : requestedDepartmentId || ""),
+  ).trim() || null;
+  let workflowTemplate = null;
+  let workflow = null;
+  let resolvedCurrentStageId = null;
 
-  if (!resolvedCurrentStageId) {
-    throw new AppError(409, "A valid workflow stage is required to create this task");
+  if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
+    if (!resolvedDepartmentId) {
+      throw new AppError(400, "department_id is required for department workflow tasks");
+    }
+
+    if (!workflowTemplateId && !legacyWorkflowManaged) {
+      throw new AppError(400, "workflow_template_id is required for department workflow tasks");
+    }
+
+    if (primaryAssignee.department_id !== resolvedDepartmentId) {
+      throw new AppError(400, "Department workflow tasks can only be assigned within the selected department");
+    }
+
+    if (workflowTemplateId) {
+      workflowTemplate = await findWorkflowTemplateById(String(workflowTemplateId).trim());
+
+      if (!workflowTemplate || workflowTemplate.is_active === false) {
+        throw new AppError(404, "Workflow template not found");
+      }
+
+      if (workflowTemplate.department_id !== resolvedDepartmentId) {
+        throw new AppError(400, "Workflow template does not belong to the selected department");
+      }
+
+      if (
+        Array.isArray(workflowTemplate.eligible_role_ids)
+        && workflowTemplate.eligible_role_ids.length > 0
+        && !workflowTemplate.eligible_role_ids.includes(primaryAssignee.role_id)
+      ) {
+        throw new AppError(400, "Selected assignee is not eligible for this workflow template");
+      }
+    }
+
+    if (legacyWorkflowManaged) {
+      workflow = await resolveWorkflowForDepartment(resolvedDepartmentId);
+      resolvedCurrentStageId = String(currentStageId || workflow.first_stage_id || "").trim();
+
+      if (!resolvedCurrentStageId) {
+        throw new AppError(409, "A valid workflow stage is required to create this task");
+      }
+    }
   }
 
   if (!Object.values(TASK_STATUSES).includes(resolvedTaskStatus)) {
     throw new AppError(500, `Invalid task status configuration: ${resolvedTaskStatus}`);
   }
 
-  const fixtureContext = await resolveFixtureContextForTask({
-    departmentId: user.department_id,
-    projectId,
-    scopeId,
-    fixtureId: payloadFixtureId,
-    fixtureNo: payloadFixtureNo,
-    projectNo,
-    scopeName,
-    quantityIndex,
-    currentStageId: resolvedCurrentStageId,
-  });
+  const resolvedPriority = priority || workflowTemplate?.default_priority || null;
+  const resolvedDeadline = deadline
+    ? new Date(deadline)
+    : (
+      workflowTemplate?.default_due_days !== null
+      && workflowTemplate?.default_due_days !== undefined
+      ? addDays(new Date(), Number(workflowTemplate.default_due_days))
+      : null
+    );
+
+  if (!resolvedPriority || !resolvedDeadline || Number.isNaN(resolvedDeadline.getTime())) {
+    throw new AppError(400, "Priority and deadline are required");
+  }
+
+  if (taskType === TASK_TYPES.CUSTOM) {
+    if (!String(title || "").trim()) {
+      throw new AppError(400, "title is required for custom tasks");
+    }
+
+    if (!String(description || "").trim()) {
+      throw new AppError(400, "description is required for custom tasks");
+    }
+  }
+
+  const resolvedApprovalRequired = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+    ? (requestedApprovalRequired ?? workflowTemplate?.default_approval_required ?? true)
+    : requestedApprovalRequired === true;
+  const resolvedProofRequired = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+    ? (requestedProofRequired ?? workflowTemplate?.default_proof_required ?? true)
+    : requestedProofRequired === true;
+
+  const fixtureContext = legacyWorkflowManaged
+    ? await resolveFixtureContextForTask({
+      departmentId: resolvedDepartmentId,
+      projectId,
+      scopeId,
+      fixtureId: payloadFixtureId,
+      fixtureNo: payloadFixtureNo,
+      projectNo,
+      scopeName,
+      quantityIndex,
+      currentStageId: resolvedCurrentStageId,
+    })
+    : null;
 
   const fixtureId = fixtureContext?.fixture_id || null;
   const resolvedProjectId = fixtureContext?.project_id || (projectId ? String(projectId).trim() : null);
@@ -570,39 +754,50 @@ async function createTaskForUser(user, payload = {}) {
   }
 
   const internalIdentifier = generateInternalTaskIdentifier({
-    departmentId: user.department_id,
-    projectNo: resolvedProjectNo,
-    scopeName: resolvedScopeName,
+    departmentId: resolvedDepartmentId || user.department_id || taskType,
+    projectNo: resolvedProjectNo || workflowTemplate?.template_name || String(title || "").trim() || taskType,
+    scopeName: resolvedScopeName || null,
     instanceCount,
   });
   const escalationSchedule = await getEscalationSchedule({
-    departmentId: user.department_id,
-    priority,
-    deadline,
+    departmentId: resolvedDepartmentId,
+    priority: resolvedPriority,
+    deadline: resolvedDeadline.toISOString(),
   });
+  const resolvedTitle = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+    ? (workflowTemplate?.template_name || String(title || "").trim() || internalIdentifier)
+    : String(title || "").trim();
 
   const taskId = await insertTask({
+    title: resolvedTitle,
     internal_identifier: internalIdentifier,
-    description: description || "",
+    task_type: taskType,
+    description: String(description || "").trim(),
     assigned_to: primaryAssignee.employee_id,
     assignee_ids: assigneeIds,
     assigned_by: user.employee_id,
-    department_id: user.department_id,
-    status: resolvedTaskStatus, // Keep for backward compatibility
-    priority,
-    deadline,
-    verification_status: VERIFICATION_STATUSES.PENDING, // Keep for backward compatibility
+    created_by: user.employee_id,
+    department_id: resolvedDepartmentId,
+    workflow_template_id: workflowTemplate?.id || null,
+    status: resolvedTaskStatus,
+    priority: resolvedPriority,
+    deadline: resolvedDeadline.toISOString(),
+    verification_status: VERIFICATION_STATUSES.PENDING,
+    approval_required: resolvedApprovalRequired,
+    proof_required: resolvedProofRequired,
     planned_minutes: Number(payload.planned_minutes) || 0,
     machine_id: machineId,
     machine_name: machineName,
     location_tag: locationTag,
     recurrence_rule: recurrenceRule,
     dependency_ids: dependencyIds,
-    requires_quality_approval: false,
+    requires_quality_approval: payload.requires_quality_approval === true && resolvedApprovalRequired === true,
+    source: normalizedSource,
+    tags: normalizedTags,
     next_escalation_at: escalationSchedule.nextEscalationAt,
     last_escalated_at: null,
-    approval_stage: "execution", // Keep for backward compatibility
-    workflow_id: workflow.id,
+    approval_stage: "execution",
+    workflow_id: workflow?.id || null,
     current_stage_id: resolvedCurrentStageId,
     lifecycle_status: resolvedTaskStatus,
     project_id: resolvedProjectId,
@@ -632,6 +827,13 @@ async function createTaskForUser(user, payload = {}) {
     targetType: "task",
     targetId: taskId,
     metadata: {
+      task_type: taskType,
+      department_id: resolvedDepartmentId,
+      workflow_template_id: workflowTemplate?.id || null,
+      approval_required: resolvedApprovalRequired,
+      proof_required: resolvedProofRequired,
+      source: normalizedSource,
+      tags: normalizedTags,
       internal_identifier: internalIdentifier,
       assignee_ids: assigneeIds,
     },
@@ -673,6 +875,76 @@ async function resolveWorkflowForDepartment(departmentId) {
   };
 }
 
+async function getAssignableUsersForTaskContext(user, {
+  taskType = TASK_TYPES.CUSTOM,
+  departmentId = null,
+  workflowTemplateId = null,
+} = {}) {
+  const allUsers = await listUsers();
+  let candidates = allUsers.filter((candidate) => canAssignTo(user, candidate));
+
+  if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
+    if (!departmentId) {
+      throw new AppError(400, "department_id is required for workflow assignment");
+    }
+
+    candidates = candidates.filter((candidate) => candidate.department_id === departmentId);
+
+    if (workflowTemplateId) {
+      const template = await findWorkflowTemplateById(workflowTemplateId);
+      if (!template || template.is_active === false) {
+        throw new AppError(404, "Workflow template not found");
+      }
+
+      if (template.department_id !== departmentId) {
+        throw new AppError(400, "Workflow template does not belong to the selected department");
+      }
+
+      if (Array.isArray(template.eligible_role_ids) && template.eligible_role_ids.length > 0) {
+        candidates = candidates.filter((candidate) => template.eligible_role_ids.includes(candidate.role_id));
+      }
+    }
+  }
+
+  return candidates;
+}
+
+async function listAssignmentReferenceDataForUser(user) {
+  const [departments, assignableUsers] = await Promise.all([
+    listDepartments(),
+    getAssignableUsersForTaskContext(user, { taskType: TASK_TYPES.CUSTOM }),
+  ]);
+
+  const visibleDepartmentIds = new Set(assignableUsers.map((candidate) => candidate.department_id).filter(Boolean));
+  if (user.department_id) {
+    visibleDepartmentIds.add(user.department_id);
+  }
+
+  return {
+    departments: departments.filter((department) => visibleDepartmentIds.has(department.id)),
+    assignable_users: assignableUsers,
+  };
+}
+
+async function listWorkflowTemplatesForUser(user, departmentId) {
+  const normalizedDepartmentId = String(departmentId || "").trim();
+  if (!normalizedDepartmentId) {
+    throw new AppError(400, "department_id is required");
+  }
+
+  const referenceData = await listAssignmentReferenceDataForUser(user);
+  const hasDepartmentAccess = referenceData.departments.some((department) => department.id === normalizedDepartmentId);
+
+  if (!hasDepartmentAccess) {
+    throw new AppError(403, "You do not have access to this department");
+  }
+
+  return listWorkflowTemplates({
+    departmentId: normalizedDepartmentId,
+    isActive: true,
+  });
+}
+
 
 async function updateTaskForUser(user, taskId, payload = {}) {
   validateTaskUpdatePayload(payload);
@@ -693,12 +965,6 @@ async function updateTaskForUser(user, taskId, payload = {}) {
 
   if (!canAccessTask(user, existingTask)) {
     throw new AppError(403, "You do not have permission to access this task");
-  }
-
-  if (
-    Object.prototype.hasOwnProperty.call(payload, "title")
-  ) {
-    throw new AppError(400, "Task title is generated automatically and cannot be provided");
   }
 
   const verificationStatus = normalizeVerificationStatus(payload);
@@ -816,7 +1082,7 @@ async function transitionTaskForUser(user, taskId, nextStageId) {
   const transitionTime = new Date();
   const nextStatus = nextStage.is_final ? TASK_STATUSES.CLOSED : TASK_STATUSES.ASSIGNED;
 
-  if (nextStatus === TASK_STATUSES.CLOSED && !taskHasProof(task)) {
+  if (nextStatus === TASK_STATUSES.CLOSED && isProofRequired(task) && !taskHasProof(task)) {
     throw new AppError(400, "Proof is required before completing the task");
   }
   const nextApprovalStage = nextStage.is_final ? "closed" : "execution";
@@ -841,6 +1107,8 @@ async function transitionTaskForUser(user, taskId, nextStageId) {
     closed_at: closedAt,
     current_stage_id: nextStage.id,
     lifecycle_status: nextStage.is_final ? "completed" : TASK_STATUSES.ASSIGNED,
+    approved_at: nextStage.is_final ? transitionTime : null,
+    approved_by: nextStage.is_final ? user.employee_id : null,
   });
 
   await appendTaskActivity(task.id, {
@@ -946,27 +1214,39 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
     await ensureDependenciesClosed(task);
   }
 
-  if (nextStatus === TASK_STATUSES.UNDER_REVIEW && !taskHasProof(task)) {
+  if ((nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED) && isProofRequired(task) && !taskHasProof(task)) {
     throw new AppError(400, "Proof is required before completing the task");
   }
 
   const startedAt = nextStatus === TASK_STATUSES.IN_PROGRESS && !task.started_at ? new Date() : task.started_at;
-  const completedAt = nextStatus === TASK_STATUSES.UNDER_REVIEW ? new Date() : task.completed_at;
-  const actualMinutes = completedAt && startedAt
-    ? Math.max(1, Math.round((new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 60000))
+  const completionEventTime = nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED
+    ? new Date()
+    : task.completed_at;
+  const actualMinutes = completionEventTime && startedAt
+    ? Math.max(1, Math.round((new Date(completionEventTime).getTime() - new Date(startedAt).getTime()) / 60000))
     : task.actual_minutes || 0;
-  const verificationStatus = nextStatus === TASK_STATUSES.UNDER_REVIEW ? VERIFICATION_STATUSES.PENDING : task.verification_status;
-  const approvalStage = nextStatus === TASK_STATUSES.UNDER_REVIEW ? "manager" : "execution";
+  const verificationStatus = nextStatus === TASK_STATUSES.UNDER_REVIEW
+    ? VERIFICATION_STATUSES.PENDING
+    : nextStatus === TASK_STATUSES.CLOSED
+      ? VERIFICATION_STATUSES.APPROVED
+      : task.verification_status;
+  const approvalStage = nextStatus === TASK_STATUSES.UNDER_REVIEW
+    ? "manager"
+    : nextStatus === TASK_STATUSES.CLOSED
+      ? "closed"
+      : "execution";
 
   await updateTaskStatus(task.id, {
     status: nextStatus,
     started_at: startedAt,
-    completed_at: completedAt,
+    completed_at: completionEventTime,
     verification_status: verificationStatus,
     actual_minutes: actualMinutes,
     approval_stage: approvalStage,
-    closed_at: task.closed_at || null,
-    submitted_at: nextStatus === TASK_STATUSES.UNDER_REVIEW ? completedAt : task.submitted_at,
+    closed_at: nextStatus === TASK_STATUSES.CLOSED ? completionEventTime : task.closed_at || null,
+    submitted_at: nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED ? completionEventTime : task.submitted_at,
+    approved_at: nextStatus === TASK_STATUSES.CLOSED ? completionEventTime : task.approved_at,
+    approved_by: nextStatus === TASK_STATUSES.CLOSED ? user.employee_id : task.approved_by,
   });
 
   await appendTaskActivity(task.id, {
@@ -1030,6 +1310,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
     kpi_target: completionMetrics.kpi_target,
     kpi_status: completionMetrics.kpi_status,
     approved_at: next.status === TASK_STATUSES.CLOSED ? closedAt : null,
+    approved_by: next.status === TASK_STATUSES.CLOSED ? user.employee_id : null,
     submitted_at: task.submitted_at || task.completed_at || closedAt || new Date(),
     rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
   });
@@ -1229,6 +1510,46 @@ async function applyTaskDetailUpdate(user, task, payload) {
 
   const normalizedPayload = { ...payload };
   const hasReassignment = hasOwn(payload, "assigned_to") || hasOwn(payload, "assignee_ids");
+  const hasDepartmentUpdate = hasOwn(payload, "department_id");
+
+  if (hasOwn(payload, "title") && task.task_type !== TASK_TYPES.CUSTOM) {
+    throw new AppError(400, "Workflow task titles are controlled by the workflow template");
+  }
+
+  if (hasOwn(payload, "title")) {
+    const normalizedTitle = String(payload.title || "").trim();
+
+    if (!normalizedTitle) {
+      throw new AppError(400, "title cannot be empty");
+    }
+
+    normalizedPayload.title = normalizedTitle;
+  }
+
+  if (hasDepartmentUpdate && task.task_type !== TASK_TYPES.CUSTOM) {
+    throw new AppError(400, "Department workflow tasks cannot be moved between departments");
+  }
+
+  if (hasOwn(payload, "tags")) {
+    normalizedPayload.tags = normalizeTags(payload.tags);
+  }
+
+  if (hasDepartmentUpdate) {
+    const normalizedDepartmentId = String(payload.department_id || "").trim();
+
+    if (!normalizedDepartmentId) {
+      normalizedPayload.department_id = null;
+    } else {
+      const departments = await listDepartments();
+      const departmentExists = departments.some((department) => department.id === normalizedDepartmentId);
+
+      if (!departmentExists) {
+        throw new AppError(400, "Selected department does not exist");
+      }
+
+      normalizedPayload.department_id = normalizedDepartmentId;
+    }
+  }
 
   if (hasReassignment) {
     const requestedAssigneeIds = [...new Set([
@@ -1248,6 +1569,28 @@ async function applyTaskDetailUpdate(user, task, payload) {
 
     if (assignees.some((assignee) => !canAssignTo(user, assignee))) {
       throw new AppError(403, "Cannot assign to this user");
+    }
+
+    if (task.task_type === TASK_TYPES.DEPARTMENT_WORKFLOW) {
+      if (assignees.some((assignee) => assignee.department_id !== task.department_id)) {
+        throw new AppError(400, "Department workflow tasks can only be reassigned within the task department");
+      }
+
+      if (task.workflow_template_id) {
+        const template = await findWorkflowTemplateById(task.workflow_template_id);
+
+        if (!template || template.is_active === false) {
+          throw new AppError(409, "Workflow template is no longer active");
+        }
+
+        if (
+          Array.isArray(template.eligible_role_ids)
+          && template.eligible_role_ids.length > 0
+          && assignees.some((assignee) => !template.eligible_role_ids.includes(assignee.role_id))
+        ) {
+          throw new AppError(400, "Selected assignee is not eligible for this workflow template");
+        }
+      }
     }
 
     normalizedPayload.assignee_ids = requestedAssigneeIds;
@@ -1300,9 +1643,12 @@ module.exports = instrumentModuleExports("service.taskService", {
   cancelTaskForUser,
   createTaskForUser,
   ensureTaskProofUpdateAllowed,
+  getAssignableUsersForTaskContext,
+  listAssignmentReferenceDataForUser,
   listTaskActivityForUser,
   listTasksForUser,
   listVerificationTasksForUser,
+  listWorkflowTemplatesForUser,
   resolveWorkflowForDepartment,
   transitionTaskForUser,
   updateTaskForUser,

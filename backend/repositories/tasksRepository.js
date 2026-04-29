@@ -47,6 +47,7 @@ function taskSelectQuery(whereClause = "") {
       t.lifecycle_status,
       COALESCE(stage.stage_name, stage.name) AS workflow_stage,
       workflow_progress.status AS workflow_status,
+      template.template_name AS workflow_template_name,
       (
         SELECT COUNT(*)::int
         FROM task_activity_logs activity
@@ -56,6 +57,7 @@ function taskSelectQuery(whereClause = "") {
       ${buildUserColumns({ userAlias: "assigner", roleAlias: "assigner_role", departmentAlias: "assigner_department", prefix: "assigner_" })}
     FROM tasks t
     LEFT JOIN workflow_stages stage ON stage.id = t.current_stage_id
+    LEFT JOIN workflow_templates template ON template.id = t.workflow_template_id
     LEFT JOIN fixture_workflow_progress workflow_progress
       ON workflow_progress.fixture_id = t.fixture_id
       AND workflow_progress.department_id = t.department_id
@@ -210,24 +212,26 @@ async function listTasksForWorkflowInstance({
 }
 
 async function insertTask(task, client = pool) {
-  if (!task.workflow_id || !task.current_stage_id) {
-    throw new Error("System configuration error: Tasks must be bound to a workflow and an active stage.");
-  }
-
   const insertQuery = `
       INSERT INTO tasks (
+        title,
         internal_identifier,
+        task_type,
         description,
         assigned_to,
         assignee_ids,
         assigned_by,
+        created_by,
         department_id,
+        workflow_template_id,
         status,
         priority,
         deadline,
         created_at,
         assigned_at,
         verification_status,
+        approval_required,
+        proof_required,
         planned_minutes,
         machine_id,
         machine_name,
@@ -235,6 +239,8 @@ async function insertTask(task, client = pool) {
         recurrence_rule,
         dependency_ids,
         requires_quality_approval,
+        source,
+        tags,
         next_escalation_at,
         last_escalated_at,
         approval_stage,
@@ -257,26 +263,35 @@ async function insertTask(task, client = pool) {
         due_date,
         sla_due_date,
         rejection_count,
+        approved_by,
         stage,
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, NOW(), NOW(), $10,
-        $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, NOW()
+        $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), $14,
+        $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24, $25::jsonb, $26, $27, $28,
+        $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45,
+        $46, $47, $48, $49, NOW()
       )
       RETURNING id
     `;
   const insertParams = [
+    task.title || null,
     task.internal_identifier,
+    task.task_type || null,
     task.description,
     task.assigned_to,
     JSON.stringify(task.assignee_ids || [task.assigned_to]),
     task.assigned_by,
+    task.created_by || task.assigned_by || null,
     task.department_id,
+    task.workflow_template_id || null,
     task.status,
     task.priority,
     task.deadline,
     task.verification_status,
+    task.approval_required !== false,
+    task.proof_required === true,
     task.planned_minutes,
     task.machine_id,
     task.machine_name,
@@ -284,6 +299,8 @@ async function insertTask(task, client = pool) {
     task.recurrence_rule,
     JSON.stringify(task.dependency_ids || []),
     task.requires_quality_approval,
+    task.source || null,
+    JSON.stringify(task.tags || []),
     task.next_escalation_at || null,
     task.last_escalated_at || null,
     task.approval_stage,
@@ -306,6 +323,7 @@ async function insertTask(task, client = pool) {
     task.due_date || task.deadline || null,
     task.sla_due_date || task.due_date || task.deadline || null,
     task.rejection_count || 0,
+    task.approved_by || null,
     task.stage || null
   ];
 
@@ -317,6 +335,7 @@ async function insertTask(task, client = pool) {
 async function updateTaskStatus(taskId, incomingValues, client = pool) {
   const hasSubmittedAt = hasOwn(incomingValues, "submitted_at");
   const hasApprovedAt = hasOwn(incomingValues, "approved_at");
+  const hasApprovedBy = hasOwn(incomingValues, "approved_by");
   const values = {
     status: incomingValues.status,
     started_at: incomingValues.started_at ?? null,
@@ -329,6 +348,7 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
     lifecycle_status: incomingValues.lifecycle_status ?? null,
     submitted_at: incomingValues.submitted_at ?? null,
     approved_at: incomingValues.approved_at ?? null,
+    approved_by: incomingValues.approved_by ?? null,
   };
 
   await client.query(
@@ -356,8 +376,9 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
           sla_due_date = COALESCE(sla_due_date, due_date, deadline),
           submitted_at = CASE WHEN $10::boolean THEN $11::timestamp ELSE submitted_at END,
           approved_at = CASE WHEN $12::boolean THEN $13::timestamp ELSE approved_at END,
+          approved_by = CASE WHEN $14::boolean THEN $15::varchar(50) ELSE approved_by END,
           updated_at = NOW()
-      WHERE id = $14::int
+      WHERE id = $16::int
     `,
     [
       values.status,
@@ -373,6 +394,8 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
       values.submitted_at ?? null,
       hasApprovedAt,
       values.approved_at ?? null,
+      hasApprovedBy,
+      values.approved_by ?? null,
       taskId,
     ],
   );
@@ -383,6 +406,7 @@ async function updateTaskVerification(taskId, values, client = pool) {
   const hasKpiTarget = Object.prototype.hasOwnProperty.call(values, "kpi_target");
   const hasKpiStatus = Object.prototype.hasOwnProperty.call(values, "kpi_status");
   const hasApprovedAt = Object.prototype.hasOwnProperty.call(values, "approved_at");
+  const hasApprovedBy = Object.prototype.hasOwnProperty.call(values, "approved_by");
   const hasSubmittedAt = Object.prototype.hasOwnProperty.call(values, "submitted_at");
   const hasVerifiedAt = Object.prototype.hasOwnProperty.call(values, "verified_at");
   const hasClosedAt = Object.prototype.hasOwnProperty.call(values, "closed_at");
@@ -414,10 +438,11 @@ async function updateTaskVerification(taskId, values, client = pool) {
           due_date = COALESCE(due_date, deadline),
           sla_due_date = COALESCE(sla_due_date, due_date, deadline),
           approved_at = CASE WHEN $17::boolean THEN $18::timestamp ELSE approved_at END,
-          submitted_at = CASE WHEN $19::boolean THEN $20::timestamp ELSE submitted_at END,
-          rejection_count = COALESCE(rejection_count, 0) + $21::int,
+          approved_by = CASE WHEN $19::boolean THEN $20::varchar(50) ELSE approved_by END,
+          submitted_at = CASE WHEN $21::boolean THEN $22::timestamp ELSE submitted_at END,
+          rejection_count = COALESCE(rejection_count, 0) + $23::int,
           updated_at = NOW()
-      WHERE id = $22::int
+      WHERE id = $24::int
     `,
     [
       values.verification_status ?? null,
@@ -438,6 +463,8 @@ async function updateTaskVerification(taskId, values, client = pool) {
       values.lifecycle_status || null,
       hasApprovedAt,
       values.approved_at ?? null,
+      hasApprovedBy,
+      values.approved_by ?? null,
       hasSubmittedAt,
       values.submitted_at ?? null,
       rejectionCountIncrement,
@@ -492,9 +519,11 @@ async function updateTaskProof(taskId, values, client = pool) {
 }
 
 async function updateTaskDetails(taskId, values, client = pool) {
+  const hasTitle = hasOwn(values, "title");
   const hasDescription = hasOwn(values, "description");
   const hasPriority = hasOwn(values, "priority");
   const hasDeadline = hasOwn(values, "deadline");
+  const hasDepartmentId = hasOwn(values, "department_id");
   const hasPlannedMinutes = hasOwn(values, "planned_minutes");
   const hasMachineId = hasOwn(values, "machine_id");
   const hasMachineName = hasOwn(values, "machine_name");
@@ -502,6 +531,9 @@ async function updateTaskDetails(taskId, values, client = pool) {
   const hasRecurrenceRule = hasOwn(values, "recurrence_rule");
   const hasDependencyIds = hasOwn(values, "dependency_ids");
   const hasRequiresQualityApproval = hasOwn(values, "requires_quality_approval");
+  const hasApprovalRequired = hasOwn(values, "approval_required");
+  const hasProofRequired = hasOwn(values, "proof_required");
+  const hasTags = hasOwn(values, "tags");
   const hasAssignedTo = hasOwn(values, "assigned_to");
   const hasAssigneeIds = hasOwn(values, "assignee_ids");
   const hasAssignedUserId = hasOwn(values, "assigned_user_id");
@@ -509,34 +541,43 @@ async function updateTaskDetails(taskId, values, client = pool) {
   await client.query(
     `
       UPDATE tasks
-      SET description = CASE WHEN $1::boolean THEN $2::text ELSE description END,
-          priority = CASE WHEN $3::boolean THEN $4::text ELSE priority END,
-          deadline = CASE WHEN $5::boolean THEN $6::timestamp ELSE deadline END,
-          due_date = CASE WHEN $5::boolean THEN COALESCE($6::timestamp, due_date, deadline) ELSE due_date END,
-          sla_due_date = CASE WHEN $5::boolean THEN COALESCE($6::timestamp, sla_due_date, due_date, deadline) ELSE sla_due_date END,
-          planned_minutes = CASE WHEN $7::boolean THEN $8::int ELSE planned_minutes END,
-          machine_id = CASE WHEN $9::boolean THEN $10::text ELSE machine_id END,
-          machine_name = CASE WHEN $11::boolean THEN $12::text ELSE machine_name END,
-          location_tag = CASE WHEN $13::boolean THEN $14::text ELSE location_tag END,
-          recurrence_rule = CASE WHEN $15::boolean THEN $16::text ELSE recurrence_rule END,
-          dependency_ids = CASE WHEN $17::boolean THEN $18::jsonb ELSE dependency_ids END,
-          requires_quality_approval = CASE WHEN $19::boolean THEN $20::boolean ELSE requires_quality_approval END,
-          assigned_to = CASE WHEN $21::boolean THEN $22::text ELSE assigned_to END,
-          assignee_ids = CASE WHEN $23::boolean THEN $24::jsonb ELSE assignee_ids END,
-          assigned_user_id = CASE WHEN $25::boolean THEN $26::text ELSE assigned_user_id END,
-          assigned_at = CASE WHEN $21::boolean OR $23::boolean THEN NOW() ELSE assigned_at END,
-          next_escalation_at = CASE WHEN $27::boolean THEN $28::timestamp ELSE next_escalation_at END,
-          last_escalated_at = CASE WHEN $29::boolean THEN $30::timestamp ELSE last_escalated_at END,
+      SET title = CASE WHEN $1::boolean THEN $2::text ELSE title END,
+          description = CASE WHEN $3::boolean THEN $4::text ELSE description END,
+          priority = CASE WHEN $5::boolean THEN $6::text ELSE priority END,
+          deadline = CASE WHEN $7::boolean THEN $8::timestamp ELSE deadline END,
+          due_date = CASE WHEN $7::boolean THEN COALESCE($8::timestamp, due_date, deadline) ELSE due_date END,
+          sla_due_date = CASE WHEN $7::boolean THEN COALESCE($8::timestamp, sla_due_date, due_date, deadline) ELSE sla_due_date END,
+          department_id = CASE WHEN $9::boolean THEN $10::text ELSE department_id END,
+          planned_minutes = CASE WHEN $11::boolean THEN $12::int ELSE planned_minutes END,
+          machine_id = CASE WHEN $13::boolean THEN $14::text ELSE machine_id END,
+          machine_name = CASE WHEN $15::boolean THEN $16::text ELSE machine_name END,
+          location_tag = CASE WHEN $17::boolean THEN $18::text ELSE location_tag END,
+          recurrence_rule = CASE WHEN $19::boolean THEN $20::text ELSE recurrence_rule END,
+          dependency_ids = CASE WHEN $21::boolean THEN $22::jsonb ELSE dependency_ids END,
+          requires_quality_approval = CASE WHEN $23::boolean THEN $24::boolean ELSE requires_quality_approval END,
+          approval_required = CASE WHEN $25::boolean THEN $26::boolean ELSE approval_required END,
+          proof_required = CASE WHEN $27::boolean THEN $28::boolean ELSE proof_required END,
+          tags = CASE WHEN $29::boolean THEN $30::jsonb ELSE tags END,
+          assigned_to = CASE WHEN $31::boolean THEN $32::text ELSE assigned_to END,
+          assignee_ids = CASE WHEN $33::boolean THEN $34::jsonb ELSE assignee_ids END,
+          assigned_user_id = CASE WHEN $35::boolean THEN $36::text ELSE assigned_user_id END,
+          assigned_at = CASE WHEN $31::boolean OR $33::boolean THEN NOW() ELSE assigned_at END,
+          next_escalation_at = CASE WHEN $37::boolean THEN $38::timestamp ELSE next_escalation_at END,
+          last_escalated_at = CASE WHEN $39::boolean THEN $40::timestamp ELSE last_escalated_at END,
           updated_at = NOW()
-      WHERE id = $31::int
+      WHERE id = $41::int
     `,
     [
+      hasTitle,
+      values.title ?? null,
       hasDescription,
       values.description ?? null,
       hasPriority,
       values.priority ?? null,
       hasDeadline,
       values.deadline ?? null,
+      hasDepartmentId,
+      values.department_id ?? null,
       hasPlannedMinutes,
       values.planned_minutes ?? null,
       hasMachineId,
@@ -551,6 +592,12 @@ async function updateTaskDetails(taskId, values, client = pool) {
       hasDependencyIds ? JSON.stringify(values.dependency_ids ?? []) : null,
       hasRequiresQualityApproval,
       values.requires_quality_approval ?? null,
+      hasApprovalRequired,
+      values.approval_required ?? null,
+      hasProofRequired,
+      values.proof_required ?? null,
+      hasTags,
+      hasTags ? JSON.stringify(values.tags ?? []) : null,
       hasAssignedTo,
       values.assigned_to ?? null,
       hasAssigneeIds,

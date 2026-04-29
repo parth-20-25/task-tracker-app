@@ -1,5 +1,16 @@
 import { apiRequest } from "@/api/http";
-import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog, TaskStatus, VerificationStatus } from "@/types";
+import {
+  Task,
+  TaskActivity,
+  TaskAttachment,
+  TaskChecklist,
+  TaskLog,
+  TaskStatus,
+  TaskType,
+  User,
+  VerificationStatus,
+  WorkflowTemplate,
+} from "@/types";
 
 
 interface UpdateTaskPayload {
@@ -25,11 +36,18 @@ interface UpdateTaskPayload {
 }
 
 interface CreateTaskPayload {
+  task_type: TaskType;
+  title?: string;
   description: string;
   assigned_to: string;
   assignee_ids?: string[];
+  department_id?: string | null;
+  workflow_template_id?: string | null;
   priority: Task["priority"];
   deadline: string;
+  approval_required?: boolean;
+  proof_required?: boolean;
+  tags?: string[];
   planned_minutes?: number;
   machine_id?: string;
   machine_name?: string;
@@ -45,6 +63,11 @@ interface CreateTaskPayload {
   rework_date?: string | null;
 }
 
+export interface TaskAssignmentReferenceData {
+  departments: Array<{ id: string; name: string }>;
+  assignable_users: User[];
+}
+
 export function fetchTasks() {
   return apiRequest<Task[]>("/tasks");
 }
@@ -58,6 +81,33 @@ export function createTask(task: CreateTaskPayload) {
     method: "POST",
     body: JSON.stringify(task),
   });
+}
+
+export function fetchTaskAssignmentReferenceData() {
+  return apiRequest<TaskAssignmentReferenceData>("/task-assignment/reference-data");
+}
+
+export function fetchTaskAssignmentTemplates(departmentId: string) {
+  return apiRequest<WorkflowTemplate[]>(`/task-assignment/workflow-templates?department_id=${encodeURIComponent(departmentId)}`);
+}
+
+export function fetchTaskAssignmentUsers(params: {
+  task_type: TaskType;
+  department_id?: string | null;
+  workflow_template_id?: string | null;
+}) {
+  const search = new URLSearchParams();
+  search.set("task_type", params.task_type);
+
+  if (params.department_id) {
+    search.set("department_id", params.department_id);
+  }
+
+  if (params.workflow_template_id) {
+    search.set("workflow_template_id", params.workflow_template_id);
+  }
+
+  return apiRequest<User[]>(`/task-assignment/assignable-users?${search.toString()}`);
 }
 
 export function updateTask(taskId: number, data: UpdateTaskPayload) {

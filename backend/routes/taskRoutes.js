@@ -16,9 +16,12 @@ const {
   cancelTaskForUser,
   createTaskForUser,
   ensureTaskProofUpdateAllowed,
+  getAssignableUsersForTaskContext,
+  listAssignmentReferenceDataForUser,
   listTaskActivityForUser,
   listTasksForUser,
   listVerificationTasksForUser,
+  listWorkflowTemplatesForUser,
   transitionTaskForUser,
   updateTaskForUser,
 } = require("../services/taskService");
@@ -71,6 +74,40 @@ router.get(
   asyncHandler(async (req, res) => {
     const tasks = await listVerificationTasksForUser(req.user);
     return sendSuccess(res, tasks);
+  }),
+);
+
+router.get(
+  "/task-assignment/reference-data",
+  authorize(PERMISSIONS.ASSIGN_TASK),
+  asyncHandler(async (req, res) => {
+    const data = await listAssignmentReferenceDataForUser(req.user);
+    return sendSuccess(res, data);
+  }),
+);
+
+router.get(
+  "/task-assignment/workflow-templates",
+  authorize(PERMISSIONS.ASSIGN_TASK),
+  asyncHandler(async (req, res) => {
+    const templates = await listWorkflowTemplatesForUser(req.user, req.query.department_id);
+    return sendSuccess(res, templates);
+  }),
+);
+
+router.get(
+  "/task-assignment/assignable-users",
+  authorize(PERMISSIONS.ASSIGN_TASK),
+  asyncHandler(async (req, res) => {
+    const taskType = String(req.query.task_type || "").trim() || "custom";
+    const departmentId = String(req.query.department_id || "").trim() || null;
+    const workflowTemplateId = String(req.query.workflow_template_id || "").trim() || null;
+    const users = await getAssignableUsersForTaskContext(req.user, {
+      taskType,
+      departmentId,
+      workflowTemplateId,
+    });
+    return sendSuccess(res, users);
   }),
 );
 

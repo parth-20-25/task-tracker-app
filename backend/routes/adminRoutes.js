@@ -24,6 +24,8 @@ const {
   toggleEscalationRule,
   deleteEscalationRule,
   updateUserStatus,
+  saveWorkflowTemplate,
+  deleteWorkflowTemplate,
 } = require("../services/adminService");
 const {
   createWorkflow,
@@ -47,6 +49,7 @@ const {
   listKpiDefinitions,
 } = require("../repositories/referenceRepository");
 const { listWorkflows } = require("../repositories/workflowAdminRepository");
+const { listWorkflowTemplates } = require("../repositories/workflowTemplatesRepository");
 
 const router = express.Router();
 
@@ -264,6 +267,29 @@ router.delete(
   "/workflows/:workflowId",
   authorize(PERMISSIONS.MANAGE_WORKFLOWS),
   asyncHandler(async (req, res) => sendSuccess(res, await deleteWorkflow(req.user, req.params.workflowId))),
+);
+
+router.get(
+  "/workflow-templates",
+  authorize(PERMISSIONS.MANAGE_WORKFLOWS),
+  asyncHandler(async (req, res) => sendSuccess(res, await listWorkflowTemplates({
+    departmentId: req.query.department_id ? String(req.query.department_id).trim() : null,
+  }))),
+);
+
+router.put(
+  "/workflow-templates/:templateId",
+  authorize(PERMISSIONS.MANAGE_WORKFLOWS),
+  asyncHandler(async (req, res) => sendSuccess(res, await saveWorkflowTemplate(req.user, {
+    ...req.body,
+    id: req.params.templateId === "new" ? null : req.params.templateId,
+  }))),
+);
+
+router.delete(
+  "/workflow-templates/:templateId",
+  authorize(PERMISSIONS.MANAGE_WORKFLOWS),
+  asyncHandler(async (req, res) => sendSuccess(res, await deleteWorkflowTemplate(req.user, req.params.templateId))),
 );
 
 // ============ WORKFLOW STAGES ============

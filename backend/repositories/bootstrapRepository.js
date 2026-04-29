@@ -128,6 +128,15 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fixture_id UUID`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fixture_no TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stage TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'department_workflow'`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS workflow_template_id UUID`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS approval_required BOOLEAN NOT NULL DEFAULT TRUE`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_required BOOLEAN NOT NULL DEFAULT TRUE`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'admin_manual'`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by VARCHAR(50)`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS approved_by VARCHAR(50)`,
   ];
 
   for (const statement of taskColumnStatements) {
@@ -158,21 +167,15 @@ async function ensureTasksTable(client) {
   await client.query(`ALTER TABLE tasks ALTER COLUMN proof_url SET DEFAULT '{}'::text[]`);
 
   await client.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'tasks'
-          AND column_name = 'title'
-      ) THEN
-        UPDATE tasks
-        SET internal_identifier = COALESCE(NULLIF(internal_identifier, ''), NULLIF(title, ''), CONCAT('TASK-', id::text))
-        WHERE internal_identifier IS NULL OR internal_identifier = '';
+    UPDATE tasks
+    SET internal_identifier = COALESCE(NULLIF(internal_identifier, ''), NULLIF(title, ''), CONCAT('TASK-', id::text))
+    WHERE internal_identifier IS NULL OR internal_identifier = ''
+  `);
 
-        ALTER TABLE tasks DROP COLUMN title;
-      END IF;
-    END $$;
+  await client.query(`
+    UPDATE tasks
+    SET title = COALESCE(NULLIF(title, ''), NULLIF(internal_identifier, ''), CONCAT('Task #', id::text))
+    WHERE title IS NULL OR title = ''
   `);
 
   await client.query(`
@@ -224,6 +227,16 @@ async function ensureTasksTable(client) {
     ON tasks (project_id, scope_id, fixture_no)
   `, "idx_tasks_project_scope_fixture_identity");
 
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_task_type_department
+    ON tasks (task_type, department_id, created_at DESC)
+  `, "idx_tasks_task_type_department");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_workflow_template
+    ON tasks (workflow_template_id)
+  `, "idx_tasks_workflow_template");
+
   await client.query(`
     UPDATE tasks
     SET assignee_ids = to_jsonb(ARRAY[assigned_to]::text[])
@@ -241,6 +254,38 @@ async function ensureTasksTable(client) {
     UPDATE tasks
     SET assigned_user_id = COALESCE(NULLIF(assigned_user_id, ''), assigned_to)
     WHERE assigned_user_id IS NULL OR assigned_user_id = ''
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET created_by = COALESCE(NULLIF(created_by, ''), NULLIF(assigned_by, ''), NULLIF(assigned_to, ''))
+    WHERE created_by IS NULL OR created_by = ''
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET task_type = COALESCE(NULLIF(task_type, ''), 'department_workflow'),
+        approval_required = COALESCE(approval_required, TRUE),
+        proof_required = COALESCE(proof_required, TRUE),
+        source = COALESCE(NULLIF(source, ''), 'admin_manual'),
+        tags = COALESCE(tags, '[]'::jsonb),
+        title = COALESCE(NULLIF(title, ''), NULLIF(internal_identifier, ''), CONCAT('Task #', id::text))
+    WHERE task_type IS NULL
+       OR task_type = ''
+       OR approval_required IS NULL
+       OR proof_required IS NULL
+       OR source IS NULL
+       OR source = ''
+       OR tags IS NULL
+       OR title IS NULL
+       OR title = ''
+  `);
+
+  await client.query(`
+    UPDATE tasks
+    SET approved_by = COALESCE(NULLIF(approved_by, ''), NULLIF(assigned_by, ''))
+    WHERE approved_by IS NULL
+      AND approved_at IS NOT NULL
   `);
 
   await client.query(`
@@ -380,6 +425,31 @@ async function ensureReferenceTables(client) {
       UNIQUE(department_id, workflow_name, stage_name)
     )
   `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS workflow_templates (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      department_id TEXT NOT NULL REFERENCES departments(id),
+      template_name TEXT NOT NULL,
+      description TEXT,
+      default_priority TEXT,
+      default_proof_required BOOLEAN NOT NULL DEFAULT TRUE,
+      default_approval_required BOOLEAN NOT NULL DEFAULT TRUE,
+      default_due_days INTEGER,
+      escalation_level INTEGER NOT NULL DEFAULT 0,
+      eligible_role_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by VARCHAR(50),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (department_id, template_name)
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_workflow_templates_department_active
+    ON workflow_templates (department_id, is_active, template_name)
+  `, "idx_workflow_templates_department_active");
 
   await client.query(`ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
   await client.query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
@@ -1110,6 +1180,194 @@ async function seedPermissionsAndWorkflows(client) {
             updated_at = NOW()
       `,
       [deptId, workflowName, stageName, stageOrder]
+    );
+  }
+
+  const seededTemplates = [
+    {
+      departmentNames: ["design"],
+      template_name: "Fixture Creation",
+      description: "Structured fixture creation work for department-owned execution.",
+      default_priority: "high",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 2,
+      escalation_level: 1,
+      eligible_role_ids: ["r4", "r7"],
+    },
+    {
+      departmentNames: ["design"],
+      template_name: "CAD Verification",
+      description: "Template-controlled CAD verification before downstream release.",
+      default_priority: "medium",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 1,
+      escalation_level: 1,
+      eligible_role_ids: ["r4", "r7"],
+    },
+    {
+      departmentNames: ["production"],
+      template_name: "Batch Verification",
+      description: "Production batch verification with accountable ownership and proof.",
+      default_priority: "medium",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 1,
+      escalation_level: 1,
+      eligible_role_ids: ["r4", "r7"],
+    },
+    {
+      departmentNames: ["production"],
+      template_name: "Shift Validation",
+      description: "Shift-level production validation for planned operational checks.",
+      default_priority: "medium",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 1,
+      escalation_level: 1,
+      eligible_role_ids: ["r4"],
+    },
+    {
+      departmentNames: ["production"],
+      template_name: "Machine Readiness",
+      description: "Pre-run machine readiness confirmation for production execution.",
+      default_priority: "high",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 0,
+      escalation_level: 1,
+      eligible_role_ids: ["r4", "r7"],
+    },
+    {
+      departmentNames: ["quality", "quality assurance"],
+      template_name: "Quality Inspection",
+      description: "Standard inspection work isolated from intervention tasks.",
+      default_priority: "high",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 1,
+      escalation_level: 1,
+      eligible_role_ids: ["r5"],
+    },
+    {
+      departmentNames: ["quality", "quality assurance"],
+      template_name: "Rejection Review",
+      description: "Controlled rejection review with approval discipline.",
+      default_priority: "high",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 1,
+      escalation_level: 2,
+      eligible_role_ids: ["r5"],
+    },
+    {
+      departmentNames: ["quality", "quality assurance"],
+      template_name: "Final Audit",
+      description: "Final audit workflow task with explicit proof and approval gates.",
+      default_priority: "critical",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 1,
+      escalation_level: 2,
+      eligible_role_ids: ["r5"],
+    },
+    {
+      departmentNames: ["maintenance"],
+      template_name: "Preventive Check",
+      description: "Scheduled maintenance verification captured as structured workflow work.",
+      default_priority: "medium",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 2,
+      escalation_level: 1,
+      eligible_role_ids: ["r6"],
+    },
+    {
+      departmentNames: ["maintenance"],
+      template_name: "Breakdown Verification",
+      description: "Urgent maintenance verification with mandatory evidence and approval.",
+      default_priority: "critical",
+      default_proof_required: true,
+      default_approval_required: true,
+      default_due_days: 0,
+      escalation_level: 2,
+      eligible_role_ids: ["r6"],
+    },
+  ];
+
+  const departmentRows = await client.query(`
+    SELECT id, LOWER(BTRIM(name)) AS normalized_name
+    FROM departments
+    WHERE is_active = TRUE
+  `);
+  const departmentIdsByName = new Map(
+    departmentRows.rows.map((row) => [row.normalized_name, row.id]),
+  );
+
+  for (const template of seededTemplates) {
+    const departmentId = template.departmentNames
+      .map((name) => departmentIdsByName.get(name))
+      .find(Boolean);
+
+    if (!departmentId) {
+      continue;
+    }
+
+    await client.query(
+      `
+        INSERT INTO workflow_templates (
+          department_id,
+          template_name,
+          description,
+          default_priority,
+          default_proof_required,
+          default_approval_required,
+          default_due_days,
+          escalation_level,
+          eligible_role_ids,
+          is_active,
+          created_by,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9::jsonb,
+          TRUE,
+          'system',
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (department_id, template_name) DO UPDATE
+        SET description = EXCLUDED.description,
+            default_priority = EXCLUDED.default_priority,
+            default_proof_required = EXCLUDED.default_proof_required,
+            default_approval_required = EXCLUDED.default_approval_required,
+            default_due_days = EXCLUDED.default_due_days,
+            escalation_level = EXCLUDED.escalation_level,
+            eligible_role_ids = EXCLUDED.eligible_role_ids,
+            is_active = TRUE,
+            updated_at = NOW()
+      `,
+      [
+        departmentId,
+        template.template_name,
+        template.description,
+        template.default_priority,
+        template.default_proof_required,
+        template.default_approval_required,
+        template.default_due_days,
+        template.escalation_level,
+        JSON.stringify(template.eligible_role_ids),
+      ],
     );
   }
 }

@@ -23,8 +23,9 @@ import { AuditLog, Department, Machine, Role, Shift, User } from "@/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
-import { Building2, FileText, Settings, Shield, Users, Wrench, Clock3 } from "lucide-react";
+import { Building2, FileText, Settings, Shield, Users, Wrench, Clock3, Briefcase } from "lucide-react";
 
+const AssignmentsTab = lazy(() => import("./admin/AssignmentsTab"));
 const UsersTab = lazy(() => import("./admin/UsersTab"));
 const RolesTab = lazy(() => import("./admin/RolesTab"));
 const DepartmentsTab = lazy(() => import("./admin/DepartmentsTab"));
@@ -33,7 +34,7 @@ const MachinesTab = lazy(() => import("./admin/MachinesTab"));
 const WorkflowsTab = lazy(() => import("./admin/WorkflowsTab"));
 const AuditTab = lazy(() => import("./admin/AuditTab"));
 
-const validTabs = ["users", "roles", "departments", "shifts", "machines", "workflows", "audit"] as const;
+const validTabs = ["assignments", "users", "roles", "departments", "shifts", "machines", "workflows", "audit"] as const;
 type AdminTab = typeof validTabs[number];
 
 export default function AdminPanel() {
@@ -42,6 +43,7 @@ export default function AdminPanel() {
   const navigate = useNavigate();
   const routeTab = location.pathname.split("/")[2];
   const availableTabs = useMemo(() => ([
+    access.canAssignTasks ? "assignments" : null,
     access.canManageUsers ? "users" : null,
     access.canManageRoles ? "roles" : null,
     access.canManageDepartments ? "departments" : null,
@@ -104,6 +106,7 @@ export default function AdminPanel() {
         onValueChange={(value) => navigate(value === "users" ? "/admin/users" : `/admin/${value}`)}
       >
         <TabsList>
+          {access.canAssignTasks && <TabsTrigger value="assignments"><Briefcase className="h-3.5 w-3.5 mr-1.5" />Assignments</TabsTrigger>}
           {access.canManageUsers && <TabsTrigger value="users"><Users className="h-3.5 w-3.5 mr-1.5" />Users</TabsTrigger>}
           {access.canManageRoles && <TabsTrigger value="roles"><Shield className="h-3.5 w-3.5 mr-1.5" />Roles</TabsTrigger>}
           {access.canManageDepartments && <TabsTrigger value="departments"><Building2 className="h-3.5 w-3.5 mr-1.5" />Departments</TabsTrigger>}
@@ -112,6 +115,12 @@ export default function AdminPanel() {
           {access.canManageWorkflows && <TabsTrigger value="workflows"><Settings className="h-3.5 w-3.5 mr-1.5" />Workflows</TabsTrigger>}
           {access.canViewAuditLogs && <TabsTrigger value="audit"><FileText className="h-3.5 w-3.5 mr-1.5" />Audit Logs</TabsTrigger>}
         </TabsList>
+
+        {access.canAssignTasks && <TabsContent value="assignments" className="mt-4">
+          <Suspense fallback={<div>Loading...</div>}>
+            <AssignmentsTab />
+          </Suspense>
+        </TabsContent>}
 
         {access.canManageUsers && <TabsContent value="users" className="mt-4">
           <Suspense fallback={<div>Loading...</div>}>

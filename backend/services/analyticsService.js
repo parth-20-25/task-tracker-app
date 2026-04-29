@@ -503,6 +503,7 @@ async function queryTaskFacts({ scopeContext, startDate, endDate, departmentId =
   const where = [
     "t.created_at >= $1",
     "t.created_at < $2",
+    "COALESCE(t.task_type, 'department_workflow') = 'department_workflow'",
   ];
 
   if (scopeContext.scope === "department_only") {

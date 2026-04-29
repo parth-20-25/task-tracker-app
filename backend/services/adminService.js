@@ -41,6 +41,10 @@ const {
   listMachines,
   upsertMachine,
 } = require("../repositories/machinesRepository");
+const {
+  deleteWorkflowTemplate: deleteWorkflowTemplateRecord,
+  upsertWorkflowTemplate,
+} = require("../repositories/workflowTemplatesRepository");
 const { pool } = require("../db");
 
 async function listUsersForScope(user, scope = USER_SCOPES.ACCESSIBLE) {
@@ -244,6 +248,40 @@ async function saveDepartment(actor, payload) {
   return departments;
 }
 
+async function saveWorkflowTemplate(actor, payload) {
+  requireFields(payload, ["department_id", "template_name"]);
+
+  const template = await upsertWorkflowTemplate({
+    ...payload,
+    created_by: payload.created_by || actor.employee_id,
+    default_priority: payload.default_priority || null,
+    default_proof_required: payload.default_proof_required === true,
+    default_approval_required: payload.default_approval_required !== false,
+    eligible_role_ids: Array.isArray(payload.eligible_role_ids) ? payload.eligible_role_ids : [],
+    is_active: payload.is_active !== false,
+  });
+
+  await createAuditLog({
+    userEmployeeId: actor.employee_id,
+    actionType: "workflow_template_saved",
+    targetType: "workflow_template",
+    targetId: template.id,
+    metadata: {
+      department_id: template.department_id,
+      template_name: template.template_name,
+      default_priority: template.default_priority,
+      default_proof_required: template.default_proof_required,
+      default_approval_required: template.default_approval_required,
+      default_due_days: template.default_due_days,
+      escalation_level: template.escalation_level,
+      eligible_role_ids: template.eligible_role_ids,
+      is_active: template.is_active,
+    },
+  });
+
+  return template;
+}
+
 async function saveKpiDefinition(actor, payload) {
   requireFields(payload, ["id", "name"]);
   const kpis = await upsertKpiDefinition(payload);
@@ -358,6 +396,24 @@ async function deleteMachine(actor, machineId) {
   return true;
 }
 
+async function deleteWorkflowTemplate(actor, templateId) {
+  const deleted = await deleteWorkflowTemplateRecord(templateId);
+
+  if (!deleted) {
+    throw new AppError(404, "Workflow template not found");
+  }
+
+  await createAuditLog({
+    userEmployeeId: actor.employee_id,
+    actionType: "workflow_template_deleted",
+    targetType: "workflow_template",
+    targetId: templateId,
+    metadata: {},
+  });
+
+  return true;
+}
+
 async function deleteUser(actor, employeeId) {
   await deleteUserRecord(employeeId);
   await createAuditLog({
@@ -416,6 +472,7 @@ module.exports = {
   deleteRole,
   deleteShift,
   deleteUser,
+  deleteWorkflowTemplate,
   getAdminReferenceData,
   listUsersForScope,
   saveDepartment,
@@ -425,6 +482,7 @@ module.exports = {
   saveRole,
   saveShift,
   saveUser,
+  saveWorkflowTemplate,
   toggleEscalationRule,
   updateUserStatus,
 };

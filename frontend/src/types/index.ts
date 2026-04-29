@@ -3,6 +3,8 @@ export type VerificationStatus = 'pending' | 'manager_approved' | 'quality_pendi
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type RoleScope = 'global' | 'department' | 'team' | 'self';
 export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed' | 'cancelled';
+export type TaskType = 'department_workflow' | 'custom';
+export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import';
 export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 
@@ -40,12 +42,17 @@ export interface User {
 export interface Task {
   id: number;
   title: string;
+  internal_identifier?: string;
+  task_type: TaskType;
   description: string;
   assigned_to: string;
   assigned_user_id?: string;
   assignee_ids: string[];
   assigned_by: string;
+  created_by?: string | null;
   department_id: string;
+  workflow_template_id?: string | null;
+  workflow_template_name?: string | null;
   status: TaskStatus;
   verification_status: VerificationStatus;
   priority: Priority;
@@ -94,7 +101,12 @@ export interface Task {
   next_escalation_at?: string | null;
   last_escalated_at?: string | null;
   requires_quality_approval: boolean;
+  approval_required: boolean;
+  proof_required: boolean;
   approval_stage?: string;
+  source?: TaskSource;
+  tags?: string[];
+  approved_by?: string | null;
   workflow_id?: string;
   current_stage_id?: string;
   workflow_stage?: string | null;
@@ -102,6 +114,24 @@ export interface Task {
   activity_count?: number;
   assignee?: User;
   assigner?: User;
+}
+
+export interface WorkflowTemplate {
+  id: string;
+  department_id: string;
+  department_name?: string | null;
+  template_name: string;
+  description?: string | null;
+  default_priority?: Priority | null;
+  default_proof_required: boolean;
+  default_approval_required: boolean;
+  default_due_days?: number | null;
+  escalation_level: number;
+  eligible_role_ids: string[];
+  is_active: boolean;
+  created_at: string;
+  created_by?: string | null;
+  updated_at?: string | null;
 }
 
 export interface TaskActivity {

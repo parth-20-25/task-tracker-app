@@ -1,12 +1,19 @@
 import { createContext, useContext } from "react";
-import { Task } from "@/types";
+import { Task, TaskType } from "@/types";
 
 export interface NewTaskInput {
+  task_type: TaskType;
+  title?: string;
   description: string;
   assigned_to: string;
   assignee_ids?: string[];
+  department_id?: string | null;
+  workflow_template_id?: string | null;
   priority: Task["priority"];
   deadline: string;
+  approval_required?: boolean;
+  proof_required?: boolean;
+  tags?: string[];
   planned_minutes?: number;
   machine_id?: string;
   machine_name?: string;

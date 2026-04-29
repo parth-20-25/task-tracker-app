@@ -9,6 +9,24 @@ function parseAllowedOrigins(value) {
     .filter(Boolean);
 }
 
+function deriveVercelPreviewPattern(origin) {
+  const match = /^https:\/\/([a-z0-9-]+)\.vercel\.app$/i.exec(origin);
+
+  if (!match) {
+    return null;
+  }
+
+  return `https://${match[1]}-*.vercel.app`;
+}
+
+function buildEffectiveAllowedOrigins(allowedOrigins) {
+  const derivedOrigins = allowedOrigins
+    .map(deriveVercelPreviewPattern)
+    .filter(Boolean);
+
+  return [...new Set([...allowedOrigins, ...derivedOrigins])];
+}
+
 function buildOriginRegex(pattern) {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`, "i");
@@ -20,8 +38,11 @@ function isOriginAllowed(origin, allowedOrigins) {
   }
 
   const normalizedOrigin = normalizeOriginPattern(origin);
+  const effectiveAllowedOrigins = buildEffectiveAllowedOrigins(
+    allowedOrigins.map(normalizeOriginPattern).filter(Boolean),
+  );
 
-  return allowedOrigins.some((allowedOrigin) => {
+  return effectiveAllowedOrigins.some((allowedOrigin) => {
     if (allowedOrigin === "*") {
       return true;
     }
@@ -39,24 +60,37 @@ function isOriginAllowed(origin, allowedOrigins) {
 }
 
 function buildCorsOptions(rawAllowedOrigins) {
-  const allowedOrigins = parseAllowedOrigins(rawAllowedOrigins);
+  const configuredOrigins = parseAllowedOrigins(rawAllowedOrigins);
+  const effectiveAllowedOrigins = buildEffectiveAllowedOrigins(configuredOrigins);
 
   return {
     origin(origin, callback) {
-      if (isOriginAllowed(origin, allowedOrigins)) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const normalizedOrigin = normalizeOriginPattern(origin);
+
+      if (isOriginAllowed(normalizedOrigin, effectiveAllowedOrigins)) {
         callback(null, true);
         return;
       }
 
       console.warn("CORS origin rejected", {
-        origin: origin || null,
-        allowedOrigins,
+        origin: normalizedOrigin,
+        allowedOrigins: effectiveAllowedOrigins,
       });
 
-      callback(new Error(`CORS origin not allowed: ${origin || "unknown"}`));
+      callback(new Error(`CORS origin not allowed: ${normalizedOrigin}`));
     },
+    credentials: true,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "X-Requested-With"],
+    allowedHeaders: [
+      "Authorization",
+      "Content-Type",
+      "X-Requested-With"
+    ],
     optionsSuccessStatus: 204,
   };
 }

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCircle2 } from 'lucide-react';
 import { fetchNotifications, markNotificationRead } from '@/api/notificationApi';
+import { ListSkeleton } from '@/components/LoadingSkeletons';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { notificationQueryKeys } from '@/lib/queryKeys';
@@ -28,7 +29,9 @@ export default function Notifications() {
       </div>
 
       <div className="space-y-3">
-        {notifications.map(notification => (
+        {notificationsQuery.isLoading && <ListSkeleton count={4} />}
+
+        {!notificationsQuery.isLoading && notifications.map(notification => (
           <Card key={notification.id} className={!notification.read_at ? 'border-primary/40' : undefined}>
             <CardContent className="p-4 flex items-start gap-3">
               <Bell className="h-4 w-4 mt-1 text-primary" />
@@ -54,7 +57,7 @@ export default function Notifications() {
           </Card>
         ))}
 
-        {notifications.length === 0 && (
+        {!notificationsQuery.isLoading && notifications.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-12">No notifications yet.</p>
         )}
       </div>

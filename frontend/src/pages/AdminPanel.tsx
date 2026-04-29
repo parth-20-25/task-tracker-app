@@ -23,6 +23,7 @@ import { AuditLog, Department, Machine, Role, Shift, User } from "@/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
+import { RouteContentSkeleton } from "@/components/LoadingSkeletons";
 import { Building2, FileText, Settings, Shield, Users, Wrench, Clock3, Briefcase } from "lucide-react";
 
 const AssignmentsTab = lazy(() => import("./admin/AssignmentsTab"));
@@ -117,13 +118,13 @@ export default function AdminPanel() {
         </TabsList>
 
         {access.canAssignTasks && <TabsContent value="assignments" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <AssignmentsTab />
           </Suspense>
         </TabsContent>}
 
         {access.canManageUsers && <TabsContent value="users" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <UsersTab
               users={users}
               roles={roles}
@@ -163,7 +164,7 @@ export default function AdminPanel() {
         </TabsContent>}
 
         {access.canManageRoles && <TabsContent value="roles" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <RolesTab
               roles={roles}
               onSave={async (payload) => {
@@ -190,7 +191,7 @@ export default function AdminPanel() {
         </TabsContent>}
 
         {access.canManageDepartments && <TabsContent value="departments" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <DepartmentsTab
               departments={departments}
               onSave={async (payload) => {
@@ -217,7 +218,7 @@ export default function AdminPanel() {
         </TabsContent>}
 
         {access.canManageShifts && <TabsContent value="shifts" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <ShiftsTab
               shifts={shifts}
               onSave={async (payload) => {
@@ -244,7 +245,7 @@ export default function AdminPanel() {
         </TabsContent>}
 
         {access.canManageMachines && <TabsContent value="machines" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <MachinesTab
               machines={machines}
               departments={departments}
@@ -272,13 +273,13 @@ export default function AdminPanel() {
         </TabsContent>}
 
         {access.canManageWorkflows && <TabsContent value="workflows" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <WorkflowsTab />
           </Suspense>
         </TabsContent>}
 
         {access.canViewAuditLogs && <TabsContent value="audit" className="mt-4">
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<RouteContentSkeleton />}>
             <AuditTab auditLogs={auditLogs} />
           </Suspense>
         </TabsContent>}

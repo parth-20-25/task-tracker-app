@@ -57,6 +57,7 @@ export interface DepartmentProjectPayload {
 }
 
 export interface CreateDesignTaskPayload {
+  department_id?: string;
   project_id: string;
   scope_id?: string;
   fixture_id?: string;
@@ -171,45 +172,59 @@ export function fetchWorkflowByDepartment() {
   return apiRequest<WorkflowDefinition>("/workflows/by-department");
 }
 
-export function fetchFixtureCurrentStage(fixtureId: string) {
-  return apiRequest<FixtureCurrentStage | null>(`/workflows/current-stage?fixture_id=${encodeURIComponent(fixtureId)}`);
+export function fetchFixtureCurrentStage(fixtureId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  params.set("fixture_id", fixtureId);
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<FixtureCurrentStage | null>(`/workflows/current-stage?${params.toString()}`);
 }
 
-export function fetchFixtureFullProgress(fixtureId: string) {
-  return apiRequest<FixtureFullProgress>(`/workflows/progress?fixture_id=${encodeURIComponent(fixtureId)}`);
+export function fetchFixtureFullProgress(fixtureId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  params.set("fixture_id", fixtureId);
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<FixtureFullProgress>(`/workflows/progress?${params.toString()}`);
 }
 
-export function validateFixtureAssignment(fixtureId: string) {
+export function validateFixtureAssignment(fixtureId: string, departmentId?: string) {
   return apiRequest<AssignmentValidation>("/workflows/validate-assignment", {
     method: "POST",
-    body: JSON.stringify({ fixture_id: fixtureId }),
+    body: JSON.stringify(stripUndefined({ fixture_id: fixtureId, department_id: departmentId })),
   });
 }
 
-export function assignFixtureStage(payload: { fixture_id: string; assigned_to: string }) {
+export function assignFixtureStage(payload: { fixture_id: string; assigned_to: string; department_id?: string }) {
   return apiRequest<FixtureCurrentStage>("/workflows/assign", {
     method: "POST",
     body: JSON.stringify(stripUndefined(payload)),
   });
 }
 
-export function completeFixtureStage(payload: { fixture_id: string }) {
+export function completeFixtureStage(payload: { fixture_id: string; department_id?: string }) {
   return apiRequest<FixtureCurrentStage>("/workflows/complete", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function approveFixtureStage(payload: { fixture_id: string }) {
+export function approveFixtureStage(payload: { fixture_id: string; department_id?: string }) {
   return apiRequest<FixtureCurrentStage>("/workflows/approve", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(stripUndefined(payload)),
   });
 }
 
-export function rejectFixtureStage(payload: { fixture_id: string }) {
+export function rejectFixtureStage(payload: { fixture_id: string; department_id?: string }) {
   return apiRequest<FixtureCurrentStage>("/workflows/reject", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(stripUndefined(payload)),
   });
 }

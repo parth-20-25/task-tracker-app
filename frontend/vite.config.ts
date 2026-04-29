@@ -49,19 +49,6 @@ export default defineConfig(({ mode }) => {
         workbox: {
           cleanupOutdatedCaches: true,
           globPatterns: ["**/*.{js,css,html,ico,png,svg}"],
-          runtimeCaching: [
-            {
-              urlPattern: /\/api\/.*/i,
-              handler: "NetworkFirst",
-              options: {
-                cacheName: "api-cache",
-                networkTimeoutSeconds: 5,
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-          ],
         },
       }),
     ].filter(Boolean),

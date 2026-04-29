@@ -44,6 +44,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     <TaskContext.Provider
       value={{
         tasks,
+        isLoading: tasksQuery.isLoading,
+        isFetching: tasksQuery.isFetching,
         executeTaskAction,
         verifyTask,
         cancelTask,

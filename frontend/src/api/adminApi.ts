@@ -1,4 +1,5 @@
 import { apiRequest } from "@/api/http";
+import { setCachedDepartments } from "@/lib/referenceDataCache";
 import {
   AuditLog,
   Department,
@@ -26,7 +27,10 @@ export function fetchDepartments() {
 }
 
 export function fetchAllDepartments() {
-  return apiRequest<Department[]>("/all-departments");
+  return apiRequest<Department[]>("/all-departments").then((response) => {
+    setCachedDepartments("all-departments", response);
+    return response;
+  });
 }
 
 export function fetchAuditLogs() {

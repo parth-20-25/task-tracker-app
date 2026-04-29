@@ -1,6 +1,7 @@
 const express = require("express");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { AppError } = require("../lib/AppError");
+const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
@@ -26,7 +27,11 @@ router.use(authenticate);
 router.get(
   "/workflows/by-department",
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id || null;
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
+      "A department is required",
+    );
     const workflow = await getWorkflowForDepartment(departmentId);
 
     console.log("User Dept:", departmentId);
@@ -49,7 +54,11 @@ router.get(
       throw new AppError(400, "fixture_id query parameter is required");
     }
 
-    const result = await getCurrentStageForFixture(fixtureId);
+    const departmentId = req.query.department_id
+      ? resolveAccessibleDepartmentId(req.user, req.query.department_id, "A department is required")
+      : null;
+
+    const result = await getCurrentStageForFixture(fixtureId, departmentId);
     return sendSuccess(res, result ?? null);
   }),
 );
@@ -61,10 +70,11 @@ router.get(
 router.get(
   "/workflows/progress",
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id;
-    if (!departmentId) {
-      throw new AppError(403, "A department is required to access workflow data");
-    }
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
+      "A department is required to access workflow data",
+    );
 
     const fixtureId = String(req.query.fixture_id || "").trim();
     if (!fixtureId) {
@@ -83,10 +93,11 @@ router.get(
 router.post(
   "/workflows/validate-assignment",
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id;
-    if (!departmentId) {
-      throw new AppError(403, "A department is required");
-    }
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
 
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) {
@@ -106,10 +117,11 @@ router.post(
   "/workflows/assign",
   authorize("can_create_task"),
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id;
-    if (!departmentId) {
-      throw new AppError(403, "A department is required");
-    }
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
 
     const fixtureId = String(req.body?.fixture_id || "").trim();
     const assignedTo = String(req.body?.assigned_to || "").trim();
@@ -117,7 +129,7 @@ router.post(
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
     if (!assignedTo) throw new AppError(400, "assigned_to is required");
 
-    const result = await assignFixtureStage(fixtureId, departmentId, assignedTo);
+    const result = await assignFixtureStage(fixtureId, departmentId, assignedTo, req.user);
     return sendSuccess(res, result, 200);
   }),
 );
@@ -130,10 +142,11 @@ router.post(
   "/workflows/complete",
   authorize("can_create_task"),
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id;
-    if (!departmentId) {
-      throw new AppError(403, "A department is required");
-    }
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
 
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
@@ -151,10 +164,11 @@ router.post(
   "/workflows/approve",
   authorize("can_verify_task"),
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id;
-    if (!departmentId) {
-      throw new AppError(403, "A department is required");
-    }
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
 
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
@@ -172,10 +186,11 @@ router.post(
   "/workflows/reject",
   authorize("can_verify_task"),
   asyncHandler(async (req, res) => {
-    const departmentId = req.user?.department_id;
-    if (!departmentId) {
-      throw new AppError(403, "A department is required");
-    }
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
 
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");

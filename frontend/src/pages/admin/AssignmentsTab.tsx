@@ -1,4 +1,4 @@
-import { TaskAssignmentBar } from "@/components/TaskAssignmentBar";
+import { DepartmentAssignmentFlow } from "@/components/DepartmentAssignmentFlow";
 
 export default function AssignmentsTab() {
   return (
@@ -6,10 +6,10 @@ export default function AssignmentsTab() {
       <div>
         <h2 className="text-lg font-semibold text-slate-900">Assignment System</h2>
         <p className="text-sm text-slate-500">
-          Route department workflow work through templates, and keep executive intervention tasks separate.
+          Select a department context and continue inside that department's native assignment flow.
         </p>
       </div>
-      <TaskAssignmentBar />
+      <DepartmentAssignmentFlow allowDepartmentSelection />
     </div>
   );
 }

@@ -30,11 +30,12 @@ const {
   listUsers,
 } = require("../repositories/usersRepository");
 const { listDepartments } = require("../repositories/departmentsRepository");
+const { countProjectsByDepartment } = require("../repositories/designProjectCatalogRepository");
 const {
   findWorkflowTemplateById,
   listWorkflowTemplates,
 } = require("../repositories/workflowTemplatesRepository");
-const { canAccessTask, canAssignTo, canVerifyTask, getTaskAccess, isTaskAssignee } = require("./accessControlService");
+const { canAccessTask, canAssignTo, canVerifyTask, getTaskAccess, isAdmin, isTaskAssignee } = require("./accessControlService");
 const { getEscalationSchedule } = require("./escalationService");
 const { notifyDepartment, notifyTaskAssignees } = require("./notificationService");
 const { refreshPerformanceAnalyticsForDepartment } = require("./performanceAnalyticsService");
@@ -915,13 +916,18 @@ async function listAssignmentReferenceDataForUser(user) {
     getAssignableUsersForTaskContext(user, { taskType: TASK_TYPES.CUSTOM }),
   ]);
 
-  const visibleDepartmentIds = new Set(assignableUsers.map((candidate) => candidate.department_id).filter(Boolean));
-  if (user.department_id) {
+  const visibleDepartmentIds = isAdmin(user)
+    ? null
+    : new Set(assignableUsers.map((candidate) => candidate.department_id).filter(Boolean));
+
+  if (visibleDepartmentIds && user.department_id) {
     visibleDepartmentIds.add(user.department_id);
   }
 
   return {
-    departments: departments.filter((department) => visibleDepartmentIds.has(department.id)),
+    departments: visibleDepartmentIds
+      ? departments.filter((department) => visibleDepartmentIds.has(department.id))
+      : departments,
     assignable_users: assignableUsers,
   };
 }
@@ -943,6 +949,31 @@ async function listWorkflowTemplatesForUser(user, departmentId) {
     departmentId: normalizedDepartmentId,
     isActive: true,
   });
+}
+
+async function resolveDepartmentAssignmentContextForUser(user, departmentId) {
+  const normalizedDepartmentId = String(departmentId || "").trim();
+
+  if (!normalizedDepartmentId) {
+    throw new AppError(400, "department_id is required");
+  }
+
+  const referenceData = await listAssignmentReferenceDataForUser(user);
+  const hasDepartmentAccess = referenceData.departments.some((department) => department.id === normalizedDepartmentId);
+
+  if (!hasDepartmentAccess) {
+    throw new AppError(403, "You do not have access to this department");
+  }
+
+  const projectCount = await countProjectsByDepartment(normalizedDepartmentId);
+  const hasProjectCatalog = projectCount > 0;
+
+  return {
+    department_id: normalizedDepartmentId,
+    flow_type: hasProjectCatalog ? "project_catalog" : "workflow_template",
+    has_project_catalog: hasProjectCatalog,
+    project_count: projectCount,
+  };
 }
 
 
@@ -1649,6 +1680,7 @@ module.exports = instrumentModuleExports("service.taskService", {
   listTasksForUser,
   listVerificationTasksForUser,
   listWorkflowTemplatesForUser,
+  resolveDepartmentAssignmentContextForUser,
   resolveWorkflowForDepartment,
   transitionTaskForUser,
   updateTaskForUser,

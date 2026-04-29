@@ -18,6 +18,7 @@ const {
   ensureTaskProofUpdateAllowed,
   getAssignableUsersForTaskContext,
   listAssignmentReferenceDataForUser,
+  resolveDepartmentAssignmentContextForUser,
   listTaskActivityForUser,
   listTasksForUser,
   listVerificationTasksForUser,
@@ -92,6 +93,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const templates = await listWorkflowTemplatesForUser(req.user, req.query.department_id);
     return sendSuccess(res, templates);
+  }),
+);
+
+router.get(
+  "/task-assignment/department-context",
+  authorize(PERMISSIONS.ASSIGN_TASK),
+  asyncHandler(async (req, res) => {
+    const context = await resolveDepartmentAssignmentContextForUser(req.user, req.query.department_id);
+    return sendSuccess(res, context);
   }),
 );
 

@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
+import { ListSkeleton } from "@/components/LoadingSkeletons";
 import { issueQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import { Issue, IssuePriority, IssueStatus } from "@/types";
@@ -82,7 +83,7 @@ function IssueList({
   isAdmin: boolean;
 }) {
   if (loading) {
-    return <p className="text-sm text-muted-foreground">Loading issues...</p>;
+    return <ListSkeleton count={3} />;
   }
 
   if (!issues || issues.length === 0) {

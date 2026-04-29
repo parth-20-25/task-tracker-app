@@ -179,20 +179,22 @@ function WorkflowTimeline({ progress }: { progress?: FixtureFullProgress }) {
 
 function SupervisorPanel({
   fixtureId,
+  departmentId,
   currentStatus,
   onAction,
 }: {
   fixtureId: string;
+  departmentId?: string;
   currentStatus: FixtureStageStatus;
   onAction: () => void;
 }) {
   const queryClient = useQueryClient();
 
   const approveMutation = useMutation({
-    mutationFn: () => approveFixtureStage({ fixture_id: fixtureId }),
+    mutationFn: () => approveFixtureStage({ fixture_id: fixtureId, department_id: departmentId }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] });
       queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot });
       toast({ title: "Stage approved", description: "The fixture has advanced to the next stage." });
       onAction();
@@ -207,10 +209,10 @@ function SupervisorPanel({
   });
 
   const rejectMutation = useMutation({
-    mutationFn: () => rejectFixtureStage({ fixture_id: fixtureId }),
+    mutationFn: () => rejectFixtureStage({ fixture_id: fixtureId, department_id: departmentId }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] });
       toast({ title: "Stage rejected", description: "The stage has been sent back for rework." });
       onAction();
     },
@@ -263,16 +265,26 @@ function SupervisorPanel({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function DesignTaskAssignmentBar() {
+interface DesignTaskAssignmentBarProps {
+  departmentId?: string;
+  departmentName?: string;
+}
+
+export function DesignTaskAssignmentBar({
+  departmentId,
+  departmentName,
+}: DesignTaskAssignmentBarProps) {
   const queryClient = useQueryClient();
   const assignableUsersQuery = useAssignableUsersQuery();
   const currentUserQuery = useCurrentUserQuery();
   const currentUser = currentUserQuery.data;
-  const designDepartmentKey = currentUser?.department_id || "self";
+  const contextDepartmentId = departmentId || currentUser?.department_id || "";
+  const designDepartmentKey = contextDepartmentId || "self";
 
   const projectsQuery = useQuery({
     queryKey: projectQueryKeys.designProjects(designDepartmentKey),
-    queryFn: () => fetchDesignProjects(currentUser?.department_id),
+    queryFn: () => fetchDesignProjects(contextDepartmentId),
+    enabled: !!contextDepartmentId,
   });
 
   const [open, setOpen] = useState(false);
@@ -304,15 +316,28 @@ export function DesignTaskAssignmentBar() {
 
   const scopesQuery = useQuery({
     queryKey: projectQueryKeys.designScopes(projectId || "unselected", designDepartmentKey),
-    queryFn: () => fetchDesignScopes(projectId, currentUser?.department_id),
-    enabled: Boolean(projectId),
+    queryFn: () => fetchDesignScopes(projectId, contextDepartmentId),
+    enabled: Boolean(projectId) && !!contextDepartmentId,
   });
 
   const fixturesQuery = useQuery({
     queryKey: ["designFixtures", designDepartmentKey, scopeId || "unselected"],
-    queryFn: () => fetchDesignFixtures(scopeId, currentUser?.department_id),
-    enabled: Boolean(scopeId),
+    queryFn: () => fetchDesignFixtures(scopeId, contextDepartmentId),
+    enabled: Boolean(scopeId) && !!contextDepartmentId,
   });
+
+  useEffect(() => {
+    setProjectId("");
+    setScopeId("");
+    setFixtureId("");
+    setDescription("");
+    setAssignedTo("");
+    setPriority("P2");
+    setDeadline("");
+    setSearchQuery("");
+    setShowSearch(false);
+    resetWorkflowState();
+  }, [contextDepartmentId]);
 
   useEffect(() => {
     if (!fixtureId) {
@@ -324,12 +349,11 @@ export function DesignTaskAssignmentBar() {
     setIsWorkflowLoading(true);
     setWorkflowErrorMessage(null);
 
-    fetchFixtureCurrentStage(fixtureId)
+    fetchFixtureCurrentStage(fixtureId, contextDepartmentId)
       .then((resolvedWorkflow) => {
         if (!isActive) {
           return;
         }
-        console.log("Workflow API response:", resolvedWorkflow);
         setWorkflow(resolvedWorkflow);
         setWorkflowErrorMessage(resolvedWorkflow ? null : "No workflow configured for this department");
       })
@@ -337,7 +361,6 @@ export function DesignTaskAssignmentBar() {
         if (!isActive) {
           return;
         }
-        console.error("Workflow fetch failed:", error);
         setWorkflow(null);
         setWorkflowErrorMessage(
           error instanceof Error && error.message
@@ -354,23 +377,19 @@ export function DesignTaskAssignmentBar() {
     return () => {
       isActive = false;
     };
-  }, [fixtureId, workflowRequestVersion]);
-
-  useEffect(() => {
-    console.log("workflow state:", workflow);
-  }, [workflow]);
+  }, [contextDepartmentId, fixtureId, workflowRequestVersion]);
 
   // Validate assignment in real-time
   const validationQuery = useQuery({
-    queryKey: ["workflow", "validate", fixtureId],
-    queryFn: () => validateFixtureAssignment(fixtureId),
+    queryKey: ["workflow", "validate", designDepartmentKey, fixtureId],
+    queryFn: () => validateFixtureAssignment(fixtureId, contextDepartmentId),
     enabled: Boolean(fixtureId) && !isWorkflowLoading && workflow !== null,
     refetchInterval: Boolean(fixtureId) && workflow !== null ? 5000 : false,
   });
 
   const progressQuery = useQuery({
-    queryKey: ["workflow", "progress", fixtureId],
-    queryFn: () => fetchFixtureFullProgress(fixtureId),
+    queryKey: ["workflow", "progress", designDepartmentKey, fixtureId],
+    queryFn: () => fetchFixtureFullProgress(fixtureId, contextDepartmentId),
     enabled: Boolean(fixtureId) && !isWorkflowLoading && workflow !== null,
     refetchInterval: Boolean(fixtureId) && workflow !== null ? 5000 : false,
   });
@@ -424,9 +443,9 @@ export function DesignTaskAssignmentBar() {
         queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs }),
         queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: notificationQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] }),
-        queryClient.invalidateQueries({ queryKey: ["workflow", "validate", fixtureId] }),
-        queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] }),
+        queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] }),
+        queryClient.invalidateQueries({ queryKey: ["workflow", "validate"] }),
+        queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] }),
       ]);
 
       setProjectId("");
@@ -458,14 +477,15 @@ export function DesignTaskAssignmentBar() {
 
   const assignStageMutation = useMutation({
     mutationFn: () =>
-      assignFixtureStage({ fixture_id: fixtureId, assigned_to: assignedTo }),
+      assignFixtureStage({ fixture_id: fixtureId, assigned_to: assignedTo, department_id: contextDepartmentId }),
     onSuccess: () => {
       refreshWorkflowState();
-      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: ["workflow", "validate", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "validate"] });
+      queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] });
       // Also create the underlying task
       createTaskMutation.mutate({
+        department_id: contextDepartmentId,
         project_id: projectId,
         scope_id: scopeId,
         fixture_id: fixtureId,
@@ -491,12 +511,18 @@ export function DesignTaskAssignmentBar() {
     setProjectId(value);
     setScopeId("");
     setFixtureId("");
+    setAssignedTo("");
+    setDescription("");
+    setDeadline("");
     resetWorkflowState();
   };
 
   const handleScopeChange = (value: string) => {
     setScopeId(value);
     setFixtureId("");
+    setAssignedTo("");
+    setDescription("");
+    setDeadline("");
     resetWorkflowState();
   };
 
@@ -550,7 +576,7 @@ export function DesignTaskAssignmentBar() {
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-primary">
             <Sparkles className="h-4 w-4" />
-            Design Task Assignment
+            {departmentName ? `${departmentName} Assignment` : "Design Task Assignment"}
           </h3>
           <p className="mt-1 text-xs text-muted-foreground font-medium">
             Deploy deterministic tasks based on validated fixture ingestion.
@@ -568,6 +594,11 @@ export function DesignTaskAssignmentBar() {
 
       {open && (
         <CardContent className="space-y-4 p-4 pt-4">
+          {departmentName && (
+            <div className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+              Department context: <span className="font-semibold text-foreground">{departmentName}</span>
+            </div>
+          )}
 
           {/* ── Row 1: Project / Scope / Fixture / Priority ── */}
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -738,6 +769,7 @@ export function DesignTaskAssignmentBar() {
               {canVerify && hasWorkflow && reviewStage && (
                 <SupervisorPanel
                   fixtureId={fixtureId}
+                  departmentId={contextDepartmentId}
                   currentStatus={reviewStage.status}
                   onAction={() => {
                     refreshWorkflowState();

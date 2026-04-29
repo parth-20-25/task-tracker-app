@@ -147,6 +147,19 @@ async function listProjectOptionsByDepartment(departmentId, client = pool) {
   return result.rows.map(mapProjectOptionRow);
 }
 
+async function countProjectsByDepartment(departmentId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT COUNT(*)::integer AS count
+      FROM design.projects
+      WHERE department_id = $1
+    `,
+    [departmentId],
+  );
+
+  return Number(result.rows[0]?.count || 0);
+}
+
 async function findProjectByIdForDepartment(projectId, departmentId, client = pool) {
   const result = await client.query(
     `
@@ -527,6 +540,7 @@ async function upsertFixture(fixtureData, client = pool) {
 }
 
 module.exports = instrumentModuleExports("repository.designProjectCatalogRepository", {
+  countProjectsByDepartment,
   createUploadBatch,
   createUploadErrors,
   findDepartmentProjectByIdForDepartment,

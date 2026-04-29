@@ -1,5 +1,6 @@
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
+import { ListSkeleton } from '@/components/LoadingSkeletons';
 import { TaskCard } from '@/components/TaskCard';
 import { TaskStatus } from '@/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -15,7 +16,7 @@ const columns: { status: TaskStatus; label: string; color: string }[] = [
 
 export default function TeamTasks() {
   const { access } = useAuth();
-  const { tasks } = useTasks();
+  const { tasks, isLoading } = useTasks();
 
   const teamTasks = access.canViewAllTasks ? tasks : [];
   const groupedTasks = columns.reduce((acc, col) => {
@@ -38,8 +39,10 @@ export default function TeamTasks() {
               </div>
               <ScrollArea className="h-[calc(100vh-220px)]">
                 <div className="space-y-2 pr-2">
-                  {colTasks.map(t => <TaskCard key={t.id} task={t} compact showActions={false} />)}
-                  {colTasks.length === 0 && (
+                  {isLoading ? (
+                    <ListSkeleton count={3} />
+                  ) : colTasks.map(t => <TaskCard key={t.id} task={t} compact showActions={false} />)}
+                  {!isLoading && colTasks.length === 0 && (
                     <div className="text-xs text-muted-foreground text-center py-8 border border-dashed rounded-lg">
                       No tasks
                     </div>

@@ -31,6 +31,8 @@ export interface NewTaskInput {
 
 export interface TaskContextType {
   tasks: Task[];
+  isLoading: boolean;
+  isFetching: boolean;
   executeTaskAction: (taskId: number, action: "start" | "resume" | "hold" | "submit") => Promise<void>;
   verifyTask: (taskId: number, action: "approve" | "reject", remarks?: string) => Promise<void>;
   cancelTask: (taskId: number, reason?: string) => Promise<void>;

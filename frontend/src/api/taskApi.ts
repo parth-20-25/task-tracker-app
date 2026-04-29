@@ -1,4 +1,5 @@
 import { apiRequest } from "@/api/http";
+import { setCachedDepartments } from "@/lib/referenceDataCache";
 import {
   Task,
   TaskActivity,
@@ -68,6 +69,13 @@ export interface TaskAssignmentReferenceData {
   assignable_users: User[];
 }
 
+export interface DepartmentAssignmentContext {
+  department_id: string;
+  flow_type: "project_catalog" | "workflow_template";
+  has_project_catalog: boolean;
+  project_count: number;
+}
+
 export function fetchTasks() {
   return apiRequest<Task[]>("/tasks");
 }
@@ -84,7 +92,10 @@ export function createTask(task: CreateTaskPayload) {
 }
 
 export function fetchTaskAssignmentReferenceData() {
-  return apiRequest<TaskAssignmentReferenceData>("/task-assignment/reference-data");
+  return apiRequest<TaskAssignmentReferenceData>("/task-assignment/reference-data").then((response) => {
+    setCachedDepartments("assignment-reference-data", response);
+    return response;
+  });
 }
 
 export function fetchTaskAssignmentTemplates(departmentId: string) {
@@ -108,6 +119,12 @@ export function fetchTaskAssignmentUsers(params: {
   }
 
   return apiRequest<User[]>(`/task-assignment/assignable-users?${search.toString()}`);
+}
+
+export function fetchDepartmentAssignmentContext(departmentId: string) {
+  return apiRequest<DepartmentAssignmentContext>(
+    `/task-assignment/department-context?department_id=${encodeURIComponent(departmentId)}`,
+  );
 }
 
 export function updateTask(taskId: number, data: UpdateTaskPayload) {

@@ -7,6 +7,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { useAuth } from "@/contexts/useAuth";
 import { TaskProvider } from "@/contexts/TaskContext";
 import { AppLayout } from "@/components/AppLayout";
+import { AppBootSkeleton, RouteContentSkeleton } from "@/components/LoadingSkeletons";
 import Login from "./pages/Login";
 import React, { Suspense } from "react";
 
@@ -28,7 +29,7 @@ function AuthenticatedApp() {
   const { isAuthenticated, isReady, access } = useAuth();
 
   if (!isReady) {
-    return null;
+    return <AppBootSkeleton />;
   }
 
   if (!isAuthenticated) return <Login />;
@@ -36,7 +37,7 @@ function AuthenticatedApp() {
   return (
     <TaskProvider>
       <AppLayout>
-        <Suspense fallback={<div>Loading...</div>}>          
+        <Suspense fallback={<RouteContentSkeleton />}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/tasks" element={<MyTasks />} />

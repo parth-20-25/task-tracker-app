@@ -2,7 +2,7 @@ const express = require("express");
 const { PERMISSIONS } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 const { asyncHandler } = require("../lib/asyncHandler");
-const { getEffectiveDepartment, requireDepartmentContext } = require("../lib/departmentContext");
+const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { handleDesignExcelUpload } = require("../lib/designExcelUpload");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
@@ -62,8 +62,9 @@ router.get(
 router.get(
   "/design/workflow-preview",
   asyncHandler(async (req, res) => {
-    let departmentId = requireDepartmentContext(
-      getEffectiveDepartment(req.user, req.query.department_id),
+    let departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
       "Invalid department context",
     );
 
@@ -74,7 +75,7 @@ router.get(
         throw new AppError(404, "Project not found for the selected department");
       }
 
-      departmentId = requireDepartmentContext(project.department_id, "Invalid department context");
+      departmentId = resolveAccessibleDepartmentId(req.user, project.department_id, "Invalid department context");
     }
 
     const workflow = await resolveWorkflowForDepartment(departmentId);

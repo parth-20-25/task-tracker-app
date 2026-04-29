@@ -1,26 +1,21 @@
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
+import { DepartmentAssignmentFlow } from '@/components/DepartmentAssignmentFlow';
+import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { TaskCard } from '@/components/TaskCard';
 import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
-import { DesignTaskAssignmentBar } from '@/components/DesignTaskAssignmentBar';
 import { ClipboardList, PlayCircle, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
 import { isDesignDepartment } from '@/lib/departments';
-import React from "react";
-
-const TaskAssignmentBar = React.lazy(() =>
-  import('@/components/TaskAssignmentBar').then(module => ({
-    default: module.TaskAssignmentBar
-  }))
-);
 
 export default function Dashboard() {
   const { user, role, access } = useAuth();
-  const { tasks } = useTasks();
+  const { tasks, isLoading } = useTasks();
 
   const isDesignUser = isDesignDepartment(user);
   const canUploadProjectData = access.canUploadData && !!user?.department_id;
   const canUploadDesignProjectData = canUploadProjectData && isDesignUser;
+  const isAdminUser = role?.hierarchy_level === 1;
 
   const myTasks = tasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
   const viewTasks = access.canViewAllTasks ? tasks : myTasks;
@@ -54,15 +49,19 @@ export default function Dashboard() {
 
       {canUploadDesignProjectData && <DesignExcelUploadModal />}
 
-      {access.canAssignTasks && (isDesignUser ? <DesignTaskAssignmentBar /> : <TaskAssignmentBar />)}
+      {access.canAssignTasks && <DepartmentAssignmentFlow allowDepartmentSelection={isAdminUser} />}
 
       <div>
         <h2 className="text-lg font-semibold mb-3">Recent Tasks</h2>
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {recentTasks.map(task => (
-            <TaskCard key={task.id} task={task} />
-          ))}
-        </div>
+        {isLoading ? (
+          <TaskGridSkeleton count={6} />
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {recentTasks.map(task => (
+              <TaskCard key={task.id} task={task} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

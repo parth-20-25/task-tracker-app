@@ -14,6 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import type { TaskAssignmentReferenceData } from "@/api/taskApi";
+import { getCachedDepartments } from "@/lib/referenceDataCache";
 import { Priority, TaskType, WorkflowTemplate } from "@/types";
 import { Plus, ShieldCheck, Workflow } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
@@ -44,11 +46,21 @@ function buildDeadlineFromTemplate(template: WorkflowTemplate | null) {
   return toLocalDateTimeValue(new Date(Date.now() + template.default_due_days * 24 * 60 * 60 * 1000));
 }
 
-export function TaskAssignmentBar() {
+interface TaskAssignmentBarProps {
+  presetDepartmentId?: string;
+  presetDepartmentName?: string;
+  hideDepartmentSelector?: boolean;
+}
+
+export function TaskAssignmentBar({
+  presetDepartmentId,
+  presetDepartmentName,
+  hideDepartmentSelector = false,
+}: TaskAssignmentBarProps) {
   const { addTask } = useTasks();
   const [open, setOpen] = useState(false);
   const [assignmentType, setAssignmentType] = useState<TaskType>("department_workflow");
-  const [departmentId, setDepartmentId] = useState("");
+  const [departmentId, setDepartmentId] = useState(presetDepartmentId || "");
   const [workflowTemplateId, setWorkflowTemplateId] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [title, setTitle] = useState("");
@@ -62,22 +74,26 @@ export function TaskAssignmentBar() {
   const referenceDataQuery = useQuery({
     queryKey: ["task-assignment", "reference-data"],
     queryFn: fetchTaskAssignmentReferenceData,
+    placeholderData: () => (
+      getCachedDepartments<TaskAssignmentReferenceData>("assignment-reference-data") ?? undefined
+    ),
   });
+  const effectiveDepartmentId = presetDepartmentId || departmentId;
 
   const templatesQuery = useQuery({
-    queryKey: ["task-assignment", "templates", departmentId],
-    queryFn: () => fetchTaskAssignmentTemplates(departmentId),
-    enabled: open && assignmentType === "department_workflow" && !!departmentId,
+    queryKey: ["task-assignment", "templates", effectiveDepartmentId],
+    queryFn: () => fetchTaskAssignmentTemplates(effectiveDepartmentId),
+    enabled: open && assignmentType === "department_workflow" && !!effectiveDepartmentId,
   });
 
   const assignableUsersQuery = useQuery({
-    queryKey: ["task-assignment", "users", assignmentType, departmentId, workflowTemplateId],
+    queryKey: ["task-assignment", "users", assignmentType, effectiveDepartmentId, workflowTemplateId],
     queryFn: () => fetchTaskAssignmentUsers({
       task_type: assignmentType,
-      department_id: assignmentType === "department_workflow" ? departmentId : departmentId || null,
+      department_id: assignmentType === "department_workflow" ? effectiveDepartmentId : effectiveDepartmentId || null,
       workflow_template_id: assignmentType === "department_workflow" ? workflowTemplateId || null : null,
     }),
-    enabled: open && (assignmentType === "custom" || (!!departmentId && !!workflowTemplateId)),
+    enabled: open && (assignmentType === "custom" || (!!effectiveDepartmentId && !!workflowTemplateId)),
   });
 
   const departments = referenceDataQuery.data?.departments ?? [];
@@ -89,10 +105,32 @@ export function TaskAssignmentBar() {
   );
 
   useEffect(() => {
+    if (presetDepartmentId) {
+      setDepartmentId(presetDepartmentId);
+      return;
+    }
+
     if (assignmentType === "department_workflow" && !departmentId && departments.length > 0) {
       setDepartmentId(departments[0].id);
     }
-  }, [assignmentType, departmentId, departments]);
+  }, [assignmentType, departmentId, departments, presetDepartmentId]);
+
+  useEffect(() => {
+    if (!presetDepartmentId) {
+      return;
+    }
+
+    setDepartmentId(presetDepartmentId);
+    setWorkflowTemplateId("");
+    setAssignedTo("");
+    setTitle("");
+    setDescription("");
+    setPriority("medium");
+    setDeadline("");
+    setProofRequired(true);
+    setApprovalRequired(true);
+    setTagsInput("");
+  }, [presetDepartmentId]);
 
   useEffect(() => {
     if (assignmentType === "custom") {
@@ -139,15 +177,15 @@ export function TaskAssignmentBar() {
     }
 
     if (assignmentType === "department_workflow") {
-      return !!departmentId && !!workflowTemplateId;
+      return !!effectiveDepartmentId && !!workflowTemplateId;
     }
 
     return !!title.trim() && !!description.trim();
-  }, [assignedTo, assignmentType, deadline, departmentId, description, priority, title, workflowTemplateId]);
+  }, [assignedTo, assignmentType, deadline, description, effectiveDepartmentId, priority, title, workflowTemplateId]);
 
   const resetForm = () => {
     setAssignmentType("department_workflow");
-    setDepartmentId(departments[0]?.id || "");
+    setDepartmentId(presetDepartmentId || departments[0]?.id || "");
     setWorkflowTemplateId("");
     setAssignedTo("");
     setTitle("");
@@ -171,7 +209,7 @@ export function TaskAssignmentBar() {
         description: description.trim(),
         assigned_to: assignedTo,
         assignee_ids: [assignedTo],
-        department_id: departmentId || null,
+        department_id: effectiveDepartmentId || null,
         workflow_template_id: assignmentType === "department_workflow" ? workflowTemplateId : null,
         priority,
         deadline: new Date(deadline).toISOString(),
@@ -241,32 +279,47 @@ export function TaskAssignmentBar() {
           {assignmentType === "department_workflow" ? (
             <>
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label>Department</Label>
-                  <Select value={departmentId} onValueChange={(value) => {
-                    setDepartmentId(value);
-                    setWorkflowTemplateId("");
-                    setTitle("");
-                    setDeadline("");
-                  }}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select department" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {departments.map((department) => (
-                        <SelectItem key={department.id} value={department.id}>
-                          {department.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {hideDepartmentSelector && presetDepartmentId ? (
+                  <div className="space-y-1.5">
+                    <Label>Department</Label>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {presetDepartmentName || presetDepartmentId}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label>Department</Label>
+                    <Select value={departmentId} onValueChange={(value) => {
+                      setDepartmentId(value);
+                      setWorkflowTemplateId("");
+                      setAssignedTo("");
+                      setTitle("");
+                      setDescription("");
+                      setPriority("medium");
+                      setDeadline("");
+                      setProofRequired(true);
+                      setApprovalRequired(true);
+                      setTagsInput("");
+                    }}>
+                      <SelectTrigger>
+                        <SelectValue placeholder={referenceDataQuery.isLoading ? "Loading departments..." : "Select department"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {departments.map((department) => (
+                          <SelectItem key={department.id} value={department.id}>
+                            {department.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 <div className="space-y-1.5">
                   <Label>Workflow Template</Label>
-                  <Select value={workflowTemplateId} onValueChange={setWorkflowTemplateId} disabled={!departmentId}>
+                  <Select value={workflowTemplateId} onValueChange={setWorkflowTemplateId} disabled={!effectiveDepartmentId}>
                     <SelectTrigger>
-                      <SelectValue placeholder={departmentId ? "Select template" : "Choose department first"} />
+                      <SelectValue placeholder={effectiveDepartmentId ? "Select template" : "Choose department first"} />
                     </SelectTrigger>
                     <SelectContent>
                       {templates.map((template) => (
@@ -315,22 +368,31 @@ export function TaskAssignmentBar() {
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label>Department Tag</Label>
-                  <Select value={departmentId || "none"} onValueChange={(value) => setDepartmentId(value === "none" ? "" : value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Optional department tag" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">No department</SelectItem>
-                      {departments.map((department) => (
-                        <SelectItem key={department.id} value={department.id}>
-                          {department.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {hideDepartmentSelector && presetDepartmentId ? (
+                  <div className="space-y-1.5">
+                    <Label>Department Context</Label>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {presetDepartmentName || presetDepartmentId}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label>Department Tag</Label>
+                    <Select value={departmentId || "none"} onValueChange={(value) => setDepartmentId(value === "none" ? "" : value)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Optional department tag" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No department</SelectItem>
+                        {departments.map((department) => (
+                          <SelectItem key={department.id} value={department.id}>
+                            {department.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1.5">

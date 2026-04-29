@@ -1,11 +1,12 @@
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
+import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { TaskCard } from '@/components/TaskCard';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function MyTasks() {
   const { user } = useAuth();
-  const { tasks } = useTasks();
+  const { tasks, isLoading } = useTasks();
   const myTasks = tasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
 
   const groups = {
@@ -29,7 +30,9 @@ export default function MyTasks() {
         </TabsList>
         {Object.entries(groups).map(([key, list]) => (
           <TabsContent key={key} value={key} className="mt-4">
-            {list.length === 0 ? (
+            {isLoading ? (
+              <TaskGridSkeleton count={6} />
+            ) : list.length === 0 ? (
               <p className="text-sm text-muted-foreground py-8 text-center">No tasks here.</p>
             ) : (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">

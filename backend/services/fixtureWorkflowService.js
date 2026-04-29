@@ -20,6 +20,8 @@ const {
   resolveFixtureByCanonicalIdentity,
   listAssignableFixtures,
 } = require("../repositories/fixtureWorkflowRepository");
+const { findUserByEmployeeId } = require("../repositories/usersRepository");
+const { canAssignTo } = require("./accessControlService");
 const { getDepartmentWorkflowStagesResponse } = require("./workflowRecoveryService");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,7 +130,7 @@ async function getWorkflowForDepartment(departmentId) {
  * Resolves fixture -> project -> configured department workflow safely.
  * Returns null when the department linkage or workflow configuration is missing.
  */
-async function getCurrentStageForFixture(fixtureId) {
+async function getCurrentStageForFixture(fixtureId, departmentId = null) {
   if (!fixtureId) {
     throw new AppError(400, "fixture_id is required");
   }
@@ -137,6 +139,10 @@ async function getCurrentStageForFixture(fixtureId) {
 
   if (!fixture) {
     throw new AppError(404, "Fixture not found");
+  }
+
+  if (departmentId && fixture.department_id !== departmentId) {
+    throw new AppError(404, "Fixture not found for the selected department");
   }
 
   const project = {
@@ -250,8 +256,21 @@ async function validateAssignment(fixtureId, departmentId) {
  * POST /api/workflows/assign
  * Sets the current stage to IN_PROGRESS.
  */
-async function assignFixtureStage(fixtureId, departmentId, assignedTo) {
+async function assignFixtureStage(fixtureId, departmentId, assignedTo, actor = null) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+
+  const assignee = await findUserByEmployeeId(assignedTo);
+  if (!assignee) {
+    throw new AppError(400, "Assigned user not found");
+  }
+
+  if (assignee.department_id !== departmentId) {
+    throw new AppError(400, "Assigned user does not belong to the selected department");
+  }
+
+  if (actor && !canAssignTo(actor, assignee)) {
+    throw new AppError(403, "Cannot assign to this user");
+  }
 
   const { canAssign, reason, currentStage } = await validateAssignment(fixtureId, departmentId);
   if (!canAssign) {

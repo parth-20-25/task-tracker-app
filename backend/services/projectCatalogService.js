@@ -3,8 +3,8 @@ const { AppError } = require("../lib/AppError");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const { instrumentModuleExports } = require("../lib/observability");
 const {
-  getEffectiveDepartment,
   requireDepartmentContext,
+  resolveAccessibleDepartmentId,
   requireUserDepartment,
 } = require("../lib/departmentContext");
 const { isDesignDepartment } = require("../lib/designDepartment");
@@ -19,7 +19,6 @@ const {
   listScopesByProjectForDepartment,
 } = require("../repositories/designProjectCatalogRepository");
 const { getConfiguredWorkflowForDepartment } = require("../repositories/fixtureWorkflowRepository");
-const { isAdmin } = require("./accessControlService");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
 
@@ -33,22 +32,6 @@ function requireDesignDepartment(user) {
   if (!isDesignDepartment(user)) {
     throw new AppError(403, "This flow is only available to the Design department");
   }
-}
-
-function resolveAccessibleDepartmentId(user, requestedDepartmentId) {
-  const effectiveDepartmentId = getEffectiveDepartment(user, requestedDepartmentId);
-
-  if (isAdmin(user)) {
-    return requireDepartmentContext(effectiveDepartmentId);
-  }
-
-  const userDepartmentId = requireUserDepartment(user, "A department is required for project data access");
-
-  if (effectiveDepartmentId && effectiveDepartmentId !== userDepartmentId) {
-    throw new AppError(403, "You do not have permission to access another department");
-  }
-
-  return requireDepartmentContext(effectiveDepartmentId);
 }
 
 function validateResolvedDesignTaskContext({ projectId, scopeId, fixtureId, currentStage, currentStageKey, currentWorkflowStage }) {
@@ -87,7 +70,7 @@ async function listDepartmentProjectsForUser(user) {
 }
 
 async function listDesignProjectsForUser(user, requestedDepartmentId) {
-  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId);
+  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
   const projects = await listProjectOptionsByDepartment(departmentId);
 
   if (projects.length === 0) {
@@ -107,7 +90,7 @@ async function listDesignScopesForUser(user, projectId, requestedDepartmentId) {
     throw new AppError(400, "project_id is required");
   }
 
-  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId);
+  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
   const project = await findProjectByIdForDepartment(normalizedProjectId, departmentId);
 
   if (!project) {
@@ -133,7 +116,7 @@ async function listDesignFixturesForUser(user, scopeId, requestedDepartmentId) {
     throw new AppError(400, "scope_id is required");
   }
 
-  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId);
+  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
   const scope = await findScopeByIdForDepartment(normalizedScopeId, departmentId);
 
   if (!scope) {
@@ -144,8 +127,6 @@ async function listDesignFixturesForUser(user, scopeId, requestedDepartmentId) {
 }
 
 async function createDesignTaskFromProject(user, payload = {}) {
-  requireDesignDepartment(user);
-
   if (Object.prototype.hasOwnProperty.call(payload, "title")) {
     throw new AppError(400, "Task title is generated automatically and cannot be provided manually");
   }
@@ -155,10 +136,14 @@ async function createDesignTaskFromProject(user, payload = {}) {
   const fixtureId = String(payload.fixture_id || "").trim();
   validateResolvedDesignTaskContext({ projectId, scopeId, fixtureId });
 
-  const departmentId = requireUserDepartment(user, "A department is required to create design tasks");
+  const departmentId = resolveAccessibleDepartmentId(
+    user,
+    payload.department_id,
+    "A department is required to create workflow tasks",
+  );
   const project = await findProjectByIdForDepartment(projectId, departmentId);
   if (!project) {
-    throw new AppError(404, "Project not found for your department");
+    throw new AppError(404, "Project not found for the selected department");
   }
 
   const fixture = await findFixtureByIdForDepartment(fixtureId, departmentId);

@@ -387,7 +387,7 @@ async function ensureDesignDepartmentSchema(client) {
       image_1_url TEXT,
       image_2_url TEXT,
       is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE,
-      CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (scope_id, fixture_no)
+      CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (project_id, scope_id, fixture_no)
     )
   `);
 

@@ -1,3 +1,5 @@
+const { SCOPE_STATUSES, classifyScopeOwnership } = require("./scope");
+
 function normalizeTextCell(value) {
   if (value === undefined || value === null) {
     return "";
@@ -16,6 +18,10 @@ function getRowNumber(item) {
 }
 
 function extractRowFields(item) {
+  const rawData = item?.raw_data && typeof item.raw_data === "object"
+    ? item.raw_data
+    : null;
+
   if (Array.isArray(item?.cols)) {
     const cols = item.cols.map(normalizeTextCell);
 
@@ -29,6 +35,7 @@ function extractRowFields(item) {
       qty: cols[5],
       image_1_url: null,
       image_2_url: null,
+      parser_confidence: "HIGH",
       raw_data: { cols },
     };
   }
@@ -43,7 +50,8 @@ function extractRowFields(item) {
     qty: item?.qty,
     image_1_url: item?.image_1_url ? normalizeTextCell(item.image_1_url) : null,
     image_2_url: item?.image_2_url ? normalizeTextCell(item.image_2_url) : null,
-    raw_data: {
+    parser_confidence: normalizeTextCell(item?.parser_confidence || "HIGH").toUpperCase(),
+    raw_data: rawData || {
       fixture_no: item?.fixture_no ?? null,
       op_no: item?.op_no ?? null,
       part_name: item?.part_name ?? null,
@@ -59,6 +67,7 @@ function extractRowFields(item) {
 function validateParsedData(parsedRows) {
   const validRows = [];
   const rejectedRows = [];
+  const skippedRows = [];
   const seenFixtureNumbers = new Set();
 
   for (const item of parsedRows) {
@@ -72,8 +81,18 @@ function validateParsedData(parsedRows) {
       qty: qtyRaw,
       image_1_url,
       image_2_url,
+      parser_confidence,
       raw_data,
     } = extractRowFields(item);
+
+    if (parser_confidence && parser_confidence !== "HIGH") {
+      rejectedRows.push({
+        row_number,
+        error_message: "Row confidence is too low for controlled fixture import.",
+        raw_data,
+      });
+      continue;
+    }
 
     if (!fixture_no || !op_no || !part_name || !fixture_type || !qtyRaw) {
       const missing = [];
@@ -103,6 +122,25 @@ function validateParsedData(parsedRows) {
       continue;
     }
 
+    const scopeAssessment = classifyScopeOwnership(remark);
+    if (scopeAssessment.status === SCOPE_STATUSES.CUSTOMER) {
+      skippedRows.push({
+        row_number,
+        fixture_no,
+        op_no,
+        part_name,
+        fixture_type,
+        remark: remark || null,
+        qty,
+        image_1_url,
+        image_2_url,
+        scope_status: scopeAssessment.status,
+        skip_reason: scopeAssessment.reason,
+        raw_data,
+      });
+      continue;
+    }
+
     const normalizedFixtureNo = fixture_no.toLowerCase();
     if (seenFixtureNumbers.has(normalizedFixtureNo)) {
       rejectedRows.push({
@@ -121,14 +159,16 @@ function validateParsedData(parsedRows) {
       op_no,
       part_name,
       fixture_type,
-      remark,
+      remark: remark || null,
       qty,
       image_1_url,
       image_2_url,
+      scope_status: scopeAssessment.status,
+      scope_reason: scopeAssessment.reason,
     });
   }
 
-  return { validRows, rejectedRows };
+  return { validRows, rejectedRows, skippedRows };
 }
 
 module.exports = {

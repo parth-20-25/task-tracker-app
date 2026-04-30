@@ -5,6 +5,7 @@ import { confirmDesignUpload, uploadDesignExcel } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { MorphLoader } from "@/components/ui/morph-loader";
 import {
   Dialog,
   DialogContent,
@@ -69,6 +70,57 @@ function formatRemark(value: string | null | undefined) {
   return normalized || "—";
 }
 
+function getRowDecisionKey(row: DesignExcelPreviewRow) {
+  return `${row.fixture_no}::${row.row_number}`;
+}
+
+function ScopeDecisionControls({
+  row,
+  value,
+  onChange,
+}: {
+  row: DesignExcelPreviewRow;
+  value?: "add_fixture" | "skip_fixture";
+  onChange: (value: "add_fixture" | "skip_fixture") => void;
+}) {
+  if (row.scope_status !== "AMBIGUOUS") {
+    return null;
+  }
+
+  const key = getRowDecisionKey(row);
+
+  return (
+    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900/50 dark:bg-amber-950/20">
+      <div className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+        This fixture does not have a clearly defined scope in remarks.
+      </div>
+      <div className="mt-1 text-xs text-amber-800/90 dark:text-amber-300">
+        Do you want to include this fixture in PARC scope?
+      </div>
+      <RadioGroup
+        value={value}
+        onValueChange={(nextValue) => onChange(nextValue as "add_fixture" | "skip_fixture")}
+        className="mt-3 grid gap-2 sm:grid-cols-2"
+      >
+        <div className="relative rounded-md border bg-background p-3">
+          <RadioGroupItem value="add_fixture" id={`scope-add-${key}`} className="absolute right-3 top-3" />
+          <Label htmlFor={`scope-add-${key}`} className="cursor-pointer">
+            <div className="text-sm font-medium">Add Fixture</div>
+            <div className="text-xs text-muted-foreground">Import this row into PARC scope after explicit confirmation.</div>
+          </Label>
+        </div>
+        <div className="relative rounded-md border bg-background p-3">
+          <RadioGroupItem value="skip_fixture" id={`scope-skip-${key}`} className="absolute right-3 top-3" />
+          <Label htmlFor={`scope-skip-${key}`} className="cursor-pointer">
+            <div className="text-sm font-medium">Skip Fixture</div>
+            <div className="text-xs text-muted-foreground">Exclude this row completely from fixtures, workflow, and approvals.</div>
+          </Label>
+        </div>
+      </RadioGroup>
+    </div>
+  );
+}
+
 export function DesignExcelUploadModal() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -76,12 +128,14 @@ export function DesignExcelUploadModal() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<DesignExcelUploadResponse | null>(null);
   const [decisions, setDecisions] = useState<Record<string, "incoming" | "existing">>({});
+  const [scopeDecisions, setScopeDecisions] = useState<Record<string, "add_fixture" | "skip_fixture">>({});
   const [isDragActive, setIsDragActive] = useState(false);
 
   const resetState = () => {
     setSelectedFile(null);
     setPreview(null);
     setDecisions({});
+    setScopeDecisions({});
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -116,6 +170,7 @@ export function DesignExcelUploadModal() {
     setSelectedFile(file);
     setPreview(null);
     setDecisions({});
+    setScopeDecisions({});
   };
 
   const uploadMutation = useMutation({
@@ -124,9 +179,10 @@ export function DesignExcelUploadModal() {
       setPreview(data);
       const initialDecisions: Record<string, "incoming" | "existing"> = {};
       data.preview.conflicts.forEach((conflict) => {
-        initialDecisions[conflict.incoming.fixture_no] = "existing";
+        initialDecisions[getRowDecisionKey(conflict.incoming)] = "existing";
       });
       setDecisions(initialDecisions);
+      setScopeDecisions({});
     },
     onError: (error) => {
       const description = error instanceof Error ? error.message : "Failed to process file";
@@ -197,16 +253,28 @@ export function DesignExcelUploadModal() {
       return;
     }
 
-    const resolved_items: Array<{ data: DesignExcelPreviewRow }> = [];
+    const resolved_items: Array<{
+      data: DesignExcelPreviewRow;
+      resolution: "incoming" | "existing";
+      scope_decision?: "add_fixture" | "skip_fixture";
+    }> = [];
 
     preview.preview.accepted.forEach((item) => {
-      resolved_items.push({ data: item.incoming });
+      const scopeDecision = scopeDecisions[getRowDecisionKey(item.incoming)];
+      resolved_items.push({
+        data: item.incoming,
+        resolution: "incoming",
+        scope_decision: scopeDecision,
+      });
     });
 
     preview.preview.conflicts.forEach((item) => {
-      const decision = decisions[item.incoming.fixture_no];
+      const decisionKey = getRowDecisionKey(item.incoming);
+      const decision = decisions[decisionKey];
       resolved_items.push({
         data: decision === "incoming" ? item.incoming : item.existing,
+        resolution: decision === "incoming" ? "incoming" : "existing",
+        scope_decision: scopeDecisions[decisionKey],
       });
     });
 
@@ -214,10 +282,24 @@ export function DesignExcelUploadModal() {
       file_info: preview.file_info,
       resolved_items,
       rejected_items: preview.preview.rejected,
+      skipped_items: preview.preview.skipped,
     });
   };
 
-  const hasUnresolvedConflicts = preview?.preview.conflicts.some((conflict) => !decisions[conflict.incoming.fixture_no]);
+  const hasUnresolvedConflicts = preview?.preview.conflicts.some((conflict) => !decisions[getRowDecisionKey(conflict.incoming)]);
+  const hasUnresolvedAcceptedScopeDecisions = preview?.preview.accepted.some((item) => (
+    item.incoming.scope_status === "AMBIGUOUS"
+      && !scopeDecisions[getRowDecisionKey(item.incoming)]
+  ));
+  const hasUnresolvedIncomingConflictScopeDecisions = preview?.preview.conflicts.some((conflict) => {
+    const decisionKey = getRowDecisionKey(conflict.incoming);
+    return decisions[decisionKey] === "incoming"
+      && conflict.incoming.scope_status === "AMBIGUOUS"
+      && !scopeDecisions[decisionKey];
+  });
+  const hasBlockingScopeDecision = Boolean(
+    hasUnresolvedAcceptedScopeDecisions || hasUnresolvedIncomingConflictScopeDecisions,
+  );
 
   return (
     <Card className="animate-fade-in mb-6 w-full border-foreground/10 bg-transparent shadow-none">
@@ -338,7 +420,14 @@ export function DesignExcelUploadModal() {
                     disabled={uploadMutation.isPending || !selectedFile}
                     className="min-w-36 bg-primary hover:bg-primary/90"
                   >
-                    {uploadMutation.isPending ? "Extracting..." : "Upload & Preview"}
+                    {uploadMutation.isPending ? (
+                      <>
+                        <MorphLoader size={16} color="currentColor" />
+                        Extracting...
+                      </>
+                    ) : (
+                      "Upload & Preview"
+                    )}
                   </Button>
                 </DialogFooter>
               </div>
@@ -379,6 +468,18 @@ export function DesignExcelUploadModal() {
                               <div className="mt-1 text-xs text-muted-foreground">
                                 Remark: <span className="font-medium text-foreground">{formatRemark(item.incoming.remark)}</span>
                               </div>
+                              {item.incoming.scope_status === "AMBIGUOUS" ? (
+                                <ScopeDecisionControls
+                                  row={item.incoming}
+                                  value={scopeDecisions[getRowDecisionKey(item.incoming)]}
+                                  onChange={(value) => {
+                                    setScopeDecisions((current) => ({
+                                      ...current,
+                                      [getRowDecisionKey(item.incoming)]: value,
+                                    }));
+                                  }}
+                                />
+                              ) : null}
                               <ImagePreviewStrip row={item.incoming} />
                             </div>
                           ))}
@@ -406,11 +507,11 @@ export function DesignExcelUploadModal() {
                               </div>
 
                               <RadioGroup
-                                value={decisions[conflict.incoming.fixture_no]}
+                                value={decisions[getRowDecisionKey(conflict.incoming)]}
                                 onValueChange={(value: "incoming" | "existing") => {
                                   setDecisions((current) => ({
                                     ...current,
-                                    [conflict.incoming.fixture_no]: value,
+                                    [getRowDecisionKey(conflict.incoming)]: value,
                                   }));
                                 }}
                                 className="grid gap-3 md:grid-cols-2"
@@ -444,6 +545,47 @@ export function DesignExcelUploadModal() {
                                   </Label>
                                 </div>
                               </RadioGroup>
+                              {decisions[getRowDecisionKey(conflict.incoming)] === "incoming" && conflict.incoming.scope_status === "AMBIGUOUS" ? (
+                                <ScopeDecisionControls
+                                  row={conflict.incoming}
+                                  value={scopeDecisions[getRowDecisionKey(conflict.incoming)]}
+                                  onChange={(value) => {
+                                    setScopeDecisions((current) => ({
+                                      ...current,
+                                      [getRowDecisionKey(conflict.incoming)]: value,
+                                    }));
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {preview.preview.skipped.length > 0 && (
+                      <div className="space-y-3">
+                        <h5 className="flex items-center gap-2 border-b pb-2 font-semibold text-slate-700 dark:text-slate-200">
+                          <XCircle className="h-5 w-5" />
+                          Skipped Customer Scope ({preview.preview.skipped.length})
+                        </h5>
+                        <div className="grid gap-3 grid-cols-1 md:grid-cols-2">
+                          {preview.preview.skipped.map((item, index) => (
+                            <div key={`${item.fixture_no}-${index}`} className="rounded-lg border bg-slate-50/80 p-3 text-sm dark:bg-slate-950/20">
+                              <div className="font-medium">{item.fixture_no}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                Row {item.row_number} • {item.part_name}
+                              </div>
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                Type: <span className="font-medium text-foreground">{item.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.qty}</span>
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                Remark: <span className="font-medium text-foreground">{formatRemark(item.remark)}</span>
+                              </div>
+                              <div className="mt-2 rounded-md border border-slate-200 bg-background/70 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:text-slate-300">
+                                {item.skip_reason}
+                              </div>
+                              <ImagePreviewStrip row={item} />
                             </div>
                           ))}
                         </div>
@@ -475,12 +617,24 @@ export function DesignExcelUploadModal() {
                   <Button variant="ghost" onClick={resetState}>
                     Cancel & Reload
                   </Button>
+                  {hasBlockingScopeDecision ? (
+                    <div className="text-xs text-amber-700 dark:text-amber-300">
+                      Choose Add Fixture or Skip Fixture for every ambiguous-scope row before saving.
+                    </div>
+                  ) : null}
                   <Button
                     onClick={handleConfirm}
-                    disabled={confirmMutation.isPending || hasUnresolvedConflicts}
+                    disabled={confirmMutation.isPending || hasUnresolvedConflicts || hasBlockingScopeDecision}
                     className="min-w-36 bg-primary hover:bg-primary/90"
                   >
-                    {confirmMutation.isPending ? "Saving..." : "Confirm & Save"}
+                    {confirmMutation.isPending ? (
+                      <>
+                        <MorphLoader size={16} color="currentColor" />
+                        Saving...
+                      </>
+                    ) : (
+                      "Confirm & Save"
+                    )}
                   </Button>
                 </DialogFooter>
               </div>

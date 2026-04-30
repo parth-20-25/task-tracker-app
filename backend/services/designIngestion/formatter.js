@@ -1,7 +1,8 @@
-function formatPreview(diffResults, rejectedRows) {
+function formatPreview(diffResults, rejectedRows, skippedRows = []) {
   const accepted = [];
   const conflicts = [];
   const rejected = [...rejectedRows];
+  const skipped = [...skippedRows];
 
   for (const result of diffResults) {
     if (result.type === 'NEW' || result.type === 'UPDATE_QTY') {
@@ -14,7 +15,8 @@ function formatPreview(diffResults, rejectedRows) {
   return {
     accepted,
     conflicts,
-    rejected
+    rejected,
+    skipped,
   };
 }
 

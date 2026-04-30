@@ -35,6 +35,11 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
+function normalizeParserConfidence(value) {
+  const normalized = normalizeString(value).toUpperCase();
+  return normalized || "HIGH";
+}
+
 function parseJsonResponse(text) {
   if (!text) {
     return null;
@@ -93,6 +98,8 @@ function validatePythonRows(rows) {
       qty: row.qty,
       image_1_url: normalizeOptionalImageUrl(row.image_1_url),
       image_2_url: normalizeOptionalImageUrl(row.image_2_url),
+      parser_confidence: normalizeParserConfidence(row.parser_confidence),
+      raw_data: row.raw_data && typeof row.raw_data === "object" ? row.raw_data : {},
     };
   });
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -20,6 +21,36 @@ BACKEND_API_URL = (os.getenv("BACKEND_API_URL") or "").strip()
 PUBLIC_UPLOAD_BASE_URL = (os.getenv("PUBLIC_UPLOAD_BASE_URL") or "").strip()
 DEFAULT_IMAGE_DIR = Path(__file__).resolve().parents[2] / "backend" / "uploads" / "design-excel"
 IMAGE_OUTPUT_DIR = Path(os.getenv("EXTRACTED_IMAGE_DIR", str(DEFAULT_IMAGE_DIR))).resolve()
+
+FIXTURE_NUMBER_PATTERN = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9/_-]{4,}$")
+OP_NUMBER_PATTERN = re.compile(r"^OP[\s._/-]*\d+[A-Z0-9._/-]*$", re.IGNORECASE)
+FIXTURE_TYPE_KEYWORDS = (
+    "fixture",
+    "weld",
+    "welding",
+    "mig",
+    "tig",
+    "robotic",
+    "robot",
+    "assy",
+    "assly",
+    "jig",
+    "gauge",
+    "check",
+    "checking",
+    "inspection",
+    "holding",
+    "clamping",
+    "mounting",
+)
+HEADER_FIELD_ALIASES = {
+    "fixture_no": {"fixtureno", "fixture", "fixtureid"},
+    "op_no": {"opno", "opnumber", "operationno", "operationnumber"},
+    "part_name": {"partname", "partdescription", "componentname"},
+    "fixture_type": {"fixturetype", "typeoffixture", "fixturedescription"},
+    "qty": {"qty", "quantity"},
+    "remark": {"remark", "remarks"},
+}
 
 app = FastAPI()
 
@@ -73,6 +104,10 @@ def normalize_header(value: Any) -> str:
     return "".join(ch for ch in normalize_text(value).lower() if ch.isalnum())
 
 
+def normalize_key(value: Any) -> str:
+    return " ".join(normalize_text(value).lower().split())
+
+
 def build_error(message: str, excel_row: int | None = None, raw_data: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "excel_row": excel_row,
@@ -121,72 +156,13 @@ def parse_wbs_header(raw_header: str) -> dict[str, str]:
     }
 
 
-def find_metadata_and_header_rows(worksheet) -> tuple[int, str, int]:
-    metadata_row = None
-    metadata_value = ""
-
+def find_metadata_row(worksheet) -> tuple[int, str]:
     for row_index, row_values in enumerate(worksheet.iter_rows(min_row=1, max_row=25, values_only=True), start=1):
         for cell_value in row_values:
-            cell_value = normalize_text(cell_value)
-            if cell_value.startswith("WBS-"):
-                metadata_row = row_index
-                metadata_value = cell_value
-                break
-        if metadata_row is not None:
-            break
-
-    if metadata_row is None:
-        raise ValueError("Could not find the WBS metadata row in the workbook.")
-
-    for row_index, row_values in enumerate(
-        worksheet.iter_rows(min_row=metadata_row + 1, max_row=metadata_row + 25, values_only=True),
-        start=metadata_row + 1,
-    ):
-        if any(normalize_text(cell_value) for cell_value in row_values):
-            return metadata_row, metadata_value, row_index
-
-    raise ValueError("Could not find the table header row below the WBS metadata row.")
-
-
-def resolve_header_map(worksheet, header_row_index: int) -> dict[str, int]:
-    header_lookup: dict[str, int] = {}
-    required_headers = {
-        "fixture_no": {"fixtureno"},
-        "op_no": {"opno"},
-        "part_name": {"partname"},
-        "fixture_type": {"fixturetype"},
-        "qty": {"qty"},
-    }
-    optional_headers = {
-        "remark": {"remark", "remarks"},
-    }
-
-    header_row = next(worksheet.iter_rows(min_row=header_row_index, max_row=header_row_index, values_only=True), ())
-
-    for column_index, cell_value in enumerate(header_row, start=1):
-        normalized = normalize_header(cell_value)
-        if normalized and normalized not in header_lookup:
-            header_lookup[normalized] = column_index
-
-    resolved: dict[str, int] = {}
-    missing: list[str] = []
-
-    for field_name, candidates in required_headers.items():
-        matched_column = next((header_lookup[candidate] for candidate in candidates if candidate in header_lookup), None)
-        if matched_column is None:
-            missing.append(field_name)
-            continue
-        resolved[field_name] = matched_column
-
-    for field_name, candidates in optional_headers.items():
-        matched_column = next((header_lookup[candidate] for candidate in candidates if candidate in header_lookup), None)
-        if matched_column is not None:
-            resolved[field_name] = matched_column
-
-    if missing:
-        raise ValueError(f"Missing required table headers: {', '.join(missing)}.")
-
-    return resolved
+            cell_text = normalize_text(cell_value)
+            if cell_text.startswith("WBS-"):
+                return row_index, cell_text
+    raise ValueError("Could not find the WBS metadata row in the workbook.")
 
 
 def build_public_image_url(file_name: str) -> str:
@@ -255,44 +231,6 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
     return images_by_row, errors
 
 
-def get_row_value(row_values: tuple[Any, ...], column_index: int) -> Any:
-    value_index = column_index - 1
-    if value_index < 0 or value_index >= len(row_values):
-        return None
-    return row_values[value_index]
-
-
-def build_rows(worksheet, header_row_index: int, header_map: dict[str, int], images_by_row: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    remark_column_index = header_map.get("remark")
-
-    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=header_row_index + 1, values_only=True), start=header_row_index + 1):
-        row_has_images = row_index in images_by_row
-        row_snapshot = {
-            "fixture_no": normalize_text(get_row_value(row_values, header_map["fixture_no"])),
-            "op_no": normalize_text(get_row_value(row_values, header_map["op_no"])),
-            "part_name": normalize_text(get_row_value(row_values, header_map["part_name"])),
-            "fixture_type": normalize_text(get_row_value(row_values, header_map["fixture_type"])),
-            "remark": normalize_text(get_row_value(row_values, remark_column_index)) if remark_column_index else "",
-            "qty": normalize_text(get_row_value(row_values, header_map["qty"])),
-        }
-
-        if not row_has_images and not any(row_snapshot.values()):
-            continue
-
-        row_images = images_by_row.get(row_index, {})
-        rows.append(
-            {
-                "excel_row": row_index,
-                **row_snapshot,
-                "image_1_url": row_images.get("image_1_url"),
-                "image_2_url": row_images.get("image_2_url"),
-            }
-        )
-
-    return rows
-
-
 def open_excel_workbook(file_bytes: bytes, *, read_only: bool) -> Any:
     return load_workbook(
         filename=BytesIO(file_bytes),
@@ -311,20 +249,366 @@ def extract_images_from_workbook(file_bytes: bytes) -> tuple[dict[int, dict[str,
         workbook.close()
 
 
+def match_header_field(cell_text: str) -> str | None:
+    normalized = normalize_header(cell_text)
+    for field_name, aliases in HEADER_FIELD_ALIASES.items():
+        if normalized in aliases:
+            return field_name
+    return None
+
+
+def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
+    best_match_count = 0
+    best_mapping: dict[str, int] = {}
+
+    for row_values in worksheet.iter_rows(min_row=metadata_row + 1, max_row=min(metadata_row + 30, worksheet.max_row), values_only=True):
+        current_mapping: dict[str, int] = {}
+        for column_index, cell_value in enumerate(row_values, start=1):
+            field_name = match_header_field(normalize_text(cell_value))
+            if field_name and field_name not in current_mapping:
+                current_mapping[field_name] = column_index
+
+        if len(current_mapping) > best_match_count:
+            best_match_count = len(current_mapping)
+            best_mapping = current_mapping
+
+    return best_mapping if best_match_count >= 3 else {}
+
+
+def build_semantic_cells(row_values: tuple[Any, ...]) -> list[dict[str, Any]]:
+    cells: list[dict[str, Any]] = []
+
+    for column_index, cell_value in enumerate(row_values, start=1):
+        if column_index in ALLOWED_IMAGE_COLUMNS:
+            continue
+
+        text = normalize_text(cell_value)
+        if not text:
+            continue
+
+        cells.append(
+            {
+                "column": column_index,
+                "text": text,
+                "normalized": normalize_key(text),
+                "header_key": normalize_header(text),
+            }
+        )
+
+    return cells
+
+
+def build_row_snapshot(cells: list[dict[str, Any]], row_images: dict[str, str]) -> dict[str, Any]:
+    return {
+        "cells": [{"column": cell["column"], "value": cell["text"]} for cell in cells],
+        "images_present": sorted(row_images.keys()),
+    }
+
+
+def is_separator_row(cells: list[dict[str, Any]]) -> bool:
+    if not cells:
+        return False
+    return all(not any(ch.isalnum() for ch in cell["text"]) for cell in cells)
+
+
+def is_header_row(cells: list[dict[str, Any]]) -> bool:
+    matched_fields = {match_header_field(cell["text"]) for cell in cells}
+    matched_fields.discard(None)
+    return len(matched_fields) >= 3
+
+
+def looks_like_op_number(value: str) -> bool:
+    if not value:
+        return False
+    return bool(OP_NUMBER_PATTERN.match(value.strip()))
+
+
+def looks_like_fixture_number(value: str) -> bool:
+    candidate = normalize_text(value).upper().replace(" ", "")
+    if not candidate:
+        return False
+    if looks_like_op_number(candidate):
+        return False
+    if "SCOPE" in candidate:
+        return False
+    if candidate.startswith("WBS-"):
+        return False
+    return bool(FIXTURE_NUMBER_PATTERN.match(candidate))
+
+
+def parse_qty_value(value: Any) -> int | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+    if re.fullmatch(r"\d+", text):
+        qty = int(text)
+        return qty if qty > 0 else None
+    return None
+
+
+def looks_like_fixture_type(value: str) -> bool:
+    normalized = normalize_key(value)
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in FIXTURE_TYPE_KEYWORDS)
+
+
+def looks_like_scope_text(value: str) -> bool:
+    normalized = normalize_key(value)
+    return "scope" in normalized or "parc" in normalized or "customer" in normalized
+
+
+def choose_hint_text(cell_map: dict[int, str], column_index: int | None) -> str:
+    if not column_index:
+        return ""
+    return cell_map.get(column_index, "")
+
+
+def choose_best_fixture_type(cells: list[dict[str, Any]], used_columns: set[int]) -> tuple[str, str]:
+    candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_fixture_type(cell["text"])]
+    if not candidates:
+        return "", ""
+    best = max(candidates, key=lambda cell: (cell["text"].lower().count("fixture"), len(cell["text"])))
+    return best["text"], best["column"]
+
+
+def choose_best_part_name(cells: list[dict[str, Any]], used_columns: set[int]) -> tuple[str, str]:
+    candidates = []
+    for cell in cells:
+        if cell["column"] in used_columns:
+            continue
+        if looks_like_fixture_number(cell["text"]) or looks_like_op_number(cell["text"]):
+            continue
+        if parse_qty_value(cell["text"]) is not None:
+            continue
+        if looks_like_scope_text(cell["text"]):
+            continue
+        if match_header_field(cell["text"]):
+            continue
+        candidates.append(cell)
+
+    if not candidates:
+        return "", ""
+
+    best = max(candidates, key=lambda cell: (len(cell["text"]), -cell["column"]))
+    return best["text"], best["column"]
+
+
+def parse_fixture_candidate(
+    row_index: int,
+    cells: list[dict[str, Any]],
+    header_hints: dict[str, int],
+    row_images: dict[str, str],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    cell_map = {cell["column"]: cell["text"] for cell in cells}
+    used_columns: set[int] = set()
+    snapshot = build_row_snapshot(cells, row_images)
+    parsed = {
+        "fixture_no": "",
+        "op_no": "",
+        "part_name": "",
+        "fixture_type": "",
+        "remark": "",
+        "qty": "",
+    }
+
+    hint_fixture_no = choose_hint_text(cell_map, header_hints.get("fixture_no"))
+    if looks_like_fixture_number(hint_fixture_no):
+        parsed["fixture_no"] = hint_fixture_no.replace(" ", "")
+        used_columns.add(header_hints["fixture_no"])
+
+    hint_op_no = choose_hint_text(cell_map, header_hints.get("op_no"))
+    if looks_like_op_number(hint_op_no):
+        parsed["op_no"] = normalize_text(hint_op_no)
+        used_columns.add(header_hints["op_no"])
+
+    hint_qty = parse_qty_value(choose_hint_text(cell_map, header_hints.get("qty")))
+    if hint_qty is not None:
+        parsed["qty"] = str(hint_qty)
+        used_columns.add(header_hints["qty"])
+
+    hint_fixture_type_column = header_hints.get("fixture_type")
+    hint_fixture_type = choose_hint_text(cell_map, hint_fixture_type_column)
+    if hint_fixture_type:
+        parsed["fixture_type"] = hint_fixture_type
+        if hint_fixture_type_column:
+            used_columns.add(hint_fixture_type_column)
+
+    hint_part_name_column = header_hints.get("part_name")
+    hint_part_name = choose_hint_text(cell_map, hint_part_name_column)
+    if hint_part_name:
+        parsed["part_name"] = hint_part_name
+        if hint_part_name_column:
+            used_columns.add(hint_part_name_column)
+
+    hint_remark_column = header_hints.get("remark")
+    hint_remark = choose_hint_text(cell_map, hint_remark_column)
+    if hint_remark:
+        parsed["remark"] = hint_remark
+        if hint_remark_column:
+            used_columns.add(hint_remark_column)
+
+    if not parsed["fixture_no"]:
+        for cell in cells:
+            if cell["column"] in used_columns:
+                continue
+            if looks_like_fixture_number(cell["text"]):
+                parsed["fixture_no"] = cell["text"].replace(" ", "")
+                used_columns.add(cell["column"])
+                break
+
+    if not parsed["op_no"]:
+        for cell in cells:
+            if cell["column"] in used_columns:
+                continue
+            if looks_like_op_number(cell["text"]):
+                parsed["op_no"] = cell["text"]
+                used_columns.add(cell["column"])
+                break
+
+    if not parsed["qty"]:
+        for cell in cells:
+            if cell["column"] in used_columns:
+                continue
+            qty_value = parse_qty_value(cell["text"])
+            if qty_value is not None:
+                parsed["qty"] = str(qty_value)
+                used_columns.add(cell["column"])
+                break
+
+    if not parsed["remark"]:
+        for cell in cells:
+            if cell["column"] in used_columns:
+                continue
+            if looks_like_scope_text(cell["text"]):
+                parsed["remark"] = cell["text"]
+                used_columns.add(cell["column"])
+                break
+
+    if not parsed["fixture_type"]:
+        fixture_type_text, fixture_type_column = choose_best_fixture_type(cells, used_columns)
+        if fixture_type_text:
+            parsed["fixture_type"] = fixture_type_text
+            used_columns.add(fixture_type_column)
+
+    if not parsed["part_name"]:
+        part_name_text, part_name_column = choose_best_part_name(cells, used_columns)
+        if part_name_text:
+            parsed["part_name"] = part_name_text
+            used_columns.add(part_name_column)
+
+    strong_identity = bool(parsed["fixture_no"] or parsed["op_no"])
+    semantic_signal_count = sum(
+        1
+        for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "qty", "remark")
+        if parsed[field_name]
+    )
+
+    if not strong_identity and not row_images:
+        return None, None
+
+    if semantic_signal_count < 2 and not row_images:
+        return None, None
+
+    missing_fields = [
+        label
+        for field_name, label in (
+            ("fixture_no", "FIXTURE NO"),
+            ("op_no", "OP.NO"),
+            ("part_name", "Part Name"),
+            ("fixture_type", "Fixture Type"),
+            ("qty", "QTY"),
+        )
+        if not parsed[field_name]
+    ]
+
+    if missing_fields:
+        return None, build_error(
+            f"Could not confidently extract required fields: {', '.join(missing_fields)}.",
+            excel_row=row_index,
+            raw_data={**snapshot, "parsed": parsed},
+        )
+
+    return (
+        {
+            "excel_row": row_index,
+            "fixture_no": parsed["fixture_no"],
+            "op_no": parsed["op_no"],
+            "part_name": parsed["part_name"],
+            "fixture_type": parsed["fixture_type"],
+            "remark": parsed["remark"],
+            "qty": parsed["qty"],
+            "image_1_url": row_images.get("image_1_url"),
+            "image_2_url": row_images.get("image_2_url"),
+            "parser_confidence": "HIGH",
+            "raw_data": snapshot,
+        },
+        None,
+    )
+
+
+def build_rows(
+    worksheet,
+    metadata_row: int,
+    header_hints: dict[str, int],
+    images_by_row: dict[int, dict[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=metadata_row + 1, values_only=True), start=metadata_row + 1):
+        row_images = images_by_row.get(row_index, {})
+        cells = build_semantic_cells(row_values)
+
+        if not cells and not row_images:
+            continue
+
+        if is_separator_row(cells):
+            continue
+
+        if any(cell["text"].startswith("WBS-") for cell in cells):
+            continue
+
+        if is_header_row(cells):
+            continue
+
+        parsed_row, error = parse_fixture_candidate(row_index, cells, header_hints, row_images)
+
+        if error:
+            errors.append(error)
+            continue
+
+        if parsed_row:
+            rows.append(parsed_row)
+            continue
+
+        if row_images:
+            errors.append(
+                build_error(
+                    "Row contains mapped images but no valid fixture data.",
+                    excel_row=row_index,
+                    raw_data=build_row_snapshot(cells, row_images),
+                )
+            )
+
+    return rows, errors
+
+
 def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
     workbook = open_excel_workbook(file_bytes, read_only=True)
     try:
         worksheet = workbook.active
-        _, metadata_value, header_row_index = find_metadata_and_header_rows(worksheet)
+        metadata_row, metadata_value = find_metadata_row(worksheet)
         file_info = parse_wbs_header(metadata_value)
-        header_map = resolve_header_map(worksheet, header_row_index)
+        header_hints = detect_header_hints(worksheet, metadata_row)
         images_by_row, image_errors = extract_images_from_workbook(file_bytes)
-        rows = build_rows(worksheet, header_row_index, header_map, images_by_row)
+        rows, parsing_errors = build_rows(worksheet, metadata_row, header_hints, images_by_row)
     finally:
         workbook.close()
 
-    if not rows and not image_errors:
-        image_errors.append(build_error("No fixture rows were found in the workbook."))
+    errors = [*image_errors, *parsing_errors]
+    if not rows and not errors:
+        errors.append(build_error("No fixture rows were found in the workbook."))
 
     return {
         "file_info": {
@@ -334,7 +618,7 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
             "company_name": file_info["company_name"],
         },
         "rows": rows,
-        "errors": image_errors,
+        "errors": errors,
     }
 
 

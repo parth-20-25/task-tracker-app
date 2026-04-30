@@ -544,6 +544,8 @@ export interface DesignExcelPreviewRow {
   qty: number;
   image_1_url?: string | null;
   image_2_url?: string | null;
+  scope_status?: "PARC" | "CUSTOMER" | "AMBIGUOUS";
+  scope_reason?: string | null;
 }
 
 export interface DesignExcelUploadResponse {
@@ -569,6 +571,20 @@ export interface DesignExcelUploadResponse {
       error_message: string;
       raw_data: Record<string, any>;
     }>;
+    skipped: Array<{
+      row_number: number;
+      fixture_no: string;
+      op_no: string;
+      part_name: string;
+      fixture_type: string;
+      remark?: string | null;
+      qty: number;
+      image_1_url?: string | null;
+      image_2_url?: string | null;
+      scope_status: "CUSTOMER";
+      skip_reason: string;
+      raw_data: Record<string, any>;
+    }>;
   };
 }
 
@@ -576,6 +592,9 @@ export interface ConfirmDesignUploadPayload {
   file_info: DesignExcelUploadResponse["file_info"];
   resolved_items: Array<{
     data: DesignExcelPreviewRow;
+    resolution: "incoming" | "existing";
+    scope_decision?: "add_fixture" | "skip_fixture";
   }>;
   rejected_items: DesignExcelUploadResponse["preview"]["rejected"];
+  skipped_items: DesignExcelUploadResponse["preview"]["skipped"];
 }

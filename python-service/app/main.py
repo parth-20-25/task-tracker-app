@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
 import re
 import uuid
@@ -8,13 +10,15 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Header, UploadFile
+from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from openpyxl import load_workbook
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 ALLOWED_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ALLOWED_EXTENSION = ".xlsx"
 ALLOWED_IMAGE_COLUMNS = {6: "image_1_url", 9: "image_2_url"}
+EXPECTED_UPLOAD_FIELD = "file"
 MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTION_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 SERVICE_TOKEN = (os.getenv("EXTRACTION_SERVICE_TOKEN") or os.getenv("DESIGN_EXTRACTION_SERVICE_TOKEN") or "").strip()
 BACKEND_API_URL = (os.getenv("BACKEND_API_URL") or "").strip()
@@ -22,7 +26,7 @@ PUBLIC_UPLOAD_BASE_URL = (os.getenv("PUBLIC_UPLOAD_BASE_URL") or "").strip()
 DEFAULT_IMAGE_DIR = Path(__file__).resolve().parents[2] / "backend" / "uploads" / "design-excel"
 IMAGE_OUTPUT_DIR = Path(os.getenv("EXTRACTED_IMAGE_DIR", str(DEFAULT_IMAGE_DIR))).resolve()
 
-FIXTURE_NUMBER_PATTERN = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9/_-]{4,}$")
+FIXTURE_NUMBER_PATTERN = re.compile(r"^PARC\d{4,}$", re.IGNORECASE)
 OP_NUMBER_PATTERN = re.compile(r"^OP[\s._/-]*\d+[A-Z0-9._/-]*$", re.IGNORECASE)
 FIXTURE_TYPE_KEYWORDS = (
     "fixture",
@@ -52,17 +56,26 @@ HEADER_FIELD_ALIASES = {
     "remark": {"remark", "remarks"},
 }
 
+logger = logging.getLogger("design_extraction")
+if not logger.handlers:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(message)s")
+
 app = FastAPI()
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root() -> dict[str, str]:
-    return {"status": "running"}
+    return {"status": "ok"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def log_event(event: str, **payload: Any) -> None:
+    record = {"event": event, **payload}
+    logger.info(json.dumps(record, default=str))
 
 
 def normalize_base_url(value: str) -> str:
@@ -106,6 +119,10 @@ def normalize_header(value: Any) -> str:
 
 def normalize_key(value: Any) -> str:
     return " ".join(normalize_text(value).lower().split())
+
+
+def normalize_fixture_number(value: Any) -> str:
+    return normalize_text(value).upper().replace(" ", "")
 
 
 def build_error(message: str, excel_row: int | None = None, raw_data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -324,7 +341,7 @@ def looks_like_op_number(value: str) -> bool:
 
 
 def looks_like_fixture_number(value: str) -> bool:
-    candidate = normalize_text(value).upper().replace(" ", "")
+    candidate = normalize_fixture_number(value)
     if not candidate:
         return False
     if looks_like_op_number(candidate):
@@ -358,40 +375,35 @@ def looks_like_scope_text(value: str) -> bool:
     return "scope" in normalized or "parc" in normalized or "customer" in normalized
 
 
-def choose_hint_text(cell_map: dict[int, str], column_index: int | None) -> str:
+def choose_hint_text(cell_map: dict[int, str], column_index: int | None, validator=None) -> str:
     if not column_index:
         return ""
-    return cell_map.get(column_index, "")
+    text = cell_map.get(column_index, "")
+    if not text:
+        return ""
+    if validator and not validator(text):
+        return ""
+    return text
 
 
-def choose_best_fixture_type(cells: list[dict[str, Any]], used_columns: set[int]) -> tuple[str, str]:
-    candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_fixture_type(cell["text"])]
+def choose_single_candidate(candidates: list[dict[str, Any]], field_label: str, row_index: int, snapshot: dict[str, Any]):
+    if len(candidates) == 1:
+        return candidates[0], None
     if not candidates:
-        return "", ""
-    best = max(candidates, key=lambda cell: (cell["text"].lower().count("fixture"), len(cell["text"])))
-    return best["text"], best["column"]
-
-
-def choose_best_part_name(cells: list[dict[str, Any]], used_columns: set[int]) -> tuple[str, str]:
-    candidates = []
-    for cell in cells:
-        if cell["column"] in used_columns:
-            continue
-        if looks_like_fixture_number(cell["text"]) or looks_like_op_number(cell["text"]):
-            continue
-        if parse_qty_value(cell["text"]) is not None:
-            continue
-        if looks_like_scope_text(cell["text"]):
-            continue
-        if match_header_field(cell["text"]):
-            continue
-        candidates.append(cell)
-
-    if not candidates:
-        return "", ""
-
-    best = max(candidates, key=lambda cell: (len(cell["text"]), -cell["column"]))
-    return best["text"], best["column"]
+        return None, build_error(
+            f"Could not confidently extract required field: {field_label}.",
+            excel_row=row_index,
+            raw_data={**snapshot, "candidate_field": field_label},
+        )
+    return None, build_error(
+        f"Multiple possible values found for {field_label}; row rejected to avoid guessing.",
+        excel_row=row_index,
+        raw_data={
+            **snapshot,
+            "candidate_field": field_label,
+            "candidate_values": [{"column": cell["column"], "value": cell["text"]} for cell in candidates],
+        },
+    )
 
 
 def parse_fixture_candidate(
@@ -400,9 +412,10 @@ def parse_fixture_candidate(
     header_hints: dict[str, int],
     row_images: dict[str, str],
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    cell_map = {cell["column"]: cell["text"] for cell in cells}
-    used_columns: set[int] = set()
     snapshot = build_row_snapshot(cells, row_images)
+    cell_map = {cell["column"]: cell["text"] for cell in cells}
+    cells_by_column = {cell["column"]: cell for cell in cells}
+    used_columns: set[int] = set()
     parsed = {
         "fixture_no": "",
         "op_no": "",
@@ -412,103 +425,123 @@ def parse_fixture_candidate(
         "qty": "",
     }
 
-    hint_fixture_no = choose_hint_text(cell_map, header_hints.get("fixture_no"))
-    if looks_like_fixture_number(hint_fixture_no):
-        parsed["fixture_no"] = hint_fixture_no.replace(" ", "")
-        used_columns.add(header_hints["fixture_no"])
+    fixture_candidates = [cell for cell in cells if looks_like_fixture_number(cell["text"])]
+    if not fixture_candidates:
+        if row_images:
+            return None, build_error(
+                "Row contains mapped images but no valid fixture number pattern.",
+                excel_row=row_index,
+                raw_data=snapshot,
+            )
+        return None, None
 
-    hint_op_no = choose_hint_text(cell_map, header_hints.get("op_no"))
-    if looks_like_op_number(hint_op_no):
+    fixture_cell, fixture_error = choose_single_candidate(fixture_candidates, "FIXTURE NO", row_index, snapshot)
+    if fixture_error:
+        return None, fixture_error
+
+    parsed["fixture_no"] = normalize_fixture_number(fixture_cell["text"])
+    used_columns.add(fixture_cell["column"])
+
+    hint_op_no = choose_hint_text(cell_map, header_hints.get("op_no"), looks_like_op_number)
+    if hint_op_no:
         parsed["op_no"] = normalize_text(hint_op_no)
         used_columns.add(header_hints["op_no"])
+    else:
+        op_candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_op_number(cell["text"])]
+        op_cell, op_error = choose_single_candidate(op_candidates, "OP.NO", row_index, snapshot)
+        if op_error:
+            return None, op_error
+        parsed["op_no"] = normalize_text(op_cell["text"])
+        used_columns.add(op_cell["column"])
 
-    hint_qty = parse_qty_value(choose_hint_text(cell_map, header_hints.get("qty")))
-    if hint_qty is not None:
-        parsed["qty"] = str(hint_qty)
-        used_columns.add(header_hints["qty"])
-
-    hint_fixture_type_column = header_hints.get("fixture_type")
-    hint_fixture_type = choose_hint_text(cell_map, hint_fixture_type_column)
-    if hint_fixture_type:
-        parsed["fixture_type"] = hint_fixture_type
-        if hint_fixture_type_column:
-            used_columns.add(hint_fixture_type_column)
-
-    hint_part_name_column = header_hints.get("part_name")
-    hint_part_name = choose_hint_text(cell_map, hint_part_name_column)
-    if hint_part_name:
-        parsed["part_name"] = hint_part_name
-        if hint_part_name_column:
-            used_columns.add(hint_part_name_column)
+    hint_qty_column = header_hints.get("qty")
+    hint_qty_value = parse_qty_value(choose_hint_text(cell_map, hint_qty_column))
+    if hint_qty_value is not None:
+        parsed["qty"] = str(hint_qty_value)
+        used_columns.add(hint_qty_column)
+    else:
+        qty_candidates = [cell for cell in cells if cell["column"] not in used_columns and parse_qty_value(cell["text"]) is not None]
+        qty_cell, qty_error = choose_single_candidate(qty_candidates, "QTY", row_index, snapshot)
+        if qty_error:
+            return None, qty_error
+        parsed["qty"] = str(parse_qty_value(qty_cell["text"]))
+        used_columns.add(qty_cell["column"])
 
     hint_remark_column = header_hints.get("remark")
     hint_remark = choose_hint_text(cell_map, hint_remark_column)
     if hint_remark:
         parsed["remark"] = hint_remark
-        if hint_remark_column:
-            used_columns.add(hint_remark_column)
+        used_columns.add(hint_remark_column)
+    else:
+        remark_candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_scope_text(cell["text"])]
+        if len(remark_candidates) > 1:
+            return None, build_error(
+                "Multiple possible values found for Remarks; row rejected to avoid guessing.",
+                excel_row=row_index,
+                raw_data={
+                    **snapshot,
+                    "candidate_field": "Remarks",
+                    "candidate_values": [{"column": cell["column"], "value": cell["text"]} for cell in remark_candidates],
+                },
+            )
+        if len(remark_candidates) == 1:
+            parsed["remark"] = remark_candidates[0]["text"]
+            used_columns.add(remark_candidates[0]["column"])
 
-    if not parsed["fixture_no"]:
+    hint_fixture_type_column = header_hints.get("fixture_type")
+    hint_fixture_type = choose_hint_text(cell_map, hint_fixture_type_column)
+    if hint_fixture_type:
+        parsed["fixture_type"] = hint_fixture_type
+        used_columns.add(hint_fixture_type_column)
+    else:
+        fixture_type_candidates = [
+            cell for cell in cells if cell["column"] not in used_columns and looks_like_fixture_type(cell["text"])
+        ]
+        fixture_type_cell, fixture_type_error = choose_single_candidate(
+            fixture_type_candidates,
+            "Fixture Type",
+            row_index,
+            snapshot,
+        )
+        if fixture_type_error:
+            return None, fixture_type_error
+        parsed["fixture_type"] = fixture_type_cell["text"]
+        used_columns.add(fixture_type_cell["column"])
+
+    hint_part_name_column = header_hints.get("part_name")
+    hint_part_name = choose_hint_text(cell_map, hint_part_name_column)
+    if hint_part_name:
+        parsed["part_name"] = hint_part_name
+        used_columns.add(hint_part_name_column)
+    else:
+        part_name_candidates = []
         for cell in cells:
             if cell["column"] in used_columns:
                 continue
-            if looks_like_fixture_number(cell["text"]):
-                parsed["fixture_no"] = cell["text"].replace(" ", "")
-                used_columns.add(cell["column"])
-                break
-
-    if not parsed["op_no"]:
-        for cell in cells:
-            if cell["column"] in used_columns:
-                continue
-            if looks_like_op_number(cell["text"]):
-                parsed["op_no"] = cell["text"]
-                used_columns.add(cell["column"])
-                break
-
-    if not parsed["qty"]:
-        for cell in cells:
-            if cell["column"] in used_columns:
-                continue
-            qty_value = parse_qty_value(cell["text"])
-            if qty_value is not None:
-                parsed["qty"] = str(qty_value)
-                used_columns.add(cell["column"])
-                break
-
-    if not parsed["remark"]:
-        for cell in cells:
-            if cell["column"] in used_columns:
+            if match_header_field(cell["text"]):
                 continue
             if looks_like_scope_text(cell["text"]):
-                parsed["remark"] = cell["text"]
-                used_columns.add(cell["column"])
-                break
+                continue
+            if looks_like_fixture_type(cell["text"]):
+                continue
+            if looks_like_op_number(cell["text"]):
+                continue
+            if looks_like_fixture_number(cell["text"]):
+                continue
+            if parse_qty_value(cell["text"]) is not None:
+                continue
+            part_name_candidates.append(cell)
 
-    if not parsed["fixture_type"]:
-        fixture_type_text, fixture_type_column = choose_best_fixture_type(cells, used_columns)
-        if fixture_type_text:
-            parsed["fixture_type"] = fixture_type_text
-            used_columns.add(fixture_type_column)
-
-    if not parsed["part_name"]:
-        part_name_text, part_name_column = choose_best_part_name(cells, used_columns)
-        if part_name_text:
-            parsed["part_name"] = part_name_text
-            used_columns.add(part_name_column)
-
-    strong_identity = bool(parsed["fixture_no"] or parsed["op_no"])
-    semantic_signal_count = sum(
-        1
-        for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "qty", "remark")
-        if parsed[field_name]
-    )
-
-    if not strong_identity and not row_images:
-        return None, None
-
-    if semantic_signal_count < 2 and not row_images:
-        return None, None
+        part_name_cell, part_name_error = choose_single_candidate(
+            part_name_candidates,
+            "Part Name",
+            row_index,
+            snapshot,
+        )
+        if part_name_error:
+            return None, part_name_error
+        parsed["part_name"] = part_name_cell["text"]
+        used_columns.add(part_name_cell["column"])
 
     missing_fields = [
         label
@@ -610,6 +643,22 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
     if not rows and not errors:
         errors.append(build_error("No fixture rows were found in the workbook."))
 
+    for row in rows:
+        log_event(
+            "extract_row_accepted",
+            excel_row=row["excel_row"],
+            fixture_no=row["fixture_no"],
+            parser_confidence=row["parser_confidence"],
+        )
+
+    for error in errors:
+        log_event(
+            "extract_row_rejected",
+            excel_row=error.get("excel_row"),
+            reason=error.get("error_message"),
+            raw_data=error.get("raw_data", {}),
+        )
+
     return {
         "file_info": {
             "project_code": file_info["project_code"],
@@ -624,33 +673,134 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
 
 @app.post("/extract")
 async def extract_workbook(
-    file: UploadFile = File(...),
+    request: Request,
     x_extraction_token: str | None = Header(default=None),
 ):
+    content_type = normalize_text(request.headers.get("content-type"))
+
     if not SERVICE_TOKEN:
+        log_event("extract_request_rejected", reason="service_not_configured", content_type=content_type)
         return build_error_response(500, "Service is not configured", [build_error("EXTRACTION_SERVICE_TOKEN is required.")])
 
+    form = await request.form()
+    form_keys = list(form.keys())
+    upload_fields = []
+    for field_name, value in form.multi_items():
+        if isinstance(value, StarletteUploadFile):
+            upload_fields.append(
+                {
+                    "field_name": field_name,
+                    "filename": normalize_text(value.filename),
+                    "content_type": normalize_text(value.content_type),
+                }
+            )
+
+    log_event(
+        "extract_request_received",
+        content_type=content_type,
+        form_keys=form_keys,
+        upload_fields=upload_fields,
+    )
+
     if x_extraction_token != SERVICE_TOKEN:
+        log_event("extract_request_rejected", reason="invalid_token", content_type=content_type, form_keys=form_keys)
         return build_error_response(401, "Unauthorized", [build_error("Invalid extraction token.")])
 
-    if not normalize_text(file.filename).lower().endswith(ALLOWED_EXTENSION):
+    if "multipart/form-data" not in content_type.lower():
+        log_event("extract_request_rejected", reason="invalid_content_type", content_type=content_type, form_keys=form_keys)
+        return build_error_response(422, "Failed to process file", [build_error("Request must use multipart/form-data.")])
+
+    if EXPECTED_UPLOAD_FIELD not in form:
+        log_event(
+            "extract_request_rejected",
+            reason="missing_expected_upload_field",
+            expected_field=EXPECTED_UPLOAD_FIELD,
+            form_keys=form_keys,
+            upload_fields=upload_fields,
+        )
+        return build_error_response(
+            422,
+            "Failed to process file",
+            [build_error(f"Expected multipart field '{EXPECTED_UPLOAD_FIELD}' was not provided.")],
+        )
+
+    uploaded_file = form.get(EXPECTED_UPLOAD_FIELD)
+    if not isinstance(uploaded_file, StarletteUploadFile):
+        log_event(
+            "extract_request_rejected",
+            reason="invalid_upload_field_type",
+            expected_field=EXPECTED_UPLOAD_FIELD,
+            form_keys=form_keys,
+        )
+        return build_error_response(
+            422,
+            "Failed to process file",
+            [build_error(f"Multipart field '{EXPECTED_UPLOAD_FIELD}' must contain a file upload.")],
+        )
+
+    if len(upload_fields) != 1:
+        log_event(
+            "extract_request_rejected",
+            reason="unexpected_upload_field_count",
+            upload_fields=upload_fields,
+        )
+        return build_error_response(
+            422,
+            "Failed to process file",
+            [build_error("Exactly one uploaded Excel file is required.")],
+        )
+
+    if not normalize_text(uploaded_file.filename).lower().endswith(ALLOWED_EXTENSION):
+        log_event(
+            "extract_request_rejected",
+            reason="invalid_extension",
+            filename=normalize_text(uploaded_file.filename),
+        )
         return build_error_response(400, "Failed to process file", [build_error("Only .xlsx files are allowed.")])
 
-    if normalize_text(file.content_type).lower() != ALLOWED_CONTENT_TYPE:
+    if normalize_text(uploaded_file.content_type).lower() != ALLOWED_CONTENT_TYPE:
+        log_event(
+            "extract_request_rejected",
+            reason="invalid_mime_type",
+            filename=normalize_text(uploaded_file.filename),
+            file_content_type=normalize_text(uploaded_file.content_type),
+        )
         return build_error_response(400, "Failed to process file", [build_error("Only .xlsx MIME type is allowed.")])
 
-    file_bytes = await file.read()
+    file_bytes = await uploaded_file.read()
     if not file_bytes:
+        log_event("extract_request_rejected", reason="empty_file", filename=normalize_text(uploaded_file.filename))
         return build_error_response(400, "Failed to process file", [build_error("Uploaded file is empty.")])
 
     if len(file_bytes) > MAX_UPLOAD_BYTES:
+        log_event(
+            "extract_request_rejected",
+            reason="file_too_large",
+            filename=normalize_text(uploaded_file.filename),
+            size_bytes=len(file_bytes),
+        )
         return build_error_response(400, "Failed to process file", [build_error("Excel file exceeds the maximum allowed size.")])
 
+    log_event(
+        "extract_processing_started",
+        filename=normalize_text(uploaded_file.filename),
+        size_bytes=len(file_bytes),
+    )
+
     try:
-        return await asyncio.to_thread(_process_workbook, file_bytes)
+        result = await asyncio.to_thread(_process_workbook, file_bytes)
+        log_event(
+            "extract_processing_completed",
+            filename=normalize_text(uploaded_file.filename),
+            accepted_rows=len(result["rows"]),
+            error_count=len(result["errors"]),
+        )
+        return result
     except ValueError as exc:
+        log_event("extract_processing_failed", filename=normalize_text(uploaded_file.filename), reason=str(exc))
         return build_error_response(422, "Failed to process file", [build_error(str(exc))])
     except Exception as exc:
+        log_event("extract_processing_failed", filename=normalize_text(uploaded_file.filename), reason=str(exc))
         return build_error_response(500, "Failed to process file", [build_error(str(exc))])
 
 

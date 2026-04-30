@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/useAuth";
 import { TaskProvider } from "@/contexts/TaskContext";
 import { AppLayout } from "@/components/AppLayout";
 import { AppBootSkeleton, RouteContentSkeleton } from "@/components/LoadingSkeletons";
+import { PWAUpdatePrompt } from "@/components/PWAUpdatePrompt";
 import Login from "./pages/Login";
 import React, { Suspense } from "react";
 
@@ -62,6 +63,7 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
+      <PWAUpdatePrompt />
       <AuthProvider>
         <BrowserRouter>
           <AuthenticatedApp />

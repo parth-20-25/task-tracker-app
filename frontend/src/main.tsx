@@ -1,10 +1,7 @@
 import { createRoot } from "react-dom/client";
-import { registerSW } from "virtual:pwa-register";
 import { API_BASE_URL } from "@/api/config";
 import App from "./App.tsx";
 import "./index.css";
-
-registerSW({ immediate: true });
 
 const warmBackend = () => {
   void fetch(`${API_BASE_URL}/health`, {

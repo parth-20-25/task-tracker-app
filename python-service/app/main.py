@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from io import BytesIO
@@ -124,9 +125,9 @@ def find_metadata_and_header_rows(worksheet) -> tuple[int, str, int]:
     metadata_row = None
     metadata_value = ""
 
-    for row_index in range(1, min(worksheet.max_row, 25) + 1):
-        for cell in worksheet[row_index]:
-            cell_value = normalize_text(cell.value)
+    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=1, max_row=25, values_only=True), start=1):
+        for cell_value in row_values:
+            cell_value = normalize_text(cell_value)
             if cell_value.startswith("WBS-"):
                 metadata_row = row_index
                 metadata_value = cell_value
@@ -137,8 +138,11 @@ def find_metadata_and_header_rows(worksheet) -> tuple[int, str, int]:
     if metadata_row is None:
         raise ValueError("Could not find the WBS metadata row in the workbook.")
 
-    for row_index in range(metadata_row + 1, min(worksheet.max_row, metadata_row + 25) + 1):
-        if any(normalize_text(cell.value) for cell in worksheet[row_index]):
+    for row_index, row_values in enumerate(
+        worksheet.iter_rows(min_row=metadata_row + 1, max_row=metadata_row + 25, values_only=True),
+        start=metadata_row + 1,
+    ):
+        if any(normalize_text(cell_value) for cell_value in row_values):
             return metadata_row, metadata_value, row_index
 
     raise ValueError("Could not find the table header row below the WBS metadata row.")
@@ -157,8 +161,10 @@ def resolve_header_map(worksheet, header_row_index: int) -> dict[str, int]:
         "remark": {"remark", "remarks"},
     }
 
-    for column_index in range(1, worksheet.max_column + 1):
-        normalized = normalize_header(worksheet.cell(header_row_index, column_index).value)
+    header_row = next(worksheet.iter_rows(min_row=header_row_index, max_row=header_row_index, values_only=True), ())
+
+    for column_index, cell_value in enumerate(header_row, start=1):
+        normalized = normalize_header(cell_value)
         if normalized and normalized not in header_lookup:
             header_lookup[normalized] = column_index
 
@@ -249,19 +255,26 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
     return images_by_row, errors
 
 
+def get_row_value(row_values: tuple[Any, ...], column_index: int) -> Any:
+    value_index = column_index - 1
+    if value_index < 0 or value_index >= len(row_values):
+        return None
+    return row_values[value_index]
+
+
 def build_rows(worksheet, header_row_index: int, header_map: dict[str, int], images_by_row: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     remark_column_index = header_map.get("remark")
 
-    for row_index in range(header_row_index + 1, worksheet.max_row + 1):
+    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=header_row_index + 1, values_only=True), start=header_row_index + 1):
         row_has_images = row_index in images_by_row
         row_snapshot = {
-            "fixture_no": normalize_text(worksheet.cell(row_index, header_map["fixture_no"]).value),
-            "op_no": normalize_text(worksheet.cell(row_index, header_map["op_no"]).value),
-            "part_name": normalize_text(worksheet.cell(row_index, header_map["part_name"]).value),
-            "fixture_type": normalize_text(worksheet.cell(row_index, header_map["fixture_type"]).value),
-            "remark": normalize_text(worksheet.cell(row_index, remark_column_index).value) if remark_column_index else "",
-            "qty": normalize_text(worksheet.cell(row_index, header_map["qty"]).value),
+            "fixture_no": normalize_text(get_row_value(row_values, header_map["fixture_no"])),
+            "op_no": normalize_text(get_row_value(row_values, header_map["op_no"])),
+            "part_name": normalize_text(get_row_value(row_values, header_map["part_name"])),
+            "fixture_type": normalize_text(get_row_value(row_values, header_map["fixture_type"])),
+            "remark": normalize_text(get_row_value(row_values, remark_column_index)) if remark_column_index else "",
+            "qty": normalize_text(get_row_value(row_values, header_map["qty"])),
         }
 
         if not row_has_images and not any(row_snapshot.values()):
@@ -278,6 +291,51 @@ def build_rows(worksheet, header_row_index: int, header_map: dict[str, int], ima
         )
 
     return rows
+
+
+def open_excel_workbook(file_bytes: bytes, *, read_only: bool) -> Any:
+    return load_workbook(
+        filename=BytesIO(file_bytes),
+        data_only=True,
+        keep_links=False,
+        read_only=read_only,
+    )
+
+
+def extract_images_from_workbook(file_bytes: bytes) -> tuple[dict[int, dict[str, str]], list[dict[str, Any]]]:
+    workbook = open_excel_workbook(file_bytes, read_only=False)
+    try:
+        worksheet = workbook.active
+        return extract_anchored_images(worksheet)
+    finally:
+        workbook.close()
+
+
+def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
+    workbook = open_excel_workbook(file_bytes, read_only=True)
+    try:
+        worksheet = workbook.active
+        _, metadata_value, header_row_index = find_metadata_and_header_rows(worksheet)
+        file_info = parse_wbs_header(metadata_value)
+        header_map = resolve_header_map(worksheet, header_row_index)
+        images_by_row, image_errors = extract_images_from_workbook(file_bytes)
+        rows = build_rows(worksheet, header_row_index, header_map, images_by_row)
+    finally:
+        workbook.close()
+
+    if not rows and not image_errors:
+        image_errors.append(build_error("No fixture rows were found in the workbook."))
+
+    return {
+        "file_info": {
+            "project_code": file_info["project_code"],
+            "scope_name": file_info["scope_name"],
+            "scope_name_display": file_info["scope_name"],
+            "company_name": file_info["company_name"],
+        },
+        "rows": rows,
+        "errors": image_errors,
+    }
 
 
 @app.post("/extract")
@@ -305,29 +363,7 @@ async def extract_workbook(
         return build_error_response(400, "Failed to process file", [build_error("Excel file exceeds the maximum allowed size.")])
 
     try:
-        workbook = load_workbook(filename=BytesIO(file_bytes), data_only=True, keep_links=False)
-        worksheet = workbook.active
-
-        _, metadata_value, header_row_index = find_metadata_and_header_rows(worksheet)
-        file_info = parse_wbs_header(metadata_value)
-        header_map = resolve_header_map(worksheet, header_row_index)
-        images_by_row, image_errors = extract_anchored_images(worksheet)
-        rows = build_rows(worksheet, header_row_index, header_map, images_by_row)
-        workbook.close()
-
-        if not rows and not image_errors:
-            image_errors.append(build_error("No fixture rows were found in the workbook."))
-
-        return {
-            "file_info": {
-                "project_code": file_info["project_code"],
-                "scope_name": file_info["scope_name"],
-                "scope_name_display": file_info["scope_name"],
-                "company_name": file_info["company_name"],
-            },
-            "rows": rows,
-            "errors": image_errors,
-        }
+        return await asyncio.to_thread(_process_workbook, file_bytes)
     except ValueError as exc:
         return build_error_response(422, "Failed to process file", [build_error(str(exc))])
     except Exception as exc:

@@ -1,5 +1,6 @@
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
+const { AppError } = require("../lib/AppError");
 
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
@@ -116,6 +117,7 @@ function mapFixtureOptionRow(row) {
     qty: Number(row.qty),
     image_1_url: row.image_1_url || null,
     image_2_url: row.image_2_url || null,
+    ingestion_source: row.ingestion_source || null,
   };
 }
 
@@ -361,7 +363,8 @@ async function listFixturesByScopeForDepartment(scopeId, departmentId, client = 
         di.remark,
         di.qty,
         di.image_1_url,
-        di.image_2_url
+        di.image_2_url,
+        di.ingestion_source
       FROM design.fixtures di
       JOIN design.scopes ds
         ON ds.id = di.scope_id
@@ -393,7 +396,8 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
         di.remark,
         di.qty,
         di.image_1_url,
-        di.image_2_url
+        di.image_2_url,
+        di.ingestion_source
       FROM design.fixtures di
       JOIN design.scopes ds
         ON ds.id = di.scope_id
@@ -478,7 +482,8 @@ async function findFixturesByScopeForDedupe(scopeId, client = pool) {
         remark,
         qty,
         image_1_url,
-        image_2_url
+        image_2_url,
+        ingestion_source
       FROM design.fixtures
       WHERE scope_id = $1
     `,
@@ -486,6 +491,94 @@ async function findFixturesByScopeForDedupe(scopeId, client = pool) {
   );
 
   return result.rows.map(mapFixtureOptionRow);
+}
+
+async function listFixturesByUploadBatchForDepartment(batchId, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        di.id AS fixture_id,
+        di.fixture_no,
+        di.image_1_url,
+        di.image_2_url,
+        di.ingestion_source
+      FROM design.fixtures di
+      JOIN design.upload_batches ub
+        ON ub.id = di.batch_id
+      JOIN design.scopes ds
+        ON ds.id = di.scope_id
+      JOIN design.projects dp
+        ON dp.id = ds.project_id
+      WHERE ub.id = $1
+        AND dp.department_id = $2
+      ORDER BY di.fixture_no ASC, di.id ASC
+    `,
+    [batchId, departmentId],
+  );
+
+  return result.rows.map((row) => ({
+    fixture_id: row.fixture_id,
+    fixture_no: row.fixture_no,
+    image_1_url: row.image_1_url || null,
+    image_2_url: row.image_2_url || null,
+    ingestion_source: row.ingestion_source || null,
+  }));
+}
+
+async function updateFixtureReferenceImageForDepartment({
+  fixtureId,
+  departmentId,
+  imageType,
+  imageUrl,
+}, client = pool) {
+  const resolvedColumn =
+    imageType === "part" ? "image_1_url"
+      : imageType === "fixture" ? "image_2_url"
+        : null;
+
+  if (!resolvedColumn) {
+    throw new AppError(400, "Invalid image_type. Expected 'part' or 'fixture'");
+  }
+
+  const selectResult = await client.query(
+    `
+      SELECT
+        di.fixture_no,
+        di.${resolvedColumn} AS previous_image_url
+      FROM design.fixtures di
+      JOIN design.scopes ds
+        ON ds.id = di.scope_id
+      JOIN design.projects dp
+        ON dp.id = ds.project_id
+      WHERE di.id = $1
+        AND dp.department_id = $2
+      LIMIT 1
+    `,
+    [fixtureId, departmentId],
+  );
+
+  if (!selectResult.rows[0]) {
+    throw new AppError(404, "Fixture not found");
+  }
+
+  const previousImageUrl = selectResult.rows[0].previous_image_url || null;
+  const fixtureNo = selectResult.rows[0].fixture_no;
+
+  await client.query(
+    `
+      UPDATE design.fixtures
+      SET ${resolvedColumn} = $1,
+          updated_at = NOW()
+      WHERE id = $2
+    `,
+    [imageUrl, fixtureId],
+  );
+
+  return {
+    fixture_no: fixtureNo,
+    previous_image_url: previousImageUrl,
+    new_image_url: imageUrl,
+  };
 }
 
 async function upsertFixture(fixtureData, client = pool) {
@@ -502,9 +595,10 @@ async function upsertFixture(fixtureData, client = pool) {
         qty,
         image_1_url,
         image_2_url,
+        ingestion_source,
         batch_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       ON CONFLICT (project_id, scope_id, fixture_no) DO UPDATE
       SET
         op_no = EXCLUDED.op_no,
@@ -514,6 +608,7 @@ async function upsertFixture(fixtureData, client = pool) {
         qty = EXCLUDED.qty,
         image_1_url = EXCLUDED.image_1_url,
         image_2_url = EXCLUDED.image_2_url,
+        ingestion_source = EXCLUDED.ingestion_source,
         batch_id = EXCLUDED.batch_id,
         updated_at = NOW()
       RETURNING
@@ -528,7 +623,8 @@ async function upsertFixture(fixtureData, client = pool) {
         remark,
         qty,
         image_1_url,
-        image_2_url
+        image_2_url,
+        ingestion_source
     `,
     [
       fixtureData.project_id,
@@ -541,6 +637,7 @@ async function upsertFixture(fixtureData, client = pool) {
       fixtureData.qty,
       fixtureData.image_1_url || null,
       fixtureData.image_2_url || null,
+      fixtureData.ingestion_source || null,
       fixtureData.batch_id || null,
     ],
   );
@@ -561,9 +658,11 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   findScopeByIdForDepartment,
   listDepartmentProjectsByDepartment,
   listFixturesByScopeForDepartment,
+  listFixturesByUploadBatchForDepartment,
   listProjectOptionsByDepartment,
   listScopesByProjectForDepartment,
   touchProject,
+  updateFixtureReferenceImageForDepartment,
   upsertFixture,
   upsertProjectByNumber,
 });

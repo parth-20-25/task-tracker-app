@@ -386,6 +386,7 @@ async function ensureDesignDepartmentSchema(client) {
       qty INTEGER NOT NULL,
       image_1_url TEXT,
       image_2_url TEXT,
+      ingestion_source TEXT,
       is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE,
       CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (project_id, scope_id, fixture_no)
     )
@@ -397,7 +398,41 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS remark TEXT,
     ADD COLUMN IF NOT EXISTS image_1_url TEXT,
     ADD COLUMN IF NOT EXISTS image_2_url TEXT,
+    ADD COLUMN IF NOT EXISTS ingestion_source TEXT,
     ADD COLUMN IF NOT EXISTS is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'design_fixtures_ingestion_source_check'
+      ) THEN
+        ALTER TABLE design.fixtures
+        ADD CONSTRAINT design_fixtures_ingestion_source_check
+        CHECK (
+          ingestion_source IS NULL
+          OR ingestion_source IN ('excel_upload', 'manual_paste')
+        );
+      END IF;
+    END $$;
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'design_fixtures_scope_fixture_no_key'
+      ) THEN
+        ALTER TABLE design.fixtures
+        ADD CONSTRAINT design_fixtures_scope_fixture_no_key
+        UNIQUE (project_id, scope_id, fixture_no);
+      END IF;
+    END $$;
   `);
 
   await client.query(`

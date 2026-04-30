@@ -4,6 +4,7 @@ const { AppError } = require("../lib/AppError");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { handleDesignExcelUpload } = require("../lib/designExcelUpload");
+const { handleReferenceImageUpload, buildFixtureReferenceImageFileUrl } = require("../lib/designFixtureReferenceImageUpload");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
@@ -13,8 +14,14 @@ const {
   parseAndPreviewUpload,
   parseAndPreviewUploadedWorkbook,
   confirmUpload,
+  uploadFixtureReferenceImage,
 } = require("../services/designExcelService");
-const { findProjectByIdForDepartment } = require("../repositories/designProjectCatalogRepository");
+const {
+  findProjectByIdForDepartment,
+  listFixturesByUploadBatchForDepartment,
+  updateFixtureReferenceImageForDepartment,
+} = require("../repositories/designProjectCatalogRepository");
+const { createAuditLog } = require("../repositories/auditRepository");
 const {
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
@@ -133,6 +140,85 @@ router.post(
   asyncHandler(async (req, res) => {
     const task = await createDesignTaskFromProject(req.user, req.body);
     return sendSuccess(res, task, 201);
+  }),
+);
+
+router.get(
+  "/design/upload-batches/:batchId/fixtures",
+  authorize(PERMISSIONS.UPLOAD_DATA),
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
+      "Invalid department context",
+    );
+
+    const batchId = req.params.batchId;
+    const fixtures = await listFixturesByUploadBatchForDepartment(batchId, departmentId);
+
+    return sendSuccess(res, fixtures, 200);
+  }),
+);
+
+router.post(
+  "/design/fixtures/:fixtureId/reference-image",
+  authorize(PERMISSIONS.UPLOAD_DATA),
+  handleReferenceImageUpload,
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
+      "Invalid department context",
+    );
+
+    if (!req.file) {
+      throw new AppError(400, "No image file uploaded");
+    }
+
+    const imageType = String(req.body?.image_type || req.query?.image_type || "").trim().toLowerCase();
+    if (!imageType || !["part", "fixture"].includes(imageType)) {
+      throw new AppError(400, "Invalid image_type. Expected 'part' or 'fixture'.");
+    }
+
+    const fixtureId = req.params.fixtureId;
+    const fileName = req.file.filename;
+    const imageUrl = buildFixtureReferenceImageFileUrl(fileName);
+
+    console.info("[design-reference-image-upload]", {
+      event: "reference_image_upload_start",
+      fixture_id: fixtureId,
+      department_id: departmentId,
+      image_type: imageType,
+      file_name: req.file.originalname,
+      stored_file_name: fileName,
+      file_size_bytes: req.file.size,
+      mime_type: req.file.mimetype,
+      user_id: req.user.id,
+      employee_id: req.user.employee_id,
+    });
+
+    const result = await uploadFixtureReferenceImage(
+      req.user,
+      fixtureId,
+      departmentId,
+      imageType,
+      imageUrl,
+    );
+
+    await createAuditLog({
+      userEmployeeId: req.user.employee_id,
+      actionType: "DESIGN_FIXTURE_REFERENCE_IMAGE_UPLOADED",
+      targetType: "design_fixture",
+      targetId: fixtureId,
+      metadata: {
+        image_type: imageType,
+        image_url: imageUrl,
+        previous_image_url: result.previous_image_url,
+        fixture_no: result.fixture_no,
+      },
+    });
+
+    return sendSuccess(res, result, 200);
   }),
 );
 

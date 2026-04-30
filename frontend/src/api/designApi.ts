@@ -166,6 +166,62 @@ export function confirmDesignUpload(payload: ConfirmDesignUploadPayload) {
   });
 }
 
+export function pastePasteFixtureData(text: string) {
+  return apiRequest<DesignExcelUploadResponse>("/design/upload", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function confirmPasteFixtureData(payload: ConfirmDesignUploadPayload) {
+  return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/design/upload/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listFixturesByUploadBatch(batchId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+  
+  return apiRequest<Array<{
+    fixture_id: string;
+    fixture_no: string;
+    image_1_url: string | null;
+    image_2_url: string | null;
+    ingestion_source: string | null;
+  }>>(`/design/upload-batches/${encodeURIComponent(batchId)}/fixtures${params.toString() ? `?${params.toString()}` : ""}`, {
+    method: "GET",
+  });
+}
+
+export function uploadFixtureReferenceImage(
+  fixtureId: string,
+  imageType: "part" | "fixture",
+  file: File,
+  departmentId?: string,
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("image_type", imageType);
+
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<{
+    fixture_no: string;
+    previous_image_url: string | null;
+    new_image_url: string;
+  }>(`/design/fixtures/${encodeURIComponent(fixtureId)}/reference-image${params.toString() ? `?${params.toString()}` : ""}`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
 // ── Fixture Workflow Engine API ───────────────────────────────────────────────
 
 export function fetchWorkflowByDepartment() {

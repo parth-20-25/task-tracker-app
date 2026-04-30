@@ -1,7 +1,14 @@
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, ImageIcon, UploadCloud, XCircle } from "lucide-react";
-import { confirmDesignUpload, uploadDesignExcel } from "@/api/designApi";
+import { AlertTriangle, CheckCircle2, FileSpreadsheet, ImageIcon, UploadCloud, XCircle, Image as ImageIconSolid, Check } from "lucide-react";
+import {
+  confirmDesignUpload,
+  uploadDesignExcel,
+  pastePasteFixtureData,
+  confirmPasteFixtureData,
+  listFixturesByUploadBatch,
+  uploadFixtureReferenceImage,
+} from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -121,24 +128,254 @@ function ScopeDecisionControls({
   );
 }
 
+interface BatchFixture {
+  fixture_id: string;
+  fixture_no: string;
+  image_1_url: string | null;
+  image_2_url: string | null;
+  ingestion_source: string | null;
+}
+
+function ImageStatusBadge({ hasImage, imageType }: { hasImage: boolean; imageType: "Part" | "Fixture" }) {
+  return (
+    <div className={cn(
+      "flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium",
+      hasImage
+        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+        : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+    )}>
+      <ImageIconSolid className="h-3 w-3" />
+      {imageType} {hasImage ? "✓" : "Missing"}
+    </div>
+  );
+}
+
+interface PostConfirmReviewProps {
+  batchId: string;
+  batchFixtures: BatchFixture[] | null;
+  uploadingImageFor: { fixtureId: string; imageType: "part" | "fixture" } | null;
+  referenceImageMutation: any;
+  fileUploadRef: React.RefObject<HTMLInputElement>;
+  onClose: () => void;
+}
+
+function PostConfirmReviewStage({
+  batchId,
+  batchFixtures,
+  uploadingImageFor,
+  referenceImageMutation,
+  fileUploadRef,
+  onClose,
+}: PostConfirmReviewProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background/50">
+      <div className="shrink-0 border-b bg-card p-4">
+        <h4 className="text-lg font-semibold">Upload Complete — Review & Upload Reference Images</h4>
+        <p className="text-sm text-muted-foreground">
+          Batch {batchId.slice(0, 8)}... — Fixtures loaded. Optional: Upload missing part/fixture reference images.
+        </p>
+      </div>
+
+      <div className="fixture-modal-scroll min-h-0 flex-1 overflow-y-auto p-4">
+        {!batchFixtures ? (
+          <div className="flex items-center justify-center py-12">
+            <MorphLoader size={32} color="currentColor" />
+          </div>
+        ) : batchFixtures.length === 0 ? (
+          <div className="rounded-lg border border-dashed bg-muted/40 p-6 text-center">
+            <p className="text-sm text-muted-foreground">No fixtures in this batch.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {batchFixtures.map((fixture) => {
+              const isManualPaste = fixture.ingestion_source === "manual_paste";
+              const partImageMissing = !fixture.image_1_url;
+              const fixtureImageMissing = !fixture.image_2_url;
+              const showImageControls = isManualPaste && (partImageMissing || fixtureImageMissing);
+
+              return (
+                <div key={fixture.fixture_id} className="rounded-lg border bg-card p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <div className="font-semibold">{fixture.fixture_no}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {fixture.ingestion_source === "manual_paste" ? "Manual Paste" : "Excel Upload"}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <ImageStatusBadge hasImage={!partImageMissing} imageType="Part" />
+                      <ImageStatusBadge hasImage={!fixtureImageMissing} imageType="Fixture" />
+                    </div>
+                  </div>
+
+                  {showImageControls && (
+                    <div className="mt-3 space-y-2 rounded-md border border-amber-200/50 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/10">
+                      {partImageMissing && (
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm">
+                            <div className="font-medium text-amber-900 dark:text-amber-200">Part Image Missing</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Column F reference image</div>
+                          </div>
+                          <input
+                            ref={fileUploadRef}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                referenceImageMutation.mutate({ fixtureId: fixture.fixture_id, imageType: "part", file });
+                              }
+                            }}
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              fileUploadRef.current?.click();
+                            }}
+                            disabled={
+                              referenceImageMutation.isPending &&
+                              uploadingImageFor?.fixtureId === fixture.fixture_id &&
+                              uploadingImageFor?.imageType === "part"
+                            }
+                          >
+                            {referenceImageMutation.isPending &&
+                            uploadingImageFor?.fixtureId === fixture.fixture_id &&
+                            uploadingImageFor?.imageType === "part" ? (
+                              <>
+                                <MorphLoader size={14} color="currentColor" />
+                              </>
+                            ) : (
+                              <>
+                                <ImageIconSolid className="mr-1 h-4 w-4" />
+                                Upload
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      )}
+
+                      {fixtureImageMissing && (
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm">
+                            <div className="font-medium text-amber-900 dark:text-amber-200">Fixture Image Missing</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Column I reference image</div>
+                          </div>
+                          <input
+                            ref={fileUploadRef}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                referenceImageMutation.mutate({ fixtureId: fixture.fixture_id, imageType: "fixture", file });
+                              }
+                            }}
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              fileUploadRef.current?.click();
+                            }}
+                            disabled={
+                              referenceImageMutation.isPending &&
+                              uploadingImageFor?.fixtureId === fixture.fixture_id &&
+                              uploadingImageFor?.imageType === "fixture"
+                            }
+                          >
+                            {referenceImageMutation.isPending &&
+                            uploadingImageFor?.fixtureId === fixture.fixture_id &&
+                            uploadingImageFor?.imageType === "fixture" ? (
+                              <>
+                                <MorphLoader size={14} color="currentColor" />
+                              </>
+                            ) : (
+                              <>
+                                <ImageIconSolid className="mr-1 h-4 w-4" />
+                                Upload
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {fixture.image_1_url && (
+                    <div className="mt-2 rounded-md border bg-muted/30 p-2">
+                      <img
+                        src={fixture.image_1_url}
+                        alt={`${fixture.fixture_no} part`}
+                        className="h-20 w-full object-cover rounded"
+                      />
+                    </div>
+                  )}
+                  {fixture.image_2_url && (
+                    <div className="mt-2 rounded-md border bg-muted/30 p-2">
+                      <img
+                        src={fixture.image_2_url}
+                        alt={`${fixture.fixture_no} fixture`}
+                        className="h-20 w-full object-cover rounded"
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <DialogFooter className="shrink-0 flex-col items-stretch justify-between gap-3 border-t bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
+        <p className="text-xs text-muted-foreground">
+          Reference images are optional. Assignment can proceed without them.
+        </p>
+        <Button onClick={onClose} className="bg-primary hover:bg-primary/90">
+          <Check className="mr-2 h-4 w-4" />
+          Done
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
 export function DesignExcelUploadModal() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileUploadRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
+  const [uploadMode, setUploadMode] = useState<"excel" | "paste">("excel");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pasteText, setPasteText] = useState("");
   const [preview, setPreview] = useState<DesignExcelUploadResponse | null>(null);
   const [decisions, setDecisions] = useState<Record<string, "incoming" | "existing">>({});
   const [scopeDecisions, setScopeDecisions] = useState<Record<string, "add_fixture" | "skip_fixture">>({});
   const [isDragActive, setIsDragActive] = useState(false);
+  const [confirmationStage, setConfirmationStage] = useState<"preview" | "review">("preview");
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchFixtures, setBatchFixtures] = useState<BatchFixture[] | null>(null);
+  const [uploadingImageFor, setUploadingImageFor] = useState<{ fixtureId: string; imageType: "part" | "fixture" } | null>(null);
 
   const resetState = () => {
     setSelectedFile(null);
+    setPasteText("");
     setPreview(null);
     setDecisions({});
     setScopeDecisions({});
     setIsDragActive(false);
+    setConfirmationStage("preview");
+    setBatchId(null);
+    setBatchFixtures(null);
+    setUploadingImageFor(null);
+    setUploadMode("excel");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+    if (fileUploadRef.current) {
+      fileUploadRef.current.value = "";
     }
   };
 
@@ -151,21 +388,16 @@ export function DesignExcelUploadModal() {
 
   const validateClientFile = (file: File) => {
     const hasXlsxExtension = file.name.toLowerCase().endsWith(".xlsx");
-
     if (!hasXlsxExtension) {
       throw new Error("Only .xlsx Excel files are allowed");
     }
-
     if (file.size > MAX_FILE_SIZE_BYTES) {
       throw new Error("Excel file must be 10 MB or smaller");
     }
   };
 
   const setFileForUpload = (file: File | null) => {
-    if (!file) {
-      return;
-    }
-
+    if (!file) return;
     validateClientFile(file);
     setSelectedFile(file);
     setPreview(null);
@@ -183,37 +415,102 @@ export function DesignExcelUploadModal() {
       });
       setDecisions(initialDecisions);
       setScopeDecisions({});
+      setConfirmationStage("preview");
     },
     onError: (error) => {
-      const description = error instanceof Error ? error.message : "Failed to process file";
       toast({
         title: "Upload failed",
-        description,
+        description: error instanceof Error ? error.message : "Failed to process file",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const pasteMutation = useMutation({
+    mutationFn: (text: string) => pastePasteFixtureData(text),
+    onSuccess: (data) => {
+      setPreview(data);
+      const initialDecisions: Record<string, "incoming" | "existing"> = {};
+      data.preview.conflicts.forEach((conflict) => {
+        initialDecisions[getRowDecisionKey(conflict.incoming)] = "existing";
+      });
+      setDecisions(initialDecisions);
+      setScopeDecisions({});
+      setConfirmationStage("preview");
+    },
+    onError: (error) => {
+      toast({
+        title: "Paste failed",
+        description: error instanceof Error ? error.message : "Failed to process paste data",
         variant: "destructive",
       });
     },
   });
 
   const confirmMutation = useMutation({
-    mutationFn: confirmDesignUpload,
+    mutationFn: (payload: any) => {
+      if (uploadMode === "excel") {
+        return confirmDesignUpload(payload);
+      } else {
+        return confirmPasteFixtureData(payload);
+      }
+    },
     onSuccess: async (data) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: projectQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs }),
-        queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
-      ]);
-
-      toast({
-        title: "Upload confirmed",
-        description: `Successfully loaded ${data.accepted_count} fixtures.`,
-      });
-      setOpen(false);
+      setBatchId(data.batch_id);
+      setConfirmationStage("review");
+      try {
+        const fixtures = await listFixturesByUploadBatch(data.batch_id);
+        setBatchFixtures(fixtures);
+      } catch (err) {
+        console.error("Failed to load batch fixtures", err);
+        toast({
+          title: "Warning",
+          description: "Batch created but could not load fixture details. Please refresh.",
+          variant: "default",
+        });
+      }
     },
     onError: (error) => {
       toast({
         title: "Confirmation failed",
         description: error instanceof Error ? error.message : "Could not complete the process",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const referenceImageMutation = useMutation({
+    mutationFn: ({ fixtureId, imageType, file }: { fixtureId: string; imageType: "part" | "fixture"; file: File }) =>
+      uploadFixtureReferenceImage(fixtureId, imageType, file),
+    onSuccess: (data) => {
+      toast({
+        title: "Image uploaded",
+        description: `${data.fixture_no} reference image updated.`,
+      });
+
+      setBatchFixtures((prev) => {
+        if (!prev) return prev;
+        return prev.map((f) => {
+          if (f.fixture_id === uploadingImageFor?.fixtureId) {
+            if (uploadingImageFor.imageType === "part") {
+              return { ...f, image_1_url: data.new_image_url };
+            } else {
+              return { ...f, image_2_url: data.new_image_url };
+            }
+          }
+          return f;
+        });
+      });
+
+      setUploadingImageFor(null);
+      if (fileUploadRef.current) {
+        fileUploadRef.current.value = "";
+      }
+    },
+    onError: (error) => {
+      toast({
+        title: "Image upload failed",
+        description: error instanceof Error ? error.message : "Failed to upload image",
         variant: "destructive",
       });
     },
@@ -235,7 +532,6 @@ export function DesignExcelUploadModal() {
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragActive(false);
-
     try {
       const nextFile = event.dataTransfer.files?.[0] || null;
       setFileForUpload(nextFile);
@@ -249,9 +545,7 @@ export function DesignExcelUploadModal() {
   };
 
   const handleConfirm = () => {
-    if (!preview) {
-      return;
-    }
+    if (!preview) return;
 
     const resolved_items: Array<{
       data: DesignExcelPreviewRow;
@@ -301,129 +595,228 @@ export function DesignExcelUploadModal() {
     hasUnresolvedAcceptedScopeDecisions || hasUnresolvedIncomingConflictScopeDecisions,
   );
 
+  const isLoading = uploadMutation.isPending || pasteMutation.isPending || confirmMutation.isPending;
+
   return (
     <Card className="animate-fade-in mb-6 w-full border-foreground/10 bg-transparent shadow-none">
       <CardHeader className="flex flex-row items-center justify-between rounded-t-xl border-b border-primary/20 bg-gradient-to-r from-primary/10 to-transparent p-4 pb-2">
         <div>
           <h3 className="text-lg font-bold tracking-tight">Design Department Ingestion</h3>
           <p className="text-sm text-muted-foreground">
-            Secure Excel upload with Python-based extraction for fixture rows and images.
+            Excel upload or manual paste with Python extraction, conflict review, and optional reference images.
           </p>
         </div>
         <Dialog open={open} onOpenChange={handleOpenChange}>
           <DialogTrigger asChild>
             <Button className="h-10 rounded-full bg-primary px-5 font-semibold shadow-sm transition-all hover:bg-primary/90">
               <UploadCloud className="mr-2 h-4 w-4" />
-              Upload Design Excel
+              Fixture Upload
             </Button>
           </DialogTrigger>
           <DialogContent className="glass flex max-h-[90vh] min-h-0 w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-5xl">
             <DialogHeader className="shrink-0 border-b bg-background/95 p-6 pb-4 pr-12">
               <DialogTitle className="flex items-center gap-2 text-2xl font-bold">
                 <FileSpreadsheet className="h-6 w-6 text-primary" />
-                Fixture Spreadsheet Ingestion
+                Fixture Data Ingestion
               </DialogTitle>
               <DialogDescription>
-                Upload a `.xlsx` workbook to extract fixture rows, map anchored images, review conflicts, and save through the main backend.
+                Choose upload method: Excel file extraction or manual paste. Review conflicts, confirm selection, and upload reference images.
               </DialogDescription>
             </DialogHeader>
 
-            {!preview ? (
+            {confirmationStage === "review" && batchId ? (
+              <PostConfirmReviewStage
+                batchId={batchId}
+                batchFixtures={batchFixtures}
+                uploadingImageFor={uploadingImageFor}
+                referenceImageMutation={referenceImageMutation}
+                fileUploadRef={fileUploadRef}
+                onClose={() => {
+                  setOpen(false);
+                  resetState();
+                  queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+                  queryClient.invalidateQueries({ queryKey: taskQueryKeys.all });
+                  queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs });
+                  queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all });
+                }}
+              />
+            ) : !preview ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="fixture-modal-scroll min-h-0 flex-1 overflow-y-auto p-6">
                   <div className="flex flex-col gap-4">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      className="hidden"
-                      onChange={handleFileInputChange}
-                    />
-
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => fileInputRef.current?.click()}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          fileInputRef.current?.click();
-                        }
-                      }}
-                      onDragEnter={(event) => {
-                        event.preventDefault();
-                        setIsDragActive(true);
-                      }}
-                      onDragLeave={(event) => {
-                        event.preventDefault();
-                        setIsDragActive(false);
-                      }}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={handleDrop}
-                      className={cn(
-                        "rounded-2xl border border-dashed px-6 py-10 text-center transition-colors",
-                        isDragActive
-                          ? "border-primary bg-primary/10"
-                          : "border-border/80 bg-muted/20 hover:border-primary/60 hover:bg-primary/5",
-                      )}
-                    >
-                      <div className="mx-auto flex max-w-xl flex-col items-center gap-3">
-                        <div className="rounded-full border border-primary/20 bg-primary/10 p-4 text-primary">
-                          <UploadCloud className="h-8 w-8" />
+                    {/* Mode Selection */}
+                    <div className="rounded-lg border bg-card p-4">
+                      <Label className="text-sm font-semibold mb-3 block">Select Upload Method</Label>
+                      <RadioGroup value={uploadMode} onValueChange={(val) => setUploadMode(val as "excel" | "paste")}>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="relative rounded-md border p-3 cursor-pointer hover:bg-muted/30">
+                            <RadioGroupItem value="excel" id="mode-excel" className="absolute right-3 top-3" />
+                            <Label htmlFor="mode-excel" className="cursor-pointer">
+                              <div className="text-sm font-medium">Excel File</div>
+                              <div className="text-xs text-muted-foreground">Upload .xlsx with Python extraction</div>
+                            </Label>
+                          </div>
+                          <div className="relative rounded-md border p-3 cursor-pointer hover:bg-muted/30">
+                            <RadioGroupItem value="paste" id="mode-paste" className="absolute right-3 top-3" />
+                            <Label htmlFor="mode-paste" className="cursor-pointer">
+                              <div className="text-sm font-medium">Paste Data</div>
+                              <div className="text-xs text-muted-foreground">Paste copied rows directly</div>
+                            </Label>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-lg font-semibold">Drag and drop your Excel workbook here</p>
-                          <p className="text-sm text-muted-foreground">
-                            `.xlsx` only, up to 10 MB. The backend forwards the file to the private Python extraction service.
+                      </RadioGroup>
+                    </div>
+
+                    {uploadMode === "excel" ? (
+                      <>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                          className="hidden"
+                          onChange={handleFileInputChange}
+                        />
+
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => fileInputRef.current?.click()}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              fileInputRef.current?.click();
+                            }
+                          }}
+                          onDragEnter={(event) => {
+                            event.preventDefault();
+                            setIsDragActive(true);
+                          }}
+                          onDragLeave={(event) => {
+                            event.preventDefault();
+                            setIsDragActive(false);
+                          }}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={handleDrop}
+                          className={cn(
+                            "rounded-2xl border border-dashed px-6 py-10 text-center transition-colors",
+                            isDragActive
+                              ? "border-primary bg-primary/10"
+                              : "border-border/80 bg-muted/20 hover:border-primary/60 hover:bg-primary/5",
+                          )}
+                        >
+                          <div className="mx-auto flex max-w-xl flex-col items-center gap-3">
+                            <div className="rounded-full border border-primary/20 bg-primary/10 p-4 text-primary">
+                              <UploadCloud className="h-8 w-8" />
+                            </div>
+                            <div>
+                              <p className="text-lg font-semibold">Drag and drop your Excel workbook here</p>
+                              <p className="text-sm text-muted-foreground">
+                                `.xlsx` only, up to 10 MB. The backend forwards the file to the private Python extraction service.
+                              </p>
+                            </div>
+                            <Button type="button" variant="outline" className="rounded-full">
+                              Choose File
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border bg-card/60 p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex items-start gap-3">
+                              <div className="rounded-lg bg-primary/10 p-2 text-primary">
+                                <FileSpreadsheet className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <div className="font-medium">
+                                  {selectedFile ? selectedFile.name : "No file selected yet"}
+                                </div>
+                                <div className="text-sm text-muted-foreground">
+                                  {selectedFile
+                                    ? `${formatFileSize(selectedFile.size)} ready for extraction`
+                                    : "Expected layout: WBS header, fixture table, and images anchored in columns F and I."}
+                                </div>
+                              </div>
+                            </div>
+                            {selectedFile ? (
+                              <Button
+                                variant="ghost"
+                                onClick={() => {
+                                  setSelectedFile(null);
+                                  setPasteText("");
+                                  setPreview(null);
+                                  setDecisions({});
+                                  setScopeDecisions({});
+                                }}
+                              >
+                                Clear
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="rounded-lg border bg-card p-4">
+                          <Label className="text-sm font-semibold mb-2 block">Paste Fixture Data</Label>
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Copy rows from Excel (WBS header line + fixture table with headers). Paste directly below.
                           </p>
+                          <textarea
+                            value={pasteText}
+                            onChange={(e) => setPasteText(e.target.value)}
+                            placeholder="Paste your fixture data here...
+Example:
+WBS-PRJ1-SCOPE_CompanyName
+s. no	fixture no	op.no	part name	fixture type	qty	designer
+1	FIX001	OP1	Part A	Type1	5	John"
+                            className="w-full h-40 p-3 font-mono text-sm border rounded-md bg-muted/20 focus:outline-none focus:ring-2 focus:ring-primary"
+                          />
                         </div>
-                        <Button type="button" variant="outline" className="rounded-full">
-                          Choose File
-                        </Button>
-                      </div>
-                    </div>
 
-                    <div className="rounded-xl border bg-card/60 p-4">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-start gap-3">
-                          <div className="rounded-lg bg-primary/10 p-2 text-primary">
-                            <FileSpreadsheet className="h-5 w-5" />
-                          </div>
-                          <div>
-                            <div className="font-medium">
-                              {selectedFile ? selectedFile.name : "No file selected yet"}
+                        <div className="rounded-xl border bg-card/60 p-4">
+                          <div className="flex items-start gap-3">
+                            <div className="rounded-lg bg-primary/10 p-2 text-primary">
+                              <FileSpreadsheet className="h-5 w-5" />
                             </div>
-                            <div className="text-sm text-muted-foreground">
-                              {selectedFile
-                                ? `${formatFileSize(selectedFile.size)} ready for extraction`
-                                : "Expected layout: WBS header, fixture table, and images anchored in columns F and I."}
+                            <div>
+                              <div className="font-medium">Paste Format</div>
+                              <div className="text-sm text-muted-foreground">
+                                {pasteText ? `${pasteText.split('\n').length} lines ready for parsing` : "Include header line and table with headers and data rows."}
+                              </div>
                             </div>
                           </div>
                         </div>
-                        {selectedFile ? (
-                          <Button variant="ghost" onClick={resetState}>
-                            Clear
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 <DialogFooter className="shrink-0 flex-col items-stretch justify-between gap-3 border-t bg-background/95 p-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <ImageIcon className="h-4 w-4" />
-                    Images outside columns F or I will be rejected with row-level errors.
+                    {uploadMode === "excel"
+                      ? "Images in columns F (part) and I (fixture) will be extracted and mapped."
+                      : "Reference images can be uploaded after confirmation."}
                   </div>
                   <Button
-                    onClick={() => selectedFile && uploadMutation.mutate(selectedFile)}
-                    disabled={uploadMutation.isPending || !selectedFile}
+                    onClick={() => {
+                      if (uploadMode === "excel" && selectedFile) {
+                        uploadMutation.mutate(selectedFile);
+                      } else if (uploadMode === "paste" && pasteText) {
+                        pasteMutation.mutate(pasteText);
+                      }
+                    }}
+                    disabled={
+                      isLoading ||
+                      (uploadMode === "excel" && !selectedFile) ||
+                      (uploadMode === "paste" && !pasteText.trim())
+                    }
                     className="min-w-36 bg-primary hover:bg-primary/90"
                   >
-                    {uploadMutation.isPending ? (
+                    {isLoading ? (
                       <>
                         <MorphLoader size={16} color="currentColor" />
-                        Extracting...
+                        Processing...
                       </>
                     ) : (
                       "Upload & Preview"
@@ -614,7 +1007,16 @@ export function DesignExcelUploadModal() {
                 </div>
 
                 <DialogFooter className="shrink-0 flex-col items-stretch justify-between gap-3 border-t bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
-                  <Button variant="ghost" onClick={resetState}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setPreview(null);
+                      setSelectedFile(null);
+                      setPasteText("");
+                      setDecisions({});
+                      setScopeDecisions({});
+                    }}
+                  >
                     Cancel & Reload
                   </Button>
                   {hasBlockingScopeDecision ? (

@@ -1,6 +1,7 @@
 const { AppError } = require("../lib/AppError");
 const { requireUserDepartment } = require("../lib/departmentContext");
 const { instrumentModuleExports } = require("../lib/observability");
+const { createAuditLog } = require("../repositories/auditRepository");
 const { pool } = require("../db");
 const {
   upsertProjectByNumber,
@@ -130,46 +131,107 @@ async function buildPreviewPayload(user, {
 async function parseAndPreviewUpload(user, payload = {}) {
   const { text } = payload;
 
+  logImportDecision("paste_upload_start", {
+    user_id: user.id,
+    employee_id: user.employee_id,
+    has_text: Boolean(text),
+    text_length: text ? String(text).length : 0,
+  });
+
   if (!text) {
+    logImportDecision("paste_upload_validation_failed", {
+      error: "Missing required fields: text",
+      user_id: user.id,
+    });
     throw new AppError(400, "Missing required fields: text");
   }
 
-  const { file_info, parsedRows } = parsePasteData(text);
-  const { validRows, rejectedRows, skippedRows } = validateParsedData(parsedRows);
+  try {
+    const { file_info, parsedRows } = parsePasteData(text);
+    const { validRows, rejectedRows, skippedRows } = validateParsedData(parsedRows);
 
-  return buildPreviewPayload(user, {
-    fileInfo: {
+    logImportDecision("paste_upload_parse_success", {
       project_code: file_info.project_code,
       scope_name: file_info.scope_name,
       company_name: file_info.company_name,
-    },
-    validRows,
-    rejectedRows,
-    skippedRows,
-    metadataSource: "manual_paste",
-  });
+      total_rows: parsedRows.length,
+      valid_rows: validRows.length,
+      rejected_rows: rejectedRows.length,
+      skipped_rows: skippedRows.length,
+    });
+
+    return buildPreviewPayload(user, {
+      fileInfo: {
+        project_code: file_info.project_code,
+        scope_name: file_info.scope_name,
+        company_name: file_info.company_name,
+      },
+      validRows,
+      rejectedRows,
+      skippedRows,
+      metadataSource: "manual_paste",
+    });
+  } catch (err) {
+    logImportDecision("paste_upload_parse_error", {
+      error_message: err instanceof Error ? err.message : String(err),
+      user_id: user.id,
+    });
+    throw err;
+  }
 }
 
 async function parseAndPreviewUploadedWorkbook(user, file) {
   if (!file) {
+    logImportDecision("excel_upload_validation_failed", {
+      error: "No Excel file uploaded",
+      user_id: user.id,
+    });
     throw new AppError(400, "No Excel file uploaded");
   }
 
-  const extractionResult = await extractDesignWorkbook(file);
-  const {
-    validRows,
-    rejectedRows: validationErrors,
-    skippedRows,
-  } = validateParsedData(extractionResult.rows);
-  const rejectedRows = [...mapExtractionErrors(extractionResult.errors), ...validationErrors];
-
-  return buildPreviewPayload(user, {
-    fileInfo: extractionResult.file_info,
-    validRows,
-    rejectedRows,
-    skippedRows,
-    metadataSource: "python_excel_upload",
+  logImportDecision("excel_upload_start", {
+    user_id: user.id,
+    employee_id: user.employee_id,
+    file_name: file.originalname,
+    file_size_bytes: file.size,
+    mime_type: file.mimetype,
   });
+
+  try {
+    const extractionResult = await extractDesignWorkbook(file);
+    const {
+      validRows,
+      rejectedRows: validationErrors,
+      skippedRows,
+    } = validateParsedData(extractionResult.rows);
+    const rejectedRows = [...mapExtractionErrors(extractionResult.errors), ...validationErrors];
+
+    logImportDecision("excel_upload_parse_success", {
+      project_code: extractionResult.file_info.project_code,
+      scope_name: extractionResult.file_info.scope_name,
+      company_name: extractionResult.file_info.company_name,
+      total_rows: extractionResult.rows.length,
+      valid_rows: validRows.length,
+      rejected_rows: rejectedRows.length,
+      skipped_rows: skippedRows.length,
+      extraction_errors_count: extractionResult.errors.length,
+    });
+
+    return buildPreviewPayload(user, {
+      fileInfo: extractionResult.file_info,
+      validRows,
+      rejectedRows,
+      skippedRows,
+      metadataSource: "python_excel_upload",
+    });
+  } catch (err) {
+    logImportDecision("excel_upload_parse_error", {
+      error_message: err instanceof Error ? err.message : String(err),
+      file_name: file.originalname,
+      user_id: user.id,
+    });
+    throw err;
+  }
 }
 
 async function confirmUpload(user, payload = {}) {
@@ -180,6 +242,8 @@ async function confirmUpload(user, payload = {}) {
   if (!file_info || !file_info.project_code || !file_info.scope_name_display || !file_info.company_name) {
     throw new AppError(400, "Missing file info in confirm payload");
   }
+
+  const ingestionSource = file_info.metadata_source === "manual_paste" ? "manual_paste" : "excel_upload";
 
   const resolvedItems = Array.isArray(resolved_items) ? resolved_items : [];
   const rejectedItems = Array.isArray(rejected_items) ? rejected_items : [];
@@ -201,6 +265,7 @@ async function confirmUpload(user, payload = {}) {
     if (resolution === "existing") {
       uploadDecisionLogs.push({
         row_number: Number.isFinite(Number(fixtureData.row_number)) ? Number(fixtureData.row_number) : 0,
+        fixture_no: fixtureData.fixture_no || null,
         error_message: buildDecisionErrorMessage("Existing fixture retained after conflict review", fixtureData),
       });
       logImportDecision("kept_existing_fixture", {
@@ -219,11 +284,39 @@ async function confirmUpload(user, payload = {}) {
         fixture_no: fixtureData.fixture_no,
         row_number: fixtureData.row_number,
       });
+
+      // Audit: block customer-scope imports (no fixture mutations happen for this row)
+      await createAuditLog({
+        userEmployeeId: user.employee_id,
+        actionType: "DESIGN_FIXTURE_BLOCKED_CUSTOMER_SCOPE",
+        targetType: "design_fixture",
+        targetId: fixtureData.fixture_no || "unknown",
+        metadata: {
+          project_code: file_info.project_code,
+          scope_name: file_info.scope_name_display,
+          row_number: fixtureData.row_number,
+          ingestion_source: file_info.metadata_source,
+        },
+      });
+
       throw new AppError(400, buildDecisionErrorMessage("Customer-scope fixture cannot be imported", fixtureData));
     }
 
     if (scopeAssessment.status === SCOPE_STATUSES.AMBIGUOUS) {
       if (!scopeDecision) {
+        await createAuditLog({
+          userEmployeeId: user.employee_id,
+          actionType: "DESIGN_FIXTURE_MISSING_AMBIGUOUS_SCOPE_DECISION",
+          targetType: "design_fixture",
+          targetId: fixtureData.fixture_no || "unknown",
+          metadata: {
+            project_code: file_info.project_code,
+            scope_name: file_info.scope_name_display,
+            row_number: fixtureData.row_number,
+            ingestion_source: file_info.metadata_source,
+          },
+        });
+
         throw new AppError(
           400,
           buildDecisionErrorMessage("This fixture does not have a clearly defined scope in remarks. Choose Add Fixture or Skip Fixture", fixtureData),
@@ -233,6 +326,7 @@ async function confirmUpload(user, payload = {}) {
       if (scopeDecision === "skip_fixture") {
         uploadDecisionLogs.push({
           row_number: Number.isFinite(Number(fixtureData.row_number)) ? Number(fixtureData.row_number) : 0,
+          fixture_no: fixtureData.fixture_no || null,
           error_message: buildDecisionErrorMessage("Ambiguous-scope fixture skipped by explicit user decision", fixtureData),
         });
         logImportDecision("user_skipped_ambiguous_fixture", {
@@ -256,6 +350,19 @@ async function confirmUpload(user, payload = {}) {
 
     const normalizedFixtureNo = String(fixtureData.fixture_no).trim().toLowerCase();
     if (seenFixtureNumbers.has(normalizedFixtureNo)) {
+      await createAuditLog({
+        userEmployeeId: user.employee_id,
+        actionType: "DESIGN_FIXTURE_DUPLICATE_IN_CONFIRM_PAYLOAD",
+        targetType: "design_fixture",
+        targetId: fixtureData.fixture_no || "unknown",
+        metadata: {
+          project_code: file_info.project_code,
+          scope_name: file_info.scope_name_display,
+          row_number: fixtureData.row_number,
+          ingestion_source: file_info.metadata_source,
+        },
+      });
+
       throw new AppError(400, buildDecisionErrorMessage("Duplicate fixture identity detected in confirm payload", fixtureData));
     }
 
@@ -299,6 +406,7 @@ async function confirmUpload(user, payload = {}) {
       ...rejectedItems,
       ...skippedItems.map((item) => ({
         row_number: item.row_number,
+        fixture_no: item.fixture_no || null,
         error_message: item.skip_reason || "Customer-scope fixture skipped.",
       })),
       ...uploadDecisionLogs,
@@ -339,16 +447,36 @@ async function confirmUpload(user, payload = {}) {
         qty: fixtureData.qty,
         image_1_url: fixtureData.image_1_url || null,
         image_2_url: fixtureData.image_2_url || null,
+        ingestion_source: ingestionSource,
       };
 
       await upsertFixture(fixtureObj, client);
+
       logImportDecision("imported_fixture", {
         batch_id: batchId,
         project_id: project.project_id,
         scope_id: scope.scope_id,
         fixture_no: fixtureData.fixture_no,
         row_number: fixtureData.row_number,
+        ingestion_source: ingestionSource,
       });
+
+      await createAuditLog({
+        userEmployeeId: user.employee_id,
+        actionType: "DESIGN_FIXTURE_IMPORTED",
+        targetType: "design_fixture",
+        targetId: fixtureData.fixture_no || "unknown",
+        metadata: {
+          batch_id: batchId,
+          project_id: project.project_id,
+          scope_id: scope.scope_id,
+          project_code: file_info.project_code,
+          scope_name: file_info.scope_name_display,
+          row_number: fixtureData.row_number,
+          ingestion_source: ingestionSource,
+        },
+      });
+
       acceptedCount++;
     }
 
@@ -357,6 +485,25 @@ async function confirmUpload(user, payload = {}) {
         row_number: Number.isFinite(Number(r.row_number)) ? Number(r.row_number) : 0,
         error_message: r.error_message,
       }));
+
+      // Audit: every rejected/skipped row (including conflict decisions + skipped ambiguouss)
+      for (const r of strictRejectedItems) {
+        await createAuditLog({
+          userEmployeeId: user.employee_id,
+          actionType: "DESIGN_FIXTURE_SKIPPED_OR_REJECTED",
+          targetType: "design_fixture",
+          targetId: r.fixture_no || "unknown",
+          metadata: {
+            batch_id: batchId,
+            project_code: file_info.project_code,
+            scope_name: file_info.scope_name_display,
+            row_number: r.row_number,
+            error_message: r.error_message,
+            ingestion_source: ingestionSource,
+          },
+        });
+      }
+
       await createUploadErrors(batchId, errorsPayload, client);
     }
 
@@ -375,8 +522,36 @@ async function confirmUpload(user, payload = {}) {
   }
 }
 
+async function uploadFixtureReferenceImage(
+  user,
+  fixtureId,
+  departmentId,
+  imageType,
+  imageUrl,
+) {
+  const result = await updateFixtureReferenceImageForDepartment({
+    fixtureId,
+    departmentId,
+    imageType,
+    imageUrl,
+  });
+
+  logImportDecision("fixture_reference_image_uploaded", {
+    fixture_id: fixtureId,
+    fixture_no: result.fixture_no,
+    image_type: imageType,
+    image_url: imageUrl,
+    previous_image_url: result.previous_image_url,
+    user_id: user.id,
+    employee_id: user.employee_id,
+  });
+
+  return result;
+}
+
 module.exports = instrumentModuleExports("service.designExcelService", {
   parseAndPreviewUpload,
   parseAndPreviewUploadedWorkbook,
-  confirmUpload
+  confirmUpload,
+  uploadFixtureReferenceImage,
 });

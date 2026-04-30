@@ -64,6 +64,11 @@ function ImagePreviewStrip({ row }: { row: DesignExcelPreviewRow }) {
   );
 }
 
+function formatRemark(value: string | null | undefined) {
+  const normalized = String(value || "").trim();
+  return normalized || "—";
+}
+
 export function DesignExcelUploadModal() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -371,6 +376,9 @@ export function DesignExcelUploadModal() {
                               <div className="mt-2 text-xs text-muted-foreground">
                                 Type: <span className="font-medium text-foreground">{item.incoming.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.incoming.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.incoming.qty}</span>
                               </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                Remark: <span className="font-medium text-foreground">{formatRemark(item.incoming.remark)}</span>
+                              </div>
                               <ImagePreviewStrip row={item.incoming} />
                             </div>
                           ))}
@@ -416,6 +424,7 @@ export function DesignExcelUploadModal() {
                                       <div>Type: <span className="font-medium text-foreground">{conflict.existing.fixture_type}</span></div>
                                       <div>OP: <span className="font-medium text-foreground">{conflict.existing.op_no}</span></div>
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.existing.qty}</span></div>
+                                      <div>Remark: <span className="font-medium text-foreground">{formatRemark(conflict.existing.remark)}</span></div>
                                     </div>
                                     <ImagePreviewStrip row={conflict.existing} />
                                   </Label>
@@ -429,6 +438,7 @@ export function DesignExcelUploadModal() {
                                       <div>Type: <span className="font-medium text-foreground">{conflict.incoming.fixture_type}</span></div>
                                       <div>OP: <span className="font-medium text-foreground">{conflict.incoming.op_no}</span></div>
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.incoming.qty}</span></div>
+                                      <div>Remark: <span className="font-medium text-foreground">{formatRemark(conflict.incoming.remark)}</span></div>
                                     </div>
                                     <ImagePreviewStrip row={conflict.incoming} />
                                   </Label>

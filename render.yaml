@@ -20,6 +20,8 @@ services:
         sync: false
       - key: DESIGN_EXTRACTION_SERVICE_TOKEN
         sync: false
+      - key: DESIGN_EXTRACTION_TIMEOUT_MS
+        value: "120000"
 
   - type: web
     name: tasktracker-python-service

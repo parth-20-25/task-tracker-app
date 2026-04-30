@@ -1,6 +1,8 @@
 const { AppError } = require("../lib/AppError");
 const { sanitizeOriginalFileName } = require("../lib/designExcelUpload");
 const { env } = require("../config/env");
+const RETRYABLE_EXTRACTION_STATUS_CODES = new Set([502, 503, 504]);
+const EXTRACTION_MAX_ATTEMPTS = 2;
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
@@ -26,6 +28,11 @@ function normalizeOptionalImageUrl(value) {
   }
 
   throw new AppError(502, "Failed to process file", "Python service returned an invalid image URL", "DESIGN_EXTRACTION_INVALID_URL");
+}
+
+function normalizeOptionalString(value) {
+  const normalized = normalizeString(value);
+  return normalized || null;
 }
 
 function parseJsonResponse(text) {
@@ -82,10 +89,21 @@ function validatePythonRows(rows) {
       op_no: normalizeString(row.op_no),
       part_name: normalizeString(row.part_name),
       fixture_type: normalizeString(row.fixture_type),
+      remark: normalizeOptionalString(row.remark || row.remarks),
       qty: row.qty,
       image_1_url: normalizeOptionalImageUrl(row.image_1_url),
       image_2_url: normalizeOptionalImageUrl(row.image_2_url),
     };
+  });
+}
+
+function extractPythonErrorDetails(payload) {
+  return payload?.errors || payload?.message || payload?.detail || null;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 
@@ -144,54 +162,74 @@ async function extractDesignWorkbook(file) {
     );
   }
 
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => controller.abort(), env.designExtraction.timeoutMs);
+  const forwardedName = sanitizeOriginalFileName(file.originalname);
+  const fileBlob = new Blob([file.buffer], { type: file.mimetype });
 
-  try {
-    const formData = new FormData();
-    const forwardedName = sanitizeOriginalFileName(file.originalname);
-    const fileBlob = new Blob([file.buffer], { type: file.mimetype });
+  for (let attempt = 1; attempt <= EXTRACTION_MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), env.designExtraction.timeoutMs);
 
-    formData.append("file", fileBlob, forwardedName);
+    try {
+      const formData = new FormData();
+      formData.append("file", fileBlob, forwardedName);
 
-    const response = await fetch(`${env.designExtraction.serviceUrl}/extract`, {
-      method: "POST",
-      body: formData,
-      headers: {
-        "x-extraction-token": env.designExtraction.token,
-      },
-      signal: controller.signal,
-    });
+      const response = await fetch(`${env.designExtraction.serviceUrl}/extract`, {
+        method: "POST",
+        body: formData,
+        headers: {
+          "x-extraction-token": env.designExtraction.token,
+        },
+        signal: controller.signal,
+      });
 
-    const text = await response.text();
-    const payload = parseJsonResponse(text);
+      const text = await response.text();
+      const payload = parseJsonResponse(text);
 
-    if (!response.ok) {
-      throw new AppError(
-        502,
-        "Failed to process file",
-        payload?.errors || payload?.message || payload?.detail || null,
-        "DESIGN_EXTRACTION_FAILED",
-      );
+      if (!response.ok) {
+        const errorDetails = extractPythonErrorDetails(payload);
+
+        if (
+          response.status >= 500
+          && RETRYABLE_EXTRACTION_STATUS_CODES.has(response.status)
+          && attempt < EXTRACTION_MAX_ATTEMPTS
+        ) {
+          await wait(1000);
+          continue;
+        }
+
+        throw new AppError(
+          response.status === 504 ? 504 : 502,
+          "Failed to process file",
+          errorDetails,
+          "DESIGN_EXTRACTION_FAILED",
+        );
+      }
+
+      return {
+        file_info: validatePythonFileInfo(payload?.file_info),
+        rows: validatePythonRows(payload?.rows),
+        errors: validatePythonErrors(payload?.errors),
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+
+      const isAbortError = error?.name === "AbortError";
+
+      if (attempt < EXTRACTION_MAX_ATTEMPTS) {
+        await wait(1000);
+        continue;
+      }
+
+      if (isAbortError) {
+        throw new AppError(504, "Failed to process file", "Python extraction service timed out", "DESIGN_EXTRACTION_TIMEOUT");
+      }
+
+      throw new AppError(502, "Failed to process file", error?.message || null, "DESIGN_EXTRACTION_UNAVAILABLE");
+    } finally {
+      clearTimeout(timeoutHandle);
     }
-
-    return {
-      file_info: validatePythonFileInfo(payload?.file_info),
-      rows: validatePythonRows(payload?.rows),
-      errors: validatePythonErrors(payload?.errors),
-    };
-  } catch (error) {
-    if (error instanceof AppError) {
-      throw error;
-    }
-
-    if (error?.name === "AbortError") {
-      throw new AppError(504, "Failed to process file", "Python extraction service timed out", "DESIGN_EXTRACTION_TIMEOUT");
-    }
-
-    throw new AppError(502, "Failed to process file", error?.message || null, "DESIGN_EXTRACTION_UNAVAILABLE");
-  } finally {
-    clearTimeout(timeoutHandle);
   }
 }
 

@@ -248,6 +248,7 @@ function normalizeScopeReportData(rawRows = []) {
         op_no: String(rawRow?.op_no || "").trim(),
         part_name: String(rawRow?.part_name || "").trim(),
         fixture_type: String(rawRow?.fixture_type || "").trim(),
+        remark: String(rawRow?.remark || rawRow?.remarks || "").trim(),
         qty: Number(rawRow?.qty) || 0,
         designer: String(rawRow?.designer || "").trim(),
         stages: {

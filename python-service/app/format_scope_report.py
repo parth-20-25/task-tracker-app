@@ -12,23 +12,21 @@ Expected raw sheet columns (row 1 = WBS title, row 2 = headers, row 3+ = data):
   D  (col 4):  Part Name
   E  (col 5):  Fixture Type
   F  (col 6):  QTY
-  G  (col 7):  Status
-  H  (col 8):  CONCEPT
-  I  (col 9):  CONCEPT hrs
-  J  (col 10): DAP
-  K  (col 11): DAP hrs
-  L  (col 12): 3D FINISH
-  M  (col 13): 3D FINISH hrs
-  N  (col 14): 2D FINISH
-  O  (col 15): 2D FINISH hrs
-  P  (col 16): Total hrs
-  Q  (col 17): Designer
-  R  (col 18): Ref Image      ← hyperlink to image_1_url
-  S  (col 19): Work Image     ← hyperlink to image_2_url
-  T  (col 20): Work Proof     ← hyperlink to proof url
-
-Output sheet has 19 columns (Work Image merged visually into Ref Image column,
-both hyperlinks preserved; only one "Ref. Image" column shown in output).
+  G  (col 7):  Remark
+  H  (col 8):  Status
+  I  (col 9):  CONCEPT
+  J  (col 10): CONCEPT hrs
+  K  (col 11): DAP
+  L  (col 12): DAP hrs
+  M  (col 13): 3D FINISH
+  N  (col 14): 3D FINISH hrs
+  O  (col 15): 2D FINISH
+  P  (col 16): 2D FINISH hrs
+  Q  (col 17): Total hrs
+  R  (col 18): Designer
+  S  (col 19): Ref Image      ← hyperlink to image_1_url
+  T  (col 20): Work Image     ← hyperlink to image_2_url
+  U  (col 21): Work Proof     ← hyperlink to proof url
 """
 
 from __future__ import annotations
@@ -105,21 +103,22 @@ COL_OPNO     = 3
 COL_PART     = 4
 COL_FXTYPE   = 5
 COL_QTY      = 6
-COL_STATUS   = 7
-COL_CONCEPT  = 8
-COL_CONHRS   = 9
-COL_DAP      = 10
-COL_DAPHRS   = 11
-COL_3D       = 12
-COL_3DHRS    = 13
-COL_2D       = 14
-COL_2DHRS    = 15
-COL_TOTAL    = 16
-COL_DESIGNER = 17
-COL_REFIMG   = 18
-COL_FIXIMG   = 19   # NEW COLUMN
-COL_PROOF    = 20   # SHIFTED
-OUT_NCOLS    = 20
+COL_REMARK   = 7
+COL_STATUS   = 8
+COL_CONCEPT  = 9
+COL_CONHRS   = 10
+COL_DAP      = 11
+COL_DAPHRS   = 12
+COL_3D       = 13
+COL_3DHRS    = 14
+COL_2D       = 15
+COL_2DHRS    = 16
+COL_TOTAL    = 17
+COL_DESIGNER = 18
+COL_REFIMG   = 19
+COL_FIXIMG   = 20
+COL_PROOF    = 21
+OUT_NCOLS    = 21
 
 # Fixed column widths
 COL_WIDTHS: dict[int, float] = {
@@ -129,6 +128,7 @@ COL_WIDTHS: dict[int, float] = {
     COL_PART:     32.0,
     COL_FXTYPE:   26.0,
     COL_QTY:      5.5,
+    COL_REMARK:   18.0,
     COL_STATUS:   13.0,
     COL_CONCEPT:  26.0,
     COL_CONHRS:   11.0,
@@ -141,6 +141,7 @@ COL_WIDTHS: dict[int, float] = {
     COL_TOTAL:    12.0,
     COL_DESIGNER: 11.0,
     COL_REFIMG:   9.0,
+    COL_FIXIMG:   9.0,
     COL_PROOF:    9.0,
 }
 
@@ -251,7 +252,7 @@ def read_raw(path: str) -> tuple[str, list[dict]]:
     rows: list[dict] = []
 
     for r in range(3, ws.max_row + 1):
-        vals = [ws.cell(r, c).value for c in range(1, 21)]
+        vals = [ws.cell(r, c).value for c in range(1, 22)]
 
         # Skip blank rows
         if not any(v for v in vals):
@@ -268,26 +269,27 @@ def read_raw(path: str) -> tuple[str, list[dict]]:
             "part":      str(vals[3] or ""),
             "fx_type":   str(vals[4] or ""),
             "qty":       vals[5],
-            "status":    str(vals[6] or ""),
-            # Stage date-range and hours (cols H-O, indices 7-14)
-            "concept":   str(vals[7]  or ""),
-            "con_hrs":   str(vals[8]  or ""),
-            "dap":       str(vals[9]  or ""),
-            "dap_hrs":   str(vals[10] or ""),
-            "d3":        str(vals[11] or ""),
-            "d3_hrs":    str(vals[12] or ""),
-            "d2":        str(vals[13] or ""),
-            "d2_hrs":    str(vals[14] or ""),
-            "total_hrs": str(vals[15] or ""),
-            "designer":  str(vals[16] or ""),
+            "remark":    str(vals[6] or ""),
+            "status":    str(vals[7] or ""),
+            # Stage date-range and hours (cols I-P, indices 8-15)
+            "concept":   str(vals[8]  or ""),
+            "con_hrs":   str(vals[9]  or ""),
+            "dap":       str(vals[10] or ""),
+            "dap_hrs":   str(vals[11] or ""),
+            "d3":        str(vals[12] or ""),
+            "d3_hrs":    str(vals[13] or ""),
+            "d2":        str(vals[14] or ""),
+            "d2_hrs":    str(vals[15] or ""),
+            "total_hrs": str(vals[16] or ""),
+            "designer":  str(vals[17] or ""),
             # Image / proof cells — text value tells us if a link exists
-            "ref_img":   str(vals[17] or ""),
-            "work_img":  str(vals[18] or ""),
-            "proof":     str(vals[19] or ""),
+            "ref_img":   str(vals[18] or ""),
+            "work_img":  str(vals[19] or ""),
+            "proof":     str(vals[20] or ""),
             # Actual hyperlink URLs
-            "ref_url":   hlink(18),
-            "work_url":  hlink(19),
-            "proof_url": hlink(20),
+            "ref_url":   hlink(19),
+            "work_url":  hlink(20),
+            "proof_url": hlink(21),
         })
 
     return wbs_title, rows
@@ -321,9 +323,9 @@ def build_formatted(wbs_title: str, raw_rows: list[dict]) -> Workbook:
 
     # ── Row 2: Section group headers ───────────────────────────────────────
     sections = [
-        (1,  7,  "FIXTURE INFORMATION",         C_SECT_LEFT_BG),
-        (8,  15, "STAGE-WISE PROGRESS TRACKING", C_SECT_MID_BG),
-        (16, 20, "SUMMARY & RESOURCES",          C_SECT_RIGHT_BG),
+        (1,  8,  "FIXTURE INFORMATION",          C_SECT_LEFT_BG),
+        (9,  16, "STAGE-WISE PROGRESS TRACKING", C_SECT_MID_BG),
+        (17, 21, "SUMMARY & RESOURCES",          C_SECT_RIGHT_BG),
     ]
     for start, end, label, bg in sections:
         if start != end:
@@ -345,6 +347,7 @@ def build_formatted(wbs_title: str, raw_rows: list[dict]) -> Workbook:
         (COL_PART,     "Part Name",             C_HDR_FIXTURE),
         (COL_FXTYPE,   "Fixture Type",          C_HDR_FIXTURE),
         (COL_QTY,      "QTY",                   C_HDR_FIXTURE),
+        (COL_REMARK,   "Remark",                C_HDR_FIXTURE),
         (COL_STATUS,   "Status",                C_HDR_FIXTURE),
         (COL_CONCEPT,  "CONCEPT\nDate Range",   C_HDR_STAGE),
         (COL_CONHRS,   "CONCEPT\nhrs",          C_HDR_STAGE),
@@ -433,6 +436,10 @@ def build_formatted(wbs_title: str, raw_rows: list[dict]) -> Workbook:
         # QTY
         wc(COL_QTY, raw["qty"],
            align = _align(h="center", v="center"))
+
+        # Remark
+        wc(COL_REMARK, raw["remark"] or None,
+           align = _align(h="left", v="center", wrap=True))
 
         # Status badge
         s_bg, s_dark = STATUS_COLORS.get(display_status, ("FFFFFF", True))

@@ -528,6 +528,7 @@ export interface DesignFixtureOption {
   op_no: string;
   part_name: string;
   fixture_type: string;
+  remark?: string | null;
   qty: number;
   image_1_url?: string | null;
   image_2_url?: string | null;
@@ -539,6 +540,7 @@ export interface DesignExcelPreviewRow {
   op_no: string;
   part_name: string;
   fixture_type: string;
+  remark?: string | null;
   qty: number;
   image_1_url?: string | null;
   image_2_url?: string | null;

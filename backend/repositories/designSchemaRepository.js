@@ -382,6 +382,7 @@ async function ensureDesignDepartmentSchema(client) {
       op_no TEXT NOT NULL,
       part_name TEXT NOT NULL,
       fixture_type TEXT NOT NULL,
+      remark TEXT,
       qty INTEGER NOT NULL,
       image_1_url TEXT,
       image_2_url TEXT,
@@ -393,6 +394,7 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     ALTER TABLE design.fixtures
     ADD COLUMN IF NOT EXISTS project_id UUID,
+    ADD COLUMN IF NOT EXISTS remark TEXT,
     ADD COLUMN IF NOT EXISTS image_1_url TEXT,
     ADD COLUMN IF NOT EXISTS image_2_url TEXT,
     ADD COLUMN IF NOT EXISTS is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE

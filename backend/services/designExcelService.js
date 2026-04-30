@@ -184,6 +184,7 @@ async function confirmUpload(user, payload = {}) {
         op_no: fixtureData.op_no,
         part_name: fixtureData.part_name,
         fixture_type: fixtureData.fixture_type,
+        remark: fixtureData.remark || null,
         qty: fixtureData.qty,
         image_1_url: fixtureData.image_1_url || null,
         image_2_url: fixtureData.image_2_url || null,

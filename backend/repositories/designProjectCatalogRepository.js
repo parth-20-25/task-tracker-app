@@ -112,6 +112,7 @@ function mapFixtureOptionRow(row) {
     op_no: row.op_no,
     part_name: row.part_name,
     fixture_type: row.fixture_type,
+    remark: row.remark || null,
     qty: Number(row.qty),
     image_1_url: row.image_1_url || null,
     image_2_url: row.image_2_url || null,
@@ -357,6 +358,7 @@ async function listFixturesByScopeForDepartment(scopeId, departmentId, client = 
         di.op_no,
         di.part_name,
         di.fixture_type,
+        di.remark,
         di.qty,
         di.image_1_url,
         di.image_2_url
@@ -388,6 +390,7 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
         di.op_no,
         di.part_name,
         di.fixture_type,
+        di.remark,
         di.qty,
         di.image_1_url,
         di.image_2_url
@@ -472,6 +475,7 @@ async function findFixturesByScopeForDedupe(scopeId, client = pool) {
         op_no,
         part_name,
         fixture_type,
+        remark,
         qty,
         image_1_url,
         image_2_url
@@ -494,17 +498,19 @@ async function upsertFixture(fixtureData, client = pool) {
         op_no,
         part_name,
         fixture_type,
+        remark,
         qty,
         image_1_url,
         image_2_url,
         batch_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (scope_id, fixture_no) DO UPDATE
       SET project_id = EXCLUDED.project_id,
           op_no = EXCLUDED.op_no,
           part_name = EXCLUDED.part_name,
           fixture_type = EXCLUDED.fixture_type,
+          remark = EXCLUDED.remark,
           qty = EXCLUDED.qty,
           image_1_url = EXCLUDED.image_1_url,
           image_2_url = EXCLUDED.image_2_url,
@@ -518,6 +524,7 @@ async function upsertFixture(fixtureData, client = pool) {
         op_no,
         part_name,
         fixture_type,
+        remark,
         qty,
         image_1_url,
         image_2_url
@@ -529,6 +536,7 @@ async function upsertFixture(fixtureData, client = pool) {
       fixtureData.op_no,
       fixtureData.part_name,
       fixtureData.fixture_type,
+      fixtureData.remark || null,
       fixtureData.qty,
       fixtureData.image_1_url || null,
       fixtureData.image_2_url || null,

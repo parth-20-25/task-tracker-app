@@ -6,7 +6,7 @@ function formatPreview(diffResults, rejectedRows) {
   for (const result of diffResults) {
     if (result.type === 'NEW' || result.type === 'UPDATE_QTY') {
       accepted.push(result);
-    } else if (result.type === 'CONFLICT_PART_NAME' || result.type === 'CONFLICT_OTHER') {
+    } else if (result.type === 'CONFLICT_PART_NAME' || result.type === 'CONFLICT_OTHER' || result.type === 'CONFLICT_IMAGES') {
       conflicts.push(result);
     }
   }

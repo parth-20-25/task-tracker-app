@@ -64,6 +64,7 @@ const TABLE_COLUMNS = [
   { key: "image1", header: "Image" },
   { key: "fixtureType", header: "Fixture Type" },
   { key: "qty", header: "QTY" },
+  { key: "remark", header: "Remark" },
   { key: "image2", header: "image" },
   { key: "designer", header: "designer" },
   { key: "concept", header: "CONCEPT" },
@@ -84,6 +85,7 @@ const RAW_TABLE_COLUMNS = [
   { key: "partName", header: "Part Name" },
   { key: "fixtureType", header: "Fixture Type" },
   { key: "qty", header: "QTY" },
+  { key: "remark", header: "Remark" },
   { key: "status", header: "Status" },
   { key: "concept", header: "CONCEPT" },
   { key: "conceptHours", header: "CONCEPT hrs" },
@@ -756,6 +758,7 @@ function buildRawReportRows(normalizedData = [], fixtureLookup = new Map()) {
       partName: row.part_name || "",
       fixtureType: row.fixture_type || "",
       qty: row.qty || 0,
+      remark: row.remark || "",
       status: row.status || "",
       concept: formatStageCellValue(concept),
       conceptHours: formatDuration(concept.duration_minutes || 0),
@@ -797,15 +800,15 @@ async function generateRawScopeExcel(normalizedData, filePath, context = {}, fix
     const excelRow = worksheet.addRow(RAW_TABLE_COLUMNS.map((column) => row[column.key] ?? ""));
 
     if (row.refImageUrl) {
-      applyLinkCell(excelRow.getCell(18), row.refImageUrl);  // Col R = Ref Image
+      applyLinkCell(excelRow.getCell(19), row.refImageUrl);
     }
 
     if (row.fixImageUrl) {
-      applyLinkCell(excelRow.getCell(19), row.fixImageUrl);
+      applyLinkCell(excelRow.getCell(20), row.fixImageUrl);
     }
 
     if (row.proofUrl) {
-      applyLinkCell(excelRow.getCell(20), row.proofUrl);     // Col T = Work Proof
+      applyLinkCell(excelRow.getCell(21), row.proofUrl);
     }
 
   });
@@ -943,12 +946,12 @@ function buildWorkbook(context, rows) {
     }
 
     if (row.image2Url) {
-      const cell = excelRow.getCell(8);
+      const cell = excelRow.getCell(9);
       applyLinkCell(cell, row.image2Url);
     }
 
     if (row.proofUrl) {
-      const cell = excelRow.getCell(19);
+      const cell = excelRow.getCell(20);
       applyLinkCell(cell, row.proofUrl);
     }
 
@@ -1109,6 +1112,7 @@ function buildFixtureRows(fixtures, progressRows, attemptRows, options = {}) {
       image1Url,
       fixtureType: fixture.fixture_type || "",
       qty: Number(fixture.qty) || 0,
+      remark: fixture.remark || "",
       image2: "",
       image2Url,
       designer: chooseDesignerName(fixture, currentStage),
@@ -1259,6 +1263,7 @@ function buildScopeReportSourceRows(fixtures, progressRows, attemptRows, attachm
       op_no: fixture.op_no,
       part_name: fixture.part_name,
       fixture_type: fixture.fixture_type,
+      remark: fixture.remark || "",
       qty: fixture.qty,
       designer: resolveDesigner(progressByStage, fixture),
       image1Url,
@@ -1384,6 +1389,7 @@ async function getFixturesForScope(scopeId) {
         f.op_no,
         f.part_name,
         f.fixture_type,
+        f.remark,
         f.qty,
         f.image_1_url,
         f.image_2_url,
@@ -1453,6 +1459,7 @@ async function getFixturesForProject(projectId) {
         f.op_no,
         f.part_name,
         f.fixture_type,
+        f.remark,
         f.qty,
         f.image_1_url,
         f.image_2_url,

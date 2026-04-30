@@ -35,7 +35,7 @@ const env = {
   designExtraction: {
     serviceUrl: process.env.DESIGN_EXTRACTION_SERVICE_URL || "",
     token: process.env.DESIGN_EXTRACTION_SERVICE_TOKEN || "",
-    timeoutMs: parseNumber(process.env.DESIGN_EXTRACTION_TIMEOUT_MS, 30000),
+    timeoutMs: parseNumber(process.env.DESIGN_EXTRACTION_TIMEOUT_MS, 120000),
   },
   smtp: {
     host: process.env.SMTP_HOST || "",

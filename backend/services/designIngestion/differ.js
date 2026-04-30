@@ -20,7 +20,8 @@ function diffWithDatabase(validRows, existingFixtures) {
     const isPartDiff = normalizeValue(existing.part_name) !== normalizeValue(incoming.part_name);
     const incomingHasAnyImage = Boolean(incoming.image_1_url || incoming.image_2_url);
     const isOtherDiff = normalizeValue(existing.op_no) !== normalizeValue(incoming.op_no)
-      || normalizeValue(existing.fixture_type) !== normalizeValue(incoming.fixture_type);
+      || normalizeValue(existing.fixture_type) !== normalizeValue(incoming.fixture_type)
+      || normalizeValue(existing.remark) !== normalizeValue(incoming.remark);
     const isImageDiff = incomingHasAnyImage
       && (
         normalizeValue(existing.image_1_url) !== normalizeValue(incoming.image_1_url)

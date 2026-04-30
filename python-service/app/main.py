@@ -146,12 +146,15 @@ def find_metadata_and_header_rows(worksheet) -> tuple[int, str, int]:
 
 def resolve_header_map(worksheet, header_row_index: int) -> dict[str, int]:
     header_lookup: dict[str, int] = {}
-    expected = {
+    required_headers = {
         "fixture_no": {"fixtureno"},
         "op_no": {"opno"},
         "part_name": {"partname"},
         "fixture_type": {"fixturetype"},
         "qty": {"qty"},
+    }
+    optional_headers = {
+        "remark": {"remark", "remarks"},
     }
 
     for column_index in range(1, worksheet.max_column + 1):
@@ -162,12 +165,17 @@ def resolve_header_map(worksheet, header_row_index: int) -> dict[str, int]:
     resolved: dict[str, int] = {}
     missing: list[str] = []
 
-    for field_name, candidates in expected.items():
+    for field_name, candidates in required_headers.items():
         matched_column = next((header_lookup[candidate] for candidate in candidates if candidate in header_lookup), None)
         if matched_column is None:
             missing.append(field_name)
             continue
         resolved[field_name] = matched_column
+
+    for field_name, candidates in optional_headers.items():
+        matched_column = next((header_lookup[candidate] for candidate in candidates if candidate in header_lookup), None)
+        if matched_column is not None:
+            resolved[field_name] = matched_column
 
     if missing:
         raise ValueError(f"Missing required table headers: {', '.join(missing)}.")
@@ -243,6 +251,7 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
 
 def build_rows(worksheet, header_row_index: int, header_map: dict[str, int], images_by_row: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    remark_column_index = header_map.get("remark")
 
     for row_index in range(header_row_index + 1, worksheet.max_row + 1):
         row_has_images = row_index in images_by_row
@@ -251,6 +260,7 @@ def build_rows(worksheet, header_row_index: int, header_map: dict[str, int], ima
             "op_no": normalize_text(worksheet.cell(row_index, header_map["op_no"]).value),
             "part_name": normalize_text(worksheet.cell(row_index, header_map["part_name"]).value),
             "fixture_type": normalize_text(worksheet.cell(row_index, header_map["fixture_type"]).value),
+            "remark": normalize_text(worksheet.cell(row_index, remark_column_index).value) if remark_column_index else "",
             "qty": normalize_text(worksheet.cell(row_index, header_map["qty"]).value),
         }
 
@@ -295,7 +305,7 @@ async def extract_workbook(
         return build_error_response(400, "Failed to process file", [build_error("Excel file exceeds the maximum allowed size.")])
 
     try:
-        workbook = load_workbook(filename=BytesIO(file_bytes), data_only=True)
+        workbook = load_workbook(filename=BytesIO(file_bytes), data_only=True, keep_links=False)
         worksheet = workbook.active
 
         _, metadata_value, header_row_index = find_metadata_and_header_rows(worksheet)
@@ -303,6 +313,7 @@ async def extract_workbook(
         header_map = resolve_header_map(worksheet, header_row_index)
         images_by_row, image_errors = extract_anchored_images(worksheet)
         rows = build_rows(worksheet, header_row_index, header_map, images_by_row)
+        workbook.close()
 
         if not rows and not image_errors:
             image_errors.append(build_error("No fixture rows were found in the workbook."))

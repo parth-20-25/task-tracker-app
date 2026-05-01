@@ -1,4 +1,5 @@
 const { SCOPE_STATUSES, classifyScopeOwnership } = require("./scope");
+const { FIXTURE_NO_REGEX, normalizePastedCell } = require("./parser");
 
 function normalizeTextCell(value) {
   if (value === undefined || value === null) {
@@ -9,7 +10,13 @@ function normalizeTextCell(value) {
     return Number.isInteger(value) ? String(value) : String(value);
   }
 
-  return String(value).trim();
+  return normalizePastedCell(value);
+}
+
+function normalizeFixtureNo(value) {
+  return normalizeTextCell(value)
+    .replace(/\s+/g, "")
+    .toUpperCase();
 }
 
 function getRowNumber(item) {
@@ -32,6 +39,7 @@ function extractRowFields(item) {
       part_name: cols[3],
       fixture_type: cols[4],
       remark: "",
+      designer: cols[6] || "",
       qty: cols[5],
       image_1_url: null,
       image_2_url: null,
@@ -47,9 +55,10 @@ function extractRowFields(item) {
     part_name: normalizeTextCell(item?.part_name),
     fixture_type: normalizeTextCell(item?.fixture_type),
     remark: normalizeTextCell(item?.remark),
+    designer: normalizeTextCell(item?.designer),
     qty: item?.qty,
-    image_1_url: item?.image_1_url ? normalizeTextCell(item.image_1_url) : null,
-    image_2_url: item?.image_2_url ? normalizeTextCell(item.image_2_url) : null,
+    image_1_url: null,
+    image_2_url: null,
     parser_confidence: normalizeTextCell(item?.parser_confidence || "HIGH").toUpperCase(),
     raw_data: rawData || {
       fixture_no: item?.fixture_no ?? null,
@@ -57,9 +66,10 @@ function extractRowFields(item) {
       part_name: item?.part_name ?? null,
       fixture_type: item?.fixture_type ?? null,
       remark: item?.remark ?? null,
+      designer: item?.designer ?? null,
       qty: item?.qty ?? null,
-      image_1_url: item?.image_1_url ?? null,
-      image_2_url: item?.image_2_url ?? null,
+      image_1_url: null,
+      image_2_url: null,
     },
   };
 }
@@ -78,6 +88,7 @@ function validateParsedData(parsedRows) {
       part_name,
       fixture_type,
       remark,
+      designer,
       qty: qtyRaw,
       image_1_url,
       image_2_url,
@@ -85,18 +96,28 @@ function validateParsedData(parsedRows) {
       raw_data,
     } = extractRowFields(item);
 
-    if (parser_confidence && parser_confidence !== "HIGH") {
+    const normalizedFixtureNo = normalizeFixtureNo(fixture_no);
+
+    if (!normalizedFixtureNo) {
       rejectedRows.push({
         row_number,
-        error_message: "Row confidence is too low for controlled fixture import.",
+        error_message: "Fixture No is mandatory for import.",
         raw_data,
       });
       continue;
     }
 
-    if (!fixture_no || !op_no || !part_name || !fixture_type || !qtyRaw) {
+    if (!FIXTURE_NO_REGEX.test(normalizedFixtureNo)) {
+      rejectedRows.push({
+        row_number,
+        error_message: "Fixture No must match the PARC fixture format.",
+        raw_data,
+      });
+      continue;
+    }
+
+    if (!op_no || !part_name || !fixture_type || !qtyRaw) {
       const missing = [];
-      if (!fixture_no) missing.push("FIXTURE NO");
       if (!op_no) missing.push("OP.NO");
       if (!part_name) missing.push("Part Name");
       if (!fixture_type) missing.push("Fixture Type");
@@ -112,11 +133,19 @@ function validateParsedData(parsedRows) {
 
     const qtyText = normalizeTextCell(qtyRaw);
     const qty = parseInt(qtyText, 10);
-    // User requested "QTY must be numeric".
-    if (isNaN(qty) || (String(qty) !== qtyText && !/^\d+$/.test(qtyText))) {
+    if (isNaN(qty) || !/^\d+$/.test(qtyText) || qty <= 0) {
       rejectedRows.push({
         row_number,
         error_message: "QTY must be a valid numeric value.",
+        raw_data,
+      });
+      continue;
+    }
+
+    if (parser_confidence && parser_confidence !== "HIGH") {
+      rejectedRows.push({
+        row_number,
+        error_message: "Row confidence is too low for controlled fixture import.",
         raw_data,
       });
       continue;
@@ -126,11 +155,12 @@ function validateParsedData(parsedRows) {
     if (scopeAssessment.status === SCOPE_STATUSES.CUSTOMER) {
       skippedRows.push({
         row_number,
-        fixture_no,
+        fixture_no: normalizedFixtureNo,
         op_no,
         part_name,
         fixture_type,
         remark: remark || null,
+        designer: designer || null,
         qty,
         image_1_url,
         image_2_url,
@@ -141,8 +171,8 @@ function validateParsedData(parsedRows) {
       continue;
     }
 
-    const normalizedFixtureNo = fixture_no.toLowerCase();
-    if (seenFixtureNumbers.has(normalizedFixtureNo)) {
+    const fixtureNoKey = normalizedFixtureNo.toLowerCase();
+    if (seenFixtureNumbers.has(fixtureNoKey)) {
       rejectedRows.push({
         row_number,
         error_message: "Duplicate fixture number found in uploaded file.",
@@ -151,15 +181,16 @@ function validateParsedData(parsedRows) {
       continue;
     }
 
-    seenFixtureNumbers.add(normalizedFixtureNo);
+    seenFixtureNumbers.add(fixtureNoKey);
 
     validRows.push({
       row_number,
-      fixture_no,
+      fixture_no: normalizedFixtureNo,
       op_no,
       part_name,
       fixture_type,
       remark: remark || null,
+      designer: designer || null,
       qty,
       image_1_url,
       image_2_url,

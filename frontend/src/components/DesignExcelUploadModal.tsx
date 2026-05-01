@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, ImageIcon, UploadCloud, XCircle, Image as ImageIconSolid, Check } from "lucide-react";
 import {
@@ -136,6 +136,61 @@ interface BatchFixture {
   ingestion_source: string | null;
 }
 
+interface PendingPreviewImage {
+  file: File;
+  previewUrl: string;
+}
+
+type PendingPreviewImageMap = Record<string, {
+  part?: PendingPreviewImage;
+  fixture?: PendingPreviewImage;
+}>;
+
+function PreviewReferenceImageControls({
+  row,
+  rowKey,
+  queuedImages,
+  onSelect,
+}: {
+  row: DesignExcelPreviewRow;
+  rowKey: string;
+  queuedImages: PendingPreviewImageMap;
+  onSelect: (rowKey: string, imageType: "part" | "fixture") => void;
+}) {
+  const partPreviewUrl = queuedImages[rowKey]?.part?.previewUrl || row.image_1_url || null;
+  const fixturePreviewUrl = queuedImages[rowKey]?.fixture?.previewUrl || row.image_2_url || null;
+
+  return (
+    <div className="mt-3 grid gap-2 md:grid-cols-2">
+      {[
+        { imageType: "part" as const, label: "Part Image", imageUrl: partPreviewUrl },
+        { imageType: "fixture" as const, label: "Fixture Image", imageUrl: fixturePreviewUrl },
+      ].map((item) => (
+        <div key={`${rowKey}-${item.imageType}`} className="rounded-md border bg-background/70 p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{item.label}</div>
+          {item.imageUrl ? (
+            <div className="mt-2 space-y-2">
+              <img src={item.imageUrl} alt={`${row.fixture_no} ${item.label}`} className="h-20 w-full rounded border object-cover" />
+              <div className="flex gap-2">
+                <Button asChild size="sm" variant="outline">
+                  <a href={item.imageUrl} target="_blank" rel="noreferrer">View Image</a>
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => onSelect(rowKey, item.imageType)}>
+                  Change
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button size="sm" variant="outline" className="mt-2" onClick={() => onSelect(rowKey, item.imageType)}>
+              {item.imageType === "part" ? "Upload Part Image" : "Upload Fixture Image"}
+            </Button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ImageStatusBadge({ hasImage, imageType }: { hasImage: boolean; imageType: "Part" | "Fixture" }) {
   return (
     <div className={cn(
@@ -156,6 +211,7 @@ interface PostConfirmReviewProps {
   uploadingImageFor: { fixtureId: string; imageType: "part" | "fixture" } | null;
   referenceImageMutation: any;
   fileUploadRef: React.RefObject<HTMLInputElement>;
+  onSelectImageUpload: (target: { fixtureId: string; imageType: "part" | "fixture" }) => void;
   onClose: () => void;
 }
 
@@ -165,6 +221,7 @@ function PostConfirmReviewStage({
   uploadingImageFor,
   referenceImageMutation,
   fileUploadRef,
+  onSelectImageUpload,
   onClose,
 }: PostConfirmReviewProps) {
   return (
@@ -188,10 +245,9 @@ function PostConfirmReviewStage({
         ) : (
           <div className="space-y-3">
             {batchFixtures.map((fixture) => {
-              const isManualPaste = fixture.ingestion_source === "manual_paste";
               const partImageMissing = !fixture.image_1_url;
               const fixtureImageMissing = !fixture.image_2_url;
-              const showImageControls = isManualPaste && (partImageMissing || fixtureImageMissing);
+              const showImageControls = true;
 
               return (
                 <div key={fixture.fixture_id} className="rounded-lg border bg-card p-4">
@@ -232,6 +288,7 @@ function PostConfirmReviewStage({
                             size="sm"
                             variant="outline"
                             onClick={() => {
+                              onSelectImageUpload({ fixtureId: fixture.fixture_id, imageType: "part" });
                               fileUploadRef.current?.click();
                             }}
                             disabled={
@@ -249,10 +306,33 @@ function PostConfirmReviewStage({
                             ) : (
                               <>
                                 <ImageIconSolid className="mr-1 h-4 w-4" />
-                                Upload
+                                Upload Part Image
                               </>
                             )}
                           </Button>
+                        </div>
+                      )}
+                      {!partImageMissing && fixture.image_1_url && (
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm">
+                            <div className="font-medium text-amber-900 dark:text-amber-200">Part Image Ready</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Optional support image</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <a href={fixture.image_1_url} target="_blank" rel="noreferrer">View Image</a>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                onSelectImageUpload({ fixtureId: fixture.fixture_id, imageType: "part" });
+                                fileUploadRef.current?.click();
+                              }}
+                            >
+                              Change
+                            </Button>
+                          </div>
                         </div>
                       )}
 
@@ -278,6 +358,7 @@ function PostConfirmReviewStage({
                             size="sm"
                             variant="outline"
                             onClick={() => {
+                              onSelectImageUpload({ fixtureId: fixture.fixture_id, imageType: "fixture" });
                               fileUploadRef.current?.click();
                             }}
                             disabled={
@@ -295,10 +376,33 @@ function PostConfirmReviewStage({
                             ) : (
                               <>
                                 <ImageIconSolid className="mr-1 h-4 w-4" />
-                                Upload
+                                Upload Fixture Image
                               </>
                             )}
                           </Button>
+                        </div>
+                      )}
+                      {!fixtureImageMissing && fixture.image_2_url && (
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm">
+                            <div className="font-medium text-amber-900 dark:text-amber-200">Fixture Image Ready</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Optional support image</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <a href={fixture.image_2_url} target="_blank" rel="noreferrer">View Image</a>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                onSelectImageUpload({ fixtureId: fixture.fixture_id, imageType: "fixture" });
+                                fileUploadRef.current?.click();
+                              }}
+                            >
+                              Change
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -346,6 +450,7 @@ export function DesignExcelUploadModal() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fileUploadRef = useRef<HTMLInputElement | null>(null);
+  const previewImageInputRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
   const [uploadMode, setUploadMode] = useState<"excel" | "paste">("excel");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -358,8 +463,21 @@ export function DesignExcelUploadModal() {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [batchFixtures, setBatchFixtures] = useState<BatchFixture[] | null>(null);
   const [uploadingImageFor, setUploadingImageFor] = useState<{ fixtureId: string; imageType: "part" | "fixture" } | null>(null);
+  const [previewImageTarget, setPreviewImageTarget] = useState<{ rowKey: string; imageType: "part" | "fixture" } | null>(null);
+  const [queuedPreviewImages, setQueuedPreviewImages] = useState<PendingPreviewImageMap>({});
+
+  const clearQueuedPreviewImages = () => {
+    setQueuedPreviewImages((current) => {
+      Object.values(current).forEach((entry) => {
+        entry.part?.previewUrl && URL.revokeObjectURL(entry.part.previewUrl);
+        entry.fixture?.previewUrl && URL.revokeObjectURL(entry.fixture.previewUrl);
+      });
+      return {};
+    });
+  };
 
   const resetState = () => {
+    clearQueuedPreviewImages();
     setSelectedFile(null);
     setPasteText("");
     setPreview(null);
@@ -370,6 +488,7 @@ export function DesignExcelUploadModal() {
     setBatchId(null);
     setBatchFixtures(null);
     setUploadingImageFor(null);
+    setPreviewImageTarget(null);
     setUploadMode("excel");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -377,13 +496,105 @@ export function DesignExcelUploadModal() {
     if (fileUploadRef.current) {
       fileUploadRef.current.value = "";
     }
+    if (previewImageInputRef.current) {
+      previewImageInputRef.current.value = "";
+    }
   };
+
+  useEffect(() => () => {
+    clearQueuedPreviewImages();
+  }, []);
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (!nextOpen) {
       resetState();
     }
+  };
+
+  const queuePreviewReferenceImage = (rowKey: string, imageType: "part" | "fixture", file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setQueuedPreviewImages((current) => {
+      const existingPreviewUrl = current[rowKey]?.[imageType]?.previewUrl;
+      if (existingPreviewUrl) {
+        URL.revokeObjectURL(existingPreviewUrl);
+      }
+
+      return {
+        ...current,
+        [rowKey]: {
+          ...current[rowKey],
+          [imageType]: {
+            file,
+            previewUrl,
+          },
+        },
+      };
+    });
+  };
+
+  const uploadQueuedPreviewImages = async (fixtures: BatchFixture[]) => {
+    const queuedEntries = Object.entries(queuedPreviewImages);
+    if (queuedEntries.length === 0) {
+      return fixtures;
+    }
+
+    let nextFixtures = [...fixtures];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const [rowKey, images] of queuedEntries) {
+      const fixtureNo = rowKey.split("::")[0];
+      const batchFixture = nextFixtures.find((fixture) => fixture.fixture_no === fixtureNo);
+
+      if (!batchFixture) {
+        failureCount += 1;
+        continue;
+      }
+
+      for (const imageType of ["part", "fixture"] as const) {
+        const queuedImage = images[imageType];
+        if (!queuedImage) {
+          continue;
+        }
+
+        try {
+          const data = await uploadFixtureReferenceImage(batchFixture.fixture_id, imageType, queuedImage.file);
+          nextFixtures = nextFixtures.map((fixture) => (
+            fixture.fixture_id === batchFixture.fixture_id
+              ? {
+                ...fixture,
+                image_1_url: imageType === "part" ? data.new_image_url : fixture.image_1_url,
+                image_2_url: imageType === "fixture" ? data.new_image_url : fixture.image_2_url,
+              }
+              : fixture
+          ));
+          successCount += 1;
+        } catch (error) {
+          failureCount += 1;
+          console.error("Failed to upload queued preview image", error);
+        }
+      }
+    }
+
+    clearQueuedPreviewImages();
+
+    if (successCount > 0) {
+      toast({
+        title: "Reference images uploaded",
+        description: `${successCount} queued reference image${successCount === 1 ? "" : "s"} saved after fixture confirmation.`,
+      });
+    }
+
+    if (failureCount > 0) {
+      toast({
+        title: "Some queued images still need attention",
+        description: `${failureCount} image upload${failureCount === 1 ? "" : "s"} could not be completed automatically. You can upload them below.`,
+        variant: "default",
+      });
+    }
+
+    return nextFixtures;
   };
 
   const validateClientFile = (file: File) => {
@@ -460,7 +671,8 @@ export function DesignExcelUploadModal() {
       setConfirmationStage("review");
       try {
         const fixtures = await listFixturesByUploadBatch(data.batch_id);
-        setBatchFixtures(fixtures);
+        const fixturesWithQueuedImages = await uploadQueuedPreviewImages(fixtures);
+        setBatchFixtures(fixturesWithQueuedImages);
       } catch (err) {
         console.error("Failed to load batch fixtures", err);
         toast({
@@ -508,6 +720,7 @@ export function DesignExcelUploadModal() {
       }
     },
     onError: (error) => {
+      setUploadingImageFor(null);
       toast({
         title: "Image upload failed",
         description: error instanceof Error ? error.message : "Failed to upload image",
@@ -526,6 +739,18 @@ export function DesignExcelUploadModal() {
         description: error instanceof Error ? error.message : "Choose a valid .xlsx file",
         variant: "destructive",
       });
+    }
+  };
+
+  const handlePreviewImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && previewImageTarget) {
+      queuePreviewReferenceImage(previewImageTarget.rowKey, previewImageTarget.imageType, file);
+    }
+
+    setPreviewImageTarget(null);
+    if (previewImageInputRef.current) {
+      previewImageInputRef.current.value = "";
     }
   };
 
@@ -614,6 +839,13 @@ export function DesignExcelUploadModal() {
             </Button>
           </DialogTrigger>
           <DialogContent className="glass flex max-h-[90vh] min-h-0 w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-5xl">
+            <input
+              ref={previewImageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handlePreviewImageInputChange}
+            />
             <DialogHeader className="shrink-0 border-b bg-background/95 p-6 pb-4 pr-12">
               <DialogTitle className="flex items-center gap-2 text-2xl font-bold">
                 <FileSpreadsheet className="h-6 w-6 text-primary" />
@@ -631,6 +863,7 @@ export function DesignExcelUploadModal() {
                 uploadingImageFor={uploadingImageFor}
                 referenceImageMutation={referenceImageMutation}
                 fileUploadRef={fileUploadRef}
+                onSelectImageUpload={setUploadingImageFor}
                 onClose={() => {
                   setOpen(false);
                   resetState();
@@ -873,6 +1106,17 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                   }}
                                 />
                               ) : null}
+                              {uploadMode === "paste" ? (
+                                <PreviewReferenceImageControls
+                                  row={item.incoming}
+                                  rowKey={getRowDecisionKey(item.incoming)}
+                                  queuedImages={queuedPreviewImages}
+                                  onSelect={(rowKey, imageType) => {
+                                    setPreviewImageTarget({ rowKey, imageType });
+                                    previewImageInputRef.current?.click();
+                                  }}
+                                />
+                              ) : null}
                               <ImagePreviewStrip row={item.incoming} />
                             </div>
                           ))}
@@ -934,6 +1178,17 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.incoming.qty}</span></div>
                                       <div>Remark: <span className="font-medium text-foreground">{formatRemark(conflict.incoming.remark)}</span></div>
                                     </div>
+                                    {uploadMode === "paste" ? (
+                                      <PreviewReferenceImageControls
+                                        row={conflict.incoming}
+                                        rowKey={getRowDecisionKey(conflict.incoming)}
+                                        queuedImages={queuedPreviewImages}
+                                        onSelect={(rowKey, imageType) => {
+                                          setPreviewImageTarget({ rowKey, imageType });
+                                          previewImageInputRef.current?.click();
+                                        }}
+                                      />
+                                    ) : null}
                                     <ImagePreviewStrip row={conflict.incoming} />
                                   </Label>
                                 </div>

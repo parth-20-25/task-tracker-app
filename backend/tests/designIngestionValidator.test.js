@@ -118,4 +118,44 @@ runTest("rejects duplicate fixture numbers in the same upload", () => {
   assert.match(result.rejectedRows[0].error_message, /Duplicate fixture number/i);
 });
 
+runTest("rejects rows that do not contain a fixture number", () => {
+  const result = validateParsedData([
+    {
+      row_number: 14,
+      fixture_no: "",
+      op_no: "OP 170",
+      part_name: "Customer Scope",
+      fixture_type: "Checking fixture",
+      remark: "Customer Scope",
+      qty: "1",
+      parser_confidence: "MEDIUM",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 0);
+  assert.equal(result.rejectedRows.length, 1);
+  assert.match(result.rejectedRows[0].error_message, /Fixture No is mandatory/i);
+});
+
+runTest("normalizes safe formatting noise without changing business meaning", () => {
+  const result = validateParsedData([
+    {
+      row_number: 15,
+      fixture_no: " parc26001006. ",
+      op_no: " OP 110&OP 120. ",
+      part_name: " STIFFNER   MTG \n BKT. ",
+      fixture_type: " Checking fixture. ",
+      remark: " PARC   scope. ",
+      qty: "2",
+      parser_confidence: "HIGH",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 1);
+  assert.equal(result.validRows[0].fixture_no, "PARC26001006");
+  assert.equal(result.validRows[0].op_no, "OP 110&OP 120");
+  assert.equal(result.validRows[0].part_name, "STIFFNER MTG BKT");
+  assert.equal(result.validRows[0].remark, "PARC scope");
+});
+
 console.log("designIngestion validator checks passed");

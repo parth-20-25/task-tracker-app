@@ -532,6 +532,7 @@ export interface DesignFixtureOption {
   qty: number;
   image_1_url?: string | null;
   image_2_url?: string | null;
+  ingestion_source?: string | null;
 }
 
 export interface DesignExcelPreviewRow {

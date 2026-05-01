@@ -41,6 +41,7 @@ import {
 } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { FixtureReferenceImageSupport } from "@/components/FixtureReferenceImageSupport";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -432,6 +433,18 @@ export function DesignTaskAssignmentBar({
   const selectedProject = projects.find((p) => p.project_id === projectId);
   const selectedScope = scopes.find((s) => s.scope_id === scopeId);
   const selectedFixture = fixtures.find((f) => f.fixture_id === fixtureId);
+  const updateSelectedFixtureImages = (nextImages: { image_1_url: string | null; image_2_url: string | null }) => {
+    queryClient.setQueryData(
+      ["designFixtures", designDepartmentKey, scopeId || "unselected"],
+      (current: typeof fixtures | undefined) => (
+        (current || []).map((fixture) => (
+          fixture.fixture_id === fixtureId
+            ? { ...fixture, ...nextImages }
+            : fixture
+        ))
+      ),
+    );
+  };
 
   // ── Submit (still creates the task as before) ─────────────────────────────
 
@@ -672,37 +685,46 @@ export function DesignTaskAssignmentBar({
 
           {/* ── Fixture Details Card ── */}
           {(selectedProject || selectedScope || selectedFixture) && (
-            <div className="grid gap-3 rounded-xl border bg-gradient-to-r from-muted/50 to-muted/20 p-4 text-xs md:grid-cols-4 shadow-inner">
-              <div className="md:col-span-1">
-                <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold">Project</p>
-                <p className="mt-1 font-medium text-foreground truncate">
-                  {selectedProject ? selectedProject.project_code : "—"}
-                </p>
-                <p className="text-muted-foreground truncate">{selectedScope ? selectedScope.scope_name : "—"}</p>
-              </div>
-              <div className="md:col-span-3 border-l pl-4">
-                <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold mb-2">
-                  Fixture Details (Read-only)
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  <div>
-                    <div className="text-[10px] text-muted-foreground">PART NAME</div>
-                    <div className="font-semibold">{selectedFixture?.part_name || "—"}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-muted-foreground">OP.NO</div>
-                    <div className="font-semibold">{selectedFixture?.op_no || "—"}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-muted-foreground">TYPE</div>
-                    <div className="font-semibold">{selectedFixture?.fixture_type || "—"}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-muted-foreground">QTY</div>
-                    <div className="font-semibold text-primary">{selectedFixture?.qty || "—"}</div>
+            <div className="space-y-3">
+              <div className="grid gap-3 rounded-xl border bg-gradient-to-r from-muted/50 to-muted/20 p-4 text-xs md:grid-cols-4 shadow-inner">
+                <div className="md:col-span-1">
+                  <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold">Project</p>
+                  <p className="mt-1 font-medium text-foreground truncate">
+                    {selectedProject ? selectedProject.project_code : "—"}
+                  </p>
+                  <p className="text-muted-foreground truncate">{selectedScope ? selectedScope.scope_name : "—"}</p>
+                </div>
+                <div className="md:col-span-3 border-l pl-4">
+                  <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold mb-2">
+                    Fixture Details (Read-only)
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">PART NAME</div>
+                      <div className="font-semibold">{selectedFixture?.part_name || "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">OP.NO</div>
+                      <div className="font-semibold">{selectedFixture?.op_no || "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">TYPE</div>
+                      <div className="font-semibold">{selectedFixture?.fixture_type || "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">QTY</div>
+                      <div className="font-semibold text-primary">{selectedFixture?.qty || "—"}</div>
+                    </div>
                   </div>
                 </div>
               </div>
+              {selectedFixture ? (
+                <FixtureReferenceImageSupport
+                  fixture={selectedFixture}
+                  departmentId={contextDepartmentId}
+                  onFixtureImagesChange={updateSelectedFixtureImages}
+                />
+              ) : null}
             </div>
           )}
 

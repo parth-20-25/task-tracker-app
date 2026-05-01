@@ -30,8 +30,8 @@ router.use(authenticate);
 router.get(
   "/predictive-insights",
   asyncHandler(async (req, res) => {
-    const { scopeId, projectId, departmentId } = req.query;
-    const filters = { scopeId, projectId, departmentId: departmentId || req.user.department_id };
+    const { scopeId, projectId, departmentId, userId, startDate, endDate } = req.query;
+    const filters = { scopeId, projectId, departmentId, userId, startDate, endDate };
     const data = await buildPredictiveInsights(filters, req.user);
     return sendSuccess(res, data);
   })

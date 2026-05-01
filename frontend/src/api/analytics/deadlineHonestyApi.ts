@@ -39,8 +39,11 @@ export interface DeadlineHonestyPayload {
 
 export interface DeadlineHonestyFilters {
   departmentId?: string;
+  userId?: string;
   scopeId?: string;
   projectId?: string;
+  startDate?: string;
+  endDate?: string;
 }
 
 // ─── Fetch ────────────────────────────────────────────────────────────────────
@@ -50,8 +53,11 @@ export function fetchDeadlineHonesty(
 ): Promise<DeadlineHonestyPayload> {
   const params = new URLSearchParams();
   if (filters.departmentId) params.append("departmentId", filters.departmentId);
+  if (filters.userId) params.append("userId", filters.userId);
   if (filters.scopeId) params.append("scopeId", filters.scopeId);
   if (filters.projectId) params.append("projectId", filters.projectId);
+  if (filters.startDate) params.append("startDate", filters.startDate);
+  if (filters.endDate) params.append("endDate", filters.endDate);
 
   const query = params.toString();
   return apiRequest<DeadlineHonestyPayload>(

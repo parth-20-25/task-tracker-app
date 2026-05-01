@@ -9,12 +9,14 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get("/overview", asyncHandler(async (req, res) => {
-  const { departmentId, userId, scopeId, projectId } = req.query;
+  const { departmentId, userId, scopeId, projectId, startDate, endDate } = req.query;
   const filters = {
-    departmentId: departmentId,
-    userId: userId,
+    departmentId,
+    userId,
     scopeId,
-    projectId
+    projectId,
+    startDate,
+    endDate,
   };
   
   const analyticsData = await getAnalyticsOverview(filters, req.user);

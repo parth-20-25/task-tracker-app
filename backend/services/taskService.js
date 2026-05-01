@@ -1283,7 +1283,13 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
   await appendTaskActivity(task.id, {
     userEmployeeId: user.employee_id,
     actionType: "status_changed",
-    metadata: { from: task.status, to: nextStatus },
+    metadata: {
+      from: task.status,
+      to: nextStatus,
+      workflow_id: task.workflow_id || null,
+      current_stage_id: task.current_stage_id || null,
+      current_stage_name: task.workflow_stage || null,
+    },
   });
 
   await createAuditLog({
@@ -1386,7 +1392,12 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
     userEmployeeId: user.employee_id,
     actionType: next.activityType,
     notes: remarks || null,
-    metadata: { verification_status: next.verificationStatus },
+    metadata: {
+      verification_status: next.verificationStatus,
+      workflow_id: task.workflow_id || null,
+      current_stage_id: task.current_stage_id || null,
+      current_stage_name: task.workflow_stage || null,
+    },
   });
 
   await createAuditLog({

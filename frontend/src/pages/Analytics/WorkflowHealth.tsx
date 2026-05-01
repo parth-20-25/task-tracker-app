@@ -272,7 +272,7 @@ function HealthEmptyState() {
       <div>
         <p className="text-sm font-medium text-slate-300">No health data available</p>
         <p className="text-xs text-slate-500 mt-1 max-w-xs">
-          Complete fixture workflows with deadlines assigned to generate the health score.
+          Complete workflow items with due dates and stage history to generate the health score.
         </p>
       </div>
     </div>
@@ -369,7 +369,7 @@ export default function WorkflowHealth({ filters }: WorkflowHealthProps) {
             <p className="text-xs text-slate-500">
               Based on{" "}
               <span className="text-slate-300 font-medium">{data.raw.fixture_count}</span>{" "}
-              completed fixture{data.raw.fixture_count !== 1 ? "s" : ""}
+              completed item{data.raw.fixture_count !== 1 ? "s" : ""}
               {data.raw.measurable_count > 0 && (
                 <>
                   {" "}·{" "}

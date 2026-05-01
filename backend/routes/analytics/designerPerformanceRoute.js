@@ -13,8 +13,8 @@ router.use(authenticate);
  * Returns user performance across 4 dimensions: Throughput, Efficiency, Quality, Reliability.
  */
 router.get("/user-performance", asyncHandler(async (req, res) => {
-  const { scopeId, projectId, departmentId } = req.query;
-  const filters = { scopeId, projectId, departmentId: departmentId || req.user.department_id };
+  const { scopeId, projectId, departmentId, userId, startDate, endDate } = req.query;
+  const filters = { scopeId, projectId, departmentId, userId, startDate, endDate };
   const data = await getUserPerformance(filters, req.user);
   return sendSuccess(res, data);
 }));

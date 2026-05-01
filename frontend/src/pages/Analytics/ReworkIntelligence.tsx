@@ -35,6 +35,8 @@ function getSecondaryBarColor(index: number): string {
 interface ReworkData {
   by_stage: Record<string, number>;
   by_user: Array<{ name: string; reworks: number }>;
+  total_reworks?: number;
+  top_stage_name?: string | null;
 }
 
 function KPICard({ label, value, sub, icon, accent }: any) {
@@ -55,7 +57,7 @@ export default function ReworkIntelligence({ data, filters }: { data?: ReworkDat
 
   const stage_rework = Object.entries(data.by_stage || {}).map(([stage, count]) => ({ stage, count }));
   const user_rework = data.by_user || [];
-  const totalReworks = user_rework.reduce((sum, d) => sum + d.reworks, 0);
+  const totalReworks = data.total_reworks ?? user_rework.reduce((sum, d) => sum + d.reworks, 0);
 
   return (
     <div className="space-y-6 mt-8 pt-8 border-t border-border/40">
@@ -67,7 +69,7 @@ export default function ReworkIntelligence({ data, filters }: { data?: ReworkDat
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Rework Intelligence</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Identify chronic failure points and isolation metrics from rejected stage attempts.
+            Identify chronic failure points and user-level rework pressure from recorded rejection events.
           </p>
         </div>
       </div>
@@ -83,7 +85,7 @@ export default function ReworkIntelligence({ data, filters }: { data?: ReworkDat
         />
         <KPICard
           label="Chronic Stage"
-          value={stage_rework.length > 0 ? [...stage_rework].sort((a,b) => b.count - a.count)[0].stage : "N/A"}
+          value={data.top_stage_name || (stage_rework.length > 0 ? [...stage_rework].sort((a,b) => b.count - a.count)[0].stage : "N/A")}
           sub="most frequent rework point"
           icon={<AlertTriangle className="h-5 w-5 text-red-600" />}
           accent="bg-red-50 dark:bg-red-950/40"
@@ -97,7 +99,7 @@ export default function ReworkIntelligence({ data, filters }: { data?: ReworkDat
         <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-sm flex flex-col">
           <div className="mb-5">
             <h3 className="text-base font-semibold text-foreground">Rework by Stage</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Total rejected attempts per workflow stage</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Stage-attributed rework events where the source stage is reliably known</p>
           </div>
           <div className="flex-1 min-h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -141,7 +143,7 @@ export default function ReworkIntelligence({ data, filters }: { data?: ReworkDat
                 <UserX className="h-4 w-4 text-muted-foreground" />
                 User Rework Ranking
               </h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Sorted by total reworks</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Sorted by recorded rework events</p>
             </div>
           </div>
           <div className="flex-1 min-h-[300px] overflow-hidden">

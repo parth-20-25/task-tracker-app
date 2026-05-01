@@ -20,8 +20,8 @@ router.use(authenticate);
  *   projectId – filter to a project (all scopes)
  */
 router.get("/workflow-health", asyncHandler(async (req, res) => {
-  const { scopeId, projectId, departmentId } = req.query;
-  const filters = { scopeId, projectId, departmentId: departmentId || req.user.department_id };
+  const { scopeId, projectId, departmentId, userId, startDate, endDate } = req.query;
+  const filters = { scopeId, projectId, departmentId, userId, startDate, endDate };
   const data = await getWorkflowHealth(filters, req.user);
   return sendSuccess(res, data);
 }));

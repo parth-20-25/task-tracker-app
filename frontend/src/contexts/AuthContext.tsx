@@ -1,9 +1,10 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { loginRequest } from "@/api/authApi";
 import { getStoredToken, setToken } from "@/api/http";
 import { useCurrentUserQuery } from "@/hooks/queries/useCurrentUserQuery";
 import { authQueryKeys } from "@/lib/queryKeys";
+import { ApiError } from "@/lib/api/ApiError";
 import { buildUiAccess, hasUserPermission } from "@/lib/permissions";
 import { AuthContext, type AuthContextType } from "@/contexts/useAuth";
 
@@ -15,6 +16,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const role = currentUser?.role || null;
   const access = buildUiAccess(currentUser);
+
+  useEffect(() => {
+    if (!hasToken || !currentUserQuery.isError) {
+      return;
+    }
+
+    if (currentUserQuery.error instanceof ApiError && currentUserQuery.error.status === 401) {
+      setToken(null);
+      queryClient.removeQueries({ queryKey: authQueryKeys.currentUser });
+    }
+  }, [currentUserQuery.error, currentUserQuery.isError, hasToken, queryClient]);
 
   const refreshSession = useCallback(async () => {
     if (!getStoredToken()) {

@@ -261,6 +261,7 @@ async function ensureDepartmentWorkflow(departmentId, client = pool) {
   return {
     id: workflow.id,
     name: workflow.name,
+    department_id: workflow.department_id || departmentId,
     first_stage_id: workflow.initial_stage_id || stageRows[0]?.id || null,
     stages: mapWorkflowStages(stageRows),
     workflowRecovered,

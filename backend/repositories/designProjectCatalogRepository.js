@@ -599,8 +599,9 @@ async function upsertFixture(fixtureData, client = pool) {
         batch_id
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      ON CONFLICT (project_id, scope_id, fixture_no) DO UPDATE
+      ON CONFLICT (scope_id, fixture_no) DO UPDATE
       SET
+        project_id = EXCLUDED.project_id,
         op_no = EXCLUDED.op_no,
         part_name = EXCLUDED.part_name,
         fixture_type = EXCLUDED.fixture_type,

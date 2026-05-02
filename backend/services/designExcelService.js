@@ -1,7 +1,9 @@
 const { AppError } = require("../lib/AppError");
 const { requireUserDepartment } = require("../lib/departmentContext");
 const { instrumentModuleExports } = require("../lib/observability");
+const { logger } = require("../lib/logger");
 const { createAuditLog } = require("../repositories/auditRepository");
+const { getActiveWorkflowForDepartment, initProgressForFixture } = require("../repositories/fixtureWorkflowRepository");
 const { pool } = require("../db");
 const {
   upsertProjectByNumber,
@@ -378,6 +380,11 @@ async function confirmUpload(user, payload = {}) {
   try {
     await client.query("BEGIN");
 
+    const workflow = await getActiveWorkflowForDepartment(departmentId, client);
+    if (!workflow || !Array.isArray(workflow.stages) || workflow.stages.length === 0) {
+      throw new AppError(409, `No workflow configured for department ${departmentId}`);
+    }
+
     const project = await upsertProjectByNumber({
       project_no: file_info.project_code,
       project_name: file_info.project_code,
@@ -450,12 +457,14 @@ async function confirmUpload(user, payload = {}) {
         ingestion_source: ingestionSource,
       };
 
-      await upsertFixture(fixtureObj, client);
+      const fixture = await upsertFixture(fixtureObj, client);
+      await initProgressForFixture(fixture.fixture_id, departmentId, workflow.stages, client);
 
       logImportDecision("imported_fixture", {
         batch_id: batchId,
         project_id: project.project_id,
         scope_id: scope.scope_id,
+        fixture_id: fixture.fixture_id,
         fixture_no: fixtureData.fixture_no,
         row_number: fixtureData.row_number,
         ingestion_source: ingestionSource,
@@ -465,9 +474,10 @@ async function confirmUpload(user, payload = {}) {
         userEmployeeId: user.employee_id,
         actionType: "DESIGN_FIXTURE_IMPORTED",
         targetType: "design_fixture",
-        targetId: fixtureData.fixture_no || "unknown",
+        targetId: fixture.fixture_id || fixtureData.fixture_no || "unknown",
         metadata: {
           batch_id: batchId,
+          fixture_id: fixture.fixture_id,
           project_id: project.project_id,
           scope_id: scope.scope_id,
           project_code: file_info.project_code,
@@ -475,7 +485,7 @@ async function confirmUpload(user, payload = {}) {
           row_number: fixtureData.row_number,
           ingestion_source: ingestionSource,
         },
-      });
+      }, client);
 
       acceptedCount++;
     }
@@ -501,7 +511,7 @@ async function confirmUpload(user, payload = {}) {
             error_message: r.error_message,
             ingestion_source: ingestionSource,
           },
-        });
+        }, client);
       }
 
       await createUploadErrors(batchId, errorsPayload, client);
@@ -511,12 +521,34 @@ async function confirmUpload(user, payload = {}) {
     return { success: true, batch_id: batchId, accepted_count: acceptedCount };
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("UPLOAD_CONFIRM_ERROR", err);
+    logger.error("Design upload confirmation failed", {
+      operation: "confirmUpload",
+      department_id: departmentId,
+      user_employee_id: user?.employee_id || null,
+      project_code: file_info?.project_code || null,
+      scope_name: file_info?.scope_name_display || null,
+      accepted_item_count: actionableItems.length,
+      rejected_item_count: rejectedItems.length,
+      skipped_item_count: skippedItems.length,
+      errorMessage: err?.message || "Unknown upload confirmation error",
+      errorCode: err?.code || null,
+      constraint: err?.constraint || null,
+      detail: err?.detail || null,
+      stack: err?.stack || null,
+    });
     if (err instanceof AppError) {
       throw err;
     }
 
-    throw new AppError(500, "Failed to confirm upload");
+    throw new AppError(
+      500,
+      "Upload confirmation failed while saving fixture data. The operation was rolled back.",
+      {
+        code: err?.code || null,
+        constraint: err?.constraint || null,
+        detail: err?.detail || null,
+      },
+    );
   } finally {
     client.release();
   }

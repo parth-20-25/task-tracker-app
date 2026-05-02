@@ -319,6 +319,13 @@ async function ensureFixtureBatchConstraint(client) {
   `);
 }
 
+async function ensureFixtureIdentityIndex(client) {
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_design_fixtures_scope_fixture_no_unique
+    ON design.fixtures (scope_id, fixture_no)
+  `);
+}
+
 async function ensureDesignIntegrityDiagnostics(client) {
   await client.query(`
     CREATE OR REPLACE VIEW design.projects_without_fixtures AS
@@ -388,7 +395,9 @@ async function ensureDesignDepartmentSchema(client) {
       image_2_url TEXT,
       ingestion_source TEXT,
       is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE,
-      CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (project_id, scope_id, fixture_no)
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (scope_id, fixture_no)
     )
   `);
 
@@ -399,7 +408,9 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS image_1_url TEXT,
     ADD COLUMN IF NOT EXISTS image_2_url TEXT,
     ADD COLUMN IF NOT EXISTS ingestion_source TEXT,
-    ADD COLUMN IF NOT EXISTS is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE
+    ADD COLUMN IF NOT EXISTS is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   `);
 
   await client.query(`
@@ -430,7 +441,7 @@ async function ensureDesignDepartmentSchema(client) {
       ) THEN
         ALTER TABLE design.fixtures
         ADD CONSTRAINT design_fixtures_scope_fixture_no_key
-        UNIQUE (project_id, scope_id, fixture_no);
+        UNIQUE (scope_id, fixture_no);
       END IF;
     END $$;
   `);
@@ -505,6 +516,7 @@ async function ensureDesignDepartmentSchema(client) {
   await ensureUploadBatchScopeProjectConstraint(client);
   await ensureFixtureScopeProjectConstraint(client);
   await ensureFixtureBatchConstraint(client);
+  await ensureFixtureIdentityIndex(client);
 
   await ensureColumnNotNull(client, "design.projects", "department_id");
   await ensureColumnNotNull(client, "design.scopes", "project_id");

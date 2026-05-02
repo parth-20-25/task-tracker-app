@@ -8,7 +8,6 @@ const { instrumentModuleExports } = require("../lib/observability");
 const {
   approveStageAttempt,
   getActiveWorkflowForDepartment,
-  getConfiguredWorkflowForDepartment,
   getProgressForFixture,
   initProgressForFixture,
   updateProgressRow,
@@ -156,32 +155,18 @@ async function getCurrentStageForFixture(fixtureId, departmentId = null) {
     return null;
   }
 
-  const workflow = await getConfiguredWorkflowForDepartment(project.department_id);
+  const workflow = await getActiveWorkflowForDepartment(project.department_id);
 
   if (!workflow || !workflow.department_id || workflow.department_id !== project.department_id) {
     return null;
   }
 
-  const progress = await getProgressForFixture(fixtureId, project.department_id);
-
-  // find first stage NOT approved
-  const current = progress.find(s => s.status !== "APPROVED");
-
-  if (!current) {
-    return {
-      stage: null,
-      status: "APPROVED",
-      stage_order: null,
-      is_complete: true,
-    };
+  let progress = await getProgressForFixture(fixtureId, project.department_id);
+  if (progress.length === 0) {
+    progress = await ensureProgressInitialized(fixtureId, project.department_id, workflow);
   }
 
-  return {
-    stage: current.stage_name,
-    status: current.status,
-    stage_order: current.stage_order,
-    is_complete: false,
-  };
+  return buildCurrentStageResponse(progress, workflow);
 }
 
 /**

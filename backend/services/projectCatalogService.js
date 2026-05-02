@@ -2,6 +2,7 @@ const { TASK_STATUSES } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const { instrumentModuleExports } = require("../lib/observability");
+const { pool } = require("../db");
 const {
   requireDepartmentContext,
   resolveAccessibleDepartmentId,
@@ -11,13 +12,16 @@ const { isDesignDepartment } = require("../lib/designDepartment");
 const {
   findDepartmentProjectByIdForDepartment,
   findFixtureByIdForDepartment,
+  findOrCreateScope,
   findProjectByIdForDepartment,
   findScopeByIdForDepartment,
   listDepartmentProjectsByDepartment,
   listFixturesByScopeForDepartment,
   listProjectOptionsByDepartment,
   listScopesByProjectForDepartment,
+  upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
+const { createAuditLog } = require("../repositories/auditRepository");
 const { getConfiguredWorkflowForDepartment } = require("../repositories/fixtureWorkflowRepository");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
@@ -71,16 +75,7 @@ async function listDepartmentProjectsForUser(user) {
 
 async function listDesignProjectsForUser(user, requestedDepartmentId) {
   const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
-  const projects = await listProjectOptionsByDepartment(departmentId);
-
-  if (projects.length === 0) {
-    throw new AppError(
-      404,
-      `No projects found for department ${departmentId}. Possible mismatch or data integrity issue.`,
-    );
-  }
-
-  return projects;
+  return listProjectOptionsByDepartment(departmentId);
 }
 
 async function listDesignScopesForUser(user, projectId, requestedDepartmentId) {
@@ -98,14 +93,6 @@ async function listDesignScopesForUser(user, projectId, requestedDepartmentId) {
   }
 
   const scopes = await listScopesByProjectForDepartment(normalizedProjectId, departmentId);
-
-  if (scopes.length === 0) {
-    throw new AppError(
-      409,
-      `Project ${normalizedProjectId} has no scopes for department ${departmentId}. Possible data integrity issue.`,
-    );
-  }
-
   return scopes;
 }
 
@@ -124,6 +111,102 @@ async function listDesignFixturesForUser(user, scopeId, requestedDepartmentId) {
   }
 
   return listFixturesByScopeForDepartment(normalizedScopeId, departmentId);
+}
+
+function normalizeProjectUploadRow(row = {}) {
+  return {
+    project_no: String(row.project_no || "").trim(),
+    project_name: String(row.project_name || "").trim(),
+    customer_name: String(row.customer_name || "").trim(),
+    scope_name: String(row.scope_name || "").trim(),
+    instance_count: Number(row.instance_count),
+    rework_date: row.rework_date || null,
+  };
+}
+
+function validateProjectUploadRow(row) {
+  if (!row.project_no || !row.project_name || !row.customer_name || !row.scope_name) {
+    return "project_no, project_name, customer_name, and scope_name are required";
+  }
+
+  if (!Number.isInteger(row.instance_count) || row.instance_count <= 0) {
+    return "instance_count must be a positive integer";
+  }
+
+  return null;
+}
+
+async function uploadDepartmentProjectsForUser(user, payload = {}) {
+  requireDesignDepartment(user);
+
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  if (rows.length === 0) {
+    throw new AppError(400, "rows is required");
+  }
+
+  const departmentId = requireUserDepartment(user);
+  const skippedRows = [];
+  let successCount = 0;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const normalizedRow = normalizeProjectUploadRow(rows[index]);
+      const validationError = validateProjectUploadRow(normalizedRow);
+
+      if (validationError) {
+        skippedRows.push({
+          row_number: index + 1,
+          ...normalizedRow,
+          reason: validationError,
+        });
+        continue;
+      }
+
+      const project = await upsertProjectByNumber({
+        project_no: normalizedRow.project_no,
+        project_name: normalizedRow.project_name,
+        customer_name: normalizedRow.customer_name,
+        department_id: departmentId,
+        uploaded_by: user.employee_id,
+      }, client);
+
+      const scope = await findOrCreateScope(project.project_id, normalizedRow.scope_name, client);
+
+      await createAuditLog({
+        userEmployeeId: user.employee_id,
+        actionType: "DESIGN_PROJECT_SCOPE_IMPORTED",
+        targetType: "design_project",
+        targetId: scope.scope_id || project.project_id || normalizedRow.project_no,
+        metadata: {
+          project_id: project.project_id,
+          scope_id: scope.scope_id,
+          project_code: normalizedRow.project_no,
+          project_name: normalizedRow.project_name,
+          customer_name: normalizedRow.customer_name,
+          scope_name: normalizedRow.scope_name,
+          instance_count: normalizedRow.instance_count,
+          rework_date: normalizedRow.rework_date,
+          department_id: departmentId,
+        },
+      }, client);
+
+      successCount += 1;
+    }
+
+    await client.query("COMMIT");
+    return {
+      success_count: successCount,
+      skipped_rows: skippedRows,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function createDesignTaskFromProject(user, payload = {}) {
@@ -212,4 +295,5 @@ module.exports = instrumentModuleExports("service.projectCatalogService", {
   listDesignFixturesForUser,
   listDesignProjectsForUser,
   listDesignScopesForUser,
+  uploadDepartmentProjectsForUser,
 });

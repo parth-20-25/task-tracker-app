@@ -28,6 +28,7 @@ const {
   listDesignFixturesForUser,
   listDesignProjectsForUser,
   listDesignScopesForUser,
+  uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
 
 const router = express.Router();
@@ -39,6 +40,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const projects = await listDepartmentProjectsForUser(req.user);
     return sendSuccess(res, projects);
+  }),
+);
+
+router.post(
+  "/department-projects",
+  authorize(PERMISSIONS.UPLOAD_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await uploadDepartmentProjectsForUser(req.user, req.body);
+    return sendSuccess(res, result, 200);
   }),
 );
 

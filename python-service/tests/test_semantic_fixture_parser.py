@@ -1,9 +1,13 @@
 import unittest
+from io import BytesIO
 from openpyxl import Workbook
 
-from fastapi.testclient import TestClient
+try:
+    from fastapi.testclient import TestClient
+except Exception:  # pragma: no cover - local env may omit httpx
+    TestClient = None
 
-from app.main import app, build_rows, detect_header_hints, find_metadata_row
+from app.main import app, build_rows, detect_header_hints, find_metadata_row, _process_workbook
 
 
 class SemanticFixtureParserTests(unittest.TestCase):
@@ -75,7 +79,7 @@ class SemanticFixtureParserTests(unittest.TestCase):
 
         self.assertEqual(rows, [])
         self.assertEqual(len(errors), 1)
-        self.assertIn("Could not confidently extract required fields", errors[0]["error_message"])
+        self.assertIn("Could not confidently extract required field", errors[0]["error_message"])
 
     def test_build_rows_skips_non_fixture_garbage_rows(self):
         workbook = Workbook()
@@ -101,6 +105,7 @@ class SemanticFixtureParserTests(unittest.TestCase):
         worksheet["D3"] = "RH BRACKET"
         worksheet["E3"] = "Checking fixture"
         worksheet["F3"] = 2
+        worksheet["G3"] = "PARC scope"
 
         metadata_row, _ = find_metadata_row(worksheet)
         header_hints = detect_header_hints(worksheet, metadata_row)
@@ -110,9 +115,76 @@ class SemanticFixtureParserTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Multiple possible values found for Part Name", errors[0]["error_message"])
 
+    def test_build_rows_carries_vertical_merged_fixture_values(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
+        worksheet["A3"] = "Fixture No"
+        worksheet["B3"] = "OP.NO"
+        worksheet["C3"] = "Part Name"
+        worksheet["D3"] = "Fixture Type"
+        worksheet["E3"] = "QTY"
+        worksheet["A4"] = "PARC26001005"
+        worksheet.merge_cells("A4:A5")
+        worksheet["B4"] = "OP 21"
+        worksheet["C4"] = "FIRST PART"
+        worksheet["D4"] = "Checking fixture"
+        worksheet["E4"] = 1
+        worksheet["B5"] = "OP 22"
+        worksheet["C5"] = "SECOND PART"
+        worksheet["D5"] = "Checking fixture"
+        worksheet["E5"] = 2
+
+        metadata_row, _ = find_metadata_row(worksheet)
+        header_hints = detect_header_hints(worksheet, metadata_row)
+        rows, errors = build_rows(worksheet, metadata_row, header_hints, {})
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["fixture_no"], "PARC26001005")
+        self.assertEqual(rows[1]["op_no"], "OP 22")
+        self.assertEqual(rows[1]["qty"], "2")
+
+    def test_process_workbook_uses_fixture_sheet_not_first_cost_sheet(self):
+        workbook = Workbook()
+        cost_sheet = workbook.active
+        cost_sheet.title = "SA 30"
+        cost_sheet["A1"] = "Robotic MIG Welding Fixture"
+        cost_sheet["A2"] = "Sr. No."
+        cost_sheet["D2"] = "Qty"
+        cost_sheet["A3"] = 1
+        cost_sheet["D3"] = 8
+
+        fixture_sheet = workbook.create_sheet("WBS-PARC2600M001")
+        fixture_sheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
+        fixture_sheet["A3"] = "Fixture No"
+        fixture_sheet["B3"] = "OP.NO"
+        fixture_sheet["C3"] = "Part Name"
+        fixture_sheet["D3"] = "Fixture Type"
+        fixture_sheet["E3"] = "QTY"
+        fixture_sheet["A4"] = "PARC26001008"
+        fixture_sheet["B4"] = "10.0"
+        fixture_sheet["C4"] = "SPM STATION"
+        fixture_sheet["D4"] = "Checking fixture"
+        fixture_sheet["E4"] = 2
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+
+        result = _process_workbook(buffer.getvalue())
+
+        self.assertEqual(result["file_info"]["project_code"], "PARC2600M001")
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertEqual(result["rows"][0]["fixture_no"], "PARC26001008")
+        self.assertEqual(result["rows"][0]["op_no"], "OP 10")
+        self.assertEqual(result["rows"][0]["qty"], "2")
+        self.assertEqual(result["errors"], [])
+
 
 class ExtractEndpointValidationTests(unittest.TestCase):
     def setUp(self):
+        if TestClient is None:
+            self.skipTest("fastapi testclient dependencies are not installed")
         import app.main as main_module
 
         self.original_token = main_module.SERVICE_TOKEN

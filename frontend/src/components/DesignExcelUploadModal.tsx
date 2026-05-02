@@ -77,6 +77,11 @@ function formatRemark(value: string | null | undefined) {
   return normalized || "—";
 }
 
+function formatRejectedValue(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  return normalized || "—";
+}
+
 function getRowDecisionKey(row: DesignExcelPreviewRow) {
   return `${row.fixture_no}::${row.row_number}`;
 }
@@ -1248,11 +1253,34 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                         </h5>
                         <div className="space-y-2">
                           {preview.preview.rejected.map((rejected, index) => (
-                            <div key={`${rejected.row_number}-${index}`} className="flex justify-between gap-3 rounded-lg border border-red-200 bg-red-50/50 p-3 text-sm dark:border-red-900/50 dark:bg-red-950/20">
-                              <span className="w-20 font-bold text-red-700 dark:text-red-400">
-                                {rejected.row_number > 0 ? `Row ${rejected.row_number}` : "General"}
-                              </span>
-                              <span className="flex-1 text-red-600 dark:text-red-300">{rejected.error_message}</span>
+                            <div key={`${rejected.row_number}-${index}`} className="rounded-lg border border-red-200 bg-red-50/50 p-3 text-sm dark:border-red-900/50 dark:bg-red-950/20">
+                              <div className="flex justify-between gap-3">
+                                <span className="w-20 font-bold text-red-700 dark:text-red-400">
+                                  {rejected.row_number > 0 ? `Row ${rejected.row_number}` : "General"}
+                                </span>
+                                <span className="flex-1 text-red-600 dark:text-red-300">{rejected.error_message}</span>
+                              </div>
+                              {rejected.raw_data?.validation ? (
+                                <div className="mt-3 rounded-md border border-red-200/70 bg-background/70 p-3 text-xs text-muted-foreground dark:border-red-900/40">
+                                  {rejected.raw_data.validation.sheet_name ? (
+                                    <div>
+                                      Sheet: <span className="font-medium text-foreground">{rejected.raw_data.validation.sheet_name}</span>
+                                    </div>
+                                  ) : null}
+                                  <div>
+                                    Raw: Fixture No <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.fixture_no)}</span>,
+                                    {" "}OP.NO <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.op_no)}</span>,
+                                    {" "}Fixture Type <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.fixture_type)}</span>,
+                                    {" "}QTY <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.qty)}</span>
+                                  </div>
+                                  <div>
+                                    Normalized: Fixture No <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.fixture_no)}</span>,
+                                    {" "}OP.NO <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.op_no)}</span>,
+                                    {" "}Fixture Type <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.fixture_type)}</span>,
+                                    {" "}QTY <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.qty)}</span>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           ))}
                         </div>

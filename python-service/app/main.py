@@ -48,12 +48,42 @@ FIXTURE_TYPE_KEYWORDS = (
     "mounting",
 )
 HEADER_FIELD_ALIASES = {
-    "fixture_no": {"fixtureno", "fixture", "fixtureid"},
-    "op_no": {"opno", "opnumber", "operationno", "operationnumber"},
-    "part_name": {"partname", "partdescription", "componentname"},
-    "fixture_type": {"fixturetype", "typeoffixture", "fixturedescription"},
-    "qty": {"qty", "quantity"},
-    "remark": {"remark", "remarks"},
+    "fixture_no": {
+        "fixtureno",
+        "fixtureno.",
+        "fixture",
+        "fixtureid",
+        "fixtureidentifier",
+        "fixturenumber",
+        "fixturecode",
+    },
+    "op_no": {
+        "opno",
+        "opnumber",
+        "operationno",
+        "operationnumber",
+        "operation",
+        "op",
+    },
+    "part_name": {
+        "partname",
+        "partdescription",
+        "componentname",
+        "componentdescription",
+        "particular",
+        "itemdescription",
+        "description",
+    },
+    "fixture_type": {
+        "fixturetype",
+        "typeoffixture",
+        "fixturedescription",
+        "type",
+        "fixturecategory",
+        "category",
+    },
+    "qty": {"qty", "quantity", "nos", "noofqty"},
+    "remark": {"remark", "remarks", "scope", "scoperemarks", "comment", "comments"},
 }
 
 logger = logging.getLogger("design_extraction")
@@ -182,6 +212,17 @@ def find_metadata_row(worksheet) -> tuple[int, str]:
     raise ValueError("Could not find the WBS metadata row in the workbook.")
 
 
+def find_workbook_metadata(workbook) -> tuple[str, int, str]:
+    for worksheet in workbook.worksheets:
+        try:
+            metadata_row, metadata_value = find_metadata_row(worksheet)
+            return worksheet.title, metadata_row, metadata_value
+        except ValueError:
+            continue
+
+    raise ValueError("Could not find the WBS metadata row in the workbook.")
+
+
 def build_public_image_url(file_name: str) -> str:
     return f"{resolve_public_upload_base_url()}/{file_name}"
 
@@ -266,11 +307,46 @@ def extract_images_from_workbook(file_bytes: bytes) -> tuple[dict[int, dict[str,
         workbook.close()
 
 
+def tokenize_header(value: Any) -> set[str]:
+    text = normalize_text(value).lower().replace("_", " ")
+    return {token for token in re.split(r"[^a-z0-9]+", text) if token}
+
+
 def match_header_field(cell_text: str) -> str | None:
     normalized = normalize_header(cell_text)
+    tokens = tokenize_header(cell_text)
+
     for field_name, aliases in HEADER_FIELD_ALIASES.items():
         if normalized in aliases:
             return field_name
+
+    if {"fixture", "no"} <= tokens or {"fixture", "number"} <= tokens:
+        return "fixture_no"
+
+    if "fixture" in tokens and "type" in tokens:
+        return "fixture_type"
+
+    if ("op" in tokens and ("no" in tokens or "number" in tokens)) or ({"operation", "no"} <= tokens):
+        return "op_no"
+
+    if "qty" in tokens or "quantity" in tokens:
+        return "qty"
+
+    if "part" in tokens and ("name" in tokens or "description" in tokens):
+        return "part_name"
+
+    if "component" in tokens and ("name" in tokens or "description" in tokens):
+        return "part_name"
+
+    if {"item", "description"} <= tokens:
+        return "part_name"
+
+    if "remark" in tokens or "remarks" in tokens or "comment" in tokens or "comments" in tokens:
+        return "remark"
+
+    if "scope" in tokens:
+        return "remark"
+
     return None
 
 
@@ -278,14 +354,20 @@ def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
     best_match_count = 0
     best_mapping: dict[str, int] = {}
 
-    for row_values in worksheet.iter_rows(min_row=metadata_row + 1, max_row=min(metadata_row + 30, worksheet.max_row), values_only=True):
+    start_row = max(1, metadata_row + 1)
+    end_row = min(max(start_row + 30, 30), worksheet.max_row)
+
+    for row_values in worksheet.iter_rows(min_row=start_row, max_row=end_row, values_only=True):
         current_mapping: dict[str, int] = {}
         for column_index, cell_value in enumerate(row_values, start=1):
             field_name = match_header_field(normalize_text(cell_value))
             if field_name and field_name not in current_mapping:
                 current_mapping[field_name] = column_index
 
-        if len(current_mapping) > best_match_count:
+        match_count = len(current_mapping)
+        has_primary_identity = "fixture_no" in current_mapping or ("part_name" in current_mapping and "qty" in current_mapping)
+
+        if has_primary_identity and match_count > best_match_count:
             best_match_count = len(current_mapping)
             best_mapping = current_mapping
 
@@ -296,9 +378,6 @@ def build_semantic_cells(row_values: tuple[Any, ...]) -> list[dict[str, Any]]:
     cells: list[dict[str, Any]] = []
 
     for column_index, cell_value in enumerate(row_values, start=1):
-        if column_index in ALLOWED_IMAGE_COLUMNS:
-            continue
-
         text = normalize_text(cell_value)
         if not text:
             continue
@@ -340,6 +419,24 @@ def looks_like_op_number(value: str) -> bool:
     return bool(OP_NUMBER_PATTERN.match(value.strip()))
 
 
+def parse_op_value(value: Any) -> str | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+
+    if looks_like_op_number(text):
+        normalized = re.sub(r"[\s._/-]+", " ", text).strip()
+        normalized = re.sub(r"^OP\b", "OP", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"^OP\s*", "OP ", normalized, flags=re.IGNORECASE)
+        return normalized.upper()
+
+    if re.fullmatch(r"\d+(?:\.0+)?", text):
+        numeric_text = text.split(".", 1)[0]
+        return f"OP {numeric_text}"
+
+    return None
+
+
 def looks_like_fixture_number(value: str) -> bool:
     candidate = normalize_fixture_number(value)
     if not candidate:
@@ -359,6 +456,9 @@ def parse_qty_value(value: Any) -> int | None:
         return None
     if re.fullmatch(r"\d+", text):
         qty = int(text)
+        return qty if qty > 0 else None
+    if re.fullmatch(r"\d+(?:\.0+)?", text):
+        qty = int(float(text))
         return qty if qty > 0 else None
     return None
 
@@ -386,6 +486,28 @@ def choose_hint_text(cell_map: dict[int, str], column_index: int | None, validat
     return text
 
 
+def is_valid_field_value(field_name: str, value: str) -> bool:
+    if not value:
+        return False
+    if field_name == "fixture_no":
+        return looks_like_fixture_number(value)
+    if field_name == "op_no":
+        return parse_op_value(value) is not None
+    if field_name == "qty":
+        return parse_qty_value(value) is not None
+    if field_name == "fixture_type":
+        return looks_like_fixture_type(value)
+    if field_name == "remark":
+        return looks_like_scope_text(value)
+    if field_name == "part_name":
+        return True
+    return False
+
+
+def should_carry_field_value(field_name: str) -> bool:
+    return field_name in {"fixture_no", "fixture_type", "remark", "qty"}
+
+
 def choose_single_candidate(candidates: list[dict[str, Any]], field_label: str, row_index: int, snapshot: dict[str, Any]):
     if len(candidates) == 1:
         return candidates[0], None
@@ -411,8 +533,15 @@ def parse_fixture_candidate(
     cells: list[dict[str, Any]],
     header_hints: dict[str, int],
     row_images: dict[str, str],
+    *,
+    sheet_name: str,
+    inherited_hints: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    inherited_hints = inherited_hints or {}
     snapshot = build_row_snapshot(cells, row_images)
+    snapshot["sheet_name"] = sheet_name
+    if inherited_hints:
+        snapshot["inherited_hints"] = inherited_hints
     cell_map = {cell["column"]: cell["text"] for cell in cells}
     cells_by_column = {cell["column"]: cell for cell in cells}
     used_columns: set[int] = set()
@@ -442,36 +571,47 @@ def parse_fixture_candidate(
     parsed["fixture_no"] = normalize_fixture_number(fixture_cell["text"])
     used_columns.add(fixture_cell["column"])
 
-    hint_op_no = choose_hint_text(cell_map, header_hints.get("op_no"), looks_like_op_number)
+    hint_op_no = choose_hint_text(cell_map, header_hints.get("op_no"), lambda value: parse_op_value(value) is not None)
     if hint_op_no:
-        parsed["op_no"] = normalize_text(hint_op_no)
-        used_columns.add(header_hints["op_no"])
+        parsed["op_no"] = parse_op_value(hint_op_no) or normalize_text(hint_op_no)
+        if "op_no" in header_hints:
+            used_columns.add(header_hints["op_no"])
     else:
         op_candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_op_number(cell["text"])]
-        op_cell, op_error = choose_single_candidate(op_candidates, "OP.NO", row_index, snapshot)
-        if op_error:
-            return None, op_error
-        parsed["op_no"] = normalize_text(op_cell["text"])
-        used_columns.add(op_cell["column"])
+        if op_candidates:
+            op_cell, op_error = choose_single_candidate(op_candidates, "OP.NO", row_index, snapshot)
+            if op_error:
+                return None, op_error
+            parsed["op_no"] = parse_op_value(op_cell["text"]) or normalize_text(op_cell["text"])
+            used_columns.add(op_cell["column"])
+        elif inherited_hints.get("op_no"):
+            parsed["op_no"] = parse_op_value(inherited_hints["op_no"]) or normalize_text(inherited_hints["op_no"])
 
     hint_qty_column = header_hints.get("qty")
     hint_qty_value = parse_qty_value(choose_hint_text(cell_map, hint_qty_column))
     if hint_qty_value is not None:
         parsed["qty"] = str(hint_qty_value)
-        used_columns.add(hint_qty_column)
+        if hint_qty_column:
+            used_columns.add(hint_qty_column)
     else:
         qty_candidates = [cell for cell in cells if cell["column"] not in used_columns and parse_qty_value(cell["text"]) is not None]
-        qty_cell, qty_error = choose_single_candidate(qty_candidates, "QTY", row_index, snapshot)
-        if qty_error:
-            return None, qty_error
-        parsed["qty"] = str(parse_qty_value(qty_cell["text"]))
-        used_columns.add(qty_cell["column"])
+        if qty_candidates:
+            qty_cell, qty_error = choose_single_candidate(qty_candidates, "QTY", row_index, snapshot)
+            if qty_error:
+                return None, qty_error
+            parsed["qty"] = str(parse_qty_value(qty_cell["text"]))
+            used_columns.add(qty_cell["column"])
+        elif inherited_hints.get("qty"):
+            inherited_qty = parse_qty_value(inherited_hints.get("qty"))
+            if inherited_qty is not None:
+                parsed["qty"] = str(inherited_qty)
 
     hint_remark_column = header_hints.get("remark")
     hint_remark = choose_hint_text(cell_map, hint_remark_column)
     if hint_remark:
         parsed["remark"] = hint_remark
-        used_columns.add(hint_remark_column)
+        if hint_remark_column:
+            used_columns.add(hint_remark_column)
     else:
         remark_candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_scope_text(cell["text"])]
         if len(remark_candidates) > 1:
@@ -487,12 +627,15 @@ def parse_fixture_candidate(
         if len(remark_candidates) == 1:
             parsed["remark"] = remark_candidates[0]["text"]
             used_columns.add(remark_candidates[0]["column"])
+        elif inherited_hints.get("remark"):
+            parsed["remark"] = inherited_hints["remark"]
 
     hint_fixture_type_column = header_hints.get("fixture_type")
     hint_fixture_type = choose_hint_text(cell_map, hint_fixture_type_column)
     if hint_fixture_type:
         parsed["fixture_type"] = hint_fixture_type
-        used_columns.add(hint_fixture_type_column)
+        if hint_fixture_type_column:
+            used_columns.add(hint_fixture_type_column)
     else:
         fixture_type_candidates = [
             cell for cell in cells if cell["column"] not in used_columns and looks_like_fixture_type(cell["text"])
@@ -505,14 +648,18 @@ def parse_fixture_candidate(
         )
         if fixture_type_error:
             return None, fixture_type_error
-        parsed["fixture_type"] = fixture_type_cell["text"]
-        used_columns.add(fixture_type_cell["column"])
+        if fixture_type_cell:
+            parsed["fixture_type"] = fixture_type_cell["text"]
+            used_columns.add(fixture_type_cell["column"])
+        elif inherited_hints.get("fixture_type"):
+            parsed["fixture_type"] = inherited_hints["fixture_type"]
 
     hint_part_name_column = header_hints.get("part_name")
     hint_part_name = choose_hint_text(cell_map, hint_part_name_column)
     if hint_part_name:
         parsed["part_name"] = hint_part_name
-        used_columns.add(hint_part_name_column)
+        if hint_part_name_column:
+            used_columns.add(hint_part_name_column)
     else:
         part_name_candidates = []
         for cell in cells:
@@ -532,22 +679,39 @@ def parse_fixture_candidate(
                 continue
             part_name_candidates.append(cell)
 
-        part_name_cell, part_name_error = choose_single_candidate(
-            part_name_candidates,
-            "Part Name",
-            row_index,
-            snapshot,
-        )
-        if part_name_error:
-            return None, part_name_error
-        parsed["part_name"] = part_name_cell["text"]
-        used_columns.add(part_name_cell["column"])
+        part_name_cell = None
+        if len(part_name_candidates) > 1:
+            return None, build_error(
+                "Multiple possible values found for Part Name; row rejected to avoid guessing.",
+                excel_row=row_index,
+                raw_data={
+                    **snapshot,
+                    "candidate_field": "Part Name",
+                    "candidate_values": [{"column": cell["column"], "value": cell["text"]} for cell in part_name_candidates],
+                },
+            )
+        if len(part_name_candidates) == 1:
+            part_name_cell = part_name_candidates[0]
+
+        if part_name_cell:
+            parsed["part_name"] = part_name_cell["text"]
+            used_columns.add(part_name_cell["column"])
+        else:
+            merged_part_name_source = choose_hint_text(cell_map, header_hints.get("op_no"))
+            if (
+                merged_part_name_source
+                and not parse_op_value(merged_part_name_source)
+                and not looks_like_fixture_number(merged_part_name_source)
+                and parse_qty_value(merged_part_name_source) is None
+            ):
+                parsed["part_name"] = merged_part_name_source
+        if not parsed["part_name"] and inherited_hints.get("part_name"):
+            parsed["part_name"] = inherited_hints["part_name"]
 
     missing_fields = [
         label
         for field_name, label in (
             ("fixture_no", "FIXTURE NO"),
-            ("op_no", "OP.NO"),
             ("part_name", "Part Name"),
             ("fixture_type", "Fixture Type"),
             ("qty", "QTY"),
@@ -574,10 +738,45 @@ def parse_fixture_candidate(
             "image_1_url": row_images.get("image_1_url"),
             "image_2_url": row_images.get("image_2_url"),
             "parser_confidence": "HIGH",
-            "raw_data": snapshot,
+            "raw_data": {
+                **snapshot,
+                "normalized_fields": {
+                    "fixture_no": parsed["fixture_no"] or None,
+                    "op_no": parsed["op_no"] or None,
+                    "part_name": parsed["part_name"] or None,
+                    "fixture_type": parsed["fixture_type"] or None,
+                    "qty": parsed["qty"] or None,
+                },
+            },
         },
         None,
     )
+
+
+def build_vertical_merge_lookup(worksheet) -> dict[tuple[int, int], Any]:
+    lookup: dict[tuple[int, int], Any] = {}
+
+    for merged_range in getattr(worksheet.merged_cells, "ranges", []):
+        if merged_range.min_col != merged_range.max_col:
+            continue
+
+        master_value = worksheet.cell(merged_range.min_row, merged_range.min_col).value
+        for row_index in range(merged_range.min_row, merged_range.max_row + 1):
+            lookup[(row_index, merged_range.min_col)] = master_value
+
+    return lookup
+
+
+def get_effective_row_values(worksheet, row_index: int, max_column: int, vertical_merge_lookup: dict[tuple[int, int], Any]) -> tuple[Any, ...]:
+    values: list[Any] = []
+
+    for column_index in range(1, max_column + 1):
+        cell_value = worksheet.cell(row=row_index, column=column_index).value
+        if cell_value in (None, ""):
+            cell_value = vertical_merge_lookup.get((row_index, column_index), cell_value)
+        values.append(cell_value)
+
+    return tuple(values)
 
 
 def build_rows(
@@ -588,9 +787,13 @@ def build_rows(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    vertical_merge_lookup = build_vertical_merge_lookup(worksheet)
+    carry_hints: dict[str, str] = {}
+    start_row = max(1, metadata_row + 1)
 
-    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=metadata_row + 1, values_only=True), start=metadata_row + 1):
+    for row_index in range(start_row, worksheet.max_row + 1):
         row_images = images_by_row.get(row_index, {})
+        row_values = get_effective_row_values(worksheet, row_index, worksheet.max_column, vertical_merge_lookup)
         cells = build_semantic_cells(row_values)
 
         if not cells and not row_images:
@@ -605,13 +808,37 @@ def build_rows(
         if is_header_row(cells):
             continue
 
-        parsed_row, error = parse_fixture_candidate(row_index, cells, header_hints, row_images)
+        row_has_structured_content = bool(cells or row_images)
+        inherited_hints: dict[str, str] = {}
+        for field_name, column_index in header_hints.items():
+            if not column_index:
+                continue
+
+            raw_value = normalize_text(row_values[column_index - 1]) if column_index - 1 < len(row_values) else ""
+            if raw_value and is_valid_field_value(field_name, raw_value):
+                carry_hints[field_name] = raw_value
+                continue
+
+            if row_has_structured_content and field_name in carry_hints and should_carry_field_value(field_name):
+                inherited_hints[field_name] = carry_hints[field_name]
+
+        parsed_row, error = parse_fixture_candidate(
+            row_index,
+            cells,
+            header_hints,
+            row_images,
+            sheet_name=worksheet.title,
+            inherited_hints=inherited_hints,
+        )
 
         if error:
             errors.append(error)
             continue
 
         if parsed_row:
+            for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "remark", "qty"):
+                if parsed_row.get(field_name):
+                    carry_hints[field_name] = str(parsed_row[field_name])
             rows.append(parsed_row)
             continue
 
@@ -628,22 +855,48 @@ def build_rows(
 
 
 def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
-    workbook = open_excel_workbook(file_bytes, read_only=True)
+    workbook = open_excel_workbook(file_bytes, read_only=False)
     try:
-        worksheet = workbook.active
-        metadata_row, metadata_value = find_metadata_row(worksheet)
+        _metadata_sheet_name, _metadata_row, metadata_value = find_workbook_metadata(workbook)
         file_info = parse_wbs_header(metadata_value)
-        header_hints = detect_header_hints(worksheet, metadata_row)
-        images_by_row, image_errors = extract_images_from_workbook(file_bytes)
-        rows, parsing_errors = build_rows(worksheet, metadata_row, header_hints, images_by_row)
+
+        all_rows: list[dict[str, Any]] = []
+        all_errors: list[dict[str, Any]] = []
+
+        for worksheet in workbook.worksheets:
+            try:
+                metadata_row, _ = find_metadata_row(worksheet)
+            except ValueError:
+                metadata_row = 0
+
+            header_hints = detect_header_hints(worksheet, metadata_row)
+            images_by_row, image_errors = extract_anchored_images(worksheet)
+            rows, parsing_errors = build_rows(worksheet, metadata_row, header_hints, images_by_row)
+
+            all_rows.extend(rows)
+            all_errors.extend(image_errors)
+            all_errors.extend(parsing_errors)
     finally:
         workbook.close()
 
-    errors = [*image_errors, *parsing_errors]
-    if not rows and not errors:
+    deduped_rows: list[dict[str, Any]] = []
+    seen_row_keys: set[tuple[str, int, str]] = set()
+    for row in all_rows:
+        row_key = (
+            row.get("raw_data", {}).get("sheet_name", ""),
+            int(row["excel_row"]),
+            row["fixture_no"],
+        )
+        if row_key in seen_row_keys:
+            continue
+        seen_row_keys.add(row_key)
+        deduped_rows.append(row)
+
+    errors = all_errors
+    if not deduped_rows and not errors:
         errors.append(build_error("No fixture rows were found in the workbook."))
 
-    for row in rows:
+    for row in deduped_rows:
         log_event(
             "extract_row_accepted",
             excel_row=row["excel_row"],
@@ -666,7 +919,7 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
             "scope_name_display": file_info["scope_name"],
             "company_name": file_info["company_name"],
         },
-        "rows": rows,
+        "rows": deduped_rows,
         "errors": errors,
     }
 

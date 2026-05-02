@@ -29,6 +29,11 @@ function mapExtractionErrors(errors = []) {
   }));
 }
 
+function isNonBlockingImageExtractionError(error) {
+  const message = String(error?.error_message || "").toLowerCase();
+  return message.includes("image");
+}
+
 function logImportDecision(event, payload = {}) {
   console.info("[design-import]", {
     event,
@@ -58,12 +63,11 @@ function assertImportableFixtureShape(fixtureData) {
   }
 
   const fixtureNo = String(fixtureData.fixture_no || "").trim();
-  const opNo = String(fixtureData.op_no || "").trim();
   const partName = String(fixtureData.part_name || "").trim();
   const fixtureType = String(fixtureData.fixture_type || "").trim();
   const qty = Number(fixtureData.qty);
 
-  if (!fixtureNo || !opNo || !partName || !fixtureType || !Number.isInteger(qty) || qty <= 0) {
+  if (!fixtureNo || !partName || !fixtureType || !Number.isInteger(qty) || qty <= 0) {
     throw new AppError(400, buildDecisionErrorMessage("Fixture confirmation payload failed strict validation", fixtureData));
   }
 }
@@ -206,7 +210,15 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
       rejectedRows: validationErrors,
       skippedRows,
     } = validateParsedData(extractionResult.rows);
-    const rejectedRows = [...mapExtractionErrors(extractionResult.errors), ...validationErrors];
+    const acceptedRowNumbers = new Set(validRows.map((row) => Number(row.row_number)));
+    const extractionErrors = mapExtractionErrors(extractionResult.errors).filter((error) => {
+      if (!isNonBlockingImageExtractionError(error)) {
+        return true;
+      }
+
+      return !acceptedRowNumbers.has(Number(error.row_number));
+    });
+    const rejectedRows = [...extractionErrors, ...validationErrors];
 
     logImportDecision("excel_upload_parse_success", {
       project_code: extractionResult.file_info.project_code,

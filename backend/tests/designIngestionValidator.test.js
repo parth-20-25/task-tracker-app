@@ -70,7 +70,7 @@ runTest("keeps ambiguous scope rows pending explicit decision", () => {
   assert.match(result.validRows[0].scope_reason, /clearly defined scope/i);
 });
 
-runTest("rejects low-confidence rows", () => {
+runTest("does not reject rows only because parser confidence is low", () => {
   const result = validateParsedData([
     {
       excel_row: 11,
@@ -84,9 +84,8 @@ runTest("rejects low-confidence rows", () => {
     },
   ]);
 
-  assert.equal(result.validRows.length, 0);
-  assert.equal(result.rejectedRows.length, 1);
-  assert.match(result.rejectedRows[0].error_message, /confidence/i);
+  assert.equal(result.validRows.length, 1);
+  assert.equal(result.rejectedRows.length, 0);
 });
 
 runTest("rejects duplicate fixture numbers in the same upload", () => {
@@ -135,6 +134,44 @@ runTest("rejects rows that do not contain a fixture number", () => {
   assert.equal(result.validRows.length, 0);
   assert.equal(result.rejectedRows.length, 1);
   assert.match(result.rejectedRows[0].error_message, /Fixture No is mandatory/i);
+});
+
+runTest("accepts equipment-level fixture rows without OP.NO when other mandatory fields are present", () => {
+  const result = validateParsedData([
+    {
+      row_number: 16,
+      fixture_no: "PARC25119009",
+      op_no: "",
+      part_name: "Dry Leak Testing SPM",
+      fixture_type: "LEAK TEST SPM",
+      remark: "PARC scope",
+      qty: "1",
+      parser_confidence: "HIGH",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 1);
+  assert.equal(result.validRows[0].op_no, "");
+  assert.equal(result.rejectedRows.length, 0);
+});
+
+runTest("normalizes numeric formatting noise for QTY and OP.NO", () => {
+  const result = validateParsedData([
+    {
+      row_number: 17,
+      fixture_no: "PARC26001007",
+      op_no: "10.0",
+      part_name: "LH BRACKET SUB ASSLY",
+      fixture_type: "Checking fixture",
+      remark: "PARC scope",
+      qty: "2.0",
+      parser_confidence: "HIGH",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 1);
+  assert.equal(result.validRows[0].op_no, "OP 10");
+  assert.equal(result.validRows[0].qty, 2);
 });
 
 runTest("normalizes safe formatting noise without changing business meaning", () => {

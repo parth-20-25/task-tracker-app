@@ -13,15 +13,95 @@ function normalizeTextCell(value) {
   return normalizePastedCell(value);
 }
 
-function normalizeFixtureNo(value) {
+function normalizeNormalizedText(value) {
   return normalizeTextCell(value)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeFixtureNo(value) {
+  return normalizeNormalizedText(value)
     .replace(/\s+/g, "")
     .toUpperCase();
+}
+
+function normalizeOpNo(value) {
+  const text = normalizeNormalizedText(value);
+  if (!text) {
+    return "";
+  }
+
+  if (/^OP[\s._/-]*\d+[A-Z0-9._/-]*$/i.test(text)) {
+    return text
+      .replace(/[\s._/-]+/g, " ")
+      .replace(/^OP\s*/i, "OP ")
+      .trim()
+      .toUpperCase();
+  }
+
+  if (/^\d+(?:\.0+)?$/.test(text)) {
+    return `OP ${text.split(".", 1)[0]}`;
+  }
+
+  return text;
+}
+
+function normalizeQty(value) {
+  const text = normalizeNormalizedText(value);
+  if (!text) {
+    return { raw: text, normalized: null };
+  }
+
+  if (/^\d+$/.test(text)) {
+    const qty = parseInt(text, 10);
+    return { raw: text, normalized: qty > 0 ? qty : null };
+  }
+
+  if (/^\d+(?:\.0+)?$/.test(text)) {
+    const qty = parseInt(text.split(".", 1)[0], 10);
+    return { raw: text, normalized: qty > 0 ? qty : null };
+  }
+
+  return { raw: text, normalized: null };
 }
 
 function getRowNumber(item) {
   const rowNumber = item?.excel_row ?? item?.row_number;
   return Number(rowNumber);
+}
+
+function buildFieldDiagnostics(fields) {
+  return {
+    sheet_name: fields?.sheet_name || null,
+    raw: {
+      fixture_no: fields.fixture_no_raw ?? null,
+      op_no: fields.op_no_raw ?? null,
+      part_name: fields.part_name_raw ?? null,
+      fixture_type: fields.fixture_type_raw ?? null,
+      qty: fields.qty_raw ?? null,
+    },
+    normalized: {
+      fixture_no: fields.fixture_no ?? null,
+      op_no: fields.op_no ?? null,
+      part_name: fields.part_name ?? null,
+      fixture_type: fields.fixture_type ?? null,
+      qty: fields.qty ?? null,
+    },
+  };
+}
+
+function buildRejectedRow(row_number, error_message, raw_data, diagnostics, extra = {}) {
+  return {
+    row_number,
+    error_message,
+    raw_data: {
+      ...(raw_data && typeof raw_data === "object" ? raw_data : {}),
+      validation: {
+        ...(diagnostics || {}),
+        ...extra,
+      },
+    },
+  };
 }
 
 function extractRowFields(item) {
@@ -97,70 +177,80 @@ function validateParsedData(parsedRows) {
     } = extractRowFields(item);
 
     const normalizedFixtureNo = normalizeFixtureNo(fixture_no);
+    const normalizedOpNo = normalizeOpNo(op_no);
+    const normalizedPartName = normalizeNormalizedText(part_name);
+    const normalizedFixtureType = normalizeNormalizedText(fixture_type);
+    const normalizedRemark = normalizeNormalizedText(remark);
+    const normalizedDesigner = normalizeNormalizedText(designer);
+    const qtyInfo = normalizeQty(qtyRaw);
+    const diagnostics = buildFieldDiagnostics({
+      sheet_name: raw_data?.sheet_name || null,
+      fixture_no_raw: fixture_no,
+      op_no_raw: op_no,
+      part_name_raw: part_name,
+      fixture_type_raw: fixture_type,
+      qty_raw: qtyInfo.raw,
+      fixture_no: normalizedFixtureNo,
+      op_no: normalizedOpNo || null,
+      part_name: normalizedPartName || null,
+      fixture_type: normalizedFixtureType || null,
+      qty: qtyInfo.normalized,
+    });
 
     if (!normalizedFixtureNo) {
-      rejectedRows.push({
-        row_number,
-        error_message: "Fixture No is mandatory for import.",
-        raw_data,
-      });
+      rejectedRows.push(buildRejectedRow(row_number, "Fixture No is mandatory for import.", raw_data, diagnostics, {
+        reason: "fixture_no_missing",
+        expected: "A PARC fixture number such as PARC25119001",
+      }));
       continue;
     }
 
     if (!FIXTURE_NO_REGEX.test(normalizedFixtureNo)) {
-      rejectedRows.push({
-        row_number,
-        error_message: "Fixture No must match the PARC fixture format.",
-        raw_data,
-      });
+      rejectedRows.push(buildRejectedRow(row_number, "Fixture No must match the PARC fixture format.", raw_data, diagnostics, {
+        reason: "fixture_no_invalid",
+        expected: "A PARC fixture number such as PARC25119001",
+      }));
       continue;
     }
 
-    if (!op_no || !part_name || !fixture_type || !qtyRaw) {
+    if (!normalizedPartName || !normalizedFixtureType || qtyInfo.normalized === null) {
       const missing = [];
-      if (!op_no) missing.push("OP.NO");
-      if (!part_name) missing.push("Part Name");
-      if (!fixture_type) missing.push("Fixture Type");
-      if (!qtyRaw) missing.push("QTY");
+      if (!normalizedPartName) missing.push("Part Name");
+      if (!normalizedFixtureType) missing.push("Fixture Type");
+      if (qtyInfo.normalized === null) missing.push("QTY");
       
-      rejectedRows.push({
+      rejectedRows.push(buildRejectedRow(
         row_number,
-        error_message: `Missing fields: ${missing.join(', ')}`,
+        `Missing fields: ${missing.join(", ")}`,
         raw_data,
-      });
+        diagnostics,
+        {
+          reason: "required_field_missing",
+          missing_fields: missing,
+        },
+      ));
       continue;
     }
 
-    const qtyText = normalizeTextCell(qtyRaw);
-    const qty = parseInt(qtyText, 10);
-    if (isNaN(qty) || !/^\d+$/.test(qtyText) || qty <= 0) {
-      rejectedRows.push({
-        row_number,
-        error_message: "QTY must be a valid numeric value.",
-        raw_data,
-      });
+    if (qtyInfo.normalized === null) {
+      rejectedRows.push(buildRejectedRow(row_number, "QTY must be a valid numeric value.", raw_data, diagnostics, {
+        reason: "qty_invalid",
+        expected: "A positive number such as 1, 2, or 2.0",
+      }));
       continue;
     }
 
-    if (parser_confidence && parser_confidence !== "HIGH") {
-      rejectedRows.push({
-        row_number,
-        error_message: "Row confidence is too low for controlled fixture import.",
-        raw_data,
-      });
-      continue;
-    }
-
-    const scopeAssessment = classifyScopeOwnership(remark);
+    const qty = qtyInfo.normalized;
+    const scopeAssessment = classifyScopeOwnership(normalizedRemark);
     if (scopeAssessment.status === SCOPE_STATUSES.CUSTOMER) {
       skippedRows.push({
         row_number,
         fixture_no: normalizedFixtureNo,
-        op_no,
-        part_name,
-        fixture_type,
-        remark: remark || null,
-        designer: designer || null,
+        op_no: normalizedOpNo,
+        part_name: normalizedPartName,
+        fixture_type: normalizedFixtureType,
+        remark: normalizedRemark || null,
+        designer: normalizedDesigner || null,
         qty,
         image_1_url,
         image_2_url,
@@ -173,11 +263,9 @@ function validateParsedData(parsedRows) {
 
     const fixtureNoKey = normalizedFixtureNo.toLowerCase();
     if (seenFixtureNumbers.has(fixtureNoKey)) {
-      rejectedRows.push({
-        row_number,
-        error_message: "Duplicate fixture number found in uploaded file.",
-        raw_data,
-      });
+      rejectedRows.push(buildRejectedRow(row_number, "Duplicate fixture number found in uploaded file.", raw_data, diagnostics, {
+        reason: "duplicate_fixture_no",
+      }));
       continue;
     }
 
@@ -186,16 +274,18 @@ function validateParsedData(parsedRows) {
     validRows.push({
       row_number,
       fixture_no: normalizedFixtureNo,
-      op_no,
-      part_name,
-      fixture_type,
-      remark: remark || null,
-      designer: designer || null,
+      op_no: normalizedOpNo,
+      part_name: normalizedPartName,
+      fixture_type: normalizedFixtureType,
+      remark: normalizedRemark || null,
+      designer: normalizedDesigner || null,
       qty,
       image_1_url,
       image_2_url,
       scope_status: scopeAssessment.status,
       scope_reason: scopeAssessment.reason,
+      parser_confidence,
+      raw_data,
     });
   }
 

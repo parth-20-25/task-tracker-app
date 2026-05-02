@@ -11,6 +11,7 @@ const {
   findFixturesByScopeForDedupe,
   createUploadBatch,
   createUploadErrors,
+  createUploadRowCorrections,
   upsertFixture
 } = require("../repositories/designProjectCatalogRepository");
 
@@ -21,12 +22,154 @@ const { diffWithDatabase } = require("./designIngestion/differ");
 const { formatPreview } = require("./designIngestion/formatter");
 const { extractDesignWorkbook } = require("./pythonExtractionClient");
 
+const CORRECTIONABLE_FIELDS = ["fixture_no", "op_no", "part_name", "fixture_type", "qty", "remark"];
+const FIELD_LABEL_TO_KEY = {
+  "fixture no": "fixture_no",
+  "fixture number": "fixture_no",
+  "op.no": "op_no",
+  "op no": "op_no",
+  "part name": "part_name",
+  "fixture type": "fixture_type",
+  qty: "qty",
+  remark: "remark",
+  remarks: "remark",
+};
+
+function normalizeRowReferenceSource(value) {
+  return value === "business_serial" ? "business_serial" : "excel_row";
+}
+
+function normalizeFieldKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function mapFieldLabelToKey(value) {
+  return FIELD_LABEL_TO_KEY[normalizeFieldKey(value)] || null;
+}
+
+function normalizeRowReference(row = {}) {
+  const explicitReference = String(
+    row.row_reference
+      || row.business_row_reference
+      || row.raw_data?.row_reference
+      || row.raw_data?.business_row_reference
+      || row.row_number
+      || row.excel_row
+      || "",
+  ).trim();
+
+  return explicitReference || "General";
+}
+
+function normalizePrimaryRowNumber(row = {}) {
+  const primaryRow = Number(row.row_number);
+  if (Number.isFinite(primaryRow) && primaryRow > 0) {
+    return primaryRow;
+  }
+
+  const excelRow = Number(row.excel_row);
+  if (Number.isFinite(excelRow) && excelRow > 0) {
+    return excelRow;
+  }
+
+  return 0;
+}
+
+function normalizeExcelRow(row = {}) {
+  const excelRow = Number(row.excel_row ?? row.raw_data?.excel_row);
+  return Number.isFinite(excelRow) && excelRow > 0 ? excelRow : null;
+}
+
+function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
+  const rawData = error.raw_data && typeof error.raw_data === "object" ? error.raw_data : {};
+  const parsed = rawData.parsed && typeof rawData.parsed === "object" ? rawData.parsed : {};
+  const normalizedFields = rawData.normalized_fields && typeof rawData.normalized_fields === "object"
+    ? rawData.normalized_fields
+    : {};
+  const candidateField = typeof rawData.candidate_field === "string" ? rawData.candidate_field : null;
+  const parsedMissingFields = CORRECTIONABLE_FIELDS
+    .filter((fieldName) => fieldName !== "remark" && !String(parsed[fieldName] || "").trim())
+    .map((fieldName) => {
+      switch (fieldName) {
+        case "fixture_no":
+          return "Fixture No";
+        case "op_no":
+          return "OP.NO";
+        case "part_name":
+          return "Part Name";
+        case "fixture_type":
+          return "Fixture Type";
+        case "qty":
+          return "QTY";
+        default:
+          return fieldName;
+      }
+    });
+
+  const problemFields = [
+    ...new Set([
+      ...parsedMissingFields.map(mapFieldLabelToKey).filter(Boolean),
+      mapFieldLabelToKey(candidateField),
+    ].filter(Boolean)),
+  ];
+
+  const rowReference = normalizeRowReference({
+    row_reference: rawData.row_reference,
+    business_row_reference: rawData.business_row_reference,
+    row_number: error.row_number,
+    excel_row: error.excel_row,
+  });
+
+  return {
+    sheet_name: rawData.sheet_name || null,
+    excel_row: normalizeExcelRow(error),
+    row_reference: rowReference,
+    row_reference_source: normalizeRowReferenceSource(rawData.row_reference_source),
+    business_row_reference: rawData.business_row_reference || null,
+    raw: {
+      fixture_no: parsed.fixture_no || null,
+      op_no: parsed.op_no || null,
+      part_name: parsed.part_name || null,
+      fixture_type: parsed.fixture_type || null,
+      qty: parsed.qty || null,
+      remark: parsed.remark || null,
+    },
+    normalized: {
+      fixture_no: normalizedFields.fixture_no || parsed.fixture_no || null,
+      op_no: normalizedFields.op_no || parsed.op_no || null,
+      part_name: normalizedFields.part_name || parsed.part_name || null,
+      fixture_type: normalizedFields.fixture_type || parsed.fixture_type || null,
+      qty: normalizedFields.qty || parsed.qty || null,
+      remark: parsed.remark || null,
+    },
+    inherited: rawData.inherited_hints || {},
+    candidate_field: candidateField,
+    candidate_values: Array.isArray(rawData.candidate_values) ? rawData.candidate_values : [],
+    missing_fields: parsedMissingFields,
+    problem_fields: problemFields,
+    snapshot_cells: Array.isArray(rawData.cells) ? rawData.cells : [],
+  };
+}
+
 function mapExtractionErrors(errors = []) {
-  return errors.map((error) => ({
-    row_number: error.excel_row || 0,
-    error_message: error.error_message,
-    raw_data: error.raw_data || {},
-  }));
+  return errors.map((error) => {
+    const diagnostics = buildCorrectionDiagnosticsFromExtractionError(error);
+    return {
+      row_number: normalizePrimaryRowNumber(error),
+      excel_row: diagnostics.excel_row,
+      row_reference: diagnostics.row_reference,
+      row_reference_source: diagnostics.row_reference_source,
+      business_row_reference: diagnostics.business_row_reference,
+      error_message: error.error_message,
+      raw_data: {
+        ...(error.raw_data || {}),
+        validation: diagnostics,
+      },
+    };
+  });
 }
 
 function isNonBlockingImageExtractionError(error) {
@@ -47,6 +190,13 @@ function normalizeScopeDecision(value) {
 
 function normalizeResolution(value) {
   return value === "existing" ? "existing" : "incoming";
+}
+
+function normalizeFixtureIdentity(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
 }
 
 function buildDecisionErrorMessage(prefix, fixtureData) {
@@ -72,21 +222,13 @@ function assertImportableFixtureShape(fixtureData) {
   }
 }
 
-async function buildPreviewPayload(user, {
-  fileInfo,
-  validRows,
-  rejectedRows,
-  skippedRows,
-  metadataSource,
-}) {
+async function resolveExistingFixturesForScope(user, fileInfo) {
   const departmentId = requireUserDepartment(user);
   const project_code_clean = fileInfo.project_code.trim();
   const scope_name_display = fileInfo.scope_name.trim();
   const scope_name_normalized = normalize(scope_name_display);
-  const company_name_clean = fileInfo.company_name.trim();
 
   const client = await pool.connect();
-  let existingFixtures = [];
   try {
     const projectCheck = await client.query(
       `
@@ -98,27 +240,104 @@ async function buildPreviewPayload(user, {
       [project_code_clean, departmentId],
     );
 
-    if (projectCheck.rows.length > 0) {
-      const projectId = projectCheck.rows[0].project_id;
-      const scopeCheck = await client.query(
-        `
-          SELECT id AS scope_id, scope_name
-          FROM design.scopes
-          WHERE project_id = $1
-        `,
-        [projectId],
-      );
+    if (projectCheck.rows.length === 0) {
+      return [];
+    }
 
-      for (const sc of scopeCheck.rows) {
-        if (normalize(sc.scope_name) === scope_name_normalized) {
-          existingFixtures = await findFixturesByScopeForDedupe(sc.scope_id, client);
-          break;
-        }
+    const projectId = projectCheck.rows[0].project_id;
+    const scopeCheck = await client.query(
+      `
+        SELECT id AS scope_id, scope_name
+        FROM design.scopes
+        WHERE project_id = $1
+      `,
+      [projectId],
+    );
+
+    for (const scope of scopeCheck.rows) {
+      if (normalize(scope.scope_name) === scope_name_normalized) {
+        return findFixturesByScopeForDedupe(scope.scope_id, client);
       }
     }
+
+    return [];
   } finally {
     client.release();
   }
+}
+
+function buildCorrectionRejectedRow(originalRow, correctedRow, errorMessage, extra = {}) {
+  const originalRawData = originalRow?.raw_data && typeof originalRow.raw_data === "object"
+    ? originalRow.raw_data
+    : {};
+  const originalValidation = originalRawData.validation && typeof originalRawData.validation === "object"
+    ? originalRawData.validation
+    : {};
+
+  return {
+    row_number: normalizePrimaryRowNumber(correctedRow || originalRow),
+    excel_row: normalizeExcelRow(correctedRow || originalRow),
+    row_reference: normalizeRowReference(correctedRow || originalRow),
+    row_reference_source: normalizeRowReferenceSource(
+      correctedRow?.row_reference_source
+      || originalRow?.row_reference_source
+      || originalValidation.row_reference_source,
+    ),
+    business_row_reference:
+      correctedRow?.business_row_reference
+      || originalRow?.business_row_reference
+      || originalValidation.business_row_reference
+      || null,
+    error_message: errorMessage,
+    raw_data: {
+      ...originalRawData,
+      validation: {
+        ...originalValidation,
+        ...extra,
+      },
+    },
+  };
+}
+
+function buildCorrectionAudit(originalRow, correctedRow, classification) {
+  const originalValidation = originalRow?.raw_data?.validation || {};
+  const originalNormalized = originalValidation.normalized || {};
+  const correctedComparable = {
+    fixture_no: correctedRow?.fixture_no ?? "",
+    op_no: correctedRow?.op_no ?? "",
+    part_name: correctedRow?.part_name ?? "",
+    fixture_type: correctedRow?.fixture_type ?? "",
+    qty: correctedRow?.qty ?? "",
+    remark: correctedRow?.remark ?? "",
+  };
+
+  const corrected_fields = CORRECTIONABLE_FIELDS.filter((fieldName) => (
+    String(originalNormalized[fieldName] ?? "").trim() !== String(correctedComparable[fieldName] ?? "").trim()
+  ));
+
+  return {
+    row_reference: normalizeRowReference(correctedRow || originalRow),
+    row_number: normalizePrimaryRowNumber(correctedRow || originalRow),
+    excel_row: normalizeExcelRow(correctedRow || originalRow),
+    correction_reason: originalRow?.error_message || "Rejected row corrected inline before import.",
+    corrected_fields,
+    original_row: originalRow,
+    corrected_row: correctedRow,
+    correction_result: classification,
+  };
+}
+
+async function buildPreviewPayload(user, {
+  fileInfo,
+  validRows,
+  rejectedRows,
+  skippedRows,
+  metadataSource,
+}) {
+  const project_code_clean = fileInfo.project_code.trim();
+  const scope_name_display = fileInfo.scope_name.trim();
+  const company_name_clean = fileInfo.company_name.trim();
+  const existingFixtures = await resolveExistingFixturesForScope(user, fileInfo);
 
   const diffResults = diffWithDatabase(validRows, existingFixtures);
   const preview = formatPreview(diffResults, rejectedRows, skippedRows);
@@ -210,13 +429,13 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
       rejectedRows: validationErrors,
       skippedRows,
     } = validateParsedData(extractionResult.rows);
-    const acceptedRowNumbers = new Set(validRows.map((row) => Number(row.row_number)));
+    const acceptedRowNumbers = new Set(validRows.map((row) => Number(row.excel_row ?? row.row_number)));
     const extractionErrors = mapExtractionErrors(extractionResult.errors).filter((error) => {
       if (!isNonBlockingImageExtractionError(error)) {
         return true;
       }
 
-      return !acceptedRowNumbers.has(Number(error.row_number));
+      return !acceptedRowNumbers.has(Number(error.excel_row ?? error.row_number));
     });
     const rejectedRows = [...extractionErrors, ...validationErrors];
 
@@ -248,8 +467,161 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
   }
 }
 
+async function validateRejectedUploadRow(user, payload = {}) {
+  const { file_info, original_row, corrected_row, reserved_fixture_numbers } = payload;
+
+  if (!file_info || !file_info.project_code || !file_info.scope_name_display || !file_info.company_name) {
+    throw new AppError(400, "Missing file info for row correction");
+  }
+
+  if (!original_row || typeof original_row !== "object") {
+    throw new AppError(400, "Missing original rejected row for correction");
+  }
+
+  if (!corrected_row || typeof corrected_row !== "object") {
+    throw new AppError(400, "Missing corrected row payload");
+  }
+
+  const candidateRow = {
+    row_number: normalizePrimaryRowNumber({
+      ...original_row,
+      ...corrected_row,
+    }),
+    excel_row: normalizeExcelRow({
+      ...original_row,
+      ...corrected_row,
+    }),
+    row_reference: normalizeRowReference({
+      ...original_row,
+      ...corrected_row,
+    }),
+    row_reference_source: normalizeRowReferenceSource(
+      corrected_row.row_reference_source
+      || original_row.row_reference_source
+      || original_row.raw_data?.validation?.row_reference_source,
+    ),
+    business_row_reference:
+      corrected_row.business_row_reference
+      || original_row.business_row_reference
+      || original_row.raw_data?.validation?.business_row_reference
+      || null,
+    fixture_no: corrected_row.fixture_no,
+    op_no: corrected_row.op_no,
+    part_name: corrected_row.part_name,
+    fixture_type: corrected_row.fixture_type,
+    remark: corrected_row.remark,
+    qty: corrected_row.qty,
+    image_1_url: corrected_row.image_1_url ?? original_row.image_1_url ?? original_row.raw_data?.image_1_url ?? null,
+    image_2_url: corrected_row.image_2_url ?? original_row.image_2_url ?? original_row.raw_data?.image_2_url ?? null,
+    parser_confidence: "HIGH",
+    raw_data: {
+      ...(original_row.raw_data && typeof original_row.raw_data === "object" ? original_row.raw_data : {}),
+      validation: original_row.raw_data?.validation || {},
+    },
+  };
+
+  const { validRows, rejectedRows, skippedRows } = validateParsedData([candidateRow]);
+  if (rejectedRows.length > 0) {
+    return {
+      classification: "rejected",
+      rejected: rejectedRows[0],
+      correction_audit: buildCorrectionAudit(original_row, candidateRow, "rejected"),
+    };
+  }
+
+  if (skippedRows.length > 0) {
+    return {
+      classification: "skipped",
+      skipped: skippedRows[0],
+      correction_audit: buildCorrectionAudit(original_row, skippedRows[0], "skipped"),
+    };
+  }
+
+  const validatedRow = validRows[0];
+  const originalFixtureIdentity = normalizeFixtureIdentity(
+    original_row?.raw_data?.validation?.normalized?.fixture_no
+      || original_row?.fixture_no
+      || original_row?.raw_data?.fixture_no,
+  );
+  const reservedFixtureNumbers = new Set(
+    (Array.isArray(reserved_fixture_numbers) ? reserved_fixture_numbers : [])
+      .map(normalizeFixtureIdentity)
+      .filter(Boolean),
+  );
+  const candidateFixtureIdentity = normalizeFixtureIdentity(validatedRow.fixture_no);
+
+  if (
+    candidateFixtureIdentity
+    && reservedFixtureNumbers.has(candidateFixtureIdentity)
+    && candidateFixtureIdentity !== originalFixtureIdentity
+  ) {
+    const rejected = buildCorrectionRejectedRow(
+      original_row,
+      validatedRow,
+      "Fixture No duplicates another row already staged in this upload.",
+      {
+        reason: "duplicate_fixture_no",
+        missing_fields: [],
+        problem_fields: ["fixture_no"],
+      },
+    );
+
+    return {
+      classification: "rejected",
+      rejected,
+      correction_audit: buildCorrectionAudit(original_row, validatedRow, "rejected"),
+    };
+  }
+
+  const existingFixtures = await resolveExistingFixturesForScope(user, {
+    project_code: file_info.project_code,
+    scope_name: file_info.scope_name_display,
+    company_name: file_info.company_name,
+  });
+  const diffResults = diffWithDatabase([validatedRow], existingFixtures);
+
+  if (diffResults.length === 0) {
+    const rejected = buildCorrectionRejectedRow(
+      original_row,
+      validatedRow,
+      "This corrected row already matches an existing fixture and does not require import.",
+      {
+        reason: "already_exists",
+        missing_fields: [],
+      },
+    );
+
+    return {
+      classification: "rejected",
+      rejected,
+      correction_audit: buildCorrectionAudit(original_row, validatedRow, "rejected"),
+    };
+  }
+
+  const diffResult = diffResults[0];
+  const correctionAudit = buildCorrectionAudit(
+    original_row,
+    diffResult.incoming,
+    diffResult.type === "NEW" || diffResult.type === "UPDATE_QTY" ? "accepted" : "conflict",
+  );
+
+  if (diffResult.type === "NEW" || diffResult.type === "UPDATE_QTY") {
+    return {
+      classification: "accepted",
+      accepted: diffResult,
+      correction_audit: correctionAudit,
+    };
+  }
+
+  return {
+    classification: "conflict",
+    conflict: diffResult,
+    correction_audit: correctionAudit,
+  };
+}
+
 async function confirmUpload(user, payload = {}) {
-  const { file_info, resolved_items, rejected_items, skipped_items } = payload;
+  const { file_info, resolved_items, rejected_items, skipped_items, correction_items } = payload;
 
   const departmentId = requireUserDepartment(user);
 
@@ -262,6 +634,7 @@ async function confirmUpload(user, payload = {}) {
   const resolvedItems = Array.isArray(resolved_items) ? resolved_items : [];
   const rejectedItems = Array.isArray(rejected_items) ? rejected_items : [];
   const skippedItems = Array.isArray(skipped_items) ? skipped_items : [];
+  const correctionItems = Array.isArray(correction_items) ? correction_items : [];
   const actionableItems = [];
   const uploadDecisionLogs = [];
   const seenFixtureNumbers = new Set();
@@ -279,6 +652,8 @@ async function confirmUpload(user, payload = {}) {
     if (resolution === "existing") {
       uploadDecisionLogs.push({
         row_number: Number.isFinite(Number(fixtureData.row_number)) ? Number(fixtureData.row_number) : 0,
+        excel_row: Number.isFinite(Number(fixtureData.excel_row)) ? Number(fixtureData.excel_row) : null,
+        row_reference: normalizeRowReference(fixtureData),
         fixture_no: fixtureData.fixture_no || null,
         error_message: buildDecisionErrorMessage("Existing fixture retained after conflict review", fixtureData),
       });
@@ -340,6 +715,8 @@ async function confirmUpload(user, payload = {}) {
       if (scopeDecision === "skip_fixture") {
         uploadDecisionLogs.push({
           row_number: Number.isFinite(Number(fixtureData.row_number)) ? Number(fixtureData.row_number) : 0,
+          excel_row: Number.isFinite(Number(fixtureData.excel_row)) ? Number(fixtureData.excel_row) : null,
+          row_reference: normalizeRowReference(fixtureData),
           fixture_no: fixtureData.fixture_no || null,
           error_message: buildDecisionErrorMessage("Ambiguous-scope fixture skipped by explicit user decision", fixtureData),
         });
@@ -421,15 +798,18 @@ async function confirmUpload(user, payload = {}) {
     const scope = await findOrCreateScope(project.project_id, file_info.scope_name_display, client);
 
     let acceptedCount = 0;
-    const strictRejectedItems = [
-      ...rejectedItems,
-      ...skippedItems.map((item) => ({
-        row_number: item.row_number,
-        fixture_no: item.fixture_no || null,
-        error_message: item.skip_reason || "Customer-scope fixture skipped.",
-      })),
-      ...uploadDecisionLogs,
-    ];
+      const strictRejectedItems = [
+        ...rejectedItems,
+        ...skippedItems.map((item) => ({
+          row_number: item.row_number,
+          excel_row: item.excel_row ?? null,
+          row_reference: item.row_reference || normalizeRowReference(item),
+          fixture_no: item.fixture_no || null,
+          raw_data: item.raw_data || {},
+          error_message: item.skip_reason || "Customer-scope fixture skipped.",
+        })),
+        ...uploadDecisionLogs,
+      ];
 
     if (!project?.project_id) {
       throw new AppError(500, "Project resolution failed during controlled import");
@@ -505,7 +885,10 @@ async function confirmUpload(user, payload = {}) {
     if (strictRejectedItems.length > 0) {
       const errorsPayload = strictRejectedItems.map((r) => ({
         row_number: Number.isFinite(Number(r.row_number)) ? Number(r.row_number) : 0,
+        excel_row: Number.isFinite(Number(r.excel_row)) ? Number(r.excel_row) : null,
+        row_reference: normalizeRowReference(r),
         error_message: r.error_message,
+        raw_data: r.raw_data || null,
       }));
 
       // Audit: every rejected/skipped row (including conflict decisions + skipped ambiguouss)
@@ -520,6 +903,8 @@ async function confirmUpload(user, payload = {}) {
             project_code: file_info.project_code,
             scope_name: file_info.scope_name_display,
             row_number: r.row_number,
+            row_reference: normalizeRowReference(r),
+            excel_row: Number.isFinite(Number(r.excel_row)) ? Number(r.excel_row) : null,
             error_message: r.error_message,
             ingestion_source: ingestionSource,
           },
@@ -527,6 +912,45 @@ async function confirmUpload(user, payload = {}) {
       }
 
       await createUploadErrors(batchId, errorsPayload, client);
+    }
+
+    if (correctionItems.length > 0) {
+      const persistedCorrections = correctionItems
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          row_reference: normalizeRowReference(item.corrected_row || item.original_row || item),
+          row_number: normalizePrimaryRowNumber(item.corrected_row || item.original_row || item),
+          excel_row: normalizeExcelRow(item.corrected_row || item.original_row || item),
+          correction_reason: item.correction_reason || item.original_row?.error_message || "Rejected row corrected inline before import.",
+          correction_result: item.correction_result || "accepted",
+          original_data: item.original_row || {},
+          corrected_data: item.corrected_row || {},
+          corrected_by: user.employee_id,
+        }));
+
+      await createUploadRowCorrections(batchId, persistedCorrections, client);
+
+      for (const correction of persistedCorrections) {
+        await createAuditLog({
+          userEmployeeId: user.employee_id,
+          actionType: "DESIGN_REJECTED_ROW_CORRECTED",
+          targetType: "design_fixture",
+          targetId: correction.corrected_data?.fixture_no || correction.row_reference || "unknown",
+          metadata: {
+            batch_id: batchId,
+            project_code: file_info.project_code,
+            scope_name: file_info.scope_name_display,
+            row_reference: correction.row_reference,
+            row_number: correction.row_number,
+            excel_row: correction.excel_row,
+            correction_reason: correction.correction_reason,
+            correction_result: correction.correction_result,
+            original_data: correction.original_data,
+            corrected_data: correction.corrected_data,
+            ingestion_source: ingestionSource,
+          },
+        }, client);
+      }
     }
 
     await client.query("COMMIT");
@@ -598,4 +1022,5 @@ module.exports = instrumentModuleExports("service.designExcelService", {
   parseAndPreviewUploadedWorkbook,
   confirmUpload,
   uploadFixtureReferenceImage,
+  validateRejectedUploadRow,
 });

@@ -1,6 +1,15 @@
 const { SCOPE_STATUSES, classifyScopeOwnership } = require("./scope");
 const { FIXTURE_NO_REGEX, normalizePastedCell } = require("./parser");
 
+const FIELD_LABELS = {
+  fixture_no: "Fixture No",
+  op_no: "OP.NO",
+  part_name: "Part Name",
+  fixture_type: "Fixture Type",
+  qty: "QTY",
+  remark: "Remark",
+};
+
 function normalizeTextCell(value) {
   if (value === undefined || value === null) {
     return "";
@@ -65,20 +74,110 @@ function normalizeQty(value) {
   return { raw: text, normalized: null };
 }
 
+function normalizeRowReferenceValue(value) {
+  const normalized = normalizeTextCell(value);
+  return normalized || null;
+}
+
+function normalizeRowReferenceSource(value) {
+  return value === "business_serial" ? "business_serial" : "excel_row";
+}
+
 function getRowNumber(item) {
-  const rowNumber = item?.excel_row ?? item?.row_number;
+  const rowNumber = item?.row_number ?? item?.excel_row;
   return Number(rowNumber);
+}
+
+function getExcelRow(item) {
+  const excelRow = item?.excel_row ?? item?.raw_data?.excel_row ?? null;
+  return Number.isFinite(Number(excelRow)) ? Number(excelRow) : null;
+}
+
+function getBusinessRowReference(item) {
+  const value = item?.business_row_reference ?? item?.raw_data?.business_row_reference ?? null;
+  return normalizeRowReferenceValue(value);
+}
+
+function getRowReferenceSource(item) {
+  return normalizeRowReferenceSource(item?.row_reference_source ?? item?.raw_data?.row_reference_source);
+}
+
+function getRowReference(item) {
+  const explicitReference = normalizeRowReferenceValue(item?.row_reference ?? item?.raw_data?.row_reference);
+  if (explicitReference) {
+    return explicitReference;
+  }
+
+  const businessRowReference = getBusinessRowReference(item);
+  if (businessRowReference) {
+    return businessRowReference;
+  }
+
+  const excelRow = getExcelRow(item);
+  const rowNumber = getRowNumber(item);
+  const fallback = Number.isFinite(excelRow) && excelRow > 0 ? excelRow : rowNumber;
+  return Number.isFinite(fallback) && fallback > 0 ? String(fallback) : "General";
+}
+
+function toFieldLabel(fieldName) {
+  return FIELD_LABELS[fieldName] || fieldName;
+}
+
+function toFieldKey(label) {
+  const normalized = String(label || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (normalized === "fixture_no") return "fixture_no";
+  if (normalized === "op_no" || normalized === "op_no_") return "op_no";
+  if (normalized === "part_name") return "part_name";
+  if (normalized === "fixture_type") return "fixture_type";
+  if (normalized === "qty") return "qty";
+  if (normalized === "remark" || normalized === "remarks") return "remark";
+  return null;
+}
+
+function buildProblemFields(reason, missingFields = [], candidateField) {
+  const derived = new Set();
+
+  missingFields.forEach((label) => {
+    const key = toFieldKey(label);
+    if (key) {
+      derived.add(key);
+    }
+  });
+
+  const candidateKey = toFieldKey(candidateField);
+  if (candidateKey) {
+    derived.add(candidateKey);
+  }
+
+  if (reason === "fixture_no_missing" || reason === "fixture_no_invalid" || reason === "duplicate_fixture_no") {
+    derived.add("fixture_no");
+  }
+
+  if (reason === "qty_invalid") {
+    derived.add("qty");
+  }
+
+  return Array.from(derived);
 }
 
 function buildFieldDiagnostics(fields) {
   return {
     sheet_name: fields?.sheet_name || null,
+    excel_row: fields?.excel_row ?? null,
+    row_reference: fields?.row_reference || null,
+    row_reference_source: fields?.row_reference_source || "excel_row",
+    business_row_reference: fields?.business_row_reference || null,
     raw: {
       fixture_no: fields.fixture_no_raw ?? null,
       op_no: fields.op_no_raw ?? null,
       part_name: fields.part_name_raw ?? null,
       fixture_type: fields.fixture_type_raw ?? null,
       qty: fields.qty_raw ?? null,
+      remark: fields.remark_raw ?? null,
     },
     normalized: {
       fixture_no: fields.fixture_no ?? null,
@@ -86,18 +185,34 @@ function buildFieldDiagnostics(fields) {
       part_name: fields.part_name ?? null,
       fixture_type: fields.fixture_type ?? null,
       qty: fields.qty ?? null,
+      remark: fields.remark ?? null,
     },
+    inherited: fields?.inherited || {},
   };
 }
 
-function buildRejectedRow(row_number, error_message, raw_data, diagnostics, extra = {}) {
+function buildRejectedRow(rowMeta, error_message, raw_data, diagnostics, extra = {}) {
+  const row_reference = rowMeta?.row_reference || diagnostics?.row_reference || null;
+  const row_reference_source = rowMeta?.row_reference_source || diagnostics?.row_reference_source || "excel_row";
+  const business_row_reference = rowMeta?.business_row_reference ?? diagnostics?.business_row_reference ?? null;
+  const excel_row = rowMeta?.excel_row ?? diagnostics?.excel_row ?? null;
+  const row_number = Number.isFinite(Number(rowMeta?.row_number)) ? Number(rowMeta.row_number) : Number(rowMeta?.excel_row || 0);
+  const missing_fields = Array.isArray(extra?.missing_fields) ? extra.missing_fields : [];
+  const problem_fields = buildProblemFields(extra?.reason, missing_fields, extra?.candidate_field);
+
   return {
     row_number,
+    excel_row,
+    row_reference,
+    row_reference_source,
+    business_row_reference,
     error_message,
     raw_data: {
       ...(raw_data && typeof raw_data === "object" ? raw_data : {}),
       validation: {
         ...(diagnostics || {}),
+        missing_fields,
+        problem_fields,
         ...extra,
       },
     },
@@ -114,6 +229,10 @@ function extractRowFields(item) {
 
     return {
       row_number: getRowNumber(item),
+      excel_row: getExcelRow(item),
+      row_reference: getRowReference(item),
+      row_reference_source: getRowReferenceSource(item),
+      business_row_reference: getBusinessRowReference(item),
       fixture_no: cols[1],
       op_no: cols[2],
       part_name: cols[3],
@@ -124,12 +243,22 @@ function extractRowFields(item) {
       image_1_url: null,
       image_2_url: null,
       parser_confidence: "HIGH",
-      raw_data: { cols },
+      raw_data: {
+        cols,
+        excel_row: getExcelRow(item),
+        row_reference: getRowReference(item),
+        row_reference_source: getRowReferenceSource(item),
+        business_row_reference: getBusinessRowReference(item),
+      },
     };
   }
 
   return {
     row_number: getRowNumber(item),
+    excel_row: getExcelRow(item),
+    row_reference: getRowReference(item),
+    row_reference_source: getRowReferenceSource(item),
+    business_row_reference: getBusinessRowReference(item),
     fixture_no: normalizeTextCell(item?.fixture_no),
     op_no: normalizeTextCell(item?.op_no),
     part_name: normalizeTextCell(item?.part_name),
@@ -150,6 +279,10 @@ function extractRowFields(item) {
       qty: item?.qty ?? null,
       image_1_url: null,
       image_2_url: null,
+      excel_row: getExcelRow(item),
+      row_reference: getRowReference(item),
+      row_reference_source: getRowReferenceSource(item),
+      business_row_reference: getBusinessRowReference(item),
     },
   };
 }
@@ -163,6 +296,10 @@ function validateParsedData(parsedRows) {
   for (const item of parsedRows) {
     const {
       row_number,
+      excel_row,
+      row_reference,
+      row_reference_source,
+      business_row_reference,
       fixture_no,
       op_no,
       part_name,
@@ -175,6 +312,13 @@ function validateParsedData(parsedRows) {
       parser_confidence,
       raw_data,
     } = extractRowFields(item);
+    const rowMeta = {
+      row_number,
+      excel_row,
+      row_reference,
+      row_reference_source,
+      business_row_reference,
+    };
 
     const normalizedFixtureNo = normalizeFixtureNo(fixture_no);
     const normalizedOpNo = normalizeOpNo(op_no);
@@ -185,28 +329,36 @@ function validateParsedData(parsedRows) {
     const qtyInfo = normalizeQty(qtyRaw);
     const diagnostics = buildFieldDiagnostics({
       sheet_name: raw_data?.sheet_name || null,
+      excel_row,
+      row_reference,
+      row_reference_source,
+      business_row_reference,
       fixture_no_raw: fixture_no,
       op_no_raw: op_no,
       part_name_raw: part_name,
       fixture_type_raw: fixture_type,
       qty_raw: qtyInfo.raw,
+      remark_raw: remark,
       fixture_no: normalizedFixtureNo,
       op_no: normalizedOpNo || null,
       part_name: normalizedPartName || null,
       fixture_type: normalizedFixtureType || null,
       qty: qtyInfo.normalized,
+      remark: normalizedRemark || null,
+      inherited: raw_data?.inherited_hints || {},
     });
 
     if (!normalizedFixtureNo) {
-      rejectedRows.push(buildRejectedRow(row_number, "Fixture No is mandatory for import.", raw_data, diagnostics, {
+      rejectedRows.push(buildRejectedRow(rowMeta, "Fixture No is mandatory for import.", raw_data, diagnostics, {
         reason: "fixture_no_missing",
         expected: "A PARC fixture number such as PARC25119001",
+        missing_fields: [toFieldLabel("fixture_no")],
       }));
       continue;
     }
 
     if (!FIXTURE_NO_REGEX.test(normalizedFixtureNo)) {
-      rejectedRows.push(buildRejectedRow(row_number, "Fixture No must match the PARC fixture format.", raw_data, diagnostics, {
+      rejectedRows.push(buildRejectedRow(rowMeta, "Fixture No must match the PARC fixture format.", raw_data, diagnostics, {
         reason: "fixture_no_invalid",
         expected: "A PARC fixture number such as PARC25119001",
       }));
@@ -220,7 +372,7 @@ function validateParsedData(parsedRows) {
       if (qtyInfo.normalized === null) missing.push("QTY");
       
       rejectedRows.push(buildRejectedRow(
-        row_number,
+        rowMeta,
         `Missing fields: ${missing.join(", ")}`,
         raw_data,
         diagnostics,
@@ -233,7 +385,7 @@ function validateParsedData(parsedRows) {
     }
 
     if (qtyInfo.normalized === null) {
-      rejectedRows.push(buildRejectedRow(row_number, "QTY must be a valid numeric value.", raw_data, diagnostics, {
+      rejectedRows.push(buildRejectedRow(rowMeta, "QTY must be a valid numeric value.", raw_data, diagnostics, {
         reason: "qty_invalid",
         expected: "A positive number such as 1, 2, or 2.0",
       }));
@@ -245,6 +397,10 @@ function validateParsedData(parsedRows) {
     if (scopeAssessment.status === SCOPE_STATUSES.CUSTOMER) {
       skippedRows.push({
         row_number,
+        excel_row,
+        row_reference,
+        row_reference_source,
+        business_row_reference,
         fixture_no: normalizedFixtureNo,
         op_no: normalizedOpNo,
         part_name: normalizedPartName,
@@ -263,7 +419,7 @@ function validateParsedData(parsedRows) {
 
     const fixtureNoKey = normalizedFixtureNo.toLowerCase();
     if (seenFixtureNumbers.has(fixtureNoKey)) {
-      rejectedRows.push(buildRejectedRow(row_number, "Duplicate fixture number found in uploaded file.", raw_data, diagnostics, {
+      rejectedRows.push(buildRejectedRow(rowMeta, "Duplicate fixture number found in uploaded file.", raw_data, diagnostics, {
         reason: "duplicate_fixture_no",
       }));
       continue;
@@ -273,6 +429,10 @@ function validateParsedData(parsedRows) {
 
     validRows.push({
       row_number,
+      excel_row,
+      row_reference,
+      row_reference_source,
+      business_row_reference,
       fixture_no: normalizedFixtureNo,
       op_no: normalizedOpNo,
       part_name: normalizedPartName,

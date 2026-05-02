@@ -15,6 +15,7 @@ const {
   parseAndPreviewUploadedWorkbook,
   confirmUpload,
   uploadFixtureReferenceImage,
+  validateRejectedUploadRow,
 } = require("../services/designExcelService");
 const {
   findProjectByIdForDepartment,
@@ -140,6 +141,15 @@ router.post(
   authorize(PERMISSIONS.UPLOAD_DATA),
   asyncHandler(async (req, res) => {
     const result = await confirmUpload(req.user, req.body);
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
+  "/design/upload/rejected-row/validate",
+  authorize(PERMISSIONS.UPLOAD_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await validateRejectedUploadRow(req.user, req.body);
     return sendSuccess(res, result, 200);
   }),
 );

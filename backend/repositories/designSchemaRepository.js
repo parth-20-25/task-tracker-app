@@ -474,6 +474,34 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
+    ALTER TABLE design.upload_errors
+    ADD COLUMN IF NOT EXISTS excel_row INTEGER,
+    ADD COLUMN IF NOT EXISTS row_reference TEXT,
+    ADD COLUMN IF NOT EXISTS raw_data JSONB
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.upload_row_corrections (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      batch_id UUID NOT NULL REFERENCES design.upload_batches(id) ON DELETE CASCADE,
+      row_reference TEXT NOT NULL,
+      row_number INTEGER,
+      excel_row INTEGER,
+      correction_reason TEXT,
+      correction_result TEXT NOT NULL DEFAULT 'accepted',
+      original_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      corrected_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      corrected_by VARCHAR(50) NOT NULL,
+      corrected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_upload_row_corrections_batch_id
+    ON design.upload_row_corrections (batch_id, corrected_at DESC)
+  `);
+
+  await client.query(`
     CREATE INDEX IF NOT EXISTS idx_design_projects_project_no
     ON design.projects (project_no)
   `);

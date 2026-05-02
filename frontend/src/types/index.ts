@@ -537,6 +537,10 @@ export interface DesignFixtureOption {
 
 export interface DesignExcelPreviewRow {
   row_number: number;
+  excel_row?: number | null;
+  row_reference: string;
+  row_reference_source?: "business_serial" | "excel_row";
+  business_row_reference?: string | null;
   fixture_no: string;
   op_no: string;
   part_name: string;
@@ -547,6 +551,22 @@ export interface DesignExcelPreviewRow {
   image_2_url?: string | null;
   scope_status?: "PARC" | "CUSTOMER" | "AMBIGUOUS";
   scope_reason?: string | null;
+}
+
+export interface DesignExcelRejectedRow {
+  row_number: number;
+  excel_row?: number | null;
+  row_reference: string;
+  row_reference_source?: "business_serial" | "excel_row";
+  business_row_reference?: string | null;
+  error_message: string;
+  raw_data: Record<string, any>;
+}
+
+export interface DesignExcelSkippedRow extends DesignExcelPreviewRow {
+  raw_data: Record<string, any>;
+  scope_status: "CUSTOMER";
+  skip_reason: string;
 }
 
 export interface DesignExcelUploadResponse {
@@ -567,26 +587,37 @@ export interface DesignExcelUploadResponse {
       incoming: DesignExcelPreviewRow;
       existing: DesignExcelPreviewRow;
     }>;
-    rejected: Array<{
-      row_number: number;
-      error_message: string;
-      raw_data: Record<string, any>;
-    }>;
-    skipped: Array<{
-      row_number: number;
-      fixture_no: string;
-      op_no: string;
-      part_name: string;
-      fixture_type: string;
-      remark?: string | null;
-      qty: number;
-      image_1_url?: string | null;
-      image_2_url?: string | null;
-      scope_status: "CUSTOMER";
-      skip_reason: string;
-      raw_data: Record<string, any>;
-    }>;
+    rejected: DesignExcelRejectedRow[];
+    skipped: DesignExcelSkippedRow[];
   };
+}
+
+export interface DesignRejectedRowCorrectionAudit {
+  row_reference: string;
+  row_number: number;
+  excel_row?: number | null;
+  correction_reason: string;
+  corrected_fields: string[];
+  original_row: DesignExcelRejectedRow;
+  corrected_row: DesignExcelPreviewRow;
+  correction_result: "accepted" | "conflict" | "skipped" | "rejected";
+}
+
+export interface ValidateRejectedDesignRowResponse {
+  classification: "accepted" | "conflict" | "skipped" | "rejected";
+  accepted?: {
+    type: "NEW" | "UPDATE_QTY";
+    incoming: DesignExcelPreviewRow;
+    existing?: DesignExcelPreviewRow;
+  };
+  conflict?: {
+    type: "CONFLICT_PART_NAME" | "CONFLICT_OTHER" | "CONFLICT_IMAGES";
+    incoming: DesignExcelPreviewRow;
+    existing: DesignExcelPreviewRow;
+  };
+  skipped?: DesignExcelSkippedRow;
+  rejected?: DesignExcelRejectedRow;
+  correction_audit: DesignRejectedRowCorrectionAudit;
 }
 
 export interface ConfirmDesignUploadPayload {
@@ -598,4 +629,5 @@ export interface ConfirmDesignUploadPayload {
   }>;
   rejected_items: DesignExcelUploadResponse["preview"]["rejected"];
   skipped_items: DesignExcelUploadResponse["preview"]["skipped"];
+  correction_items?: DesignRejectedRowCorrectionAudit[];
 }

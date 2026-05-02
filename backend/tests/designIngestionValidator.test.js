@@ -16,6 +16,10 @@ runTest("accepts explicit PARC scope rows", () => {
   const result = validateParsedData([
     {
       excel_row: 8,
+      row_number: 1,
+      row_reference: "1",
+      row_reference_source: "business_serial",
+      business_row_reference: "1",
       fixture_no: "PARC26001001",
       op_no: "OP 11",
       part_name: "STIFFNER MTG BKT LH/RH SUB ASSLY",
@@ -27,6 +31,9 @@ runTest("accepts explicit PARC scope rows", () => {
   ]);
 
   assert.equal(result.validRows.length, 1);
+  assert.equal(result.validRows[0].row_reference, "1");
+  assert.equal(result.validRows[0].excel_row, 8);
+  assert.equal(result.validRows[0].row_reference_source, "business_serial");
   assert.equal(result.validRows[0].scope_status, "PARC");
   assert.equal(result.skippedRows.length, 0);
   assert.equal(result.rejectedRows.length, 0);
@@ -120,7 +127,11 @@ runTest("rejects duplicate fixture numbers in the same upload", () => {
 runTest("rejects rows that do not contain a fixture number", () => {
   const result = validateParsedData([
     {
+      excel_row: 22,
       row_number: 14,
+      row_reference: "14",
+      row_reference_source: "business_serial",
+      business_row_reference: "14",
       fixture_no: "",
       op_no: "OP 170",
       part_name: "Customer Scope",
@@ -133,6 +144,9 @@ runTest("rejects rows that do not contain a fixture number", () => {
 
   assert.equal(result.validRows.length, 0);
   assert.equal(result.rejectedRows.length, 1);
+  assert.equal(result.rejectedRows[0].row_reference, "14");
+  assert.equal(result.rejectedRows[0].excel_row, 22);
+  assert.equal(result.rejectedRows[0].raw_data.validation.problem_fields[0], "fixture_no");
   assert.match(result.rejectedRows[0].error_message, /Fixture No is mandatory/i);
 });
 

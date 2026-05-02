@@ -459,10 +459,53 @@ async function createUploadErrors(batchId, errors, client = pool) {
   for (const error of errors) {
     await client.query(
       `
-        INSERT INTO design.upload_errors (batch_id, row_number, error_message)
-        VALUES ($1, $2, $3)
+        INSERT INTO design.upload_errors (batch_id, row_number, excel_row, row_reference, error_message, raw_data)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
       `,
-      [batchId, error.row_number, error.error_message],
+      [
+        batchId,
+        error.row_number,
+        error.excel_row || null,
+        error.row_reference || null,
+        error.error_message,
+        error.raw_data ? JSON.stringify(error.raw_data) : null,
+      ],
+    );
+  }
+}
+
+async function createUploadRowCorrections(batchId, corrections, client = pool) {
+  if (!Array.isArray(corrections) || corrections.length === 0) {
+    return;
+  }
+
+  for (const correction of corrections) {
+    await client.query(
+      `
+        INSERT INTO design.upload_row_corrections (
+          batch_id,
+          row_reference,
+          row_number,
+          excel_row,
+          correction_reason,
+          correction_result,
+          original_data,
+          corrected_data,
+          corrected_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+      `,
+      [
+        batchId,
+        correction.row_reference,
+        correction.row_number || null,
+        correction.excel_row || null,
+        correction.correction_reason || null,
+        correction.correction_result || "accepted",
+        JSON.stringify(correction.original_data || {}),
+        JSON.stringify(correction.corrected_data || {}),
+        correction.corrected_by,
+      ],
     );
   }
 }
@@ -650,6 +693,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   countProjectsByDepartment,
   createUploadBatch,
   createUploadErrors,
+  createUploadRowCorrections,
   findDepartmentProjectByIdForDepartment,
   findFixtureByIdForDepartment,
   findFixturesByScopeForDedupe,

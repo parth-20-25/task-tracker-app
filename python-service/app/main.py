@@ -48,6 +48,16 @@ FIXTURE_TYPE_KEYWORDS = (
     "mounting",
 )
 HEADER_FIELD_ALIASES = {
+    "row_reference": {
+        "sno",
+        "srno",
+        "serialno",
+        "serialnumber",
+        "rowno",
+        "lineno",
+        "sequenceno",
+        "sequencenumber",
+    },
     "fixture_no": {
         "fixtureno",
         "fixtureno.",
@@ -320,6 +330,15 @@ def match_header_field(cell_text: str) -> str | None:
         if normalized in aliases:
             return field_name
 
+    if {"s", "no"} <= tokens or {"sr", "no"} <= tokens:
+        return "row_reference"
+
+    if {"serial", "no"} <= tokens or {"serial", "number"} <= tokens:
+        return "row_reference"
+
+    if {"row", "no"} <= tokens or {"line", "no"} <= tokens:
+        return "row_reference"
+
     if {"fixture", "no"} <= tokens or {"fixture", "number"} <= tokens:
         return "fixture_no"
 
@@ -489,6 +508,8 @@ def choose_hint_text(cell_map: dict[int, str], column_index: int | None, validat
 def is_valid_field_value(field_name: str, value: str) -> bool:
     if not value:
         return False
+    if field_name == "row_reference":
+        return True
     if field_name == "fixture_no":
         return looks_like_fixture_number(value)
     if field_name == "op_no":
@@ -506,6 +527,24 @@ def is_valid_field_value(field_name: str, value: str) -> bool:
 
 def should_carry_field_value(field_name: str) -> bool:
     return field_name in {"fixture_no", "fixture_type", "remark", "qty"}
+
+
+def normalize_business_row_reference(value: Any) -> str | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+    return text
+
+
+def looks_like_business_row_reference(value: Any) -> bool:
+    text = normalize_text(value)
+    if not text:
+        return False
+
+    if looks_like_fixture_number(text) or looks_like_op_number(text):
+        return False
+
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", text))
 
 
 def choose_single_candidate(candidates: list[dict[str, Any]], field_label: str, row_index: int, snapshot: dict[str, Any]):
@@ -570,6 +609,24 @@ def parse_fixture_candidate(
 
     parsed["fixture_no"] = normalize_fixture_number(fixture_cell["text"])
     used_columns.add(fixture_cell["column"])
+
+    hint_row_reference_column = header_hints.get("row_reference")
+    business_row_reference = normalize_business_row_reference(
+        choose_hint_text(cell_map, hint_row_reference_column)
+    )
+    if business_row_reference and hint_row_reference_column:
+        used_columns.add(hint_row_reference_column)
+    else:
+        row_reference_candidates = [
+            cell
+            for cell in cells
+            if cell["column"] not in used_columns
+            and cell["column"] < fixture_cell["column"]
+            and looks_like_business_row_reference(cell["text"])
+        ]
+        if len(row_reference_candidates) == 1:
+            business_row_reference = normalize_business_row_reference(row_reference_candidates[0]["text"])
+            used_columns.add(row_reference_candidates[0]["column"])
 
     hint_op_no = choose_hint_text(cell_map, header_hints.get("op_no"), lambda value: parse_op_value(value) is not None)
     if hint_op_no:
@@ -726,9 +783,17 @@ def parse_fixture_candidate(
             raw_data={**snapshot, "parsed": parsed},
         )
 
+    row_reference = business_row_reference or str(row_index)
+    row_reference_source = "business_serial" if business_row_reference else "excel_row"
+    row_number = int(business_row_reference) if business_row_reference and re.fullmatch(r"\d+", business_row_reference) else row_index
+
     return (
         {
             "excel_row": row_index,
+            "row_number": row_number,
+            "row_reference": row_reference,
+            "row_reference_source": row_reference_source,
+            "business_row_reference": business_row_reference,
             "fixture_no": parsed["fixture_no"],
             "op_no": parsed["op_no"],
             "part_name": parsed["part_name"],
@@ -740,6 +805,10 @@ def parse_fixture_candidate(
             "parser_confidence": "HIGH",
             "raw_data": {
                 **snapshot,
+                "excel_row": row_index,
+                "row_reference": row_reference,
+                "row_reference_source": row_reference_source,
+                "business_row_reference": business_row_reference,
                 "normalized_fields": {
                     "fixture_no": parsed["fixture_no"] or None,
                     "op_no": parsed["op_no"] or None,

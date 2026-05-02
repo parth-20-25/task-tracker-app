@@ -1,5 +1,16 @@
 import { apiRequest } from "@/api/http";
-import { DepartmentProject, DesignFixtureOption, DesignProjectOption, DesignScopeOption, Task, DesignExcelUploadResponse, ConfirmDesignUploadPayload } from "@/types";
+import {
+  ConfirmDesignUploadPayload,
+  DepartmentProject,
+  DesignExcelPreviewRow,
+  DesignExcelRejectedRow,
+  DesignExcelUploadResponse,
+  DesignFixtureOption,
+  DesignProjectOption,
+  DesignScopeOption,
+  Task,
+  ValidateRejectedDesignRowResponse,
+} from "@/types";
 
 // ── Fixture Workflow Types ────────────────────────────────────────────────────
 
@@ -175,6 +186,18 @@ export function pastePasteFixtureData(text: string) {
 
 export function confirmPasteFixtureData(payload: ConfirmDesignUploadPayload) {
   return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/design/upload/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function validateRejectedDesignRow(payload: {
+  file_info: DesignExcelUploadResponse["file_info"];
+  original_row: DesignExcelRejectedRow;
+  corrected_row: Record<string, unknown>;
+  reserved_fixture_numbers: string[];
+}) {
+  return apiRequest<ValidateRejectedDesignRowResponse>("/design/upload/rejected-row/validate", {
     method: "POST",
     body: JSON.stringify(payload),
   });

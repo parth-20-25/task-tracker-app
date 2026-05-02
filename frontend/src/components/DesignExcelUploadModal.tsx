@@ -8,9 +8,11 @@ import {
   confirmPasteFixtureData,
   listFixturesByUploadBatch,
   uploadFixtureReferenceImage,
+  validateRejectedDesignRow,
 } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MorphLoader } from "@/components/ui/morph-loader";
 import {
@@ -26,7 +28,12 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { adminQueryKeys, analyticsQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
-import { DesignExcelPreviewRow, DesignExcelUploadResponse } from "@/types";
+import {
+  DesignExcelPreviewRow,
+  DesignExcelRejectedRow,
+  DesignExcelUploadResponse,
+  DesignRejectedRowCorrectionAudit,
+} from "@/types";
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
@@ -86,6 +93,208 @@ function getRowDecisionKey(row: DesignExcelPreviewRow) {
   return `${row.fixture_no}::${row.row_number}`;
 }
 
+type CorrectionFieldName = "fixture_no" | "op_no" | "part_name" | "fixture_type" | "qty" | "remark";
+
+interface RejectedRowCorrectionDraft {
+  fixture_no: string;
+  op_no: string;
+  part_name: string;
+  fixture_type: string;
+  qty: string;
+  remark: string;
+}
+
+const CORRECTION_FIELDS: Array<{
+  name: CorrectionFieldName;
+  label: string;
+  placeholder: string;
+  kind?: "textarea";
+}> = [
+  { name: "fixture_no", label: "Fixture No", placeholder: "PARC25119001" },
+  { name: "fixture_type", label: "Fixture Type", placeholder: "Checking fixture" },
+  { name: "qty", label: "QTY", placeholder: "1" },
+  { name: "op_no", label: "OP.NO", placeholder: "OP 10" },
+  { name: "part_name", label: "Part Name", placeholder: "Sub assembly or part name" },
+  { name: "remark", label: "Remark", placeholder: "PARC scope", kind: "textarea" },
+];
+
+const FIXTURE_NUMBER_PATTERN = /^PARC\d{8,}$/i;
+const OP_NUMBER_PATTERN = /^OP[\s._/-]*\d+[A-Z0-9._/-]*$/i;
+
+function normalizeCorrectionValue(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function getRejectedRowKey(rejected: DesignExcelRejectedRow) {
+  const validation = rejected.raw_data?.validation || {};
+  return [
+    validation.sheet_name || "sheet",
+    rejected.row_reference || rejected.row_number || "general",
+    rejected.excel_row ?? "na",
+    validation.reason || validation.candidate_field || rejected.error_message,
+  ].join("::");
+}
+
+function getRowReferenceSummary(row: {
+  row_reference?: string;
+  row_reference_source?: "business_serial" | "excel_row";
+  excel_row?: number | null;
+}) {
+  const reference = normalizeCorrectionValue(row.row_reference);
+  if (!reference) {
+    return "General";
+  }
+
+  if (row.row_reference_source === "business_serial") {
+    const sheetRow = row.excel_row && String(row.excel_row) !== reference ? ` • Sheet row ${row.excel_row}` : "";
+    return `S.No. ${reference}${sheetRow}`;
+  }
+
+  return row.excel_row ? `Sheet row ${row.excel_row}` : `Row ${reference}`;
+}
+
+function getRejectedValidation(rejected: DesignExcelRejectedRow) {
+  return rejected.raw_data?.validation || {};
+}
+
+function getRejectedProblemFields(rejected: DesignExcelRejectedRow): CorrectionFieldName[] {
+  const validation = getRejectedValidation(rejected);
+  const problemFields = Array.isArray(validation.problem_fields) ? validation.problem_fields : [];
+  const normalized = problemFields.filter((field: unknown): field is CorrectionFieldName => (
+    typeof field === "string"
+    && CORRECTION_FIELDS.some((candidate) => candidate.name === field)
+  ));
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  return ["fixture_no", "fixture_type", "qty", "part_name"];
+}
+
+function pickDraftValue(validation: Record<string, any>, fieldName: CorrectionFieldName) {
+  const normalized = normalizeCorrectionValue(validation?.normalized?.[fieldName]);
+  if (normalized) {
+    return normalized;
+  }
+
+  const raw = normalizeCorrectionValue(validation?.raw?.[fieldName]);
+  if (raw) {
+    return raw;
+  }
+
+  const inherited = normalizeCorrectionValue(validation?.inherited?.[fieldName]);
+  if (inherited) {
+    return inherited;
+  }
+
+  return "";
+}
+
+function buildRejectedRowDraft(rejected: DesignExcelRejectedRow): RejectedRowCorrectionDraft {
+  const validation = getRejectedValidation(rejected);
+  return {
+    fixture_no: pickDraftValue(validation, "fixture_no"),
+    op_no: pickDraftValue(validation, "op_no"),
+    part_name: pickDraftValue(validation, "part_name"),
+    fixture_type: pickDraftValue(validation, "fixture_type"),
+    qty: pickDraftValue(validation, "qty"),
+    remark: pickDraftValue(validation, "remark"),
+  };
+}
+
+function buildCorrectedPreviewRow(
+  rejected: DesignExcelRejectedRow,
+  draft: RejectedRowCorrectionDraft,
+): Record<string, unknown> {
+  return {
+    row_number: rejected.row_number,
+    excel_row: rejected.excel_row ?? null,
+    row_reference: rejected.row_reference,
+    row_reference_source: rejected.row_reference_source,
+    business_row_reference: rejected.business_row_reference ?? null,
+    fixture_no: draft.fixture_no,
+    op_no: draft.op_no,
+    part_name: draft.part_name,
+    fixture_type: draft.fixture_type,
+    qty: draft.qty,
+    remark: draft.remark || null,
+  };
+}
+
+function buildReservedFixtureNumbers(preview: DesignExcelUploadResponse | null) {
+  if (!preview) {
+    return [];
+  }
+
+  return [
+    ...preview.preview.accepted.map((item) => item.incoming.fixture_no),
+    ...preview.preview.conflicts.map((item) => item.incoming.fixture_no),
+  ].filter(Boolean);
+}
+
+function buildClientFieldErrors(
+  draft: RejectedRowCorrectionDraft,
+  rejected: DesignExcelRejectedRow,
+  preview: DesignExcelUploadResponse | null,
+) {
+  const errors: Partial<Record<CorrectionFieldName, string>> = {};
+  const problemFields = getRejectedProblemFields(rejected);
+
+  if (problemFields.includes("fixture_no")) {
+    if (!normalizeCorrectionValue(draft.fixture_no)) {
+      errors.fixture_no = "Fixture No is required.";
+    } else if (!FIXTURE_NUMBER_PATTERN.test(normalizeCorrectionValue(draft.fixture_no))) {
+      errors.fixture_no = "Use the PARC fixture format.";
+    }
+  }
+
+  if (normalizeCorrectionValue(draft.op_no) && !OP_NUMBER_PATTERN.test(normalizeCorrectionValue(draft.op_no)) && !/^\d+(?:\.0+)?$/.test(normalizeCorrectionValue(draft.op_no))) {
+    errors.op_no = "Use OP format like OP 10.";
+  }
+
+  if (problemFields.includes("part_name") && !normalizeCorrectionValue(draft.part_name)) {
+    errors.part_name = "Part Name is required.";
+  }
+
+  if (problemFields.includes("fixture_type") && !normalizeCorrectionValue(draft.fixture_type)) {
+    errors.fixture_type = "Fixture Type is required.";
+  }
+
+  if (problemFields.includes("qty")) {
+    const qty = normalizeCorrectionValue(draft.qty);
+    if (!qty) {
+      errors.qty = "QTY is required.";
+    } else if (!/^\d+(?:\.0+)?$/.test(qty) || Number(qty) <= 0) {
+      errors.qty = "QTY must be a positive number.";
+    }
+  }
+
+  const fixtureNo = normalizeCorrectionValue(draft.fixture_no).toLowerCase();
+  const originalFixtureNo = normalizeCorrectionValue(rejected.raw_data?.validation?.normalized?.fixture_no).toLowerCase();
+  if (fixtureNo && !errors.fixture_no) {
+    const duplicateInPreview = buildReservedFixtureNumbers(preview)
+      .some((value) => normalizeCorrectionValue(value).toLowerCase() === fixtureNo && fixtureNo !== originalFixtureNo);
+    if (duplicateInPreview) {
+      errors.fixture_no = "This Fixture No is already staged in the current upload.";
+    }
+  }
+
+  return errors;
+}
+
+function sortAcceptedItems(items: DesignExcelUploadResponse["preview"]["accepted"]) {
+  return [...items].sort((left, right) => left.incoming.row_number - right.incoming.row_number);
+}
+
+function sortConflictItems(items: DesignExcelUploadResponse["preview"]["conflicts"]) {
+  return [...items].sort((left, right) => left.incoming.row_number - right.incoming.row_number);
+}
+
+function sortSkippedItems(items: DesignExcelUploadResponse["preview"]["skipped"]) {
+  return [...items].sort((left, right) => left.row_number - right.row_number);
+}
+
 function ScopeDecisionControls({
   row,
   value,
@@ -129,6 +338,144 @@ function ScopeDecisionControls({
           </Label>
         </div>
       </RadioGroup>
+    </div>
+  );
+}
+
+function RejectedRowCorrectionCard({
+  rejected,
+  draft,
+  fieldErrors,
+  similarCounts,
+  onDraftChange,
+  onApplyToSimilar,
+  onValidate,
+  isValidating,
+}: {
+  rejected: DesignExcelRejectedRow;
+  draft: RejectedRowCorrectionDraft;
+  fieldErrors: Partial<Record<CorrectionFieldName, string>>;
+  similarCounts: Partial<Record<CorrectionFieldName, number>>;
+  onDraftChange: (fieldName: CorrectionFieldName, value: string) => void;
+  onApplyToSimilar: (fieldName: CorrectionFieldName) => void;
+  onValidate: () => void;
+  isValidating: boolean;
+}) {
+  const validation = getRejectedValidation(rejected);
+  const problemFields = getRejectedProblemFields(rejected);
+  const missingFields = Array.isArray(validation.missing_fields) ? validation.missing_fields : [];
+  const candidateValues = Array.isArray(validation.candidate_values) ? validation.candidate_values : [];
+
+  return (
+    <div className="rounded-2xl border border-red-200 bg-white/90 p-4 shadow-sm dark:border-red-900/40 dark:bg-red-950/10">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-red-700 dark:text-red-300">{getRowReferenceSummary(rejected)}</div>
+          <div className="mt-1 text-sm text-foreground">{rejected.error_message}</div>
+        </div>
+        <Button
+          size="sm"
+          className="bg-red-600 text-white hover:bg-red-700"
+          onClick={onValidate}
+          disabled={isValidating || Object.keys(fieldErrors).length > 0}
+        >
+          {isValidating ? "Validating..." : "Validate & Add"}
+        </Button>
+      </div>
+
+      <div className="mt-3 grid gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground md:grid-cols-2">
+        <div>
+          <div className="font-semibold text-foreground">Raw Values</div>
+          <div className="mt-1 space-y-1">
+            {CORRECTION_FIELDS.map((field) => (
+              <div key={`raw-${field.name}`}>
+                {field.label}: <span className="font-medium text-foreground">{formatRejectedValue(validation.raw?.[field.name])}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-foreground">Normalized Values</div>
+          <div className="mt-1 space-y-1">
+            {CORRECTION_FIELDS.map((field) => (
+              <div key={`normalized-${field.name}`}>
+                {field.label}: <span className="font-medium text-foreground">{formatRejectedValue(validation.normalized?.[field.name])}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+        {missingFields.length > 0 ? (
+          <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 font-medium text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+            Missing: {missingFields.join(", ")}
+          </span>
+        ) : null}
+        {problemFields.map((fieldName) => (
+          <span key={fieldName} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-medium text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+            Fix {CORRECTION_FIELDS.find((field) => field.name === fieldName)?.label || fieldName}
+          </span>
+        ))}
+      </div>
+
+      {candidateValues.length > 0 ? (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
+          <div className="font-semibold">Multiple candidate values detected</div>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {candidateValues.map((candidate: { column?: number; value?: string }, index: number) => (
+              <span key={`${candidate.column}-${index}`} className="rounded-full bg-white px-2 py-1 text-amber-800 dark:bg-amber-900/40 dark:text-amber-100">
+                {candidate.column ? `C${candidate.column}: ` : ""}{candidate.value}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {problemFields.map((fieldName) => {
+          const field = CORRECTION_FIELDS.find((item) => item.name === fieldName);
+          if (!field) {
+            return null;
+          }
+
+          return (
+            <div key={field.name} className={cn("space-y-2", field.kind === "textarea" && "md:col-span-2 xl:col-span-3")}>
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs font-semibold">{field.label}</Label>
+                {(similarCounts[field.name] || 0) > 0 && normalizeCorrectionValue(draft[field.name]) ? (
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium text-primary underline-offset-4 hover:underline"
+                    onClick={() => onApplyToSimilar(field.name)}
+                  >
+                    Apply to {similarCounts[field.name]} similar row{similarCounts[field.name] === 1 ? "" : "s"}
+                  </button>
+                ) : null}
+              </div>
+              {field.kind === "textarea" ? (
+                <textarea
+                  value={draft[field.name]}
+                  onChange={(event) => onDraftChange(field.name, event.target.value)}
+                  placeholder={field.placeholder}
+                  rows={2}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                />
+              ) : (
+                <Input
+                  value={draft[field.name]}
+                  onChange={(event) => onDraftChange(field.name, event.target.value)}
+                  placeholder={field.placeholder}
+                  className="h-9 text-sm"
+                />
+              )}
+              {fieldErrors[field.name] ? (
+                <div className="text-[11px] font-medium text-red-600 dark:text-red-300">{fieldErrors[field.name]}</div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -470,6 +817,9 @@ export function DesignExcelUploadModal() {
   const [uploadingImageFor, setUploadingImageFor] = useState<{ fixtureId: string; imageType: "part" | "fixture" } | null>(null);
   const [previewImageTarget, setPreviewImageTarget] = useState<{ rowKey: string; imageType: "part" | "fixture" } | null>(null);
   const [queuedPreviewImages, setQueuedPreviewImages] = useState<PendingPreviewImageMap>({});
+  const [correctionDrafts, setCorrectionDrafts] = useState<Record<string, RejectedRowCorrectionDraft>>({});
+  const [correctionAudits, setCorrectionAudits] = useState<Record<string, DesignRejectedRowCorrectionAudit>>({});
+  const [validatingRejectedKey, setValidatingRejectedKey] = useState<string | null>(null);
 
   const clearQueuedPreviewImages = () => {
     setQueuedPreviewImages((current) => {
@@ -494,6 +844,9 @@ export function DesignExcelUploadModal() {
     setBatchFixtures(null);
     setUploadingImageFor(null);
     setPreviewImageTarget(null);
+    setCorrectionDrafts({});
+    setCorrectionAudits({});
+    setValidatingRejectedKey(null);
     setUploadMode("excel");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -631,6 +984,9 @@ export function DesignExcelUploadModal() {
       });
       setDecisions(initialDecisions);
       setScopeDecisions({});
+      setCorrectionDrafts({});
+      setCorrectionAudits({});
+      setValidatingRejectedKey(null);
       setConfirmationStage("preview");
     },
     onError: (error) => {
@@ -652,6 +1008,9 @@ export function DesignExcelUploadModal() {
       });
       setDecisions(initialDecisions);
       setScopeDecisions({});
+      setCorrectionDrafts({});
+      setCorrectionAudits({});
+      setValidatingRejectedKey(null);
       setConfirmationStage("preview");
     },
     onError: (error) => {
@@ -734,6 +1093,186 @@ export function DesignExcelUploadModal() {
     },
   });
 
+  const validateRejectedRowMutation = useMutation({
+    mutationFn: validateRejectedDesignRow,
+  });
+
+  const getCorrectionDraftForRow = (rejected: DesignExcelRejectedRow) => {
+    const rowKey = getRejectedRowKey(rejected);
+    return correctionDrafts[rowKey] || buildRejectedRowDraft(rejected);
+  };
+
+  const updateRejectedDraft = (rejected: DesignExcelRejectedRow, fieldName: CorrectionFieldName, value: string) => {
+    const rowKey = getRejectedRowKey(rejected);
+    setCorrectionDrafts((current) => ({
+      ...current,
+      [rowKey]: {
+        ...(current[rowKey] || buildRejectedRowDraft(rejected)),
+        [fieldName]: value,
+      },
+    }));
+  };
+
+  const applyDraftValueToSimilarRows = (
+    sourceRejected: DesignExcelRejectedRow,
+    fieldName: CorrectionFieldName,
+    value: string,
+  ) => {
+    if (!preview || !normalizeCorrectionValue(value)) {
+      return;
+    }
+
+    const sourceKey = getRejectedRowKey(sourceRejected);
+    let updatedCount = 0;
+
+    setCorrectionDrafts((current) => {
+      const nextDrafts = { ...current };
+      preview.preview.rejected.forEach((rejected) => {
+        const targetKey = getRejectedRowKey(rejected);
+        if (targetKey === sourceKey) {
+          return;
+        }
+
+        if (!getRejectedProblemFields(rejected).includes(fieldName)) {
+          return;
+        }
+
+        nextDrafts[targetKey] = {
+          ...(nextDrafts[targetKey] || buildRejectedRowDraft(rejected)),
+          [fieldName]: value,
+        };
+        updatedCount += 1;
+      });
+      return nextDrafts;
+    });
+
+    if (updatedCount > 0) {
+      toast({
+        title: "Applied to similar rows",
+        description: `${updatedCount} row${updatedCount === 1 ? "" : "s"} prefilled for faster correction.`,
+      });
+    }
+  };
+
+  const handleRejectedRowValidation = async (rejected: DesignExcelRejectedRow) => {
+    if (!preview) {
+      return;
+    }
+
+    const rowKey = getRejectedRowKey(rejected);
+    const draft = getCorrectionDraftForRow(rejected);
+    const clientErrors = buildClientFieldErrors(draft, rejected, preview);
+    if (Object.keys(clientErrors).length > 0) {
+      toast({
+        title: "Finish required corrections",
+        description: "Resolve the highlighted field issues before validating this row.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setValidatingRejectedKey(rowKey);
+
+    try {
+      const result = await validateRejectedRowMutation.mutateAsync({
+        file_info: preview.file_info,
+        original_row: rejected,
+        corrected_row: buildCorrectedPreviewRow(rejected, draft),
+        reserved_fixture_numbers: buildReservedFixtureNumbers(preview),
+      });
+
+      setCorrectionAudits((current) => ({
+        ...current,
+        [rowKey]: result.correction_audit,
+      }));
+
+      setPreview((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const nextRejected = current.preview.rejected.filter((item) => getRejectedRowKey(item) !== rowKey);
+        const nextPreview = {
+          ...current.preview,
+          rejected: nextRejected,
+        };
+
+        if (result.classification === "accepted" && result.accepted) {
+          return {
+            ...current,
+            preview: {
+              ...nextPreview,
+              accepted: sortAcceptedItems([...current.preview.accepted, result.accepted]),
+            },
+          };
+        }
+
+        if (result.classification === "conflict" && result.conflict) {
+          return {
+            ...current,
+            preview: {
+              ...nextPreview,
+              conflicts: sortConflictItems([...current.preview.conflicts, result.conflict]),
+            },
+          };
+        }
+
+        if (result.classification === "skipped" && result.skipped) {
+          return {
+            ...current,
+            preview: {
+              ...nextPreview,
+              skipped: sortSkippedItems([...current.preview.skipped, result.skipped]),
+            },
+          };
+        }
+
+        if (result.classification === "rejected" && result.rejected) {
+          return {
+            ...current,
+            preview: {
+              ...nextPreview,
+              rejected: [...nextRejected, result.rejected],
+            },
+          };
+        }
+
+        return current;
+      });
+
+      if (result.classification === "accepted") {
+        toast({
+          title: "Row moved to accepted",
+          description: `${getRowReferenceSummary(rejected)} is now ready for import.`,
+        });
+      } else if (result.classification === "conflict") {
+        toast({
+          title: "Row revalidated",
+          description: `${getRowReferenceSummary(rejected)} now needs a conflict decision.`,
+        });
+      } else if (result.classification === "skipped") {
+        toast({
+          title: "Row reclassified",
+          description: `${getRowReferenceSummary(rejected)} was moved to skipped customer scope.`,
+        });
+      } else {
+        toast({
+          title: "Further correction needed",
+          description: result.rejected?.error_message || "The row still has validation issues.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Validation failed",
+        description: error instanceof Error ? error.message : "Could not validate corrected row",
+        variant: "destructive",
+      });
+    } finally {
+      setValidatingRejectedKey(null);
+    }
+  };
+
   const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     try {
       const nextFile = event.target.files?.[0] || null;
@@ -807,6 +1346,7 @@ export function DesignExcelUploadModal() {
       resolved_items,
       rejected_items: preview.preview.rejected,
       skipped_items: preview.preview.skipped,
+      correction_items: Object.values(correctionAudits).filter((item) => item.correction_result !== "rejected"),
     });
   };
 
@@ -1086,7 +1626,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                 <div>
                                   <div className="font-medium">{item.incoming.fixture_no}</div>
                                   <div className="text-xs text-muted-foreground">
-                                    Row {item.incoming.row_number} • {item.incoming.part_name}
+                                    {getRowReferenceSummary(item.incoming)} • {item.incoming.part_name}
                                   </div>
                                 </div>
                                 <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800 dark:bg-green-900 dark:text-green-300">
@@ -1145,7 +1685,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                     {formatConflictType(conflict.type)}
                                   </div>
                                 </div>
-                                <div className="text-xs text-muted-foreground">Row {conflict.incoming.row_number}</div>
+                                <div className="text-xs text-muted-foreground">{getRowReferenceSummary(conflict.incoming)}</div>
                               </div>
 
                               <RadioGroup
@@ -1227,7 +1767,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                             <div key={`${item.fixture_no}-${index}`} className="rounded-lg border bg-slate-50/80 p-3 text-sm dark:bg-slate-950/20">
                               <div className="font-medium">{item.fixture_no}</div>
                               <div className="mt-1 text-xs text-muted-foreground">
-                                Row {item.row_number} • {item.part_name}
+                                {getRowReferenceSummary(item)} • {item.part_name}
                               </div>
                               <div className="mt-2 text-xs text-muted-foreground">
                                 Type: <span className="font-medium text-foreground">{item.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.qty}</span>
@@ -1251,38 +1791,35 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                           <XCircle className="h-5 w-5" />
                           Rejected Rows ({preview.preview.rejected.length})
                         </h5>
-                        <div className="space-y-2">
-                          {preview.preview.rejected.map((rejected, index) => (
-                            <div key={`${rejected.row_number}-${index}`} className="rounded-lg border border-red-200 bg-red-50/50 p-3 text-sm dark:border-red-900/50 dark:bg-red-950/20">
-                              <div className="flex justify-between gap-3">
-                                <span className="w-20 font-bold text-red-700 dark:text-red-400">
-                                  {rejected.row_number > 0 ? `Row ${rejected.row_number}` : "General"}
-                                </span>
-                                <span className="flex-1 text-red-600 dark:text-red-300">{rejected.error_message}</span>
-                              </div>
-                              {rejected.raw_data?.validation ? (
-                                <div className="mt-3 rounded-md border border-red-200/70 bg-background/70 p-3 text-xs text-muted-foreground dark:border-red-900/40">
-                                  {rejected.raw_data.validation.sheet_name ? (
-                                    <div>
-                                      Sheet: <span className="font-medium text-foreground">{rejected.raw_data.validation.sheet_name}</span>
-                                    </div>
-                                  ) : null}
-                                  <div>
-                                    Raw: Fixture No <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.fixture_no)}</span>,
-                                    {" "}OP.NO <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.op_no)}</span>,
-                                    {" "}Fixture Type <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.fixture_type)}</span>,
-                                    {" "}QTY <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.raw?.qty)}</span>
-                                  </div>
-                                  <div>
-                                    Normalized: Fixture No <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.fixture_no)}</span>,
-                                    {" "}OP.NO <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.op_no)}</span>,
-                                    {" "}Fixture Type <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.fixture_type)}</span>,
-                                    {" "}QTY <span className="font-medium text-foreground">{formatRejectedValue(rejected.raw_data.validation.normalized?.qty)}</span>
-                                  </div>
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
+                        <div className="space-y-3">
+                          {preview.preview.rejected.map((rejected) => {
+                            const rowKey = getRejectedRowKey(rejected);
+                            const draft = getCorrectionDraftForRow(rejected);
+                            const fieldErrors = buildClientFieldErrors(draft, rejected, preview);
+                            const similarCounts = Object.fromEntries(
+                              getRejectedProblemFields(rejected).map((fieldName) => [
+                                fieldName,
+                                preview.preview.rejected.filter((candidate) => (
+                                  getRejectedRowKey(candidate) !== rowKey
+                                  && getRejectedProblemFields(candidate).includes(fieldName)
+                                )).length,
+                              ]),
+                            ) as Partial<Record<CorrectionFieldName, number>>;
+
+                            return (
+                              <RejectedRowCorrectionCard
+                                key={rowKey}
+                                rejected={rejected}
+                                draft={draft}
+                                fieldErrors={fieldErrors}
+                                similarCounts={similarCounts}
+                                onDraftChange={(fieldName, value) => updateRejectedDraft(rejected, fieldName, value)}
+                                onApplyToSimilar={(fieldName) => applyDraftValueToSimilarRows(rejected, fieldName, draft[fieldName])}
+                                onValidate={() => handleRejectedRowValidation(rejected)}
+                                isValidating={validatingRejectedKey === rowKey}
+                              />
+                            );
+                          })}
                         </div>
                       </div>
                     )}

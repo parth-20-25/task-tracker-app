@@ -40,6 +40,19 @@ function normalizeParserConfidence(value) {
   return normalized || "HIGH";
 }
 
+function normalizeRowReferenceSource(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  return normalized === "business_serial" ? "business_serial" : "excel_row";
+}
+
+function derivePrimaryRowNumber(rowReference, excelRow) {
+  if (/^\d+$/.test(rowReference)) {
+    return Number(rowReference);
+  }
+
+  return excelRow;
+}
+
 function parseJsonResponse(text) {
   if (!text) {
     return null;
@@ -90,6 +103,10 @@ function validatePythonRows(rows) {
 
     return {
       excel_row,
+      row_number: derivePrimaryRowNumber(normalizeString(row.row_reference || row.business_row_reference || row.row_number), excel_row),
+      row_reference: normalizeString(row.row_reference || row.business_row_reference || row.row_number || excel_row),
+      row_reference_source: normalizeRowReferenceSource(row.row_reference_source),
+      business_row_reference: normalizeOptionalString(row.business_row_reference),
       fixture_no: normalizeString(row.fixture_no),
       op_no: normalizeString(row.op_no),
       part_name: normalizeString(row.part_name),

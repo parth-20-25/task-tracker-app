@@ -337,7 +337,25 @@ async function ensureTasksTable(client) {
   await client.query(`UPDATE tasks SET status = 'assigned' WHERE status = 'not_started'`);
   await client.query(`UPDATE tasks SET status = 'under_review' WHERE status = 'completed' AND verification_status = 'pending'`);
   await client.query(`UPDATE tasks SET status = 'closed', closed_at = COALESCE(closed_at, verified_at, completed_at, NOW()) WHERE status = 'completed' AND verification_status = 'approved'`);
-  await client.query(`UPDATE tasks SET status = 'rework' WHERE verification_status = 'rejected'`);
+  // Prevent bootstrap failures due to uniq_active_task_per_stage (fixture_id, stage) uniqueness.
+  // If multiple non-closed/cancelled tasks exist for the same (fixture_id, stage), ensure only one remains "active".
+  // Strategy: pick the first task per (fixture_id, stage) to keep as 'rework'; force the rest to 'closed'
+  // so they fall outside the unique index predicate (status NOT IN ('closed','cancelled')).
+  await client.query(`
+    WITH ranked AS (
+      SELECT
+        id,
+        fixture_id,
+        stage,
+        ROW_NUMBER() OVER (PARTITION BY fixture_id, stage ORDER BY created_at ASC, id ASC) AS rn
+      FROM tasks
+      WHERE verification_status = 'rejected'
+    )
+    UPDATE tasks t
+    SET status = CASE WHEN r.rn = 1 THEN 'rework' ELSE 'closed' END
+    FROM ranked r
+    WHERE t.id = r.id
+  `);
   await client.query(`
     UPDATE tasks
     SET lifecycle_status = CASE

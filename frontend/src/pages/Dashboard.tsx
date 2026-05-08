@@ -19,14 +19,15 @@ const TaskAssignmentBar = React.lazy(() =>
 export default function Dashboard() {
   const { user, role, access } = useAuth();
   const { tasks, isLoading } = useTasks();
+  const safeTasks = tasks ?? [];
 
   const isDesignUser = isDesignDepartment(user);
   const canUploadProjectData = access.canUploadData && !!user?.department_id;
   const canUploadDesignProjectData = canUploadProjectData && isDesignUser;
   const isAdminUser = role?.hierarchy_level === 1;
 
-  const myTasks = tasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
-  const viewTasks = access.canViewAllTasks ? tasks : myTasks;
+  const myTasks = safeTasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
+  const viewTasks = access.canViewAllTasks ? safeTasks : myTasks;
 
   const metrics = {
     total: viewTasks.length,

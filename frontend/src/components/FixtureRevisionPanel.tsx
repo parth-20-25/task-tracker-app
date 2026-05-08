@@ -74,6 +74,7 @@ export function FixtureRevisionPanel({
   onChanged,
 }: FixtureRevisionPanelProps) {
   const stages = progress?.stages ?? [];
+  const revisions = progress?.revisions ?? [];
   const [targetStage, setTargetStage] = useState(() => getDefaultTargetStage(stages));
   const [revisionType, setRevisionType] = useState<FixtureRevisionType>("OTHER");
   const [manualStatus, setManualStatus] = useState<FixtureStageStatus>("PENDING");
@@ -157,9 +158,9 @@ export function FixtureRevisionPanel({
         </div>
       </div>
 
-      {progress.revisions.length > 0 ? (
+      {revisions.length > 0 ? (
         <div className="space-y-2">
-          {progress.revisions.map((revision) => (
+          {revisions.map((revision) => (
             <div key={revision.id} className="rounded-lg border bg-muted/20 p-2 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-semibold text-foreground">

@@ -178,7 +178,13 @@ function canVerifyTask(actor, task) {
     return false;
   }
 
-  return canAccessTask(actor, task);
+  // Approval should be scoped by department (or admin), not by "visible/assignee" access.
+  // This prevents approvers (e.g., team leaders) from being blocked when they are not task assignees.
+  if (isAdmin(actor)) {
+    return true;
+  }
+
+  return canAccessDepartment(actor, task?.department_id || null);
 }
 
 function isTaskAssignee(user, task) {

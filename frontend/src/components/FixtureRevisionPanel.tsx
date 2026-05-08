@@ -168,7 +168,7 @@ export function FixtureRevisionPanel({
                 <span className="text-muted-foreground">{formatRevisionDate(revision.changed_at)}</span>
               </div>
               <p className="mt-1 text-muted-foreground">
-                {revision.reverted_from_stage} -> {revision.reverted_to_stage}
+                {revision.reverted_from_stage} {"→"}  {revision.reverted_to_stage}
               </p>
               <p className="mt-1 font-medium text-foreground">{revision.revision_reason}</p>
               {revision.revision_remarks ? <p className="mt-1 text-muted-foreground">{revision.revision_remarks}</p> : null}

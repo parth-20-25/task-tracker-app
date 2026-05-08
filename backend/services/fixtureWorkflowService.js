@@ -10,9 +10,13 @@ const {
   getActiveWorkflowForDepartment,
   getProgressForFixture,
   initProgressForFixture,
+  incrementFixtureRevision,
+  listFixtureRevisions,
   updateProgressRow,
   rejectStageAttempt,
   markFixtureComplete,
+  markFixtureIncomplete,
+  recordFixtureRevision,
   startStageAttempt,
   getFixtureWithDepartment,
   getFixtureWorkflowContext,
@@ -22,6 +26,20 @@ const {
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
 const { canAssignTo } = require("./accessControlService");
 const { getDepartmentWorkflowStagesResponse } = require("./workflowRecoveryService");
+
+const FIXTURE_REVISION_TYPES = new Set([
+  "CUSTOMER_CHANGE",
+  "INTERNAL_DESIGN_CHANGE",
+  "MANUFACTURING_ISSUE",
+  "QUALITY_CORRECTION",
+  "COST_OPTIMIZATION",
+  "APPROVAL_REJECTION",
+  "PROCUREMENT_CONSTRAINT",
+  "MANUAL_OVERRIDE",
+  "OTHER",
+]);
+
+const MANUAL_STAGE_STATUSES = new Set(["PENDING", "IN_PROGRESS", "APPROVED", "REJECTED"]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -77,6 +95,120 @@ async function ensureProgressInitialized(fixtureId, departmentId, workflow) {
  */
 function deriveCurrentStageByStatus(progressRows) {
   return progressRows.find((r) => r.status !== "APPROVED") || null;
+}
+
+function getLastStage(progressRows) {
+  return [...progressRows].sort((a, b) => Number(b.stage_order) - Number(a.stage_order))[0] || null;
+}
+
+function normalizeStageLookupValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function resolveStageFromProgress(progressRows, { targetStageName = null, targetStageOrder = null } = {}) {
+  const normalizedStageName = normalizeStageLookupValue(targetStageName);
+  const normalizedStageOrder = Number(targetStageOrder);
+
+  return progressRows.find((stage) => {
+    if (Number.isFinite(normalizedStageOrder) && Number(stage.stage_order) === normalizedStageOrder) {
+      return true;
+    }
+
+    if (!normalizedStageName) {
+      return false;
+    }
+
+    return normalizeStageLookupValue(stage.stage_name) === normalizedStageName;
+  }) || null;
+}
+
+function normalizeRevisionType(value, fallback = "OTHER") {
+  const normalized = String(value || fallback).trim().toUpperCase();
+  if (!FIXTURE_REVISION_TYPES.has(normalized)) {
+    throw new AppError(400, `Unsupported revision_type "${value}"`);
+  }
+
+  return normalized;
+}
+
+function normalizeRequiredReason(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    throw new AppError(400, "revision_reason is required");
+  }
+
+  return normalized;
+}
+
+async function applyProgressReopenState({ fixtureId, progress, targetStage, client }) {
+  for (const stage of progress) {
+    if (Number(stage.stage_order) < Number(targetStage.stage_order)) {
+      await updateProgressRow(
+        fixtureId,
+        stage.stage_name,
+        { status: "APPROVED" },
+        client,
+      );
+      continue;
+    }
+
+    await updateProgressRow(
+      fixtureId,
+      stage.stage_name,
+      {
+        status: "PENDING",
+        assigned_to: null,
+        assigned_at: null,
+        started_at: null,
+        completed_at: null,
+        duration_minutes: null,
+      },
+      client,
+    );
+  }
+}
+
+async function applyManualStageState({ fixtureId, progress, targetStage, targetStatus, client }) {
+  for (const stage of progress) {
+    const stageOrder = Number(stage.stage_order);
+    const targetOrder = Number(targetStage.stage_order);
+
+    if (stageOrder < targetOrder || (stageOrder === targetOrder && targetStatus === "APPROVED")) {
+      await updateProgressRow(fixtureId, stage.stage_name, { status: "APPROVED" }, client);
+      continue;
+    }
+
+    if (stageOrder === targetOrder) {
+      await updateProgressRow(
+        fixtureId,
+        stage.stage_name,
+        {
+          status: targetStatus,
+          assigned_to: null,
+          assigned_at: null,
+          started_at: null,
+          completed_at: null,
+          duration_minutes: null,
+        },
+        client,
+      );
+      continue;
+    }
+
+    await updateProgressRow(
+      fixtureId,
+      stage.stage_name,
+      {
+        status: "PENDING",
+        assigned_to: null,
+        assigned_at: null,
+        started_at: null,
+        completed_at: null,
+        duration_minutes: null,
+      },
+      client,
+    );
+  }
 }
 
 function buildCurrentStageResponse(progressRows, workflow) {
@@ -600,14 +732,18 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
 
   const workflow = await requireWorkflow(departmentId);
+  const fixture = await getFixtureWorkflowContext(fixtureId);
 
   let progress = await getProgressForFixture(fixtureId, departmentId);
   if (progress.length === 0) {
     progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
   }
+  const revisions = await listFixtureRevisions(fixtureId, departmentId);
 
   return {
     workflow_name: workflow.name,
+    revision_no: Number(fixture?.revision_no || 0),
+    is_legacy_workflow: fixture?.is_legacy_workflow === true,
     stages: progress.map((row) => ({
       stage_name: row.stage_name,
       stage_order: row.stage_order,
@@ -619,6 +755,25 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
       duration_minutes: row.duration_minutes,
       updated_at: row.updated_at,
     })),
+    revisions: revisions.map((row) => ({
+      id: row.id,
+      fixture_id: row.fixture_id,
+      department_id: row.department_id,
+      revision_no: Number(row.revision_no),
+      revision_type: row.revision_type,
+      revision_reason: row.revision_reason,
+      revision_remarks: row.revision_remarks,
+      reverted_from_stage: row.reverted_from_stage,
+      reverted_to_stage: row.reverted_to_stage,
+      requested_by: row.requested_by,
+      requested_by_name: row.requested_by_name || null,
+      approved_by: row.approved_by,
+      approved_by_name: row.approved_by_name || null,
+      changed_by: row.changed_by,
+      changed_by_name: row.changed_by_name || null,
+      changed_at: row.changed_at,
+      metadata: row.metadata || {},
+    })),
   };
 }
 
@@ -627,6 +782,194 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
  */
 async function listAssignableFixturesForScope(departmentId, scopeId) {
   return listAssignableFixtures(departmentId, scopeId);
+}
+
+async function reopenFixtureStage({
+  actor,
+  fixtureId,
+  departmentId,
+  targetStageName = null,
+  targetStageOrder = null,
+  revisionType = "OTHER",
+  revisionReason,
+  remarks = null,
+  requestedBy = null,
+  approvedBy = null,
+}) {
+  await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+
+  const normalizedRevisionType = normalizeRevisionType(revisionType);
+  const normalizedRevisionReason = normalizeRequiredReason(revisionReason);
+  const workflow = await requireWorkflow(departmentId);
+  let progress = await getProgressForFixture(fixtureId, departmentId);
+  if (progress.length === 0) {
+    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
+  }
+
+  const targetStage = resolveStageFromProgress(progress, { targetStageName, targetStageOrder });
+  if (!targetStage) {
+    throw new AppError(400, "Target stage was not found in the fixture workflow");
+  }
+
+  const fromStage = deriveCurrentStageByStatus(progress) || getLastStage(progress);
+  if (!fromStage) {
+    throw new AppError(409, "Fixture workflow has no stages to reopen");
+  }
+
+  if (Number(targetStage.stage_order) > Number(fromStage.stage_order)) {
+    throw new AppError(400, "Revision can only reopen the current or a previous stage");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const lockedProgress = await getProgressForFixture(fixtureId, departmentId, client);
+    const lockedTargetStage = resolveStageFromProgress(lockedProgress, { targetStageName, targetStageOrder });
+    const lockedFromStage = deriveCurrentStageByStatus(lockedProgress) || getLastStage(lockedProgress);
+
+    if (!lockedTargetStage || !lockedFromStage) {
+      throw new AppError(409, "Fixture workflow changed while processing revision");
+    }
+
+    if (Number(lockedTargetStage.stage_order) > Number(lockedFromStage.stage_order)) {
+      throw new AppError(400, "Revision can only reopen the current or a previous stage");
+    }
+
+    const nextRevisionNo = await incrementFixtureRevision(fixtureId, client);
+    await applyProgressReopenState({
+      fixtureId,
+      progress: lockedProgress,
+      targetStage: lockedTargetStage,
+      client,
+    });
+
+    await recordFixtureRevision({
+      fixture_id: fixtureId,
+      department_id: departmentId,
+      revision_no: nextRevisionNo,
+      revision_type: normalizedRevisionType,
+      revision_reason: normalizedRevisionReason,
+      revision_remarks: String(remarks || "").trim() || null,
+      reverted_from_stage: lockedFromStage.stage_name,
+      reverted_to_stage: lockedTargetStage.stage_name,
+      requested_by: String(requestedBy || actor?.employee_id || "").trim(),
+      approved_by: String(approvedBy || "").trim() || null,
+      changed_by: actor.employee_id,
+      metadata: {
+        operation: "reopen_fixture_stage",
+        from_status: lockedFromStage.status,
+        to_status: "PENDING",
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return getFullProgressForFixture(fixtureId, departmentId);
+}
+
+async function manipulateFixtureStage({
+  actor,
+  fixtureId,
+  departmentId,
+  targetStageName = null,
+  targetStageOrder = null,
+  targetStatus = "PENDING",
+  revisionReason,
+  remarks = null,
+}) {
+  await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+
+  const fixture = await getFixtureWorkflowContext(fixtureId);
+  if (!fixture?.is_legacy_workflow) {
+    throw new AppError(409, "Manual stage manipulation is restricted to legacy fixtures created before workflow launch");
+  }
+
+  const normalizedTargetStatus = String(targetStatus || "PENDING").trim().toUpperCase();
+  if (!MANUAL_STAGE_STATUSES.has(normalizedTargetStatus)) {
+    throw new AppError(400, `Unsupported target_status "${targetStatus}"`);
+  }
+
+  const normalizedRevisionReason = normalizeRequiredReason(revisionReason);
+  const workflow = await requireWorkflow(departmentId);
+  let progress = await getProgressForFixture(fixtureId, departmentId);
+  if (progress.length === 0) {
+    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
+  }
+
+  const targetStage = resolveStageFromProgress(progress, { targetStageName, targetStageOrder });
+  if (!targetStage) {
+    throw new AppError(400, "Target stage was not found in the fixture workflow");
+  }
+
+  const fromStage = deriveCurrentStageByStatus(progress) || getLastStage(progress);
+  if (!fromStage) {
+    throw new AppError(409, "Fixture workflow has no stages to manipulate");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const lockedProgress = await getProgressForFixture(fixtureId, departmentId, client);
+    const lockedTargetStage = resolveStageFromProgress(lockedProgress, { targetStageName, targetStageOrder });
+    const lockedFromStage = deriveCurrentStageByStatus(lockedProgress) || getLastStage(lockedProgress);
+
+    if (!lockedTargetStage || !lockedFromStage) {
+      throw new AppError(409, "Fixture workflow changed while processing manual override");
+    }
+
+    const nextRevisionNo = await incrementFixtureRevision(fixtureId, client);
+    await applyManualStageState({
+      fixtureId,
+      progress: lockedProgress,
+      targetStage: lockedTargetStage,
+      targetStatus: normalizedTargetStatus,
+      client,
+    });
+
+    if (
+      normalizedTargetStatus === "APPROVED"
+      && Number(lockedTargetStage.stage_order) === Math.max(...lockedProgress.map((stage) => Number(stage.stage_order)))
+    ) {
+      await markFixtureComplete(fixtureId, client);
+    } else {
+      await markFixtureIncomplete(fixtureId, client);
+    }
+
+    await recordFixtureRevision({
+      fixture_id: fixtureId,
+      department_id: departmentId,
+      revision_no: nextRevisionNo,
+      revision_type: "MANUAL_OVERRIDE",
+      revision_reason: normalizedRevisionReason,
+      revision_remarks: String(remarks || "").trim() || null,
+      reverted_from_stage: lockedFromStage.stage_name,
+      reverted_to_stage: lockedTargetStage.stage_name,
+      requested_by: actor.employee_id,
+      approved_by: actor.employee_id,
+      changed_by: actor.employee_id,
+      metadata: {
+        operation: "manual_fixture_stage_manipulation",
+        from_status: lockedFromStage.status,
+        target_status: normalizedTargetStatus,
+        legacy_only: true,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return getFullProgressForFixture(fixtureId, departmentId);
 }
 
 module.exports = instrumentModuleExports("service.fixtureWorkflowService", {
@@ -640,6 +983,8 @@ module.exports = instrumentModuleExports("service.fixtureWorkflowService", {
   rejectFixtureStage,
   getFullProgressForFixture,
   listAssignableFixturesForScope,
+  manipulateFixtureStage,
+  reopenFixtureStage,
   releaseFixtureStageAssignment,
   advanceFixtureWorkflowStage,
   advanceWorkflowAfterTaskApproval,

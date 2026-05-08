@@ -41,6 +41,7 @@ import {
 } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { FixtureRevisionPanel } from "@/components/FixtureRevisionPanel";
 import { FixtureReferenceImageSupport } from "@/components/FixtureReferenceImageSupport";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -402,8 +403,10 @@ export function DesignTaskAssignmentBar({
   const scopes = scopesQuery.data ?? [];
   const fixtures = fixturesQuery.data ?? [];
 
-  const canVerify = hasUserPermission(currentUser, PERMISSIONS.VERIFY_TASK)
+  const canVerify = hasUserPermission(currentUser, PERMISSIONS.APPROVE_COMPLETED_TASK)
     || hasUserPermission(currentUser, PERMISSIONS.APPROVE_QUALITY);
+  const canReopenFixtureStage = hasUserPermission(currentUser, PERMISSIONS.REOPEN_FIXTURE_STAGE);
+  const canManipulateFixtureStage = hasUserPermission(currentUser, PERMISSIONS.MANIPULATE_FIXTURE_STAGE);
 
   const validation = validationQuery.data;
   const currentStage = workflow;
@@ -778,6 +781,23 @@ export function DesignTaskAssignmentBar({
 
               {/* Full timeline */}
               {!isWorkflowLoading && hasWorkflow && <WorkflowTimeline progress={workflowProgress} />}
+
+              {!isWorkflowLoading && hasWorkflow && (
+                <FixtureRevisionPanel
+                  fixtureId={fixtureId}
+                  departmentId={contextDepartmentId}
+                  progress={workflowProgress}
+                  canReopen={canReopenFixtureStage}
+                  canManipulate={canManipulateFixtureStage}
+                  onChanged={() => {
+                    refreshWorkflowState();
+                    queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] });
+                    queryClient.invalidateQueries({ queryKey: ["workflow", "validate"] });
+                    queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] });
+                    queryClient.invalidateQueries({ queryKey: ["designFixtures", designDepartmentKey, scopeId || "unselected"] });
+                  }}
+                />
+              )}
 
               {/* Blocking reason */}
               {hasWorkflow && !validationQuery.isLoading && visibleBlockingReason && (

@@ -63,7 +63,7 @@ async function listRoles(client = pool) {
 function buildRolePermissionMap(storedPermissionsValue, relationalPermissionIds = [], roleId = null) {
   const storedPermissions = parsePermissions(storedPermissionsValue);
   const directPermissionIds = Object.entries(storedPermissions)
-    .filter(([permissionId, enabled]) => enabled === true && typeof permissionId === "string" && permissionId.startsWith("can_"))
+    .filter(([permissionId, enabled]) => enabled === true && typeof permissionId === "string" && permissionId !== "all")
     .map(([permissionId]) => permissionId);
   const defaultPermissionIds = storedPermissions.all === true
     ? ROLE_DEFAULT_PERMISSIONS[roleId] || []

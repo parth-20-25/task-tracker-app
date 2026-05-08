@@ -227,7 +227,7 @@ async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
 async function startStageAttempt(fixtureId, departmentId, stageName, assignedTo, timestamp = new Date(), client = pool) {
   const latestAttempt = await getLatestStageAttempt(fixtureId, stageName, client);
 
-  if (!latestAttempt || latestAttempt.status === "REJECTED") {
+  if (!latestAttempt || ["APPROVED", "REJECTED"].includes(latestAttempt.status)) {
     const nextAttemptNo = latestAttempt ? Number(latestAttempt.attempt_no) + 1 : 1;
     await client.query(
       `INSERT INTO fixture_workflow_stage_attempts (
@@ -333,6 +333,92 @@ async function markFixtureComplete(fixtureId, client = pool) {
   );
 }
 
+async function markFixtureIncomplete(fixtureId, client = pool) {
+  await client.query(
+    `UPDATE design.fixtures SET is_workflow_complete = FALSE WHERE id = $1`,
+    [fixtureId],
+  );
+}
+
+async function incrementFixtureRevision(fixtureId, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE design.fixtures
+      SET revision_no = COALESCE(revision_no, 0) + 1,
+          is_workflow_complete = FALSE,
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING revision_no
+    `,
+    [fixtureId],
+  );
+
+  return Number(result.rows[0]?.revision_no || 0);
+}
+
+async function recordFixtureRevision(revision, client = pool) {
+  const result = await client.query(
+    `
+      INSERT INTO fixture_workflow_revisions (
+        fixture_id,
+        department_id,
+        revision_no,
+        revision_type,
+        revision_reason,
+        revision_remarks,
+        reverted_from_stage,
+        reverted_to_stage,
+        requested_by,
+        approved_by,
+        changed_by,
+        changed_at,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, NOW()), $13::jsonb)
+      RETURNING *
+    `,
+    [
+      revision.fixture_id,
+      revision.department_id,
+      revision.revision_no,
+      revision.revision_type,
+      revision.revision_reason,
+      revision.revision_remarks || null,
+      revision.reverted_from_stage,
+      revision.reverted_to_stage,
+      revision.requested_by,
+      revision.approved_by || null,
+      revision.changed_by,
+      revision.changed_at || null,
+      JSON.stringify(revision.metadata || {}),
+    ],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function listFixtureRevisions(fixtureId, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        fwr.*,
+        requester.name AS requested_by_name,
+        approver.name AS approved_by_name,
+        changer.name AS changed_by_name
+      FROM fixture_workflow_revisions fwr
+      LEFT JOIN users requester ON requester.employee_id = fwr.requested_by
+      LEFT JOIN users approver ON approver.employee_id = fwr.approved_by
+      LEFT JOIN users changer ON changer.employee_id = fwr.changed_by
+      WHERE fwr.fixture_id = $1
+        AND fwr.department_id = $2
+      ORDER BY fwr.revision_no DESC, fwr.changed_at DESC
+    `,
+    [fixtureId, departmentId],
+  );
+
+  return result.rows;
+}
+
 /**
  * Returns the fixture's department_id by joining through scopes → projects.
  */
@@ -363,7 +449,9 @@ async function getFixtureWorkflowContext(fixtureId, client = pool) {
        ds.project_id,
        dp.project_no,
        dp.project_name,
-       dp.department_id
+       dp.department_id,
+       df.revision_no,
+       df.is_legacy_workflow
      FROM design.fixtures df
      JOIN design.scopes ds ON ds.id = df.scope_id
      JOIN design.projects dp ON dp.id = ds.project_id
@@ -432,10 +520,14 @@ module.exports = instrumentModuleExports("repository.fixtureWorkflowRepository",
   initProgressForFixture,
   getFixtureWithDepartment,
   getFixtureWorkflowContext,
+  incrementFixtureRevision,
   resolveFixtureByCanonicalIdentity,
+  listFixtureRevisions,
   listAssignableFixtures,
   listStageAttemptsForFixtures,
   markFixtureComplete,
+  markFixtureIncomplete,
+  recordFixtureRevision,
   rejectStageAttempt,
   startStageAttempt,
   updateProgressRow,

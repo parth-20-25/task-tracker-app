@@ -2,6 +2,7 @@ const express = require("express");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { AppError } = require("../lib/AppError");
 const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
+const { PERMISSIONS } = require("../config/constants");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
@@ -14,6 +15,8 @@ const {
   approveFixtureStage,
   rejectFixtureStage,
   getFullProgressForFixture,
+  manipulateFixtureStage,
+  reopenFixtureStage,
 } = require("../services/fixtureWorkflowService");
 
 const router = express.Router();
@@ -162,7 +165,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/approve",
-  authorize("can_verify_task"),
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -184,7 +187,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/reject",
-  authorize("can_verify_task"),
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -197,6 +200,62 @@ router.post(
 
     const result = await rejectFixtureStage(fixtureId, departmentId);
     return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/workflows/reopen-stage",
+  authorize(PERMISSIONS.REOPEN_FIXTURE_STAGE),
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
+
+    const fixtureId = String(req.body?.fixture_id || "").trim();
+    if (!fixtureId) throw new AppError(400, "fixture_id is required");
+
+    const result = await reopenFixtureStage({
+      actor: req.user,
+      fixtureId,
+      departmentId,
+      targetStageName: req.body?.target_stage_name,
+      targetStageOrder: req.body?.target_stage_order,
+      revisionType: req.body?.revision_type,
+      revisionReason: req.body?.revision_reason,
+      remarks: req.body?.remarks,
+      requestedBy: req.body?.requested_by,
+      approvedBy: req.body?.approved_by,
+    });
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
+  "/workflows/manual-stage",
+  authorize(PERMISSIONS.MANIPULATE_FIXTURE_STAGE),
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
+
+    const fixtureId = String(req.body?.fixture_id || "").trim();
+    if (!fixtureId) throw new AppError(400, "fixture_id is required");
+
+    const result = await manipulateFixtureStage({
+      actor: req.user,
+      fixtureId,
+      departmentId,
+      targetStageName: req.body?.target_stage_name,
+      targetStageOrder: req.body?.target_stage_order,
+      targetStatus: req.body?.target_status,
+      revisionReason: req.body?.revision_reason,
+      remarks: req.body?.remarks,
+    });
+    return sendSuccess(res, result, 200);
   }),
 );
 

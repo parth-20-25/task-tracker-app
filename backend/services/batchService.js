@@ -10,6 +10,11 @@ const {
 } = require("../repositories/batchRepository");
 const { isAdmin } = require("./accessControlService");
 
+function isBatchOwner(user, batch) {
+  const ownerId = batch?.uploaded_by_user_id || batch?.uploaded_by || null;
+  return Boolean(user?.employee_id && ownerId && user.employee_id === ownerId);
+}
+
 /**
  * Returns all upload batches visible to the user with their status summary.
  * Admins see all batches; department users see only their department's batches.
@@ -36,13 +41,19 @@ async function deleteBatch(user, batchId, force = false) {
     throw new AppError(404, "Batch not found");
   }
 
+  const userIsAdmin = isAdmin(user);
+
   // Department-scope check for non-admins
-  if (!isAdmin(user) && batch.department_id !== user.department_id) {
+  if (!userIsAdmin && batch.department_id !== user.department_id) {
     throw new AppError(403, "You do not have access to this batch");
   }
 
+  if (!userIsAdmin && !isBatchOwner(user, batch)) {
+    throw new AppError(403, "Only the uploader of this WBS batch or an admin can delete it");
+  }
+
   if (force) {
-    if (!isAdmin(user)) {
+    if (!userIsAdmin) {
       throw new AppError(403, "Only admins can force-delete a batch");
     }
 
@@ -67,6 +78,7 @@ async function deleteBatch(user, batchId, force = false) {
       metadata: {
         project_no: batch.project_no,
         scope_name: batch.scope_name,
+        uploaded_by_user_id: batch.uploaded_by_user_id,
         total_fixtures: batch.total_fixtures,
         force: true,
       },
@@ -106,6 +118,7 @@ async function deleteBatch(user, batchId, force = false) {
     metadata: {
       project_no: batch.project_no,
       scope_name: batch.scope_name,
+      uploaded_by_user_id: batch.uploaded_by_user_id,
       total_fixtures: batch.total_fixtures,
     },
   });

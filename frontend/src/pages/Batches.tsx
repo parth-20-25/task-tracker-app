@@ -34,16 +34,20 @@ function formatDateTime(value: string) {
 function DeleteAction({
   batch,
   isAdmin,
+  canDelete,
   onDelete,
   isPending,
 }: {
   batch: UploadBatch;
   isAdmin: boolean;
+  canDelete: boolean;
   onDelete: (batch: UploadBatch, force: boolean) => void;
   isPending: boolean;
 }) {
-  const disabled = batch.deletion_blocked;
-  const reason = batch.delete_blocked_reason || "Cannot delete this batch while active work exists.";
+  const disabled = !canDelete || batch.deletion_blocked;
+  const reason = !canDelete
+    ? "Only the uploader of this batch or an admin can delete it."
+    : batch.delete_blocked_reason || "Cannot delete this batch while active work exists.";
 
   return (
     <div className="flex items-center justify-end gap-2">
@@ -82,7 +86,7 @@ function DeleteAction({
 
 export default function Batches() {
   const queryClient = useQueryClient();
-  const { role } = useAuth();
+  const { access, role, user } = useAuth();
   const isAdmin = role?.hierarchy_level === 1;
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
 
@@ -166,43 +170,52 @@ export default function Batches() {
                 </TableRow>
               ) : null}
 
-              {batchesQuery.data?.map((batch) => (
-                <TableRow key={batch.id}>
-                  <TableCell className="font-mono text-xs">{batch.batch_id}</TableCell>
-                  <TableCell>{formatDateTime(batch.created_at)}</TableCell>
-                  <TableCell>
-                    <div className="font-medium">{batch.project_no}</div>
-                    <div className="text-xs text-muted-foreground">{batch.scope_name}</div>
-                  </TableCell>
-                  <TableCell>{batch.total_fixtures}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        batch.deletion_blocked
-                          ? "border-amber-200 bg-amber-50 text-amber-900"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-800",
-                      )}
-                    >
-                      {batch.status_summary}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>
-                        <Eye className="h-4 w-4 mr-2" />
-                        View
-                      </Button>
-                      <DeleteAction
-                        batch={batch}
-                        isAdmin={isAdmin}
-                        isPending={deleteMutation.isPending}
-                        onDelete={handleDelete}
-                      />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {batchesQuery.data?.map((batch) => {
+                const isOwner = Boolean(
+                  user?.employee_id
+                  && ((batch.uploaded_by_user_id || batch.uploaded_by) === user.employee_id),
+                );
+                const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
+
+                return (
+                  <TableRow key={batch.id}>
+                    <TableCell className="font-mono text-xs">{batch.batch_id}</TableCell>
+                    <TableCell>{formatDateTime(batch.created_at)}</TableCell>
+                    <TableCell>
+                      <div className="font-medium">{batch.project_no}</div>
+                      <div className="text-xs text-muted-foreground">{batch.scope_name}</div>
+                    </TableCell>
+                    <TableCell>{batch.total_fixtures}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          batch.deletion_blocked
+                            ? "border-amber-200 bg-amber-50 text-amber-900"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-800",
+                        )}
+                      >
+                        {batch.status_summary}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => setSelectedBatch(batch)}>
+                          <Eye className="h-4 w-4 mr-2" />
+                          View
+                        </Button>
+                        <DeleteAction
+                          batch={batch}
+                          canDelete={canDelete}
+                          isAdmin={isAdmin}
+                          isPending={deleteMutation.isPending}
+                          onDelete={handleDelete}
+                        />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
 
               {!batchesQuery.isLoading && batchesQuery.data?.length === 0 ? (
                 <TableRow>
@@ -234,7 +247,7 @@ export default function Batches() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Uploaded By</span>
-                <span>{selectedBatch.uploaded_by || "-"}</span>
+                <span>{selectedBatch.uploaded_by_user_id || selectedBatch.uploaded_by || "-"}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Accepted / Rejected</span>

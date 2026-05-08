@@ -35,9 +35,43 @@ export interface FixtureProgressStage {
   updated_at: string;
 }
 
+export type FixtureRevisionType =
+  | "CUSTOMER_CHANGE"
+  | "INTERNAL_DESIGN_CHANGE"
+  | "MANUFACTURING_ISSUE"
+  | "QUALITY_CORRECTION"
+  | "COST_OPTIMIZATION"
+  | "APPROVAL_REJECTION"
+  | "PROCUREMENT_CONSTRAINT"
+  | "MANUAL_OVERRIDE"
+  | "OTHER";
+
+export interface FixtureRevisionTimelineEntry {
+  id: string;
+  fixture_id: string;
+  department_id: string;
+  revision_no: number;
+  revision_type: FixtureRevisionType;
+  revision_reason: string;
+  revision_remarks?: string | null;
+  reverted_from_stage: string;
+  reverted_to_stage: string;
+  requested_by: string;
+  requested_by_name?: string | null;
+  approved_by?: string | null;
+  approved_by_name?: string | null;
+  changed_by: string;
+  changed_by_name?: string | null;
+  changed_at: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface FixtureFullProgress {
   workflow_name: string;
+  revision_no: number;
+  is_legacy_workflow: boolean;
   stages: FixtureProgressStage[];
+  revisions: FixtureRevisionTimelineEntry[];
 }
 
 export interface WorkflowDefinition {
@@ -303,6 +337,36 @@ export function approveFixtureStage(payload: { fixture_id: string; department_id
 
 export function rejectFixtureStage(payload: { fixture_id: string; department_id?: string }) {
   return apiRequest<FixtureCurrentStage>("/workflows/reject", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function reopenFixtureStage(payload: {
+  fixture_id: string;
+  department_id?: string;
+  target_stage_name?: string;
+  target_stage_order?: number;
+  revision_type: FixtureRevisionType;
+  revision_reason: string;
+  remarks?: string;
+}) {
+  return apiRequest<FixtureFullProgress>("/workflows/reopen-stage", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function manipulateFixtureStage(payload: {
+  fixture_id: string;
+  department_id?: string;
+  target_stage_name?: string;
+  target_stage_order?: number;
+  target_status?: FixtureStageStatus;
+  revision_reason: string;
+  remarks?: string;
+}) {
+  return apiRequest<FixtureFullProgress>("/workflows/manual-stage", {
     method: "POST",
     body: JSON.stringify(stripUndefined(payload)),
   });

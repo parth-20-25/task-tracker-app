@@ -71,7 +71,7 @@ router.get(
 
 router.get(
   "/tasks/verification-queue",
-  requireAnyPermission([PERMISSIONS.VERIFY_TASK, PERMISSIONS.APPROVE_QUALITY]),
+  requireAnyPermission([PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
   asyncHandler(async (req, res) => {
     const tasks = await listVerificationTasksForUser(req.user);
     return sendSuccess(res, tasks);
@@ -133,7 +133,7 @@ router.post(
 
 router.patch(
   "/tasks/:taskId",
-  requireAnyPermission([PERMISSIONS.EDIT_TASK, PERMISSIONS.VERIFY_TASK, PERMISSIONS.APPROVE_QUALITY]),
+  requireAnyPermission([PERMISSIONS.EDIT_TASK, PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
   asyncHandler(async (req, res) => {
     const task = await updateTaskForUser(req.user, req.params.taskId, req.body);
     return sendSuccess(res, task);

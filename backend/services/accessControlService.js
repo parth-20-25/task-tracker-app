@@ -3,6 +3,8 @@ const { PERMISSIONS, ROLE_LEVELS, USER_SCOPES } = require("../config/constants")
 const PERMISSION_ALIASES = {
   can_assign_task: [PERMISSIONS.ASSIGN_TASK],
   [PERMISSIONS.ASSIGN_TASK]: ["can_assign_task"],
+  can_verify_task: [PERMISSIONS.APPROVE_COMPLETED_TASK],
+  [PERMISSIONS.APPROVE_COMPLETED_TASK]: ["can_verify_task"],
 };
 
 function getEquivalentPermissions(permission) {
@@ -133,6 +135,10 @@ function canAccessTask(user, task) {
     return true;
   }
 
+  if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS) && canAccessDepartment(user, task.department_id)) {
+    return true;
+  }
+
   const visibleUserIds = getVisibleUserIds(user);
   const taskAssigneeIds = [
     task.assigned_user_id,
@@ -144,10 +150,7 @@ function canAccessTask(user, task) {
 }
 
 function canAssignTo(assigner, assignee) {
-  const assignerLevel = getRoleLevel(assigner);
-  const assigneeLevel = getRoleLevel(assignee);
-
-  if (!assigner || !assignee || !assignerLevel || !assigneeLevel) {
+  if (!assigner || !assignee) {
     return false;
   }
 
@@ -155,35 +158,27 @@ function canAssignTo(assigner, assignee) {
     return false;
   }
 
-  if (!assignee.is_active || assignee.employee_id === assigner.employee_id) {
+  if (!assignee.is_active) {
     return false;
   }
 
-  if (!canAccessUser(assigner, assignee)) {
+  if (!isAdmin(assigner) && assigner.department_id !== assignee.department_id) {
     return false;
   }
 
-  return assignerLevel < assigneeLevel;
+  return assignee.employee_id === assigner.employee_id || canAccessUser(assigner, assignee);
 }
 
 function canVerifyTask(actor, task) {
   const requiredPermission = task?.approval_stage === "quality"
     ? PERMISSIONS.APPROVE_QUALITY
-    : PERMISSIONS.VERIFY_TASK;
+    : PERMISSIONS.APPROVE_COMPLETED_TASK;
 
   if (!hasPermission(actor, requiredPermission)) {
     return false;
   }
 
-  const actorLevel = getRoleLevel(actor);
-  const assigneeLevel = getRoleLevel(task?.assignee);
-
-  if (!isSupervisor(actor) || !canAccessTask(actor, task) || !actorLevel || !assigneeLevel) {
-    return false;
-  }
-
-  // Supervisors can only verify tasks at their own level or below.
-  return assigneeLevel >= actorLevel;
+  return canAccessTask(actor, task);
 }
 
 function isTaskAssignee(user, task) {
@@ -197,6 +192,13 @@ function isTaskAssignee(user, task) {
 function getTaskAccess(user) {
   if (isAdmin(user)) {
     return { clause: "WHERE t.status <> 'cancelled'", params: [] };
+  }
+
+  if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS) && user?.department_id) {
+    return {
+      clause: "WHERE t.status <> 'cancelled' AND t.department_id = $1",
+      params: [user.department_id],
+    };
   }
 
   const visibleUserIds = getVisibleUserIds(user);

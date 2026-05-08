@@ -2,8 +2,12 @@ import type { Role, User } from "@/types";
 
 export const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
-  VERIFY_TASK: "can_verify_task",
+  APPROVE_COMPLETED_TASK: "approve_completed_task",
   APPROVE_QUALITY: "can_approve_quality",
+  CHANGE_FIXTURE_STAGE: "change_fixture_stage",
+  DELETE_WBS_BATCH: "delete_wbs_batch",
+  REOPEN_FIXTURE_STAGE: "reopen_fixture_stage",
+  MANIPULATE_FIXTURE_STAGE: "manipulate_fixture_stage",
   VIEW_ALL_TASKS: "can_view_all_tasks",
   CREATE_TASK: "can_create_task",
   EDIT_TASK: "can_edit_task",
@@ -36,6 +40,7 @@ export const PERMISSIONS = {
 
 export const PERMISSION_ALIASES: Record<string, string> = {
   can_assign_task: PERMISSIONS.ASSIGN_TASK,
+  can_verify_task: PERMISSIONS.APPROVE_COMPLETED_TASK,
   view_self_user: PERMISSIONS.VIEW_SELF_ANALYTICS,
   view_self_department: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
   view_department_comparison: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
@@ -71,7 +76,12 @@ const ADMIN_PANEL_PERMISSIONS = [
 
 export interface UiAccess {
   canAssignTasks: boolean;
+  canApproveCompletedTasks: boolean;
   canApproveQuality: boolean;
+  canChangeFixtureStage: boolean;
+  canDeleteWbsBatch: boolean;
+  canReopenFixtureStage: boolean;
+  canManipulateFixtureStage: boolean;
   canCreateTasks: boolean;
   canEditTasks: boolean;
   canDeleteTasks: boolean;
@@ -150,7 +160,12 @@ function isAdminUser(user: User | null | undefined) {
 
 export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canAssignTasks = hasUserPermission(user, PERMISSIONS.ASSIGN_TASK);
+  const canApproveCompletedTasks = hasUserPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK);
   const canApproveQuality = hasUserPermission(user, PERMISSIONS.APPROVE_QUALITY);
+  const canChangeFixtureStage = hasUserPermission(user, PERMISSIONS.CHANGE_FIXTURE_STAGE);
+  const canDeleteWbsBatch = hasUserPermission(user, PERMISSIONS.DELETE_WBS_BATCH);
+  const canReopenFixtureStage = hasUserPermission(user, PERMISSIONS.REOPEN_FIXTURE_STAGE);
+  const canManipulateFixtureStage = hasUserPermission(user, PERMISSIONS.MANIPULATE_FIXTURE_STAGE);
   const canCreateTasks = hasUserPermission(user, PERMISSIONS.CREATE_TASK);
   const canEditTasks = hasUserPermission(user, PERMISSIONS.EDIT_TASK);
   const canDeleteTasks = hasUserPermission(user, PERMISSIONS.DELETE_TASK);
@@ -172,7 +187,12 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
 
   return {
     canAssignTasks,
+    canApproveCompletedTasks,
     canApproveQuality,
+    canChangeFixtureStage,
+    canDeleteWbsBatch,
+    canReopenFixtureStage,
+    canManipulateFixtureStage,
     canCreateTasks,
     canEditTasks,
     canDeleteTasks,
@@ -189,7 +209,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canViewReports,
     canExportReports,
     canViewTeamTasks: canViewAllTasks,
-    canViewVerifications: hasAnyUserPermission(user, [PERMISSIONS.VERIFY_TASK, PERMISSIONS.APPROVE_QUALITY]),
+    canViewVerifications: hasAnyUserPermission(user, [PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
     canAccessAdminPanel: isAdminUser(user) || hasAnyUserPermission(user, ADMIN_PANEL_PERMISSIONS),
     canViewAuditLogs: isAdminUser(user),
     canViewDepartmentAnalytics,

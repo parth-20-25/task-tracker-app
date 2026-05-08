@@ -823,6 +823,7 @@ async function confirmUpload(user, payload = {}) {
       project_id: project.project_id,
       scope_id: scope.scope_id,
       uploaded_by: user.employee_id,
+      uploaded_by_user_id: user.employee_id,
       total_rows: actionableItems.length + strictRejectedItems.length,
       accepted_rows: actionableItems.length,
       rejected_rows: strictRejectedItems.length,

@@ -15,8 +15,12 @@ const USER_SCOPES = {
 
 const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
-  VERIFY_TASK: "can_verify_task",
+  APPROVE_COMPLETED_TASK: "approve_completed_task",
   APPROVE_QUALITY: "can_approve_quality",
+  CHANGE_FIXTURE_STAGE: "change_fixture_stage",
+  DELETE_WBS_BATCH: "delete_wbs_batch",
+  REOPEN_FIXTURE_STAGE: "reopen_fixture_stage",
+  MANIPULATE_FIXTURE_STAGE: "manipulate_fixture_stage",
   VIEW_ALL_TASKS: "can_view_all_tasks",
   CREATE_TASK: "can_create_task",
   EDIT_TASK: "can_edit_task",
@@ -52,12 +56,17 @@ const PERMISSIONS = {
 
 const PERMISSION_ID_ALIASES = {
   can_assign_task: PERMISSIONS.ASSIGN_TASK,
+  can_verify_task: PERMISSIONS.APPROVE_COMPLETED_TASK,
 };
 
 const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.ASSIGN_TASK, "Assign Task", "Allows assigning tasks to other users."],
-  [PERMISSIONS.VERIFY_TASK, "Verify Task", "Allows reviewing and approving submitted tasks."],
+  [PERMISSIONS.APPROVE_COMPLETED_TASK, "Approve Completed Task", "Allows approving completed non-quality task submissions."],
   [PERMISSIONS.APPROVE_QUALITY, "Approve Quality", "Allows performing quality-stage approval."],
+  [PERMISSIONS.CHANGE_FIXTURE_STAGE, "Change Fixture Stage", "Allows controlled fixture stage transitions."],
+  [PERMISSIONS.DELETE_WBS_BATCH, "Delete WBS Batch", "Allows deleting owned WBS upload batches subject to ownership controls."],
+  [PERMISSIONS.REOPEN_FIXTURE_STAGE, "Reopen Fixture Stage", "Allows reopening a completed fixture stage with revision history."],
+  [PERMISSIONS.MANIPULATE_FIXTURE_STAGE, "Manipulate Fixture Stage", "Allows legacy-only manual fixture stage correction."],
   [PERMISSIONS.VIEW_ALL_TASKS, "View Department Tasks", "Allows viewing broader departmental task queues."],
   [PERMISSIONS.CREATE_TASK, "Create Task", "Allows creating new tasks."],
   [PERMISSIONS.EDIT_TASK, "Edit Task", "Allows updating task execution and details."],
@@ -92,8 +101,10 @@ const ROLE_DEFAULT_PERMISSIONS = {
   r1: Object.values(PERMISSIONS),
   r2: [
     PERMISSIONS.ASSIGN_TASK,
-    PERMISSIONS.VERIFY_TASK,
+    PERMISSIONS.APPROVE_COMPLETED_TASK,
     PERMISSIONS.APPROVE_QUALITY,
+    PERMISSIONS.CHANGE_FIXTURE_STAGE,
+    PERMISSIONS.REOPEN_FIXTURE_STAGE,
     PERMISSIONS.VIEW_ALL_TASKS,
     PERMISSIONS.CREATE_TASK,
     PERMISSIONS.EDIT_TASK,
@@ -123,7 +134,9 @@ const ROLE_DEFAULT_PERMISSIONS = {
   ],
   r3: [
     PERMISSIONS.ASSIGN_TASK,
-    PERMISSIONS.VERIFY_TASK,
+    PERMISSIONS.APPROVE_COMPLETED_TASK,
+    PERMISSIONS.CHANGE_FIXTURE_STAGE,
+    PERMISSIONS.REOPEN_FIXTURE_STAGE,
     PERMISSIONS.VIEW_ALL_TASKS,
     PERMISSIONS.CREATE_TASK,
     PERMISSIONS.EDIT_TASK,
@@ -137,7 +150,9 @@ const ROLE_DEFAULT_PERMISSIONS = {
   ],
   r4: [
     PERMISSIONS.ASSIGN_TASK,
-    PERMISSIONS.VERIFY_TASK,
+    PERMISSIONS.APPROVE_COMPLETED_TASK,
+    PERMISSIONS.CHANGE_FIXTURE_STAGE,
+    PERMISSIONS.REOPEN_FIXTURE_STAGE,
     PERMISSIONS.VIEW_ALL_TASKS,
     PERMISSIONS.CREATE_TASK,
     PERMISSIONS.EDIT_TASK,
@@ -146,8 +161,8 @@ const ROLE_DEFAULT_PERMISSIONS = {
     PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
   ],
   r5: [
-    PERMISSIONS.VERIFY_TASK,
     PERMISSIONS.APPROVE_QUALITY,
+    PERMISSIONS.CHANGE_FIXTURE_STAGE,
     PERMISSIONS.VIEW_ALL_TASKS,
     PERMISSIONS.VIEW_REPORTS,
     PERMISSIONS.VIEW_SELF_ANALYTICS,

@@ -118,6 +118,8 @@ function mapFixtureOptionRow(row) {
     image_1_url: row.image_1_url || null,
     image_2_url: row.image_2_url || null,
     ingestion_source: row.ingestion_source || null,
+    revision_no: Number(row.revision_no || 0),
+    is_legacy_workflow: row.is_legacy_workflow === true,
   };
 }
 
@@ -431,17 +433,19 @@ async function createUploadBatch(batchData, client = pool) {
         project_id,
         scope_id,
         uploaded_by,
+        uploaded_by_user_id,
         total_rows,
         accepted_rows,
         rejected_rows
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING id
     `,
     [
       batchData.project_id,
       batchData.scope_id,
       batchData.uploaded_by,
+      batchData.uploaded_by_user_id || batchData.uploaded_by || null,
       batchData.total_rows,
       batchData.accepted_rows,
       batchData.rejected_rows,
@@ -526,7 +530,9 @@ async function findFixturesByScopeForDedupe(scopeId, client = pool) {
         qty,
         image_1_url,
         image_2_url,
-        ingestion_source
+        ingestion_source,
+        revision_no,
+        is_legacy_workflow
       FROM design.fixtures
       WHERE scope_id = $1
     `,
@@ -544,7 +550,9 @@ async function listFixturesByUploadBatchForDepartment(batchId, departmentId, cli
         di.fixture_no,
         di.image_1_url,
         di.image_2_url,
-        di.ingestion_source
+        di.ingestion_source,
+        di.revision_no,
+        di.is_legacy_workflow
       FROM design.fixtures di
       JOIN design.upload_batches ub
         ON ub.id = di.batch_id
@@ -668,7 +676,9 @@ async function upsertFixture(fixtureData, client = pool) {
         qty,
         image_1_url,
         image_2_url,
-        ingestion_source
+        ingestion_source,
+        revision_no,
+        is_legacy_workflow
     `,
     [
       fixtureData.project_id,

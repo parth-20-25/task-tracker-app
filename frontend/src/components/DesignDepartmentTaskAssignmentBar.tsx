@@ -368,7 +368,7 @@ export function DesignDepartmentTaskAssignmentBar() {
   const scopes = scopesQuery.data ?? [];
   const fixtures = fixturesQuery.data ?? [];
 
-  const canVerify = hasUserPermission(currentUser, PERMISSIONS.VERIFY_TASK)
+  const canVerify = hasUserPermission(currentUser, PERMISSIONS.APPROVE_COMPLETED_TASK)
     || hasUserPermission(currentUser, PERMISSIONS.APPROVE_QUALITY);
 
   const validation = validationQuery.data;

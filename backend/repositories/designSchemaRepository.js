@@ -395,6 +395,8 @@ async function ensureDesignDepartmentSchema(client) {
       image_2_url TEXT,
       ingestion_source TEXT,
       is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE,
+      revision_no INTEGER NOT NULL DEFAULT 0,
+      is_legacy_workflow BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (scope_id, fixture_no)
@@ -409,8 +411,30 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS image_2_url TEXT,
     ADD COLUMN IF NOT EXISTS ingestion_source TEXT,
     ADD COLUMN IF NOT EXISTS is_workflow_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS revision_no INTEGER,
+    ADD COLUMN IF NOT EXISTS is_legacy_workflow BOOLEAN,
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `);
+
+  await client.query(`
+    UPDATE design.fixtures
+    SET revision_no = 0
+    WHERE revision_no IS NULL
+  `);
+
+  await client.query(`
+    UPDATE design.fixtures
+    SET is_legacy_workflow = TRUE
+    WHERE is_legacy_workflow IS NULL
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixtures
+    ALTER COLUMN revision_no SET DEFAULT 0,
+    ALTER COLUMN revision_no SET NOT NULL,
+    ALTER COLUMN is_legacy_workflow SET DEFAULT FALSE,
+    ALTER COLUMN is_legacy_workflow SET NOT NULL
   `);
 
   await client.query(`
@@ -452,10 +476,56 @@ async function ensureDesignDepartmentSchema(client) {
       project_id UUID NOT NULL,
       scope_id UUID NOT NULL REFERENCES design.scopes(id) ON DELETE CASCADE,
       uploaded_by VARCHAR(50),
+      uploaded_by_user_id VARCHAR(50),
       uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       total_rows INTEGER NOT NULL DEFAULT 0,
       accepted_rows INTEGER NOT NULL DEFAULT 0,
       rejected_rows INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+
+  await client.query(`
+    ALTER TABLE design.upload_batches
+    ADD COLUMN IF NOT EXISTS uploaded_by_user_id VARCHAR(50)
+  `);
+
+  await client.query(`
+    UPDATE design.upload_batches
+    SET uploaded_by_user_id = uploaded_by
+    WHERE uploaded_by_user_id IS NULL
+      AND uploaded_by IS NOT NULL
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS fixture_workflow_revisions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      department_id TEXT NOT NULL REFERENCES departments(id),
+      revision_no INTEGER NOT NULL,
+      revision_type TEXT NOT NULL,
+      revision_reason TEXT NOT NULL,
+      revision_remarks TEXT,
+      reverted_from_stage TEXT NOT NULL,
+      reverted_to_stage TEXT NOT NULL,
+      requested_by VARCHAR(50) NOT NULL,
+      approved_by VARCHAR(50),
+      changed_by VARCHAR(50) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      CONSTRAINT fixture_workflow_revisions_type_check CHECK (
+        revision_type IN (
+          'CUSTOMER_CHANGE',
+          'INTERNAL_DESIGN_CHANGE',
+          'MANUFACTURING_ISSUE',
+          'QUALITY_CORRECTION',
+          'COST_OPTIMIZATION',
+          'APPROVAL_REJECTION',
+          'PROCUREMENT_CONSTRAINT',
+          'MANUAL_OVERRIDE',
+          'OTHER'
+        )
+      ),
+      CONSTRAINT fixture_workflow_revisions_fixture_revision_key UNIQUE (fixture_id, revision_no)
     )
   `);
 
@@ -529,6 +599,21 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_design_fixtures_batch_id
     ON design.fixtures (batch_id)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_fixtures_legacy_workflow
+    ON design.fixtures (is_legacy_workflow)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_upload_batches_uploaded_by_user
+    ON design.upload_batches (uploaded_by_user_id)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixture_workflow_revisions_fixture_changed
+    ON fixture_workflow_revisions (fixture_id, changed_at DESC)
   `);
 
   await client.query(`

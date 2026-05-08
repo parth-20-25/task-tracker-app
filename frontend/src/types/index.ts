@@ -167,6 +167,7 @@ export interface UploadBatch {
   department_id: string;
   scope_name: string;
   uploaded_by?: string | null;
+  uploaded_by_user_id?: string | null;
   uploaded_at: string;
   created_at: string;
   accepted_rows: number;
@@ -533,6 +534,8 @@ export interface DesignFixtureOption {
   image_1_url?: string | null;
   image_2_url?: string | null;
   ingestion_source?: string | null;
+  revision_no?: number;
+  is_legacy_workflow?: boolean;
 }
 
 export interface DesignExcelPreviewRow {

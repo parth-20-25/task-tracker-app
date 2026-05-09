@@ -43,7 +43,28 @@ export function PWAUpdatePrompt() {
     setIsUpdating(true);
 
     try {
+      // 1) Ask Workbox-window/virtual:pwa-register to trigger an update.
       await updateServiceWorker(true);
+
+      // 2) Explicitly trigger skipWaiting for our custom SW lifecycle (desktop reliability).
+      if (navigator.serviceWorker?.controller) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const waiting = reg?.waiting;
+        waiting?.postMessage({ type: "SKIP_WAITING" });
+      }
+
+      // 3) Reload once we have the new controller to avoid update loops.
+      if (navigator.serviceWorker) {
+        navigator.serviceWorker.addEventListener(
+          "controllerchange",
+          () => {
+            window.location.reload();
+          },
+          { once: true },
+        );
+      } else {
+        window.location.reload();
+      }
     } catch (error) {
       console.error("PWA update failed", error);
       window.location.reload();

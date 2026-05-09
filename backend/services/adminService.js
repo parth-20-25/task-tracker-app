@@ -204,7 +204,10 @@ async function saveRole(actor, payload) {
     roles = await upsertRole({
       ...payload,
       auditActorEmployeeId: actor.employee_id,
-      autoCreateMissingPermissions: payload.autoCreateMissingPermissions ?? payload.auto_create_permissions,
+      // Production durability: role editing must not fail if the UI sends canonical permission IDs
+      // that are not yet present in `permissions` table. The RBAC layer should auto-create them
+      // at save-time (especially when RBAC_AUTO_CREATE_PERMISSIONS=false).
+      autoCreateMissingPermissions: payload.autoCreateMissingPermissions ?? payload.auto_create_permissions ?? true,
       is_active: payload.is_active !== false,
       permissions: payload.permissions || {},
     }, client);

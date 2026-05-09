@@ -25,6 +25,7 @@ export default defineConfig(({ mode }) => {
       mode === "development" && componentTagger(),
       VitePWA({
         srcDir: "src",
+        filename: "sw.js",
         registerType: "prompt",
         includeAssets: ["icon-192.png", "icon-512.png"],
         manifest: {
@@ -50,7 +51,6 @@ export default defineConfig(({ mode }) => {
         strategies: "injectManifest",
         injectManifest: {
           swSrc: "src/sw.js",
-          swDest: "sw.js",
         },
         workbox: {
           cleanupOutdatedCaches: true,

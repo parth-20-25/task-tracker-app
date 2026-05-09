@@ -7,7 +7,6 @@ import {
   DesignExcelUploadResponse,
   DesignFixtureOption,
   DesignProjectOption,
-  DesignScopeOption,
   Task,
   ValidateRejectedDesignRowResponse,
 } from "@/types";
@@ -96,7 +95,6 @@ export interface DepartmentProjectPayload {
   project_no: string;
   project_name: string;
   customer_name: string;
-  scope_name: string;
   instance_count: number;
   rework_date?: string | null;
 }
@@ -104,7 +102,6 @@ export interface DepartmentProjectPayload {
 export interface CreateDesignTaskPayload {
   department_id?: string;
   project_id: string;
-  scope_id?: string;
   fixture_id?: string;
   description: string;
   assigned_to: string;
@@ -122,7 +119,6 @@ export interface UploadDepartmentProjectsResponse {
     project_no: string;
     project_name: string;
     customer_name: string;
-    scope_name: string;
     instance_count: number;
     rework_date?: string | null;
     reason: string;
@@ -146,20 +142,9 @@ export function fetchDesignProjects(departmentId?: string) {
   return apiRequest<DesignProjectOption[]>(url);
 }
 
-export function fetchDesignScopes(projectId: string, departmentId?: string) {
+export function fetchDesignFixtures(projectId: string, departmentId?: string) {
   const params = new URLSearchParams();
   params.set("project_id", projectId);
-
-  if (departmentId) {
-    params.set("department_id", departmentId);
-  }
-
-  return apiRequest<DesignScopeOption[]>(`/design/scopes?${params.toString()}`);
-}
-
-export function fetchDesignFixtures(scopeId: string, departmentId?: string) {
-  const params = new URLSearchParams();
-  params.set("scope_id", scopeId);
 
   if (departmentId) {
     params.set("department_id", departmentId);

@@ -25,7 +25,7 @@ runTest("parses semantic rows without relying on fixed headers", () => {
   const result = parsePasteData(input);
 
   assert.equal(result.file_info.project_code, "PARC26");
-  assert.equal(result.file_info.scope_name, "BIWS");
+  assert.equal(result.file_info.project_name, "BIWS");
   assert.equal(result.file_info.company_name, "ABC LIMITED");
   assert.equal(result.parsedRows.length, 2);
   assert.equal(result.parsedRows[0].fixture_no, "PARC26001001");
@@ -33,13 +33,13 @@ runTest("parses semantic rows without relying on fixed headers", () => {
   assert.equal(result.parsedRows[0].qty, "2");
   assert.equal(result.parsedRows[0].designer, "John Doe");
   assert.equal(result.parsedRows[0].remark, "");
-  assert.equal(result.parsedRows[1].remark, "PARC scope");
+  assert.equal(result.parsedRows[1].remark, "");
   assert.equal(result.parsedRows[1].parser_confidence, "HIGH");
 });
 
 runTest("keeps data-like rows without fixture numbers for hard rejection later", () => {
   const input = [
-    "WBS-PARC25-SCOPE_ONE_ABC LTD",
+    "WBS-PARC25-PROJECT_ONE_ABC LTD",
     "S.NO\tOP.NO\tREMARKS",
     "1\tOP 170\tCustomer Scope",
   ].join("\n");
@@ -49,7 +49,7 @@ runTest("keeps data-like rows without fixture numbers for hard rejection later",
   assert.equal(result.parsedRows.length, 1);
   assert.equal(result.parsedRows[0].fixture_no, "");
   assert.equal(result.parsedRows[0].op_no, "OP 170");
-  assert.equal(result.parsedRows[0].remark, "Customer Scope");
+  assert.equal(result.parsedRows[0].remark, "");
 });
 
 console.log("designIngestion parser checks passed");

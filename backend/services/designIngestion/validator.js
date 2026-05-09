@@ -1,4 +1,3 @@
-const { SCOPE_STATUSES, classifyScopeOwnership } = require("./scope");
 const { FIXTURE_NO_REGEX, normalizePastedCell } = require("./parser");
 
 const FIELD_LABELS = {
@@ -393,30 +392,6 @@ function validateParsedData(parsedRows) {
     }
 
     const qty = qtyInfo.normalized;
-    const scopeAssessment = classifyScopeOwnership(normalizedRemark);
-    if (scopeAssessment.status === SCOPE_STATUSES.CUSTOMER) {
-      skippedRows.push({
-        row_number,
-        excel_row,
-        row_reference,
-        row_reference_source,
-        business_row_reference,
-        fixture_no: normalizedFixtureNo,
-        op_no: normalizedOpNo,
-        part_name: normalizedPartName,
-        fixture_type: normalizedFixtureType,
-        remark: normalizedRemark || null,
-        designer: normalizedDesigner || null,
-        qty,
-        image_1_url,
-        image_2_url,
-        scope_status: scopeAssessment.status,
-        skip_reason: scopeAssessment.reason,
-        raw_data,
-      });
-      continue;
-    }
-
     const fixtureNoKey = normalizedFixtureNo.toLowerCase();
     if (seenFixtureNumbers.has(fixtureNoKey)) {
       rejectedRows.push(buildRejectedRow(rowMeta, "Duplicate fixture number found in uploaded file.", raw_data, diagnostics, {
@@ -442,8 +417,6 @@ function validateParsedData(parsedRows) {
       qty,
       image_1_url,
       image_2_url,
-      scope_status: scopeAssessment.status,
-      scope_reason: scopeAssessment.reason,
       parser_confidence,
       raw_data,
     });

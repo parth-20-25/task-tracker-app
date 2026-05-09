@@ -93,12 +93,10 @@ function mapBatchSummary(row) {
     id: row.id,
     batch_id: row.id,
     project_id: row.project_id,
-    scope_id: row.scope_id,
     project_no: row.project_no,
     project_name: row.project_name,
     customer_name: row.customer_name,
     department_id: row.department_id,
-    scope_name: row.scope_name,
     uploaded_by: row.uploaded_by,
     uploaded_by_user_id: row.uploaded_by_user_id || row.uploaded_by || null,
     uploaded_at: row.uploaded_at,
@@ -126,12 +124,10 @@ async function listBatchesWithSummary(departmentId, client = pool) {
       SELECT
         ub.id,
         ub.project_id,
-        ub.scope_id,
         dp.project_no,
-        dp.project_name,
+        COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
-        ds.scope_name,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
         ub.uploaded_at,
@@ -143,12 +139,11 @@ async function listBatchesWithSummary(departmentId, client = pool) {
             AND NOT (fwp.status = ANY($${params.length + 1}::text[]))
         )::integer AS active_count
       FROM design.upload_batches ub
-      JOIN design.scopes ds ON ds.id = ub.scope_id
       JOIN design.projects dp ON dp.id = ub.project_id
       LEFT JOIN design.fixtures f ON f.batch_id = ub.id
       LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
       ${departmentFilter}
-      GROUP BY ub.id, ub.project_id, ub.scope_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id, ds.scope_name
+      GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
       ORDER BY ub.uploaded_at DESC
     `,
     [...params, DELETABLE_FIXTURE_STATUSES],
@@ -163,12 +158,10 @@ async function getBatchById(batchId, client = pool) {
       SELECT
         ub.id,
         ub.project_id,
-        ub.scope_id,
         dp.project_no,
-        dp.project_name,
+        COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
-        ds.scope_name,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
         ub.uploaded_at,
@@ -180,12 +173,11 @@ async function getBatchById(batchId, client = pool) {
             AND NOT (fwp.status = ANY($2::text[]))
         )::integer AS active_count
       FROM design.upload_batches ub
-      JOIN design.scopes ds ON ds.id = ub.scope_id
       JOIN design.projects dp ON dp.id = ub.project_id
       LEFT JOIN design.fixtures f ON f.batch_id = ub.id
       LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
       WHERE ub.id = $1
-      GROUP BY ub.id, ub.project_id, ub.scope_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id, ds.scope_name
+      GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
     `,
     [batchId, DELETABLE_FIXTURE_STATUSES],
   );

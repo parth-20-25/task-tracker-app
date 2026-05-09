@@ -12,7 +12,6 @@ async function run() {
     const rows = await normalizeScopeReportData([
       {
         project_no: "P-101",
-        scope_name: "Front Bumper",
         fixture_no: "FX-01",
         op_no: "OP-9",
         part_name: "Bracket",
@@ -35,7 +34,7 @@ async function run() {
     ]);
 
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].fixture_key, "P-101::Front Bumper::FX-01");
+    assert.equal(rows[0].fixture_key, "P-101::FX-01");
     assert.deepEqual(rows[0].proof_urls, [
       "/uploads/task-proofs/a.png",
       "/uploads/task-proofs/b.png",
@@ -49,7 +48,6 @@ async function run() {
     const rows = await normalizeScopeReportData([
       {
         project_no: "",
-        scope_name: "Dash",
         fixture_no: "FX-02",
         stages: {
           concept: {},
@@ -60,7 +58,6 @@ async function run() {
       },
       {
         project_no: "P-102",
-        scope_name: "Dash",
         fixture_no: "FX-03",
         stages: {
           concept: {},
@@ -72,7 +69,7 @@ async function run() {
     ]);
 
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].fixture_key, "P-102::Dash::FX-03");
+    assert.equal(rows[0].fixture_key, "P-102::FX-03");
     assert.equal(rows[0].status, "ASSIGNED");
   }
 
@@ -102,7 +99,6 @@ async function run() {
     const rows = await normalizeScopeReportData([
       {
         project_no: "P-104",
-        scope_name: "Console",
         fixture_no: "FX-05",
         task_status: "approved",
         stages: {
@@ -114,7 +110,6 @@ async function run() {
       },
       {
         project_no: "P-104",
-        scope_name: "Console",
         fixture_no: "FX-06",
         task_status: "in_progress",
         workflow_status: "rejected",
@@ -139,9 +134,9 @@ async function run() {
       await generateRawScopeExcel(
         [
           {
-            fixture_key: "P-105::Roof::FX-07",
+            fixture_key: "P-105::FX-07",
             project_no: "P-105",
-            scope_name: "Roof",
+            project_name: "Roof",
             fixture_no: "FX-07",
             op_no: "OP-12",
             part_name: "Top Panel",
@@ -169,11 +164,11 @@ async function run() {
         filePath,
         {
           project_no: "P-105",
-          scope_name: "Roof",
+          project_name: "Roof",
           customer_name: "DemoCustomer",
         },
         new Map([
-          ["P-105::Roof::FX-07", {
+          ["P-105::FX-07", {
             image1Url: "https://example.com/ref.png",
             image2Url: "https://example.com/work.png",
           }],

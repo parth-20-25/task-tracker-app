@@ -88,28 +88,6 @@ async function repairProjectDepartmentForProject(projectId, departmentId, client
   return result.rowCount;
 }
 
-async function repairProjectDepartmentForScope(scopeId, departmentId, client = pool) {
-  if (!scopeId || !departmentId) {
-    return 0;
-  }
-
-  const result = await client.query(
-    `
-      UPDATE design.projects p
-      SET department_id = $2,
-          updated_at = NOW()
-      FROM design.scopes s
-      WHERE s.id = $1
-        AND s.project_id = p.id
-        AND p.department_id IS NULL
-      RETURNING p.id
-    `,
-    [scopeId, departmentId],
-  );
-
-  return result.rowCount;
-}
-
 async function repairProjectDepartmentForFixture(fixtureId, departmentId, client = pool) {
   if (!fixtureId || !departmentId) {
     return 0;
@@ -120,11 +98,9 @@ async function repairProjectDepartmentForFixture(fixtureId, departmentId, client
       UPDATE design.projects p
       SET department_id = $2,
           updated_at = NOW()
-      FROM design.scopes s
-      JOIN design.fixtures f
-        ON f.scope_id = s.id
+      FROM design.fixtures f
       WHERE f.id = $1
-        AND s.project_id = p.id
+        AND f.project_id = p.id
         AND p.department_id IS NULL
       RETURNING p.id
     `,
@@ -328,5 +304,4 @@ module.exports = {
   repairOrphanDesignProjects,
   repairProjectDepartmentForFixture,
   repairProjectDepartmentForProject,
-  repairProjectDepartmentForScope,
 };

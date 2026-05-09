@@ -115,7 +115,7 @@ const CORRECTION_FIELDS: Array<{
   { name: "qty", label: "QTY", placeholder: "1" },
   { name: "op_no", label: "OP.NO", placeholder: "OP 10" },
   { name: "part_name", label: "Part Name", placeholder: "Sub assembly or part name" },
-  { name: "remark", label: "Remark", placeholder: "PARC scope", kind: "textarea" },
+  { name: "remark", label: "Remark", placeholder: "Optional note", kind: "textarea" },
 ];
 
 const FIXTURE_NUMBER_PATTERN = /^PARC\d{8,}$/i;
@@ -293,53 +293,6 @@ function sortConflictItems(items: DesignExcelUploadResponse["preview"]["conflict
 
 function sortSkippedItems(items: DesignExcelUploadResponse["preview"]["skipped"]) {
   return [...items].sort((left, right) => left.row_number - right.row_number);
-}
-
-function ScopeDecisionControls({
-  row,
-  value,
-  onChange,
-}: {
-  row: DesignExcelPreviewRow;
-  value?: "add_fixture" | "skip_fixture";
-  onChange: (value: "add_fixture" | "skip_fixture") => void;
-}) {
-  if (row.scope_status !== "AMBIGUOUS") {
-    return null;
-  }
-
-  const key = getRowDecisionKey(row);
-
-  return (
-    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900/50 dark:bg-amber-950/20">
-      <div className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-        This fixture does not have a clearly defined scope in remarks.
-      </div>
-      <div className="mt-1 text-xs text-amber-800/90 dark:text-amber-300">
-        Do you want to include this fixture in PARC scope?
-      </div>
-      <RadioGroup
-        value={value}
-        onValueChange={(nextValue) => onChange(nextValue as "add_fixture" | "skip_fixture")}
-        className="mt-3 grid gap-2 sm:grid-cols-2"
-      >
-        <div className="relative rounded-md border bg-background p-3">
-          <RadioGroupItem value="add_fixture" id={`scope-add-${key}`} className="absolute right-3 top-3" />
-          <Label htmlFor={`scope-add-${key}`} className="cursor-pointer">
-            <div className="text-sm font-medium">Add Fixture</div>
-            <div className="text-xs text-muted-foreground">Import this row into PARC scope after explicit confirmation.</div>
-          </Label>
-        </div>
-        <div className="relative rounded-md border bg-background p-3">
-          <RadioGroupItem value="skip_fixture" id={`scope-skip-${key}`} className="absolute right-3 top-3" />
-          <Label htmlFor={`scope-skip-${key}`} className="cursor-pointer">
-            <div className="text-sm font-medium">Skip Fixture</div>
-            <div className="text-xs text-muted-foreground">Exclude this row completely from fixtures, workflow, and approvals.</div>
-          </Label>
-        </div>
-      </RadioGroup>
-    </div>
-  );
 }
 
 function RejectedRowCorrectionCard({
@@ -809,7 +762,6 @@ export function DesignExcelUploadModal() {
   const [pasteText, setPasteText] = useState("");
   const [preview, setPreview] = useState<DesignExcelUploadResponse | null>(null);
   const [decisions, setDecisions] = useState<Record<string, "incoming" | "existing">>({});
-  const [scopeDecisions, setScopeDecisions] = useState<Record<string, "add_fixture" | "skip_fixture">>({});
   const [isDragActive, setIsDragActive] = useState(false);
   const [confirmationStage, setConfirmationStage] = useState<"preview" | "review">("preview");
   const [batchId, setBatchId] = useState<string | null>(null);
@@ -837,7 +789,6 @@ export function DesignExcelUploadModal() {
     setPasteText("");
     setPreview(null);
     setDecisions({});
-    setScopeDecisions({});
     setIsDragActive(false);
     setConfirmationStage("preview");
     setBatchId(null);
@@ -971,7 +922,6 @@ export function DesignExcelUploadModal() {
     setSelectedFile(file);
     setPreview(null);
     setDecisions({});
-    setScopeDecisions({});
   };
 
   const uploadMutation = useMutation({
@@ -983,7 +933,6 @@ export function DesignExcelUploadModal() {
         initialDecisions[getRowDecisionKey(conflict.incoming)] = "existing";
       });
       setDecisions(initialDecisions);
-      setScopeDecisions({});
       setCorrectionDrafts({});
       setCorrectionAudits({});
       setValidatingRejectedKey(null);
@@ -1007,7 +956,6 @@ export function DesignExcelUploadModal() {
         initialDecisions[getRowDecisionKey(conflict.incoming)] = "existing";
       });
       setDecisions(initialDecisions);
-      setScopeDecisions({});
       setCorrectionDrafts({});
       setCorrectionAudits({});
       setValidatingRejectedKey(null);
@@ -1251,10 +1199,10 @@ export function DesignExcelUploadModal() {
           description: `${getRowReferenceSummary(rejected)} now needs a conflict decision.`,
         });
       } else if (result.classification === "skipped") {
-        toast({
-          title: "Row reclassified",
-          description: `${getRowReferenceSummary(rejected)} was moved to skipped customer scope.`,
-        });
+      toast({
+        title: "Row reclassified",
+        description: `${getRowReferenceSummary(rejected)} was moved to skipped rows.`,
+      });
       } else {
         toast({
           title: "Further correction needed",
@@ -1319,15 +1267,12 @@ export function DesignExcelUploadModal() {
     const resolved_items: Array<{
       data: DesignExcelPreviewRow;
       resolution: "incoming" | "existing";
-      scope_decision?: "add_fixture" | "skip_fixture";
     }> = [];
 
     preview.preview.accepted.forEach((item) => {
-      const scopeDecision = scopeDecisions[getRowDecisionKey(item.incoming)];
       resolved_items.push({
         data: item.incoming,
         resolution: "incoming",
-        scope_decision: scopeDecision,
       });
     });
 
@@ -1337,7 +1282,6 @@ export function DesignExcelUploadModal() {
       resolved_items.push({
         data: decision === "incoming" ? item.incoming : item.existing,
         resolution: decision === "incoming" ? "incoming" : "existing",
-        scope_decision: scopeDecisions[decisionKey],
       });
     });
 
@@ -1351,19 +1295,6 @@ export function DesignExcelUploadModal() {
   };
 
   const hasUnresolvedConflicts = preview?.preview.conflicts.some((conflict) => !decisions[getRowDecisionKey(conflict.incoming)]);
-  const hasUnresolvedAcceptedScopeDecisions = preview?.preview.accepted.some((item) => (
-    item.incoming.scope_status === "AMBIGUOUS"
-      && !scopeDecisions[getRowDecisionKey(item.incoming)]
-  ));
-  const hasUnresolvedIncomingConflictScopeDecisions = preview?.preview.conflicts.some((conflict) => {
-    const decisionKey = getRowDecisionKey(conflict.incoming);
-    return decisions[decisionKey] === "incoming"
-      && conflict.incoming.scope_status === "AMBIGUOUS"
-      && !scopeDecisions[decisionKey];
-  });
-  const hasBlockingScopeDecision = Boolean(
-    hasUnresolvedAcceptedScopeDecisions || hasUnresolvedIncomingConflictScopeDecisions,
-  );
 
   const isLoading = uploadMutation.isPending || pasteMutation.isPending || confirmMutation.isPending;
 
@@ -1523,7 +1454,6 @@ export function DesignExcelUploadModal() {
                                   setPasteText("");
                                   setPreview(null);
                                   setDecisions({});
-                                  setScopeDecisions({});
                                 }}
                               >
                                 Clear
@@ -1639,18 +1569,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                               <div className="mt-1 text-xs text-muted-foreground">
                                 Remark: <span className="font-medium text-foreground">{formatRemark(item.incoming.remark)}</span>
                               </div>
-                              {item.incoming.scope_status === "AMBIGUOUS" ? (
-                                <ScopeDecisionControls
-                                  row={item.incoming}
-                                  value={scopeDecisions[getRowDecisionKey(item.incoming)]}
-                                  onChange={(value) => {
-                                    setScopeDecisions((current) => ({
-                                      ...current,
-                                      [getRowDecisionKey(item.incoming)]: value,
-                                    }));
-                                  }}
-                                />
-                              ) : null}
                               {uploadMode === "paste" ? (
                                 <PreviewReferenceImageControls
                                   row={item.incoming}
@@ -1738,18 +1656,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                   </Label>
                                 </div>
                               </RadioGroup>
-                              {decisions[getRowDecisionKey(conflict.incoming)] === "incoming" && conflict.incoming.scope_status === "AMBIGUOUS" ? (
-                                <ScopeDecisionControls
-                                  row={conflict.incoming}
-                                  value={scopeDecisions[getRowDecisionKey(conflict.incoming)]}
-                                  onChange={(value) => {
-                                    setScopeDecisions((current) => ({
-                                      ...current,
-                                      [getRowDecisionKey(conflict.incoming)]: value,
-                                    }));
-                                  }}
-                                />
-                              ) : null}
                             </div>
                           ))}
                         </div>
@@ -1760,7 +1666,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                       <div className="space-y-3">
                         <h5 className="flex items-center gap-2 border-b pb-2 font-semibold text-slate-700 dark:text-slate-200">
                           <XCircle className="h-5 w-5" />
-                          Skipped Customer Scope ({preview.preview.skipped.length})
+                          Skipped Rows ({preview.preview.skipped.length})
                         </h5>
                         <div className="grid gap-3 grid-cols-1 md:grid-cols-2">
                           {preview.preview.skipped.map((item, index) => (
@@ -1834,19 +1740,13 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                       setSelectedFile(null);
                       setPasteText("");
                       setDecisions({});
-                      setScopeDecisions({});
                     }}
                   >
                     Cancel & Reload
                   </Button>
-                  {hasBlockingScopeDecision ? (
-                    <div className="text-xs text-amber-700 dark:text-amber-300">
-                      Choose Add Fixture or Skip Fixture for every ambiguous-scope row before saving.
-                    </div>
-                  ) : null}
                   <Button
                     onClick={handleConfirm}
-                    disabled={confirmMutation.isPending || hasUnresolvedConflicts || hasBlockingScopeDecision}
+                    disabled={confirmMutation.isPending || hasUnresolvedConflicts}
                     className="min-w-36 bg-primary hover:bg-primary/90"
                   >
                     {confirmMutation.isPending ? (

@@ -179,7 +179,6 @@ function buildReworkHistory(tasks) {
       approved_at: task.approved_at,
       remarks: task.remarks,
       project_name: task.project_name,
-      scope_name: task.scope_name,
     }));
 }
 

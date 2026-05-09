@@ -10,15 +10,11 @@ const {
 } = require("../lib/departmentContext");
 const { isDesignDepartment } = require("../lib/designDepartment");
 const {
-  findDepartmentProjectByIdForDepartment,
   findFixtureByIdForDepartment,
-  findOrCreateScope,
   findProjectByIdForDepartment,
-  findScopeByIdForDepartment,
   listDepartmentProjectsByDepartment,
-  listFixturesByScopeForDepartment,
+  listFixturesByProjectForDepartment,
   listProjectOptionsByDepartment,
-  listScopesByProjectForDepartment,
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
 const { createAuditLog } = require("../repositories/auditRepository");
@@ -38,13 +34,9 @@ function requireDesignDepartment(user) {
   }
 }
 
-function validateResolvedDesignTaskContext({ projectId, scopeId, fixtureId, currentStage, currentStageKey, currentWorkflowStage }) {
+function validateResolvedDesignTaskContext({ projectId, fixtureId, currentStage, currentStageKey, currentWorkflowStage }) {
   if (!projectId) {
     throw new AppError(400, "project_id is required");
-  }
-
-  if (!scopeId) {
-    throw new AppError(400, "scope_id is required");
   }
 
   if (!fixtureId) {
@@ -78,8 +70,10 @@ async function listDesignProjectsForUser(user, requestedDepartmentId) {
   return listProjectOptionsByDepartment(departmentId);
 }
 
-async function listDesignScopesForUser(user, projectId, requestedDepartmentId) {
-  const normalizedProjectId = String(projectId || "").trim();
+async function listDesignFixturesForUser(user, projectId, requestedDepartmentId) {
+  const normalizedProjectId = String(
+    typeof projectId === "object" && projectId !== null ? projectId.project_id : projectId || "",
+  ).trim();
 
   if (!normalizedProjectId) {
     throw new AppError(400, "project_id is required");
@@ -92,25 +86,7 @@ async function listDesignScopesForUser(user, projectId, requestedDepartmentId) {
     throw new AppError(404, "Project not found for the selected department");
   }
 
-  const scopes = await listScopesByProjectForDepartment(normalizedProjectId, departmentId);
-  return scopes;
-}
-
-async function listDesignFixturesForUser(user, scopeId, requestedDepartmentId) {
-  const normalizedScopeId = String(scopeId || "").trim();
-
-  if (!normalizedScopeId) {
-    throw new AppError(400, "scope_id is required");
-  }
-
-  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
-  const scope = await findScopeByIdForDepartment(normalizedScopeId, departmentId);
-
-  if (!scope) {
-    throw new AppError(404, "Scope not found for the selected department");
-  }
-
-  return listFixturesByScopeForDepartment(normalizedScopeId, departmentId);
+  return listFixturesByProjectForDepartment(normalizedProjectId, departmentId);
 }
 
 function normalizeProjectUploadRow(row = {}) {
@@ -118,15 +94,14 @@ function normalizeProjectUploadRow(row = {}) {
     project_no: String(row.project_no || "").trim(),
     project_name: String(row.project_name || "").trim(),
     customer_name: String(row.customer_name || "").trim(),
-    scope_name: String(row.scope_name || "").trim(),
     instance_count: Number(row.instance_count),
     rework_date: row.rework_date || null,
   };
 }
 
 function validateProjectUploadRow(row) {
-  if (!row.project_no || !row.project_name || !row.customer_name || !row.scope_name) {
-    return "project_no, project_name, customer_name, and scope_name are required";
+  if (!row.project_no || !row.project_name || !row.customer_name) {
+    return "project_no, project_name, and customer_name are required";
   }
 
   if (!Number.isInteger(row.instance_count) || row.instance_count <= 0) {
@@ -173,20 +148,16 @@ async function uploadDepartmentProjectsForUser(user, payload = {}) {
         uploaded_by: user.employee_id,
       }, client);
 
-      const scope = await findOrCreateScope(project.project_id, normalizedRow.scope_name, client);
-
       await createAuditLog({
         userEmployeeId: user.employee_id,
-        actionType: "DESIGN_PROJECT_SCOPE_IMPORTED",
+        actionType: "DESIGN_PROJECT_IMPORTED",
         targetType: "design_project",
-        targetId: scope.scope_id || project.project_id || normalizedRow.project_no,
+        targetId: project.project_id || normalizedRow.project_no,
         metadata: {
           project_id: project.project_id,
-          scope_id: scope.scope_id,
           project_code: normalizedRow.project_no,
           project_name: normalizedRow.project_name,
           customer_name: normalizedRow.customer_name,
-          scope_name: normalizedRow.scope_name,
           instance_count: normalizedRow.instance_count,
           rework_date: normalizedRow.rework_date,
           department_id: departmentId,
@@ -215,9 +186,8 @@ async function createDesignTaskFromProject(user, payload = {}) {
   }
 
   const projectId = String(payload.project_id || "").trim();
-  const scopeId = String(payload.scope_id || "").trim();
   const fixtureId = String(payload.fixture_id || "").trim();
-  validateResolvedDesignTaskContext({ projectId, scopeId, fixtureId });
+  validateResolvedDesignTaskContext({ projectId, fixtureId });
 
   const departmentId = resolveAccessibleDepartmentId(
     user,
@@ -234,17 +204,8 @@ async function createDesignTaskFromProject(user, payload = {}) {
     throw new AppError(404, "Fixture not found");
   }
 
-  const scopedProject = await findDepartmentProjectByIdForDepartment(scopeId, departmentId);
-  if (!scopedProject) {
-    throw new AppError(404, "Scope not found for your department");
-  }
-
-  if (scopedProject.project_id !== project.project_id) {
-    throw new AppError(409, "scope_id does not belong to the selected project_id");
-  }
-
-  if (fixture.project_id !== project.project_id || fixture.scope_id !== scopedProject.scope_id) {
-    throw new AppError(409, "fixture_id does not belong to the selected project_id and scope_id");
+  if (fixture.project_id !== project.project_id) {
+    throw new AppError(409, "fixture_id does not belong to the selected project");
   }
 
   const currentStage = await getCurrentStage(fixtureId, departmentId);
@@ -260,7 +221,6 @@ async function createDesignTaskFromProject(user, payload = {}) {
 
   validateResolvedDesignTaskContext({
     projectId,
-    scopeId,
     fixtureId,
     currentStage,
     currentStageKey,
@@ -274,14 +234,12 @@ async function createDesignTaskFromProject(user, payload = {}) {
   return createTaskForUser(user, {
     ...payload,
     project_id: project.project_id,
-    scope_id: scopedProject.scope_id,
     fixture_id: fixture.fixture_id,
     fixture_no: fixture.fixture_no,
     project_no: project.project_code,
     project_name: project.project_name,
     customer_name: project.company_name,
     project_description: project.project_name,
-    scope_name: scopedProject.scope_name,
     quantity_index: fixture.fixture_no,
     instance_count: fixture.qty,
     current_stage_id: currentWorkflowStage.id,
@@ -294,6 +252,5 @@ module.exports = instrumentModuleExports("service.projectCatalogService", {
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
-  listDesignScopesForUser,
   uploadDepartmentProjectsForUser,
 });

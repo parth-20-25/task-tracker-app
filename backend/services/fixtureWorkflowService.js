@@ -432,9 +432,9 @@ async function approveFixtureStage(fixtureId, departmentId) {
 
   const nextStage = await advanceFixtureWorkflowStage({
     project_id: fixture.project_id,
-    scope_id: fixture.scope_id,
     fixture_no: fixture.fixture_no,
     department_id: departmentId,
+    fixture_id: fixture.fixture_id,
   });
 
   if (!nextStage) {
@@ -480,7 +480,6 @@ async function rejectFixtureStage(fixtureId, departmentId) {
 async function resolveFixtureIdentityForAdvancement(identity, client = pool) {
   const departmentId = String(identity?.department_id || "").trim();
   const projectId = String(identity?.project_id || "").trim();
-  const scopeId = String(identity?.scope_id || "").trim();
   const fixtureNo = String(identity?.fixture_no || "").trim();
   const fixtureId = String(identity?.fixture_id || "").trim();
 
@@ -490,11 +489,10 @@ async function resolveFixtureIdentityForAdvancement(identity, client = pool) {
 
   let fixture = null;
 
-  if (projectId && scopeId && fixtureNo) {
+  if (projectId && fixtureNo) {
     fixture = await resolveFixtureByCanonicalIdentity(
       {
         project_id: projectId,
-        scope_id: scopeId,
         fixture_no: fixtureNo,
       },
       departmentId,
@@ -517,10 +515,8 @@ async function resolveFixtureIdentityForAdvancement(identity, client = pool) {
     department_id: departmentId,
     fixture_id: fixture.fixture_id || fixtureId,
     project_id: fixture.project_id,
-    scope_id: fixture.scope_id,
     fixture_no: fixture.fixture_no,
     project_no: fixture.project_no || null,
-    scope_name: fixture.scope_name || null,
   };
 }
 
@@ -636,8 +632,8 @@ async function advanceFixtureWorkflowStage(identity) {
 }
 
 /**
- * Resolves the true fixture_id from the composite identity
- * (project_id, scope_id, fixture_no) and advances
+ * Resolves the true fixture_id from the project fixture identity
+ * (project_id, fixture_no) and advances
  * the fixture_workflow_progress to the next stage.
  *
  * This is the SINGLE authoritative entry-point for workflow advancement
@@ -649,11 +645,10 @@ async function advanceFixtureWorkflowStage(identity) {
  * ❌ Never advance workflow from taskService directly.
  * ❌ Never use task.current_stage_id to drive workflow logic.
  */
-async function advanceWorkflowAfterTaskApproval({ project_id, scope_id, fixture_no, department_id, fixture_id }) {
-  if ((!project_id || !scope_id || !fixture_no) && !fixture_id) {
+async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, department_id, fixture_id }) {
+  if ((!project_id || !fixture_no) && !fixture_id) {
     console.warn("[WORKFLOW] advanceWorkflowAfterTaskApproval — canonical fixture identity missing, skipping", {
       project_id,
-      scope_id,
       fixture_no,
       fixture_id,
       department_id,
@@ -664,7 +659,6 @@ async function advanceWorkflowAfterTaskApproval({ project_id, scope_id, fixture_
   if (!department_id) {
     console.warn("[WORKFLOW] advanceWorkflowAfterTaskApproval — department_id missing, skipping", {
       project_id,
-      scope_id,
       fixture_no,
       fixture_id,
     });
@@ -673,7 +667,6 @@ async function advanceWorkflowAfterTaskApproval({ project_id, scope_id, fixture_
 
   const resolvedIdentity = await resolveFixtureIdentityForAdvancement({
     project_id,
-    scope_id,
     fixture_no,
     fixture_id,
     department_id,
@@ -685,7 +678,6 @@ async function advanceWorkflowAfterTaskApproval({ project_id, scope_id, fixture_
   console.log("[WORKFLOW] advanceWorkflowAfterTaskApproval — resolving advancement", {
     fixture: {
       project_id: resolvedIdentity.project_id,
-      scope_id: resolvedIdentity.scope_id,
       fixture_no: resolvedIdentity.fixture_no,
     },
     fixtureId: resolvedIdentity.fixture_id,
@@ -778,10 +770,10 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
 }
 
 /**
- * Returns assignable fixtures for a scope (excludes is_workflow_complete = true).
+ * Returns assignable fixtures for a project (excludes is_workflow_complete = true).
  */
-async function listAssignableFixturesForScope(departmentId, scopeId) {
-  return listAssignableFixtures(departmentId, scopeId);
+async function listAssignableFixturesForProject(departmentId, projectId) {
+  return listAssignableFixtures(departmentId, projectId);
 }
 
 async function reopenFixtureStage({
@@ -982,7 +974,7 @@ module.exports = instrumentModuleExports("service.fixtureWorkflowService", {
   approveFixtureStage,
   rejectFixtureStage,
   getFullProgressForFixture,
-  listAssignableFixturesForScope,
+  listAssignableFixturesForProject,
   manipulateFixtureStage,
   reopenFixtureStage,
   releaseFixtureStageAssignment,

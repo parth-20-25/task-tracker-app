@@ -3,7 +3,7 @@ const { PERMISSIONS } = require("../config/constants");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
-const { exportDesignReport, exportScopeDesignReport } = require("../services/designReportService");
+const { exportDesignReport } = require("../services/designReportService");
 const { buildReport, exportTaskReport, listTaskReportRows, listWorkflowCompletionSummary } = require("../services/reportService");
 
 const router = express.Router();
@@ -41,19 +41,6 @@ router.get(
   authorize(PERMISSIONS.EXPORT_REPORTS),
   asyncHandler(async (req, res) => {
     const report = await exportDesignReport(req.user, req.query, {
-      publicOrigin: getRequestOrigin(req),
-    });
-    res.setHeader("Content-Type", report.contentType);
-    res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
-    return res.status(200).send(report.buffer);
-  }),
-);
-
-router.get(
-  "/reports/design-scope/export",
-  authorize(PERMISSIONS.EXPORT_REPORTS),
-  asyncHandler(async (req, res) => {
-    const report = await exportScopeDesignReport(req.user, req.query.scope_id, {
       publicOrigin: getRequestOrigin(req),
     });
     res.setHeader("Content-Type", report.contentType);

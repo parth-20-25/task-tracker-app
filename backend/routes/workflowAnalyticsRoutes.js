@@ -14,10 +14,9 @@ router.use(authenticate);
 router.get(
   "/overview",
   asyncHandler(async (req, res) => {
-    const { departmentId, scopeId, projectId } = req.query;
+    const { departmentId, projectId } = req.query;
     const filters = {
       departmentId,
-      scopeId,
       projectId
     };
     const data = await getAnalyticsOverview(filters, req.user);

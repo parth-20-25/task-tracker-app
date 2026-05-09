@@ -11,7 +11,6 @@ function mapProjectRow(row) {
     project_name: row.project_name || row.project_description,
     customer_name: row.customer_name || "",
     project_description: row.project_description,
-    scope_name: row.scope_name,
     quantity_index: row.quantity_index,
     instance_count: row.instance_count === null || row.instance_count === undefined
       ? null
@@ -63,14 +62,13 @@ async function createProject(project, client = pool) {
         instance_count,
         rework_date,
         project_description,
-        scope_name,
         quantity_index,
         department_id,
         uploaded_by,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
       RETURNING *
     `,
     [
@@ -80,7 +78,6 @@ async function createProject(project, client = pool) {
       project.instance_count,
       project.rework_date || null,
       project.project_description,
-      project.scope_name,
       project.quantity_index,
       project.department_id,
       project.uploaded_by || null,

@@ -71,16 +71,17 @@ function validatePythonFileInfo(fileInfo) {
   }
 
   const project_code = normalizeString(fileInfo.project_code);
-  const scope_name = normalizeString(fileInfo.scope_name || fileInfo.scope_name_display);
+  const project_name = normalizeString(fileInfo.project_name || fileInfo.project_name_display);
   const company_name = normalizeString(fileInfo.company_name);
 
-  if (!project_code || !scope_name || !company_name) {
+  if (!project_code || !project_name || !company_name) {
     throw new AppError(502, "Failed to process file", "Python service returned incomplete file metadata", "DESIGN_EXTRACTION_INVALID_RESPONSE");
   }
 
   return {
     project_code,
-    scope_name,
+    project_name,
+    project_name_display: project_name,
     company_name,
   };
 }

@@ -2,17 +2,18 @@
  * WBS Header Parser — Single-Line Strict Parser
  *
  * Parses strings in the format:
- *   WBS-{project_code}-{scope_name}_{company_name}
+ *   WBS-{project_code}-{project_name}_{company_name}
  *
  * Example:
  *   WBS-PARC2600M001-Fuel Tank weld Line_Belrise Industries Limited
  *   → project_code: "PARC2600M001"
- *   → scope_name:   "Fuel Tank weld Line"
+ *   → project_name: "Fuel Tank weld Line"
  *   → company_name: "Belrise Industries Limited"
  */
 
 export interface WBSParseResult {
   project_code: string;
+  project_name: string;
   scope_name: string;
   company_name: string;
 }
@@ -29,7 +30,7 @@ export interface WBSParseSuccess extends WBSParseResult {
 export type WBSParseOutcome = WBSParseSuccess | WBSParseError;
 
 /**
- * Normalizes a string for scope matching:
+ * Normalizes a string for WBS matching:
  * - lowercase
  * - trim
  * - remove non-letter characters
@@ -50,7 +51,7 @@ export function normalizeWBS(str: string): string {
  * Step 1: Must start with "WBS-"
  * Step 2: Remove "WBS-" prefix
  * Step 3: Split at first "-" → project_code + remaining
- * Step 4: Split remaining at first "_" → scope_name + company_name
+ * Step 4: Split remaining at first "_" → project_name + company_name
  *         (company_name may itself contain underscores)
  */
 export function parseWBSHeader(input: string): WBSParseOutcome {
@@ -83,18 +84,19 @@ export function parseWBSHeader(input: string): WBSParseOutcome {
     return { valid: false, message: "Invalid format: missing '_' separator" };
   }
 
-  const scope_name = parts[0].trim();
+  const project_name = parts[0].trim();
   const company_name = parts.slice(1).join("_").trim();
 
   // Final validation
-  if (!scope_name || !company_name) {
-    return { valid: false, message: "Scope or Company name missing" };
+  if (!project_name || !company_name) {
+    return { valid: false, message: "Project name or Company name missing" };
   }
 
   return {
     valid: true,
     project_code,
-    scope_name,
+    project_name,
+    scope_name: project_name,
     company_name,
   };
 }

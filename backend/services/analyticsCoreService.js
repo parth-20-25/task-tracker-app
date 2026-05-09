@@ -268,7 +268,6 @@ function buildScope(filters = {}, user) {
     departmentId,
     userId,
     projectId: normalizeId(filters.projectId),
-    scopeId: normalizeId(filters.scopeId),
     startDate,
     endDate,
     visibleUserIds,
@@ -301,11 +300,6 @@ async function loadTaskRows(scope, client = pool) {
     whereClauses.push(`t.project_id = $${params.length}::uuid`);
   }
 
-  if (scope.scopeId) {
-    params.push(scope.scopeId);
-    whereClauses.push(`t.scope_id = $${params.length}::uuid`);
-  }
-
   const result = await client.query(
     `
       SELECT
@@ -321,10 +315,8 @@ async function loadTaskRows(scope, client = pool) {
         COALESCE(NULLIF(current_stage.stage_name, ''), NULLIF(current_stage.name, ''), NULLIF(t.stage, ''), 'Workflow Stage') AS current_stage_name,
         t.stage AS explicit_stage_name,
         t.project_id,
-        t.scope_id,
         t.fixture_id,
         t.project_no,
-        t.scope_name,
         t.fixture_no,
         t.quantity_index,
         t.instance_count,
@@ -635,7 +627,6 @@ function buildAnalyticsDataset(taskRows, activityRows, workflowStageRows) {
       user_name: task.user_name,
       workflow_id: task.workflow_id || null,
       project_id: task.project_id || null,
-      scope_id: task.scope_id || null,
       explicit_stage_name: normalizeId(task.explicit_stage_name),
       current_stage_name: stageTrace.currentStageName,
       current_stage_order: stageTrace.currentStageOrder,

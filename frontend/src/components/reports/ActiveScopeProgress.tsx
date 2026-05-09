@@ -1,20 +1,19 @@
 import { Layers3 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 
-export interface ActiveScopeProgressItem {
+export interface ActiveFixtureProgressItem {
   project_key: string;
   project_no: string;
   project_name: string;
   customer_name: string;
   department_name: string;
-  scope_name: string;
   fixture_no?: string | null;
   instances_complete: number;
   total_instances: number;
 }
 
 interface ActiveScopeProgressProps {
-  items: ActiveScopeProgressItem[];
+  items: ActiveFixtureProgressItem[];
 }
 
 function formatProjectFixtureLabel(projectNo: string, fixtureNo?: string | null) {
@@ -29,7 +28,7 @@ function formatProjectFixtureLabel(projectNo: string, fixtureNo?: string | null)
 }
 
 export function ActiveScopeProgress({ items }: ActiveScopeProgressProps) {
-  const groupedItems = items.reduce<Map<string, ActiveScopeProgressItem[]>>((groups, item) => {
+  const groupedItems = items.reduce<Map<string, ActiveFixtureProgressItem[]>>((groups, item) => {
     const existingItems = groups.get(item.project_key) || [];
     existingItems.push(item);
     groups.set(item.project_key, existingItems);
@@ -46,12 +45,12 @@ export function ActiveScopeProgress({ items }: ActiveScopeProgressProps) {
       <CardHeader className="p-4 pb-2">
         <div className="flex items-center gap-2">
           <Layers3 className="h-4 w-4 text-primary" />
-          <h2 className="font-semibold">Active Scope Progress</h2>
+          <h2 className="font-semibold">Active Project Progress</h2>
         </div>
       </CardHeader>
       <CardContent className="space-y-4 p-4 pt-2">
         {projectGroups.length === 0 ? (
-          <p className="text-sm text-muted-foreground">All tracked scopes are complete.</p>
+          <p className="text-sm text-muted-foreground">All tracked project fixtures are complete.</p>
         ) : (
           projectGroups.map(({ project, items: projectItems }) => {
             const totalInstances = projectItems.reduce((sum, item) => sum + item.total_instances, 0);
@@ -75,13 +74,13 @@ export function ActiveScopeProgress({ items }: ActiveScopeProgressProps) {
 
                 <div className="mt-4 space-y-2">
                   {projectItems.map((item) => (
-                    <div key={`${item.project_key}-${item.scope_name}-${item.fixture_no || "project"}`} className="rounded-md bg-muted/40 px-3 py-2 text-sm">
+                    <div key={`${item.project_key}-${item.fixture_no || "project"}`} className="rounded-md bg-muted/40 px-3 py-2 text-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="space-y-0.5">
                           <p className="font-medium">
                             {formatProjectFixtureLabel(item.project_no, item.fixture_no) || "Project"}
                           </p>
-                          <p className="text-muted-foreground">{item.scope_name || "Scope"}</p>
+                          <p className="text-muted-foreground">{item.project_name || "Project"}</p>
                         </div>
                         <span className="shrink-0 text-muted-foreground">
                           {item.instances_complete}/{item.total_instances} instances complete

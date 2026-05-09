@@ -20,7 +20,6 @@ import {
   createDesignTask,
   fetchDesignFixtures,
   fetchDesignProjects,
-  fetchDesignScopes,
   fetchFixtureCurrentStage,
   fetchFixtureFullProgress,
   rejectFixtureStage,
@@ -49,6 +48,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { hasUserPermission, PERMISSIONS } from "@/lib/permissions";
+import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 const priorityOptions = [
   { value: "P1", label: "P1 — Critical" },
@@ -268,7 +268,6 @@ export function DesignDepartmentTaskAssignmentBar() {
 
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
-  const [scopeId, setScopeId] = useState("");
   const [fixtureId, setFixtureId] = useState("");
   const [description, setDescription] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
@@ -291,16 +290,10 @@ export function DesignDepartmentTaskAssignmentBar() {
     setWorkflowRequestVersion((value) => value + 1);
   };
 
-  const scopesQuery = useQuery({
-    queryKey: projectQueryKeys.designScopes(projectId || "unselected", designDepartmentKey),
-    queryFn: () => fetchDesignScopes(projectId, currentUser?.department_id),
-    enabled: Boolean(projectId),
-  });
-
   const fixturesQuery = useQuery({
-    queryKey: ["designFixtures", designDepartmentKey, scopeId || "unselected"],
-    queryFn: () => fetchDesignFixtures(scopeId, currentUser?.department_id),
-    enabled: Boolean(scopeId),
+    queryKey: ["designFixtures", designDepartmentKey, projectId || "unselected"],
+    queryFn: () => fetchDesignFixtures(projectId, currentUser?.department_id),
+    enabled: Boolean(projectId),
   });
 
   useEffect(() => {
@@ -365,7 +358,6 @@ export function DesignDepartmentTaskAssignmentBar() {
 
   const assignableUsers = assignableUsersQuery.data ?? [];
   const projects = projectsQuery.data ?? [];
-  const scopes = scopesQuery.data ?? [];
   const fixtures = fixturesQuery.data ?? [];
 
   const canVerify = hasUserPermission(currentUser, PERMISSIONS.APPROVE_COMPLETED_TASK)
@@ -397,11 +389,10 @@ export function DesignDepartmentTaskAssignmentBar() {
 
   const selectedUser = assignableUsers.find((u) => u.employee_id === assignedTo);
   const selectedProject = projects.find((p) => p.project_id === projectId);
-  const selectedScope = scopes.find((s) => s.scope_id === scopeId);
   const selectedFixture = fixtures.find((f) => f.fixture_id === fixtureId);
   const updateSelectedFixtureImages = (nextImages: { image_1_url: string | null; image_2_url: string | null }) => {
     queryClient.setQueryData(
-      ["designFixtures", designDepartmentKey, scopeId || "unselected"],
+      ["designFixtures", designDepartmentKey, projectId || "unselected"],
       (current: typeof fixtures | undefined) => (
         (current || []).map((fixture) => (
           fixture.fixture_id === fixtureId
@@ -426,7 +417,6 @@ export function DesignDepartmentTaskAssignmentBar() {
       ]);
 
       setProjectId("");
-      setScopeId("");
       setFixtureId("");
       resetWorkflowState();
       setDescription("");
@@ -438,7 +428,7 @@ export function DesignDepartmentTaskAssignmentBar() {
 
       toast({
         title: "Design task assigned",
-        description: "The task has been created with the selected project, scope, and fixture.",
+        description: "The task has been created with the selected project and fixture.",
       });
     },
     onError: (error) => {
@@ -460,7 +450,6 @@ export function DesignDepartmentTaskAssignmentBar() {
       queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] });
       createTaskMutation.mutate({
         project_id: projectId,
-        scope_id: scopeId,
         fixture_id: fixtureId,
         description,
         assigned_to: assignedTo,
@@ -480,13 +469,6 @@ export function DesignDepartmentTaskAssignmentBar() {
 
   const handleProjectChange = (value: string) => {
     setProjectId(value);
-    setScopeId("");
-    setFixtureId("");
-    resetWorkflowState();
-  };
-
-  const handleScopeChange = (value: string) => {
-    setScopeId(value);
     setFixtureId("");
     resetWorkflowState();
   };
@@ -500,7 +482,7 @@ export function DesignDepartmentTaskAssignmentBar() {
   };
 
   const handleSubmit = () => {
-    if (!projectId || !scopeId || !fixtureId || !assignedTo || !deadline) return;
+    if (!projectId || !fixtureId || !assignedTo || !deadline) return;
     if (!canSubmitAssignment) return;
     assignStageMutation.mutate();
   };
@@ -515,16 +497,8 @@ export function DesignDepartmentTaskAssignmentBar() {
         ? "Select project"
         : "No projects available";
 
-  const scopePlaceholder = !projectId
+  const fixturePlaceholder = !projectId
     ? "Select project first"
-    : scopesQuery.isLoading
-      ? "Loading scopes..."
-      : scopes.length > 0
-        ? "Select scope"
-        : "No scopes available";
-
-  const fixturePlaceholder = !scopeId
-    ? "Select scope first"
     : fixturesQuery.isLoading
       ? "Loading fixtures..."
       : fixtures.length > 0
@@ -555,7 +529,7 @@ export function DesignDepartmentTaskAssignmentBar() {
 
       {open && (
         <CardContent className="space-y-4 p-4 pt-4">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Project *</Label>
               <Select value={projectId} onValueChange={handleProjectChange}>
@@ -565,23 +539,7 @@ export function DesignDepartmentTaskAssignmentBar() {
                 <SelectContent>
                   {projects.map((project) => (
                     <SelectItem key={project.project_id} value={project.project_id}>
-                      {project.project_code} · {project.project_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Scope *</Label>
-              <Select value={scopeId} onValueChange={handleScopeChange}>
-                <SelectTrigger className="h-9 text-sm" disabled={!projectId || scopesQuery.isLoading || scopes.length === 0}>
-                  <SelectValue placeholder={scopePlaceholder} />
-                </SelectTrigger>
-                <SelectContent>
-                  {scopes.map((scope) => (
-                    <SelectItem key={scope.scope_id} value={scope.scope_id}>
-                      {scope.scope_name}
+                      {formatDesignProjectLabel(project)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -593,7 +551,7 @@ export function DesignDepartmentTaskAssignmentBar() {
               <Select value={fixtureId} onValueChange={handleFixtureChange}>
                 <SelectTrigger
                   className="h-9 text-sm border-primary/40 focus:border-primary"
-                  disabled={!scopeId || fixturesQuery.isLoading || fixtures.length === 0}
+                  disabled={!projectId || fixturesQuery.isLoading || fixtures.length === 0}
                 >
                   <SelectValue placeholder={fixturePlaceholder} />
                 </SelectTrigger>
@@ -624,15 +582,14 @@ export function DesignDepartmentTaskAssignmentBar() {
             </div>
           </div>
 
-          {(selectedProject || selectedScope || selectedFixture) && (
+          {(selectedProject || selectedFixture) && (
             <div className="space-y-3">
               <div className="grid gap-3 rounded-xl border bg-gradient-to-r from-muted/50 to-muted/20 p-4 text-xs md:grid-cols-4 shadow-inner">
                 <div className="md:col-span-1">
                   <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold">Project</p>
                   <p className="mt-1 font-medium text-foreground truncate">
-                    {selectedProject ? selectedProject.project_code : "—"}
+                    {selectedProject ? formatDesignProjectLabel(selectedProject) : "—"}
                   </p>
-                  <p className="text-muted-foreground truncate">{selectedScope ? selectedScope.scope_name : "—"}</p>
                 </div>
                 <div className="md:col-span-3 border-l pl-4">
                   <p className="text-muted-foreground uppercase tracking-wider text-[10px] font-bold mb-2">
@@ -729,7 +686,7 @@ export function DesignDepartmentTaskAssignmentBar() {
                   currentStatus={reviewStage.status}
                   onAction={() => {
                     refreshWorkflowState();
-                    queryClient.invalidateQueries({ queryKey: ["designFixtures", designDepartmentKey, scopeId] });
+                    queryClient.invalidateQueries({ queryKey: ["designFixtures", designDepartmentKey, projectId] });
                   }}
                 />
               )}
@@ -813,7 +770,6 @@ export function DesignDepartmentTaskAssignmentBar() {
                 className="h-10 px-6 text-sm font-semibold shadow-sm hover:translate-y-[-1px] transition-all"
                 disabled={
                   !projectId ||
-                  !scopeId ||
                   !fixtureId ||
                   !assignedTo ||
                   !deadline ||

@@ -51,35 +51,6 @@ async function backfillDesignProjectRelations(client) {
     ON CONFLICT (project_no, department_id) DO NOTHING
   `);
 
-  await client.query(`
-    WITH design_departments AS (
-      SELECT d.id
-      FROM departments d
-      WHERE LOWER(BTRIM(COALESCE(d.name, ''))) = 'design'
-         OR LOWER(BTRIM(COALESCE(d.id, ''))) = 'design'
-    ),
-    source_scopes AS (
-      SELECT DISTINCT
-        dp.id AS project_id,
-        COALESCE(NULLIF(BTRIM(p.scope_name), ''), 'General') AS scope_name
-      FROM public.projects p
-      JOIN design_departments dd
-        ON dd.id = p.department_id
-      JOIN design.projects dp
-        ON dp.project_no = BTRIM(p.project_no)
-       AND dp.department_id = p.department_id
-      WHERE NULLIF(BTRIM(p.project_no), '') IS NOT NULL
-    )
-    INSERT INTO design.scopes (
-      project_id,
-      scope_name
-    )
-    SELECT
-      ss.project_id,
-      ss.scope_name
-    FROM source_scopes ss
-    ON CONFLICT (project_id, scope_name) DO NOTHING
-  `);
 }
 
 async function backfillDesignIntegrity(client) {
@@ -112,19 +83,38 @@ async function backfillDesignIntegrity(client) {
   `);
 
   await client.query(`
-    UPDATE design.upload_batches ub
-    SET project_id = s.project_id
-    FROM design.scopes s
-    WHERE ub.scope_id = s.id
-      AND ub.project_id IS DISTINCT FROM s.project_id
-  `);
+    DO $$
+    BEGIN
+      IF to_regclass('design.scopes') IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+           FROM information_schema.columns
+           WHERE table_schema = 'design'
+             AND table_name = 'upload_batches'
+             AND column_name = 'scope_id'
+         ) THEN
+        UPDATE design.upload_batches ub
+        SET project_id = s.project_id
+        FROM design.scopes s
+        WHERE ub.scope_id = s.id
+          AND ub.project_id IS DISTINCT FROM s.project_id;
+      END IF;
 
-  await client.query(`
-    UPDATE design.fixtures f
-    SET project_id = s.project_id
-    FROM design.scopes s
-    WHERE f.scope_id = s.id
-      AND f.project_id IS DISTINCT FROM s.project_id
+      IF to_regclass('design.scopes') IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+           FROM information_schema.columns
+           WHERE table_schema = 'design'
+             AND table_name = 'fixtures'
+             AND column_name = 'scope_id'
+         ) THEN
+        UPDATE design.fixtures f
+        SET project_id = s.project_id
+        FROM design.scopes s
+        WHERE f.scope_id = s.id
+          AND f.project_id IS DISTINCT FROM s.project_id;
+      END IF;
+    END $$;
   `);
 
   await client.query(`
@@ -143,19 +133,10 @@ async function backfillDesignIntegrity(client) {
 
       IF EXISTS (
         SELECT 1
-        FROM design.scopes s
-        WHERE s.project_id IS NULL
-      ) THEN
-        RAISE EXCEPTION 'design.scopes contains rows with null project_id';
-      END IF;
-
-      IF EXISTS (
-        SELECT 1
         FROM design.fixtures f
         WHERE f.project_id IS NULL
-           OR f.scope_id IS NULL
       ) THEN
-        RAISE EXCEPTION 'design.fixtures contains rows with null project_id or scope_id';
+        RAISE EXCEPTION 'design.fixtures contains rows with null project_id';
       END IF;
     END $$;
   `);
@@ -200,38 +181,6 @@ async function ensureDepartmentConstraint(client) {
   `);
 }
 
-async function ensureScopeProjectConstraint(client) {
-  await client.query(`
-    DO $$
-    DECLARE
-      project_attnum smallint;
-    BEGIN
-      SELECT attnum
-      INTO project_attnum
-      FROM pg_attribute
-      WHERE attrelid = 'design.scopes'::regclass
-        AND attname = 'project_id'
-        AND NOT attisdropped;
-
-      IF project_attnum IS NULL THEN
-        RAISE EXCEPTION 'design.scopes.project_id is missing';
-      END IF;
-
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'design.scopes'::regclass
-          AND contype = 'f'
-          AND conkey = ARRAY[project_attnum]
-      ) THEN
-        ALTER TABLE design.scopes
-        ADD CONSTRAINT fk_scope_project
-        FOREIGN KEY (project_id) REFERENCES design.projects(id);
-      END IF;
-    END $$;
-  `);
-}
-
 async function ensureFixtureProjectConstraint(client) {
   await client.query(`
     DO $$
@@ -264,44 +213,6 @@ async function ensureFixtureProjectConstraint(client) {
   `);
 }
 
-async function ensureFixtureScopeProjectConstraint(client) {
-  await client.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'design_fixtures_scope_project_fkey'
-      ) THEN
-        ALTER TABLE design.fixtures
-        ADD CONSTRAINT design_fixtures_scope_project_fkey
-        FOREIGN KEY (scope_id, project_id)
-        REFERENCES design.scopes(id, project_id)
-        ON DELETE CASCADE;
-      END IF;
-    END $$;
-  `);
-}
-
-async function ensureUploadBatchScopeProjectConstraint(client) {
-  await client.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'design_upload_batches_scope_project_fkey'
-      ) THEN
-        ALTER TABLE design.upload_batches
-        ADD CONSTRAINT design_upload_batches_scope_project_fkey
-        FOREIGN KEY (scope_id, project_id)
-        REFERENCES design.scopes(id, project_id)
-        ON DELETE CASCADE;
-      END IF;
-    END $$;
-  `);
-}
-
 async function ensureFixtureBatchConstraint(client) {
   await client.query(`
     DO $$
@@ -321,8 +232,44 @@ async function ensureFixtureBatchConstraint(client) {
 
 async function ensureFixtureIdentityIndex(client) {
   await client.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_design_fixtures_scope_fixture_no_unique
-    ON design.fixtures (scope_id, fixture_no)
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_design_fixtures_project_fixture_no_unique
+    ON design.fixtures (project_id, fixture_no)
+  `);
+}
+
+async function dropScopeArchitecture(client) {
+  await client.query(`
+    DROP INDEX IF EXISTS idx_design_fixtures_scope_fixture_no_unique;
+    DROP INDEX IF EXISTS idx_design_fixtures_scope_id;
+    DROP INDEX IF EXISTS idx_design_scopes_id_project_id;
+    DROP INDEX IF EXISTS idx_design_scopes_project_id;
+  `);
+
+  await client.query(`
+    ALTER TABLE IF EXISTS design.fixtures
+    DROP CONSTRAINT IF EXISTS design_fixtures_scope_project_fkey,
+    DROP CONSTRAINT IF EXISTS design_fixtures_scope_fixture_no_key,
+    DROP CONSTRAINT IF EXISTS design_fixtures_scope_id_fkey
+  `);
+
+  await client.query(`
+    ALTER TABLE IF EXISTS design.upload_batches
+    DROP CONSTRAINT IF EXISTS design_upload_batches_scope_project_fkey,
+    DROP CONSTRAINT IF EXISTS design_upload_batches_scope_id_fkey
+  `);
+
+  await client.query(`
+    ALTER TABLE IF EXISTS design.fixtures
+    DROP COLUMN IF EXISTS scope_id
+  `);
+
+  await client.query(`
+    ALTER TABLE IF EXISTS design.upload_batches
+    DROP COLUMN IF EXISTS scope_id
+  `);
+
+  await client.query(`
+    DROP TABLE IF EXISTS design.scopes CASCADE
   `);
 }
 
@@ -364,15 +311,6 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
-    CREATE TABLE IF NOT EXISTS design.scopes (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      project_id UUID NOT NULL,
-      scope_name TEXT NOT NULL,
-      CONSTRAINT design_scopes_project_scope_name_key UNIQUE (project_id, scope_name)
-    )
-  `);
-
-  await client.query(`
     DROP TABLE IF EXISTS design.reworks CASCADE
   `);
 
@@ -384,7 +322,6 @@ async function ensureDesignDepartmentSchema(client) {
     CREATE TABLE IF NOT EXISTS design.fixtures (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       project_id UUID NOT NULL,
-      scope_id UUID NOT NULL REFERENCES design.scopes(id) ON DELETE CASCADE,
       fixture_no TEXT NOT NULL,
       op_no TEXT NOT NULL,
       part_name TEXT NOT NULL,
@@ -399,7 +336,7 @@ async function ensureDesignDepartmentSchema(client) {
       is_legacy_workflow BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      CONSTRAINT design_fixtures_scope_fixture_no_key UNIQUE (scope_id, fixture_no)
+      CONSTRAINT design_fixtures_project_fixture_no_key UNIQUE (project_id, fixture_no)
     )
   `);
 
@@ -456,25 +393,9 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'design_fixtures_scope_fixture_no_key'
-      ) THEN
-        ALTER TABLE design.fixtures
-        ADD CONSTRAINT design_fixtures_scope_fixture_no_key
-        UNIQUE (scope_id, fixture_no);
-      END IF;
-    END $$;
-  `);
-
-  await client.query(`
     CREATE TABLE IF NOT EXISTS design.upload_batches (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       project_id UUID NOT NULL,
-      scope_id UUID NOT NULL REFERENCES design.scopes(id) ON DELETE CASCADE,
       uploaded_by VARCHAR(50),
       uploaded_by_user_id VARCHAR(50),
       uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -577,21 +498,6 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_design_scopes_project_id
-    ON design.scopes (project_id)
-  `);
-
-  await client.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_design_scopes_id_project_id
-    ON design.scopes (id, project_id)
-  `);
-
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_design_fixtures_scope_id
-    ON design.fixtures (scope_id)
-  `);
-
-  await client.query(`
     CREATE INDEX IF NOT EXISTS idx_design_fixtures_project_id
     ON design.fixtures (project_id)
   `);
@@ -622,17 +528,14 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await backfillDesignIntegrity(client);
+  await dropScopeArchitecture(client);
 
   await ensureDepartmentConstraint(client);
-  await ensureScopeProjectConstraint(client);
   await ensureFixtureProjectConstraint(client);
-  await ensureUploadBatchScopeProjectConstraint(client);
-  await ensureFixtureScopeProjectConstraint(client);
   await ensureFixtureBatchConstraint(client);
   await ensureFixtureIdentityIndex(client);
 
   await ensureColumnNotNull(client, "design.projects", "department_id");
-  await ensureColumnNotNull(client, "design.scopes", "project_id");
   await ensureColumnNotNull(client, "design.fixtures", "project_id");
 
   await ensureDesignIntegrityDiagnostics(client);

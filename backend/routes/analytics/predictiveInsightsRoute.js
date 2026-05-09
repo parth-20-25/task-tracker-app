@@ -24,14 +24,13 @@ router.use(authenticate);
  * Designer Performance, Workflow Health, and the Analytics Overview.
  *
  * Query params:
- *   scopeId   – filter to a single scope
- *   projectId – filter to a project (all scopes)
+ *   projectId – filter to a project
  */
 router.get(
   "/predictive-insights",
   asyncHandler(async (req, res) => {
-    const { scopeId, projectId, departmentId, userId, startDate, endDate } = req.query;
-    const filters = { scopeId, projectId, departmentId, userId, startDate, endDate };
+    const { projectId, departmentId, userId, startDate, endDate } = req.query;
+    const filters = { projectId, departmentId, userId, startDate, endDate };
     const data = await buildPredictiveInsights(filters, req.user);
     return sendSuccess(res, data);
   })

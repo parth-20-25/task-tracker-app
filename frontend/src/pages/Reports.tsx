@@ -5,12 +5,13 @@ import {
   WorkflowProjectSummary,
 } from "@/api/reportApi";
 import { fetchAllDepartments } from "@/api/adminApi";
-import { fetchDesignProjects, fetchDesignScopes } from "@/api/designApi";
-import { ActiveScopeProgress, ActiveScopeProgressItem } from "@/components/reports/ActiveScopeProgress";
+import { fetchDesignProjects } from "@/api/designApi";
+import { ActiveScopeProgress, ActiveFixtureProgressItem } from "@/components/reports/ActiveScopeProgress";
 import { ReportFilters } from "@/components/reports/ReportFilters";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
-import { DesignProjectOption, DesignScopeOption } from "@/types";
+import { DesignProjectOption } from "@/types";
+import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 function sanitizeFileNamePart(value: string) {
   return value
@@ -28,14 +29,10 @@ export default function Reports() {
   const [workflowSummary, setWorkflowSummary] = useState<WorkflowProjectSummary[]>([]);
   const [reportDepartmentOptions, setReportDepartmentOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedReportDepartmentId, setSelectedReportDepartmentId] = useState("");
-  const [reportType, setReportType] = useState<"scope" | "project">("scope");
   const [reportProjects, setReportProjects] = useState<DesignProjectOption[]>([]);
-  const [reportScopes, setReportScopes] = useState<DesignScopeOption[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [selectedScopeId, setSelectedScopeId] = useState("");
   const [reportExportLoading, setReportExportLoading] = useState(false);
   const [reportProjectsLoading, setReportProjectsLoading] = useState(false);
-  const [reportScopesLoading, setReportScopesLoading] = useState(false);
 
   useEffect(() => {
     if (canSelectDepartments) {
@@ -92,17 +89,13 @@ export default function Reports() {
   useEffect(() => {
     if (!canExportReports || !selectedReportDepartmentId) {
       setReportProjects([]);
-      setReportScopes([]);
       setSelectedProjectId("");
-      setSelectedScopeId("");
       return undefined;
     }
 
     let active = true;
     setReportProjectsLoading(true);
     setSelectedProjectId("");
-    setSelectedScopeId("");
-    setReportScopes([]);
 
     fetchDesignProjects(selectedReportDepartmentId)
       .then((projects) => {
@@ -135,47 +128,6 @@ export default function Reports() {
   }, [canExportReports, selectedReportDepartmentId]);
 
   useEffect(() => {
-    if (!canExportReports || !selectedProjectId || !selectedReportDepartmentId) {
-      setReportScopes([]);
-      setSelectedScopeId("");
-      return undefined;
-    }
-
-    let active = true;
-    setReportScopesLoading(true);
-    setSelectedScopeId("");
-
-    fetchDesignScopes(selectedProjectId, selectedReportDepartmentId)
-      .then((scopes) => {
-        if (!active) {
-          return;
-        }
-
-        setReportScopes(scopes);
-      })
-      .catch((error) => {
-        if (!active) {
-          return;
-        }
-
-        toast({
-          title: "Scopes unavailable",
-          description: error instanceof Error ? error.message : "Could not load report scopes.",
-          variant: "destructive",
-        });
-      })
-      .finally(() => {
-        if (active) {
-          setReportScopesLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [canExportReports, selectedReportDepartmentId, selectedProjectId]);
-
-  useEffect(() => {
     let active = true;
 
     fetchWorkflowSummary()
@@ -206,11 +158,6 @@ export default function Reports() {
     [reportProjects, selectedProjectId],
   );
 
-  const selectedScope = useMemo(
-    () => reportScopes.find((scope) => scope.scope_id === selectedScopeId) || null,
-    [reportScopes, selectedScopeId],
-  );
-
   const selectedDepartmentName = useMemo(
     () => reportDepartmentOptions.find((department) => department.id === selectedReportDepartmentId)?.name
       || user?.department?.name
@@ -218,19 +165,18 @@ export default function Reports() {
     [reportDepartmentOptions, selectedReportDepartmentId, user?.department?.name],
   );
 
-  const activeScopeProgressItems = useMemo<ActiveScopeProgressItem[]>(
-    () => workflowSummary.flatMap((project) => project.scopes
-      .filter((scope) => !scope.is_complete)
-      .map((scope) => ({
+  const activeScopeProgressItems = useMemo<ActiveFixtureProgressItem[]>(
+    () => workflowSummary.flatMap((project) => project.fixtures
+      .filter((fixture) => !fixture.is_complete)
+      .map((fixture) => ({
         project_key: project.project_key,
         project_no: project.project_no || "",
         project_name: project.project_name || "",
         customer_name: project.customer_name || "",
         department_name: project.department_name || project.department_id || "",
-        scope_name: scope.scope_name || "",
-        fixture_no: scope.fixture_no || null,
-        instances_complete: scope.completed_instances ?? 0,
-        total_instances: scope.total_instances ?? 0,
+        fixture_no: fixture.fixture_no || null,
+        instances_complete: fixture.completed_instances ?? 0,
+        total_instances: fixture.total_instances ?? 0,
       }))),
     [workflowSummary],
   );
@@ -238,8 +184,7 @@ export default function Reports() {
   const canDownloadReport = Boolean(
     canExportReports
       && selectedReportDepartmentId
-      && selectedProject
-      && (reportType === "project" || selectedScope),
+      && selectedProject,
   );
 
   const handleReportDownload = () => {
@@ -247,24 +192,15 @@ export default function Reports() {
       return;
     }
 
-    if (reportType === "scope" && !selectedScope) {
-      return;
-    }
-
-    const targetName = reportType === "project"
-      ? selectedProject.project_name
-      : selectedScope?.scope_name || "Scope";
-    const reportLabel = reportType === "project"
-      ? "Project_Wise_Report"
-      : "Scope_Wise_Report";
+    const targetName = formatDesignProjectLabel(selectedProject);
+    const reportLabel = "Project_Report";
     const fileName = `${sanitizeFileNamePart(selectedProject.project_code)}_${sanitizeFileNamePart(targetName)}_${reportLabel}.xlsx`;
 
     setReportExportLoading(true);
     downloadDesignReport({
       department_id: selectedReportDepartmentId,
       project_id: selectedProject.project_id,
-      report_type: reportType,
-      scope_id: reportType === "scope" ? selectedScope?.scope_id : undefined,
+      report_type: "project",
     }, fileName)
       .catch((error) => {
         toast({
@@ -282,7 +218,7 @@ export default function Reports() {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">Reports</h1>
-        <p className="text-sm text-muted-foreground">Generate department-driven reports and review active scope progress without report-only UI artifacts.</p>
+        <p className="text-sm text-muted-foreground">Generate department-driven project reports and review active project progress.</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
@@ -293,18 +229,11 @@ export default function Reports() {
           selectedDepartmentId={selectedReportDepartmentId}
           onDepartmentChange={setSelectedReportDepartmentId}
           selectedDepartmentName={selectedDepartmentName}
-          reportType={reportType}
-          onReportTypeChange={setReportType}
           projects={reportProjects}
-          scopes={reportScopes}
           selectedProjectId={selectedProjectId}
           onProjectChange={setSelectedProjectId}
-          selectedScopeId={selectedScopeId}
-          onScopeChange={setSelectedScopeId}
           selectedProject={selectedProject}
-          selectedScope={selectedScope}
           projectsLoading={reportProjectsLoading}
-          scopesLoading={reportScopesLoading}
           exportLoading={reportExportLoading}
           canDownloadReport={canDownloadReport}
           onDownload={handleReportDownload}

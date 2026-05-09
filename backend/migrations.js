@@ -266,7 +266,6 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS sla_due_date TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS rejection_count INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS project_id UUID,
-      ADD COLUMN IF NOT EXISTS scope_id UUID,
       ADD COLUMN IF NOT EXISTS fixture_id UUID,
       ADD COLUMN IF NOT EXISTS fixture_no TEXT,
       ADD COLUMN IF NOT EXISTS stage TEXT
@@ -340,13 +339,11 @@ async function runMigrations() {
     await client.query(`
       UPDATE tasks t
       SET project_id = COALESCE(t.project_id, f.project_id),
-          scope_id = COALESCE(t.scope_id, f.scope_id),
           fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
       FROM design.fixtures f
       WHERE t.fixture_id = f.id
         AND (
           t.project_id IS NULL
-          OR t.scope_id IS NULL
           OR COALESCE(t.fixture_no, '') = ''
         )
     `);
@@ -354,19 +351,14 @@ async function runMigrations() {
     await client.query(`
       UPDATE tasks t
       SET project_id = COALESCE(t.project_id, p.id),
-          scope_id = COALESCE(t.scope_id, s.id),
           fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
       FROM design.projects p
-      JOIN design.scopes s
-        ON s.project_id = p.id
       JOIN design.fixtures f
-        ON f.scope_id = s.id
+        ON f.project_id = p.id
       WHERE t.project_id IS NULL
-        AND t.scope_id IS NULL
         AND COALESCE(t.fixture_no, '') = ''
         AND p.department_id = t.department_id
         AND p.project_no = t.project_no
-        AND s.scope_name = t.scope_name
         AND f.fixture_no = t.quantity_index
     `);
 
@@ -403,8 +395,18 @@ async function runMigrations() {
     `);
 
     await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_tasks_project_scope_fixture_identity
-      ON tasks (project_id, scope_id, fixture_no)
+      DROP INDEX IF EXISTS idx_tasks_project_scope_fixture_identity
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_project_fixture_identity
+      ON tasks (project_id, fixture_no)
+    `);
+
+    await client.query(`
+      ALTER TABLE tasks
+      DROP COLUMN IF EXISTS scope_id,
+      DROP COLUMN IF EXISTS scope_name
     `);
 
     await client.query(`
@@ -447,7 +449,6 @@ async function runMigrations() {
         instance_count INTEGER NOT NULL DEFAULT 0,
         rework_date DATE,
         project_description TEXT NOT NULL DEFAULT '',
-        scope_name TEXT NOT NULL DEFAULT '',
         quantity_index TEXT NOT NULL DEFAULT '',
         department_id TEXT NOT NULL REFERENCES departments(id),
         uploaded_by VARCHAR(50),
@@ -461,8 +462,12 @@ async function runMigrations() {
     `);
 
     await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_projects_department_project_scope
-      ON projects (department_id, project_no, scope_name)
+      CREATE INDEX IF NOT EXISTS idx_projects_department_project
+      ON projects (department_id, project_no)
+    `);
+
+    await client.query(`
+      DROP INDEX IF EXISTS idx_projects_department_project_scope
     `);
 
     await client.query(`
@@ -474,10 +479,14 @@ async function runMigrations() {
       ALTER TABLE projects
       ADD COLUMN IF NOT EXISTS project_name TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS customer_name TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS scope_name TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS quantity_index TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS instance_count INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS rework_date DATE
+    `);
+
+    await client.query(`
+      ALTER TABLE projects
+      DROP COLUMN IF EXISTS scope_name
     `);
 
     await ensureDesignDepartmentSchema(client);

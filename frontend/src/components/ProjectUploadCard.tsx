@@ -26,11 +26,10 @@ import { parseWBSHeader, WBSParseOutcome } from "@/lib/wbsParser";
 
 type ProjectSheetRow = {
   id: string;
-  wbs_header: string;       // raw WBS input — drives project_no, customer_name, scope_name
-  project_no: string;       // parsed (read-only in UI)
+  wbs_header: string;
+  project_no: string;
   project_name: string;
-  customer_name: string;    // parsed (read-only in UI)
-  scope_name: string;       // parsed (read-only in UI)
+  customer_name: string;
   instance_count: string;
   rework_date: string;
 };
@@ -51,7 +50,6 @@ function createEmptyRow(): ProjectSheetRow {
     project_no: "",
     project_name: "",
     customer_name: "",
-    scope_name: "",
     instance_count: "",
     rework_date: "",
   };
@@ -149,7 +147,7 @@ function looksLikeHeader(columns: string[]) {
     headerText.includes("project no") &&
     headerText.includes("project name") &&
     headerText.includes("customer") &&
-    headerText.includes("scope")
+    headerText.includes("project name")
   );
 }
 
@@ -171,9 +169,8 @@ function parseExcelRows(text: string) {
     project_no: columns[0] || "",
     project_name: columns[1] || "",
     customer_name: columns[2] || "",
-    scope_name: columns[3] || "",
-    instance_count: columns[4] || "",
-    rework_date: normalizeDateInput(columns[5] || ""),
+    instance_count: columns[3] || "",
+    rework_date: normalizeDateInput(columns[4] || ""),
   }));
 }
 
@@ -203,8 +200,8 @@ function WBSPreviewChip({ result }: { result: WBSParseOutcome | null }) {
           <span className="font-semibold text-foreground">{result.project_code}</span>
         </div>
         <div>
-          <span className="text-muted-foreground">Scope: </span>
-          <span className="font-semibold text-foreground">{result.scope_name}</span>
+          <span className="text-muted-foreground">Project Name: </span>
+          <span className="font-semibold text-foreground">{result.project_name}</span>
         </div>
         <div>
           <span className="text-muted-foreground">Company: </span>
@@ -281,13 +278,13 @@ export function ProjectUploadCard() {
             result && result.valid
               ? {
                   project_no: result.project_code,
+                  project_name: result.project_name,
                   customer_name: result.company_name,
-                  scope_name: result.scope_name,
                 }
               : {
                   project_no: "",
+                  project_name: "",
                   customer_name: "",
-                  scope_name: "",
                 };
 
           return { ...row, wbs_header: value, ...derived };
@@ -407,7 +404,6 @@ export function ProjectUploadCard() {
         project_no: row.project_no.trim(),
         project_name: row.project_name.trim(),
         customer_name: row.customer_name.trim(),
-        scope_name: row.scope_name.trim(),
         instance_count: Number(row.instance_count.trim()),
         rework_date: row.rework_date.trim() || null,
       })),
@@ -442,10 +438,10 @@ export function ProjectUploadCard() {
                     Upload Design Project
                   </SheetTitle>
                   <SheetDescription>
-                    Enter a WBS Header per row — it auto-parses into Project Code, Scope, and Company.
+                    Enter a WBS Header per row. It auto-parses into Project Code, Project Name, and Company.
                     Format:{" "}
                     <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                      WBS-&#123;ProjectCode&#125;-&#123;ScopeName&#125;_&#123;CompanyName&#125;
+                      WBS-&#123;ProjectCode&#125;-&#123;ProjectName&#125;_&#123;CompanyName&#125;
                     </code>
                   </SheetDescription>
                 </SheetHeader>
@@ -457,7 +453,7 @@ export function ProjectUploadCard() {
                     <Textarea
                       value={pasteBuffer}
                       onChange={(event) => setPasteBuffer(event.target.value)}
-                      placeholder={"Project No\tProject Name\tCustomer Name\tScope Name\tInstance\tRework Date"}
+                      placeholder={"Project No\tProject Name\tCustomer Name\tInstance\tRework Date"}
                       className="min-h-24 resize-none font-mono text-xs"
                     />
                   </div>
@@ -627,7 +623,7 @@ export function ProjectUploadCard() {
       </CardHeader>
       <CardContent className="p-4 pt-2">
         <p className="text-xs text-muted-foreground">
-          WBS Header auto-fills Project Code, Scope, and Company. Rework Date is optional.
+          WBS Header auto-fills Project Code, Project Name, and Company. Rework Date is optional.
         </p>
       </CardContent>
     </Card>

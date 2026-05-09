@@ -77,7 +77,6 @@ async function deleteBatch(user, batchId, force = false) {
       targetId: batchId,
       metadata: {
         project_no: batch.project_no,
-        scope_name: batch.scope_name,
         uploaded_by_user_id: batch.uploaded_by_user_id,
         total_fixtures: batch.total_fixtures,
         force: true,
@@ -117,7 +116,6 @@ async function deleteBatch(user, batchId, force = false) {
     targetId: batchId,
     metadata: {
       project_no: batch.project_no,
-      scope_name: batch.scope_name,
       uploaded_by_user_id: batch.uploaded_by_user_id,
       total_fixtures: batch.total_fixtures,
     },

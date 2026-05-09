@@ -118,7 +118,6 @@ function mapTaskRow(row) {
   const fixtureNo = row.resolved_fixture_no || row.fixture_no || row.quantity_index || null;
   const projectName = row.resolved_project_name || row.project_name || row.project_description || null;
   const customerName = row.resolved_customer_name || row.customer_name || null;
-  const scopeName = row.resolved_scope_name || row.scope_name || null;
 
   return {
     id: row.id,
@@ -161,7 +160,6 @@ function mapTaskRow(row) {
     location_tag: row.location_tag,
     recurrence_rule: row.recurrence_rule,
     project_id: row.resolved_project_id || null,
-    scope_id: row.resolved_scope_id || null,
     fixture_id: row.resolved_fixture_id || null,
     project_no: projectNo,
     fixture_no: fixtureNo,
@@ -170,7 +168,6 @@ function mapTaskRow(row) {
     customer_name: customerName,
     company_name: customerName,
     project_description: row.project_description || null,
-    scope_name: scopeName,
     quantity_index: row.quantity_index || null,
     instance_count: row.instance_count === null || row.instance_count === undefined
       ? null

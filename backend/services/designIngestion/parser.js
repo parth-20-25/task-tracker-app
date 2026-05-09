@@ -79,16 +79,17 @@ function extractFileInfo(rawRows) {
   }
 
   const project_code = normalizePastedCell(match[1]);
-  const scope_name = normalizePastedCell(match[2]);
+  const project_name = normalizePastedCell(match[2]);
   const company_name = normalizePastedCell(match[3]);
 
-  if (!project_code || !scope_name || !company_name) {
-    throw new AppError(400, "Invalid WBS header format: project code, scope name, and company name are required.");
+  if (!project_code || !project_name || !company_name) {
+    throw new AppError(400, "Invalid WBS header format: project code, project name, and company name are required.");
   }
 
   return {
     project_code,
-    scope_name,
+    project_name,
+    project_name_display: project_name,
     company_name,
   };
 }
@@ -153,13 +154,8 @@ function isOpCell(value) {
   return /\bOP\b/i.test(text) || /\bOP\.?\s*NO\b/i.test(text);
 }
 
-function isScopeCell(value) {
-  const text = normalizePastedCell(value).toLowerCase();
-  const letters = text.replace(/[^a-z]/g, "");
-  return text.includes("parc scope")
-    || text.includes("customer scope")
-    || letters.includes("parcscope")
-    || letters.includes("customerscope");
+function isRemarkCell(_value) {
+  return false;
 }
 
 function isFixtureTypeCell(value) {
@@ -217,7 +213,6 @@ function isDataLikeRow(cells) {
   return cells.some((cell) => (
     isFixtureNumber(cell)
     || isOpCell(cell)
-    || isScopeCell(cell)
     || isFixtureTypeCell(cell)
     || isPositiveIntegerCell(cell)
   ));
@@ -238,7 +233,7 @@ function buildParsedRow(cells, rowNumber) {
 
   const remarkCell = cells
     .map((cell, index) => ({ cell, index }))
-    .find(({ cell }) => isScopeCell(cell));
+    .find(({ cell }) => isRemarkCell(cell));
 
   const ignoredIndexes = new Set();
   if (fixtureIndex >= 0) ignoredIndexes.add(fixtureIndex);

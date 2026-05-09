@@ -101,9 +101,9 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
         {!compact && (
           <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
             {task.customer_name && <span>Customer: {task.customer_name}</span>}
-            {(task.scope_name || (task.instance_count !== null && task.instance_count !== undefined)) && (
+            {(task.project_name || (task.instance_count !== null && task.instance_count !== undefined)) && (
               <span>
-                {task.scope_name || "Scope"}
+                {task.project_name || "Project"}
                 {task.instance_count !== null && task.instance_count !== undefined ? ` · Instance ${task.instance_count}` : ""}
               </span>
             )}

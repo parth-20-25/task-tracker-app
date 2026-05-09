@@ -177,16 +177,15 @@ function normalizeStagePayload(stage) {
   };
 }
 
-function buildFixtureKey(projectNo, scopeName, fixtureNo) {
+function buildFixtureKey(projectNo, fixtureNo) {
   const normalizedProjectNo = String(projectNo || "").trim();
-  const normalizedScopeName = String(scopeName || "").trim();
   const normalizedFixtureNo = String(fixtureNo || "").trim();
 
-  if (!normalizedProjectNo || !normalizedScopeName || !normalizedFixtureNo) {
+  if (!normalizedProjectNo || !normalizedFixtureNo) {
     throw new Error("Invalid fixture identity");
   }
 
-  return `${normalizedProjectNo}::${normalizedScopeName}::${normalizedFixtureNo}`;
+  return `${normalizedProjectNo}::${normalizedFixtureNo}`;
 }
 
 function deriveNormalizedStatus(row) {
@@ -236,14 +235,13 @@ function normalizeScopeReportData(rawRows = []) {
   return rawRows.reduce((normalizedRows, rawRow, index) => {
     try {
       const projectNo = String(rawRow?.project_no || "").trim();
-      const scopeName = String(rawRow?.scope_name || "").trim();
       const fixtureNo = String(rawRow?.fixture_no || "").trim();
       const stages = rawRow?.stages || {};
 
       const normalizedRow = {
-        fixture_key: buildFixtureKey(projectNo, scopeName, fixtureNo),
+        fixture_key: buildFixtureKey(projectNo, fixtureNo),
         project_no: projectNo,
-        scope_name: scopeName,
+        project_name: String(rawRow?.project_name || "").trim(),
         fixture_no: fixtureNo,
         op_no: String(rawRow?.op_no || "").trim(),
         part_name: String(rawRow?.part_name || "").trim(),
@@ -276,7 +274,6 @@ function normalizeScopeReportData(rawRows = []) {
         index,
         error: error.message,
         project_no: rawRow?.project_no || null,
-        scope_name: rawRow?.scope_name || null,
         fixture_no: rawRow?.fixture_no || null,
       });
     }
@@ -335,14 +332,13 @@ function validateNormalizedRow(row) {
 function buildReworkHistoryKey(row) {
   const departmentId = String(row.department_id || "").trim().toLowerCase();
   const projectNo = String(row.project_no || "").trim().toLowerCase();
-  const scopeName = String(row.scope_name || "").trim().toLowerCase();
   const instanceCode = String(row.instance_code || row.quantity_index || "").trim().toLowerCase();
 
-  if (!departmentId || !projectNo || !scopeName || !instanceCode) {
+  if (!departmentId || !projectNo || !instanceCode) {
     return null;
   }
 
-  return [departmentId, projectNo, scopeName, instanceCode].join("::");
+  return [departmentId, projectNo, instanceCode].join("::");
 }
 
 function mapReportRow(row) {
@@ -352,7 +348,6 @@ function mapReportRow(row) {
     project_description: row.project_name || row.project_description || "",
     customer_name: row.customer_name || "",
     priority: row.priority || "",
-    scope_name: row.scope_name || "",
     instance_code: row.instance_code || row.quantity_index || "",
     quantity_index: row.instance_count === null || row.instance_count === undefined || row.instance_count === ""
       ? row.instance_code || row.quantity_index || ""
@@ -380,38 +375,25 @@ async function buildReworkHistoryMap(reportRows) {
 
   const departmentIds = [...new Set(keyedRows.map((row) => String(row.department_id).trim()).filter(Boolean))];
   const projectNos = [...new Set(keyedRows.map((row) => String(row.project_no).trim()).filter(Boolean))];
-  const scopeNames = [...new Set(keyedRows.map((row) => String(row.scope_name).trim()).filter(Boolean))];
   const instanceCodes = [...new Set(
     keyedRows.map((row) => String(row.instance_code || row.quantity_index || "").trim()).filter(Boolean),
   )];
 
-  if (departmentIds.length === 0 || projectNos.length === 0 || scopeNames.length === 0 || instanceCodes.length === 0) {
+  if (departmentIds.length === 0 || projectNos.length === 0 || instanceCodes.length === 0) {
     return new Map();
   }
 
   const result = await pool.query(
     `
       SELECT
-        dp.department_id,
-        dp.project_no,
-        ds.scope_name,
-        di.instance_code,
-        dr.planned_date,
-        dr.created_at
-      FROM design.reworks dr
-      JOIN design.instances di
-        ON di.id = dr.instance_id
-      JOIN design.scopes ds
-        ON ds.id = di.scope_id
-      JOIN design.projects dp
-        ON dp.id = ds.project_id
-      WHERE dp.department_id = ANY($1::text[])
-        AND dp.project_no = ANY($2::text[])
-        AND ds.scope_name = ANY($3::text[])
-        AND di.instance_code = ANY($4::text[])
-      ORDER BY dr.planned_date ASC, dr.created_at ASC
+        NULL::text AS department_id,
+        NULL::text AS project_no,
+        NULL::text AS instance_code,
+        NULL::date AS planned_date,
+        NULL::timestamptz AS created_at
+      WHERE FALSE
     `,
-    [departmentIds, projectNos, scopeNames, instanceCodes],
+    [],
   );
 
   return result.rows.reduce((historyMap, row) => {
@@ -521,7 +503,6 @@ async function listTaskReportRows(user, filters = {}) {
         COALESCE(t.project_description, '') AS project_description,
         COALESCE(t.customer_name, '') AS customer_name,
         COALESCE(t.priority, '') AS priority,
-        COALESCE(t.scope_name, '') AS scope_name,
         COALESCE(t.quantity_index, '') AS instance_code,
         COALESCE(t.quantity_index, '') AS quantity_index,
         t.instance_count AS instance_count,
@@ -564,7 +545,6 @@ async function exportTaskReport(user, filters = {}) {
       { key: "project_name", label: "Project Name" },
       { key: "customer_name", label: "Customer Name" },
       { key: "priority", label: "Priority" },
-      { key: "scope_name", label: "Scope Name" },
       { key: "instance_code", label: "Instance Code" },
       { key: "workflow_stage", label: "Workflow Stage" },
       { key: "assigned_by_name", label: "Assigned By" },
@@ -586,7 +566,6 @@ async function listWorkflowCompletionSummary(user) {
 
   whereClauses.push("t.status <> 'cancelled'");
   whereClauses.push("COALESCE(t.project_no, '') <> ''");
-  whereClauses.push("COALESCE(t.scope_name, '') <> ''");
 
   const result = await pool.query(
     `
@@ -597,7 +576,6 @@ async function listWorkflowCompletionSummary(user) {
         COALESCE(t.project_no, '') AS project_no,
         COALESCE(t.project_name, t.project_description, '') AS project_name,
         COALESCE(t.customer_name, '') AS customer_name,
-        COALESCE(t.scope_name, '') AS scope_name,
         COALESCE(fixture.fixture_no, NULLIF(t.quantity_index, '')) AS fixture_no,
         COALESCE(fixture.fixture_no, NULLIF(t.quantity_index, ''), t.instance_count::text, t.id::text) AS instance_key,
         COALESCE(t.lifecycle_status, 'assigned') AS lifecycle_status,
@@ -610,14 +588,11 @@ async function listWorkflowCompletionSummary(user) {
       LEFT JOIN design.projects project
         ON project.project_no = NULLIF(t.project_no, '')
         AND project.department_id = t.department_id
-      LEFT JOIN design.scopes project_scope
-        ON project_scope.project_id = project.id
-        AND project_scope.scope_name = NULLIF(t.scope_name, '')
       LEFT JOIN design.fixtures fixture
         ON fixture.id = t.fixture_id
         OR (
           t.fixture_id IS NULL
-          AND fixture.scope_id = project_scope.id
+          AND fixture.project_id = project.id
           AND fixture.fixture_no = NULLIF(t.quantity_index, '')
         )
       LEFT JOIN workflow_stages current_stage
@@ -639,7 +614,7 @@ async function listWorkflowCompletionSummary(user) {
         LIMIT 1
       ) last_stage ON TRUE
       ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : ""}
-      ORDER BY t.project_no ASC, t.scope_name ASC, t.instance_count ASC NULLS LAST, t.id ASC
+      ORDER BY t.project_no ASC, t.instance_count ASC NULLS LAST, t.id ASC
     `,
     params,
   );
@@ -648,8 +623,8 @@ async function listWorkflowCompletionSummary(user) {
 
   for (const row of result.rows) {
     const projectKey = `${row.department_id}::${row.project_no}`;
-    const scopeKey = `${projectKey}::${row.scope_name}`;
-    const instanceKey = `${scopeKey}::${row.instance_key}`;
+    const fixtureKey = `${projectKey}::${row.fixture_no || row.instance_key}`;
+    const instanceKey = `${fixtureKey}::${row.instance_key}`;
     const instanceComplete = row.lifecycle_status === "completed" && Number(row.current_stage_order) === Number(row.last_stage_order);
     const movedBeyondFirstStage = Number(row.current_stage_order) > Number(row.first_stage_order);
     const instanceStarted = movedBeyondFirstStage || !["assigned", null, undefined].includes(row.lifecycle_status);
@@ -665,28 +640,28 @@ async function listWorkflowCompletionSummary(user) {
         customer_name: row.customer_name,
         total_instances: 0,
         completed_instances: 0,
-        total_scopes: 0,
-        completed_scopes: 0,
+        total_fixtures: 0,
+        completed_fixtures: 0,
         all_instances_completed: true,
         any_instance_started: false,
         any_instance_beyond_first_stage: false,
-        scopes: [],
+        fixtures: [],
       };
       projectMap.set(projectKey, project);
     }
 
-    let scope = project.scopes.find((entry) => entry.scope_key === scopeKey);
-    if (!scope) {
-      scope = {
-        scope_key: scopeKey,
-        scope_name: row.scope_name,
+    let fixture = project.fixtures.find((entry) => entry.fixture_key === fixtureKey);
+    if (!fixture) {
+      fixture = {
+        fixture_key: fixtureKey,
+        fixture_no: row.fixture_no || null,
         total_instances: 0,
         completed_instances: 0,
         is_complete: true,
         any_instance_started: false,
         any_instance_beyond_first_stage: false,
       };
-      project.scopes.push(scope);
+      project.fixtures.push(fixture);
     }
 
     const normalizedFixtureNo = typeof row.fixture_no === "string" && row.fixture_no.trim()
@@ -694,61 +669,53 @@ async function listWorkflowCompletionSummary(user) {
       : null;
 
     if (normalizedFixtureNo) {
-      if (scope.fixture_no_conflict) {
-        scope.fixture_no = null;
-      } else if (!scope.fixture_no) {
-        scope.fixture_no = normalizedFixtureNo;
-      } else if (scope.fixture_no !== normalizedFixtureNo) {
-        scope.fixture_no = null;
-        scope.fixture_no_conflict = true;
-      }
+      fixture.fixture_no = normalizedFixtureNo;
     }
 
     project.total_instances += 1;
-    scope.total_instances += 1;
+    fixture.total_instances += 1;
 
     if (instanceComplete) {
       project.completed_instances += 1;
-      scope.completed_instances += 1;
+      fixture.completed_instances += 1;
     } else {
       project.all_instances_completed = false;
-      scope.is_complete = false;
+      fixture.is_complete = false;
     }
 
     if (instanceStarted) {
       project.any_instance_started = true;
-      scope.any_instance_started = true;
+      fixture.any_instance_started = true;
     }
 
     if (movedBeyondFirstStage) {
       project.any_instance_beyond_first_stage = true;
-      scope.any_instance_beyond_first_stage = true;
+      fixture.any_instance_beyond_first_stage = true;
     }
   }
 
   const projects = [...projectMap.values()].map((project) => {
-    const scopes = project.scopes.map((scope) => {
-      const isComplete = scope.completed_instances === scope.total_instances;
+    const fixtures = project.fixtures.map((fixture) => {
+      const isComplete = fixture.completed_instances === fixture.total_instances;
       const status = isComplete
         ? "GREEN"
-        : scope.any_instance_started
+        : fixture.any_instance_started
           ? "YELLOW"
           : "RED";
 
       return {
-        scope_key: scope.scope_key,
-        scope_name: scope.scope_name,
-        total_instances: scope.total_instances,
-        completed_instances: scope.completed_instances,
-        any_instance_started: scope.any_instance_started,
-        any_instance_beyond_first_stage: scope.any_instance_beyond_first_stage,
-        fixture_no: scope.fixture_no || null,
+        fixture_key: fixture.fixture_key,
+        total_instances: fixture.total_instances,
+        completed_instances: fixture.completed_instances,
+        any_instance_started: fixture.any_instance_started,
+        any_instance_beyond_first_stage: fixture.any_instance_beyond_first_stage,
+        fixture_no: fixture.fixture_no || null,
         is_complete: isComplete,
         status,
       };
     });
-    const completedScopes = scopes.filter((scope) => scope.is_complete).length;
-    const isComplete = completedScopes === scopes.length && scopes.length > 0;
+    const completedFixtures = fixtures.filter((fixture) => fixture.is_complete).length;
+    const isComplete = completedFixtures === fixtures.length && fixtures.length > 0;
     const status = isComplete
       ? "GREEN"
       : project.any_instance_started
@@ -764,13 +731,13 @@ async function listWorkflowCompletionSummary(user) {
       customer_name: project.customer_name,
       total_instances: project.total_instances,
       completed_instances: project.completed_instances,
-      total_scopes: scopes.length,
-      completed_scopes: completedScopes,
+      total_fixtures: fixtures.length,
+      completed_fixtures: completedFixtures,
       is_complete: isComplete,
       status,
       any_instance_started: project.any_instance_started,
       any_instance_beyond_first_stage: project.any_instance_beyond_first_stage,
-      scopes,
+      fixtures,
     };
   });
 

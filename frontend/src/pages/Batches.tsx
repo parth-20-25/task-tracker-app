@@ -183,7 +183,7 @@ export default function Batches() {
                     <TableCell>{formatDateTime(batch.created_at)}</TableCell>
                     <TableCell>
                       <div className="font-medium">{batch.project_no}</div>
-                      <div className="text-xs text-muted-foreground">{batch.scope_name}</div>
+                      <div className="text-xs text-muted-foreground">{batch.project_name}</div>
                     </TableCell>
                     <TableCell>{batch.total_fixtures}</TableCell>
                     <TableCell>
@@ -242,8 +242,8 @@ export default function Batches() {
                 <span>{selectedBatch.project_no}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <span className="text-muted-foreground">Scope</span>
-                <span>{selectedBatch.scope_name}</span>
+                <span className="text-muted-foreground">Project Name</span>
+                <span>{selectedBatch.project_name}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Uploaded By</span>

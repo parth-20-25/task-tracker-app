@@ -420,7 +420,7 @@ async function listFixtureRevisions(fixtureId, departmentId, client = pool) {
 }
 
 /**
- * Returns the fixture's department_id by joining through scopes → projects.
+ * Returns the fixture's department_id by joining directly through projects.
  */
 async function getFixtureWithDepartment(fixtureId, fallbackDepartmentId = null, client = pool) {
   if (fallbackDepartmentId) {
@@ -430,8 +430,7 @@ async function getFixtureWithDepartment(fixtureId, fallbackDepartmentId = null, 
   const result = await client.query(
     `SELECT df.id AS fixture_id, dp.department_id
      FROM design.fixtures df
-     JOIN design.scopes ds ON ds.id = df.scope_id
-     JOIN design.projects dp ON dp.id = ds.project_id
+     JOIN design.projects dp ON dp.id = df.project_id
      WHERE df.id = $1
      LIMIT 1`,
     [fixtureId],
@@ -444,17 +443,14 @@ async function getFixtureWorkflowContext(fixtureId, client = pool) {
     `SELECT
        df.id AS fixture_id,
        df.fixture_no,
-       df.scope_id,
-       ds.scope_name,
-       ds.project_id,
+       df.project_id,
        dp.project_no,
        dp.project_name,
        dp.department_id,
        df.revision_no,
        df.is_legacy_workflow
      FROM design.fixtures df
-     JOIN design.scopes ds ON ds.id = df.scope_id
-     JOIN design.projects dp ON dp.id = ds.project_id
+     JOIN design.projects dp ON dp.id = df.project_id
      WHERE df.id = $1
      LIMIT 1`,
     [fixtureId],
@@ -463,49 +459,42 @@ async function getFixtureWorkflowContext(fixtureId, client = pool) {
   return result.rows[0] || null;
 }
 
-async function resolveFixtureByCanonicalIdentity({ project_id, scope_id, fixture_no }, departmentId, client = pool) {
-  if (!project_id || !scope_id || !fixture_no || !departmentId) {
+async function resolveFixtureByCanonicalIdentity({ project_id, fixture_no }, departmentId, client = pool) {
+  if (!project_id || !fixture_no || !departmentId) {
     return null;
   }
 
+  // Canonical lookup: (project_id + fixture_no)
   const result = await client.query(
     `SELECT
        df.id AS fixture_id,
        df.fixture_no,
-       df.scope_id,
-       ds.scope_name,
-       ds.project_id,
+       df.project_id,
        dp.project_no,
        dp.project_name,
        dp.department_id
      FROM design.fixtures df
-     JOIN design.scopes ds ON ds.id = df.scope_id
-     JOIN design.projects dp ON dp.id = ds.project_id
+     JOIN design.projects dp ON dp.id = df.project_id
      WHERE df.project_id = $1
-       AND df.scope_id = $2
-       AND df.fixture_no = $3
-       AND dp.department_id = $4
+       AND df.fixture_no = $2
+       AND dp.department_id = $3
      LIMIT 1`,
-    [project_id, scope_id, fixture_no, departmentId],
+    [project_id, fixture_no, departmentId],
   );
 
   return result.rows[0] || null;
 }
 
-/**
- * Lists fixtures for a scope that are NOT fully completed, for the given department.
- */
-async function listAssignableFixtures(departmentId, scopeId, client = pool) {
+async function listAssignableFixtures(departmentId, projectId, client = pool) {
   const result = await client.query(
-    `SELECT df.id, df.scope_id, df.fixture_no, df.op_no, df.part_name, df.fixture_type, df.qty
+    `SELECT df.id, df.project_id, df.fixture_no, df.op_no, df.part_name, df.fixture_type, df.qty
      FROM design.fixtures df
-     JOIN design.scopes ds ON ds.id = df.scope_id
-     JOIN design.projects dp ON dp.id = ds.project_id
-     WHERE df.scope_id = $1
+     JOIN design.projects dp ON dp.id = df.project_id
+     WHERE df.project_id = $1
        AND dp.department_id = $2
        AND df.is_workflow_complete = FALSE
      ORDER BY df.fixture_no ASC, df.id ASC`,
-    [scopeId, departmentId],
+    [projectId, departmentId],
   );
   return result.rows;
 }

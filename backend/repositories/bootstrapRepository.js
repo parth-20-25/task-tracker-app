@@ -112,7 +112,6 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_description TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_name TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS customer_name TEXT`,
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope_name TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS quantity_index TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS instance_count INTEGER`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS rework_date DATE`,
@@ -124,7 +123,6 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS sla_due_date TIMESTAMPTZ`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS rejection_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id UUID`,
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope_id UUID`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fixture_id UUID`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fixture_no TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stage TEXT`,
@@ -222,10 +220,18 @@ async function ensureTasksTable(client) {
     ON tasks (assigned_user_id, approved_at)
   `, "idx_tasks_assigned_user_approved_at");
 
+  await client.query(`DROP INDEX IF EXISTS idx_tasks_project_scope_fixture_identity`);
+
   await safeCreateIndex(client, `
-    CREATE INDEX IF NOT EXISTS idx_tasks_project_scope_fixture_identity
-    ON tasks (project_id, scope_id, fixture_no)
-  `, "idx_tasks_project_scope_fixture_identity");
+    CREATE INDEX IF NOT EXISTS idx_tasks_project_fixture_identity
+    ON tasks (project_id, fixture_no)
+  `, "idx_tasks_project_fixture_identity");
+
+  await client.query(`
+    ALTER TABLE tasks
+    DROP COLUMN IF EXISTS scope_id,
+    DROP COLUMN IF EXISTS scope_name
+  `);
 
   await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_tasks_task_type_department
@@ -297,27 +303,19 @@ async function ensureTasksTable(client) {
     )
     AND EXISTS (
       SELECT 1 FROM information_schema.tables 
-      WHERE table_schema = 'design' AND table_name = 'scopes'
-    )
-    AND EXISTS (
-      SELECT 1 FROM information_schema.tables 
       WHERE table_schema = 'design' AND table_name = 'fixtures'
     )
     THEN
 
       UPDATE tasks t
       SET project_id = COALESCE(t.project_id, p.id),
-          scope_id = COALESCE(t.scope_id, s.id),
           fixture_no = COALESCE(NULLIF(t.fixture_no, ''), f.fixture_no)
       FROM design.projects p
-      JOIN design.scopes s ON s.project_id = p.id
-      JOIN design.fixtures f ON f.scope_id = s.id
+      JOIN design.fixtures f ON f.project_id = p.id
       WHERE t.project_id IS NULL
-        AND t.scope_id IS NULL
         AND COALESCE(t.fixture_no, '') = ''
         AND p.department_id = t.department_id
         AND p.project_no = t.project_no
-        AND s.scope_name = t.scope_name
         AND f.fixture_no = t.quantity_index;
 
     END IF;
@@ -1047,7 +1045,6 @@ async function ensureReferenceTables(client) {
         instance_count INTEGER NOT NULL DEFAULT 0,
         rework_date DATE,
         project_description TEXT NOT NULL DEFAULT '',
-        scope_name TEXT NOT NULL DEFAULT '',
         quantity_index TEXT NOT NULL DEFAULT '',
         department_id TEXT NOT NULL REFERENCES departments(id),
         uploaded_by VARCHAR(50),
@@ -1060,10 +1057,12 @@ async function ensureReferenceTables(client) {
     DROP INDEX IF EXISTS public.idx_projects_department_unique_record
   `);
 
+  await client.query(`DROP INDEX IF EXISTS idx_projects_department_project_scope`);
+
   await safeCreateIndex(client, `
-    CREATE INDEX IF NOT EXISTS idx_projects_department_project_scope
-    ON projects (department_id, project_no, scope_name)
-  `, "idx_projects_department_project_scope");
+    CREATE INDEX IF NOT EXISTS idx_projects_department_project
+    ON projects (department_id, project_no)
+  `, "idx_projects_department_project");
 
   await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_projects_department_created_at
@@ -1082,7 +1081,7 @@ async function ensureReferenceTables(client) {
 
   await client.query(`
     ALTER TABLE projects
-    ADD COLUMN IF NOT EXISTS scope_name TEXT NOT NULL DEFAULT ''
+    DROP COLUMN IF EXISTS scope_name
   `);
 
   await client.query(`

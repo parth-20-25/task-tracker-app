@@ -9,11 +9,10 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get("/overview", asyncHandler(async (req, res) => {
-  const { departmentId, userId, scopeId, projectId, startDate, endDate } = req.query;
+  const { departmentId, userId, projectId, startDate, endDate } = req.query;
   const filters = {
     departmentId,
     userId,
-    scopeId,
     projectId,
     startDate,
     endDate,

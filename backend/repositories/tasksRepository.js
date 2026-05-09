@@ -35,12 +35,10 @@ function taskSelectQuery(whereClause = "") {
     SELECT
       t.*,
       project.id AS resolved_project_id,
-      scope.id AS resolved_scope_id,
       fixture.id AS resolved_fixture_id,
       COALESCE(project.project_no, NULLIF(t.project_no, '')) AS resolved_project_no,
       COALESCE(project.project_name, NULLIF(t.project_name, ''), NULLIF(t.project_description, '')) AS resolved_project_name,
       COALESCE(project.customer_name, NULLIF(t.customer_name, '')) AS resolved_customer_name,
-      COALESCE(scope.scope_name, NULLIF(t.scope_name, '')) AS resolved_scope_name,
       COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
       t.workflow_id,
       t.current_stage_id,
@@ -71,20 +69,11 @@ function taskSelectQuery(whereClause = "") {
         AND project.project_no = NULLIF(t.project_no, '')
         AND project.department_id = t.department_id
       )
-    LEFT JOIN design.scopes scope
-      ON (
-        t.scope_id IS NOT NULL
-        AND scope.id = t.scope_id
-      ) OR (
-        t.scope_id IS NULL
-        AND scope.project_id = project.id
-        AND scope.scope_name = NULLIF(t.scope_name, '')
-      )
     LEFT JOIN design.fixtures fixture
       ON fixture.id = t.fixture_id
       OR (
         t.fixture_id IS NULL
-        AND fixture.scope_id = COALESCE(t.scope_id, scope.id)
+        AND fixture.project_id = project.id
         AND fixture.fixture_no = COALESCE(NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, ''))
       )
     LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
@@ -180,11 +169,10 @@ async function findTaskById(taskId, client = pool) {
 async function listTasksForWorkflowInstance({
   departmentId,
   projectNo,
-  scopeName,
   instanceCode,
   instanceIndex,
 }, client = pool) {
-  if (!departmentId || !projectNo || !scopeName || !instanceCode) {
+  if (!departmentId || !projectNo || !instanceCode) {
     return [];
   }
 
@@ -198,14 +186,13 @@ async function listTasksForWorkflowInstance({
       ${taskSelectQuery(`
         WHERE t.department_id = $1
           AND t.project_no = $2
-          AND t.scope_name = $3
-          AND t.quantity_index = $4
-          AND t.instance_count = $5
+          AND t.quantity_index = $3
+          AND t.instance_count = $4
           AND t.status <> 'cancelled'
       `)}
       ORDER BY t.created_at ASC, t.id ASC
     `,
-    [departmentId, projectNo, scopeName, instanceCode, parsedInstanceIndex],
+    [departmentId, projectNo, instanceCode, parsedInstanceIndex],
   );
 
   return result.rows.map((row) => mapTaskRow(row));
@@ -248,14 +235,12 @@ async function insertTask(task, client = pool) {
         current_stage_id,
         lifecycle_status,
         project_id,
-        scope_id,
         fixture_id,
         fixture_no,
         project_no,
         project_name,
         customer_name,
         project_description,
-        scope_name,
         quantity_index,
         instance_count,
         rework_date,
@@ -270,8 +255,8 @@ async function insertTask(task, client = pool) {
       VALUES (
         $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), $14,
         $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24, $25::jsonb, $26, $27, $28,
-        $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45,
-        $46, $47, $48, $49, NOW()
+        $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43,
+        $44, $45, $46, $47, NOW()
       )
       RETURNING id
     `;
@@ -308,14 +293,12 @@ async function insertTask(task, client = pool) {
     task.current_stage_id,
     task.lifecycle_status || deriveLifecycleStatus(task.status),
     task.project_id || null,
-    task.scope_id || null,
     task.fixture_id || null,
     task.fixture_no || null,
     task.project_no || null,
     task.project_name || null,
     task.customer_name || null,
     task.project_description || null,
-    task.scope_name || null,
     task.quantity_index || null,
     task.instance_count ?? null,
     task.rework_date || null,

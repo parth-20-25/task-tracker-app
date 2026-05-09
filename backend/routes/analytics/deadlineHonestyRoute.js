@@ -15,12 +15,11 @@ router.use(authenticate);
  * delay origin by stage, and per-designer planning behaviour.
  *
  * Query params:
- *   scopeId   – filter to a single scope
- *   projectId – filter to a project (all scopes)
+ *   projectId – filter to a project
  */
 router.get("/deadline-honesty", asyncHandler(async (req, res) => {
-  const { scopeId, projectId, departmentId, userId, startDate, endDate } = req.query;
-  const filters = { scopeId, projectId, departmentId, userId, startDate, endDate };
+  const { projectId, departmentId, userId, startDate, endDate } = req.query;
+  const filters = { projectId, departmentId, userId, startDate, endDate };
   const data = await getDeadlineHonesty(filters, req.user);
   return sendSuccess(res, data);
 }));

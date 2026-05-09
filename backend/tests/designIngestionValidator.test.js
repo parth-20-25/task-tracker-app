@@ -12,7 +12,7 @@ function runTest(name, fn) {
   }
 }
 
-runTest("accepts explicit PARC scope rows", () => {
+runTest("accepts rows without classifying remarks", () => {
   const result = validateParsedData([
     {
       excel_row: 8,
@@ -34,12 +34,11 @@ runTest("accepts explicit PARC scope rows", () => {
   assert.equal(result.validRows[0].row_reference, "1");
   assert.equal(result.validRows[0].excel_row, 8);
   assert.equal(result.validRows[0].row_reference_source, "business_serial");
-  assert.equal(result.validRows[0].scope_status, "PARC");
   assert.equal(result.skippedRows.length, 0);
   assert.equal(result.rejectedRows.length, 0);
 });
 
-runTest("skips explicit customer scope rows", () => {
+runTest("accepts rows even when remarks previously looked like customer labels", () => {
   const result = validateParsedData([
     {
       excel_row: 9,
@@ -53,12 +52,12 @@ runTest("skips explicit customer scope rows", () => {
     },
   ]);
 
-  assert.equal(result.validRows.length, 0);
-  assert.equal(result.skippedRows.length, 1);
-  assert.match(result.skippedRows[0].skip_reason, /Customer scope/i);
+  assert.equal(result.validRows.length, 1);
+  assert.equal(result.skippedRows.length, 0);
+  assert.equal(result.rejectedRows.length, 0);
 });
 
-runTest("keeps ambiguous scope rows pending explicit decision", () => {
+runTest("accepts rows with blank remarks without classification", () => {
   const result = validateParsedData([
     {
       excel_row: 10,
@@ -73,8 +72,7 @@ runTest("keeps ambiguous scope rows pending explicit decision", () => {
   ]);
 
   assert.equal(result.validRows.length, 1);
-  assert.equal(result.validRows[0].scope_status, "AMBIGUOUS");
-  assert.match(result.validRows[0].scope_reason, /clearly defined scope/i);
+  assert.equal(result.skippedRows.length, 0);
 });
 
 runTest("does not reject rows only because parser confidence is low", () => {

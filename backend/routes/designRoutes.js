@@ -28,7 +28,6 @@ const {
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
-  listDesignScopesForUser,
   uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
 
@@ -62,17 +61,9 @@ router.get(
 );
 
 router.get(
-  "/design/scopes",
-  asyncHandler(async (req, res) => {
-    const scopes = await listDesignScopesForUser(req.user, req.query.project_id, req.query.department_id);
-    return sendSuccess(res, scopes);
-  }),
-);
-
-router.get(
   "/design/fixtures",
   asyncHandler(async (req, res) => {
-    const fixtures = await listDesignFixturesForUser(req.user, req.query.scope_id, req.query.department_id);
+    const fixtures = await listDesignFixturesForUser(req.user, req.query.project_id, req.query.department_id);
     return sendSuccess(res, fixtures);
   }),
 );

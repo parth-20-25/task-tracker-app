@@ -153,7 +153,7 @@ function resolveTaskTypeFromPayload(payload) {
     return normalizedTaskType;
   }
 
-  if (payload.workflow_template_id || payload.project_id || payload.scope_id || payload.fixture_id || payload.current_stage_id) {
+  if (payload.workflow_template_id || payload.project_id || payload.fixture_id || payload.current_stage_id) {
     return TASK_TYPES.DEPARTMENT_WORKFLOW;
   }
 
@@ -486,50 +486,41 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
 async function resolveFixtureContextForTask({
   departmentId,
   projectId = null,
-  scopeId = null,
   fixtureId = null,
   fixtureNo = null,
   projectNo = null,
-  scopeName = null,
   quantityIndex = null,
   currentStageId,
 }) {
   const normalizedProjectId = String(projectId || "").trim() || null;
-  const normalizedScopeId = String(scopeId || "").trim() || null;
   const normalizedFixtureId = String(fixtureId || "").trim() || null;
   const normalizedFixtureNo = String(fixtureNo || quantityIndex || "").trim() || null;
   const normalizedProjectNo = String(projectNo || "").trim() || null;
-  const normalizedScopeName = String(scopeName || "").trim() || null;
 
-  if (normalizedFixtureId || (normalizedProjectId && normalizedScopeId && normalizedFixtureNo)) {
+  if (normalizedFixtureId || (normalizedProjectId && normalizedFixtureNo)) {
     const canonicalFixtureContext = await pool.query(
       `
         SELECT
           f.id AS fixture_id,
           f.project_id,
-          f.scope_id,
           f.fixture_no,
           p.project_no,
-          s.scope_name,
           COALESCE(NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id) AS stage_name
         FROM design.fixtures f
-        JOIN design.scopes s ON s.id = f.scope_id
-        JOIN design.projects p ON p.id = s.project_id
-        LEFT JOIN workflow_stages ws ON ws.id = $5
+        JOIN design.projects p ON p.id = f.project_id
+        LEFT JOIN workflow_stages ws ON ws.id = $4
         WHERE p.department_id = $1
           AND ($2::uuid IS NULL OR p.id = $2::uuid)
-          AND ($3::uuid IS NULL OR s.id = $3::uuid)
-          AND ($4::uuid IS NULL OR f.id = $4::uuid)
-          AND ($6::text IS NULL OR f.fixture_no = $6)
+          AND ($3::uuid IS NULL OR f.id = $3::uuid)
+          AND ($5::text IS NULL OR f.fixture_no = $5)
         ORDER BY
-          CASE WHEN $4::uuid IS NOT NULL AND f.id = $4::uuid THEN 0 ELSE 1 END,
+          CASE WHEN $3::uuid IS NOT NULL AND f.id = $3::uuid THEN 0 ELSE 1 END,
           f.id ASC
         LIMIT 1
       `,
       [
         departmentId,
         normalizedProjectId,
-        normalizedScopeId,
         normalizedFixtureId,
         currentStageId,
         normalizedFixtureNo,
@@ -541,28 +532,24 @@ async function resolveFixtureContextForTask({
     }
   }
 
-  if (normalizedProjectNo && normalizedScopeName && normalizedFixtureNo) {
+  if (normalizedProjectNo && normalizedFixtureNo) {
     const legacyFixtureContext = await pool.query(
       `
         SELECT
           f.id AS fixture_id,
           f.project_id,
-          f.scope_id,
           f.fixture_no,
           p.project_no,
-          s.scope_name,
           COALESCE(NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id) AS stage_name
         FROM design.fixtures f
-        JOIN design.scopes s ON s.id = f.scope_id
-        JOIN design.projects p ON p.id = s.project_id
-        LEFT JOIN workflow_stages ws ON ws.id = $5
+        JOIN design.projects p ON p.id = f.project_id
+        LEFT JOIN workflow_stages ws ON ws.id = $4
         WHERE p.department_id = $1
           AND p.project_no = $2
-          AND s.scope_name = $3
-          AND f.fixture_no = $4
+          AND f.fixture_no = $3
         LIMIT 1
       `,
-      [departmentId, normalizedProjectNo, normalizedScopeName, normalizedFixtureNo, currentStageId],
+      [departmentId, normalizedProjectNo, normalizedFixtureNo, currentStageId],
     );
 
     return legacyFixtureContext.rows[0] || null;
@@ -592,14 +579,12 @@ async function createTaskForUser(user, payload = {}) {
     recurrence_rule: recurrenceRule = null,
     dependency_ids: dependencyIds = [],
     project_id: projectId = null,
-    scope_id: scopeId = null,
     fixture_id: payloadFixtureId = null,
     fixture_no: payloadFixtureNo = null,
     project_no: projectNo = null,
     project_name: projectName = null,
     customer_name: customerName = null,
     project_description: projectDescription = null,
-    scope_name: scopeName = null,
     quantity_index: quantityIndex = null,
     instance_count: instanceCount = null,
     current_stage_id: currentStageId = null,
@@ -611,7 +596,7 @@ async function createTaskForUser(user, payload = {}) {
   const normalizedTags = normalizeTags(requestedTags);
   const normalizedSource = normalizeTaskSource(
     requestedSource,
-    taskType === TASK_TYPES.DEPARTMENT_WORKFLOW && (projectId || scopeId || payloadFixtureId || currentStageId)
+    taskType === TASK_TYPES.DEPARTMENT_WORKFLOW && (projectId || payloadFixtureId || currentStageId)
       ? TASK_SOURCES.WORKFLOW_AUTO
       : TASK_SOURCES.ADMIN_MANUAL,
   );
@@ -634,7 +619,7 @@ async function createTaskForUser(user, payload = {}) {
   const resolvedTaskStatus = TASK_STATUSES.ASSIGNED;
   const legacyWorkflowManaged = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
     && !workflowTemplateId
-    && Boolean(projectId || scopeId || payloadFixtureId || currentStageId || projectNo || scopeName || quantityIndex);
+    && Boolean(projectId || payloadFixtureId || currentStageId || projectNo || quantityIndex);
   const resolvedDepartmentId = String(
     requestedDepartmentId
     || (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW ? primaryAssignee.department_id || user.department_id || "" : requestedDepartmentId || ""),
@@ -725,11 +710,9 @@ async function createTaskForUser(user, payload = {}) {
     ? await resolveFixtureContextForTask({
       departmentId: resolvedDepartmentId,
       projectId,
-      scopeId,
       fixtureId: payloadFixtureId,
       fixtureNo: payloadFixtureNo,
       projectNo,
-      scopeName,
       quantityIndex,
       currentStageId: resolvedCurrentStageId,
     })
@@ -737,10 +720,8 @@ async function createTaskForUser(user, payload = {}) {
 
   const fixtureId = fixtureContext?.fixture_id || null;
   const resolvedProjectId = fixtureContext?.project_id || (projectId ? String(projectId).trim() : null);
-  const resolvedScopeId = fixtureContext?.scope_id || (scopeId ? String(scopeId).trim() : null);
   const resolvedFixtureNo = fixtureContext?.fixture_no || payloadFixtureNo || quantityIndex || null;
   const resolvedProjectNo = fixtureContext?.project_no || projectNo;
-  const resolvedScopeName = fixtureContext?.scope_name || scopeName;
   const stage = fixtureContext?.stage_name || null;
 
   if (fixtureId && stage) {
@@ -757,7 +738,6 @@ async function createTaskForUser(user, payload = {}) {
   const internalIdentifier = generateInternalTaskIdentifier({
     departmentId: resolvedDepartmentId || user.department_id || taskType,
     projectNo: resolvedProjectNo || workflowTemplate?.template_name || String(title || "").trim() || taskType,
-    scopeName: resolvedScopeName || null,
     instanceCount,
   });
   const escalationSchedule = await getEscalationSchedule({
@@ -802,14 +782,12 @@ async function createTaskForUser(user, payload = {}) {
     current_stage_id: resolvedCurrentStageId,
     lifecycle_status: resolvedTaskStatus,
     project_id: resolvedProjectId,
-    scope_id: resolvedScopeId,
     fixture_id: fixtureId,
     fixture_no: resolvedFixtureNo,
     project_no: resolvedProjectNo,
     project_name: projectName,
     customer_name: customerName,
     project_description: projectDescription,
-    scope_name: resolvedScopeName,
     quantity_index: quantityIndex,
     instance_count: instanceCount,
     rework_date: reworkDate,
@@ -846,8 +824,8 @@ async function createTaskForUser(user, payload = {}) {
   return task;
 }
 
-function generateInternalTaskIdentifier({ departmentId, projectNo, scopeName, instanceCount }) {
-  const prefix = [departmentId, projectNo, scopeName, instanceCount]
+function generateInternalTaskIdentifier({ departmentId, projectNo, instanceCount }) {
+  const prefix = [departmentId, projectNo, instanceCount]
     .filter(Boolean)
     .map((part) => String(part).trim().replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, ""))
     .filter(Boolean)
@@ -1362,14 +1340,12 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
         task_id: task.id,
         fixture_id: task.fixture_id,
         project_id: task.project_id,
-        scope_id: task.scope_id,
         fixture_no: task.fixture_no,
         department_id: task.department_id,
       });
 
       await advanceWorkflowAfterTaskApproval({
         project_id: task.project_id,
-        scope_id: task.scope_id,
         fixture_no: task.fixture_no,
         department_id: task.department_id,
         fixture_id: task.fixture_id,

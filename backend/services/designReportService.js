@@ -42,7 +42,6 @@ const STAGE_STATUS_COLORS = {
 };
 
 const REPORT_TYPES = {
-  SCOPE: "scope",
   PROJECT: "project",
 };
 
@@ -688,16 +687,14 @@ function autoSizeColumns(worksheet) {
 }
 
 function buildReportTitle(context) {
-  const middleSegment = context.reportType === REPORT_TYPES.PROJECT
-    ? context.project_name
-    : context.scope_name;
+  const middleSegment = context.project_name;
 
   return `WBS-${context.project_no}-${middleSegment}-${context.customer_name}`;
 }
 
 function buildReportFileName(context) {
-  const targetName = context.reportType === REPORT_TYPES.PROJECT ? context.project_name : context.scope_name;
-  const suffix = context.reportType === REPORT_TYPES.PROJECT ? "Project_Wise_Design_Report" : "Scope_Wise_Design_Report";
+  const targetName = context.project_name;
+  const suffix = "Project_Wise_Design_Report";
   return `${sanitizeFileNamePart(context.project_no)}_${sanitizeFileNamePart(targetName)}_${suffix}.xlsx`;
 }
 
@@ -784,7 +781,7 @@ async function generateRawScopeExcel(normalizedData, filePath, context = {}, fix
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Design Report");
   const lastColumnLetter = columnNumberToLetter(RAW_TABLE_COLUMNS.length);
-  const reportTitle = `WBS-${context.project_no || normalizedData[0]?.project_no || ""}-${context.scope_name || normalizedData[0]?.scope_name || ""}-${context.customer_name || "Report"}`;
+  const reportTitle = `WBS-${context.project_no || normalizedData[0]?.project_no || ""}-${context.project_name || normalizedData[0]?.project_name || ""}-${context.customer_name || "Report"}`;
   const excelRows = buildRawReportRows(normalizedData, fixtureLookup);
 
   worksheet.getCell("A1").value = reportTitle;
@@ -1258,7 +1255,7 @@ function buildScopeReportSourceRows(fixtures, progressRows, attemptRows, attachm
     return {
       fixture_id: fixture.fixture_id,
       project_no: fixture.project_no,
-      scope_name: fixture.scope_name,
+      project_name: fixture.project_name || "",
       fixture_no: fixture.fixture_no,
       op_no: fixture.op_no,
       part_name: fixture.part_name,
@@ -1314,40 +1311,6 @@ function resolveReportDepartmentId(user, requestedDepartmentId) {
   return effectiveDepartmentId;
 }
 
-async function getScopeContext(user, scopeId, departmentId) {
-  const params = [scopeId, departmentId];
-  const whereClauses = ["s.id = $1", "p.department_id = $2"];
-
-  const result = await pool.query(
-    `
-      SELECT
-        s.id AS scope_id,
-        s.scope_name,
-        p.id AS project_id,
-        p.project_no,
-        p.project_name,
-        p.customer_name,
-        p.department_id
-      FROM design.scopes s
-      JOIN design.projects p
-        ON p.id = s.project_id
-      WHERE ${whereClauses.join(" AND ")}
-      LIMIT 1
-    `,
-    params,
-  );
-
-  const scope = result.rows[0];
-  if (!scope) {
-    throw new AppError(404, "Scope not found");
-  }
-
-  return {
-    ...scope,
-    reportType: REPORT_TYPES.SCOPE,
-  };
-}
-
 async function getProjectContext(user, projectId, departmentId) {
   const params = [projectId, departmentId];
   const whereClauses = ["p.id = $1", "p.department_id = $2"];
@@ -1378,82 +1341,12 @@ async function getProjectContext(user, projectId, departmentId) {
   };
 }
 
-async function getFixturesForScope(scopeId) {
-  const result = await pool.query(
-    `
-      SELECT
-        p.project_no,
-        s.scope_name,
-        f.id AS fixture_id,
-        f.fixture_no,
-        f.op_no,
-        f.part_name,
-        f.fixture_type,
-        f.remark,
-        f.qty,
-        f.image_1_url,
-        f.image_2_url,
-        linked_task.id AS task_id,
-        linked_task.status AS task_status,
-        linked_task.deadline AS task_deadline,
-        linked_task.proof_url AS task_proof_url,
-        linked_task.assigned_to AS task_assigned_to,
-        assignee.name AS task_assignee_name
-      FROM design.fixtures f
-      JOIN design.scopes s
-        ON s.id = f.scope_id
-      JOIN design.projects p
-        ON p.id = s.project_id
-      LEFT JOIN LATERAL (
-        SELECT
-          t.id,
-          t.status,
-          t.deadline,
-          t.proof_url,
-          t.assigned_to,
-          t.updated_at,
-          t.created_at
-        FROM tasks t
-        WHERE t.status <> 'cancelled'
-          AND (
-            t.fixture_id = f.id
-            OR (
-              t.fixture_id IS NULL
-              AND t.scope_name = s.scope_name
-              AND t.quantity_index = f.fixture_no
-              AND EXISTS (
-                SELECT 1
-                FROM design.projects p
-                WHERE p.id = s.project_id
-                  AND p.project_no = t.project_no
-                  AND p.department_id = t.department_id
-              )
-            )
-          )
-        ORDER BY
-          CASE WHEN t.status = ANY($2::text[]) THEN 0 ELSE 1 END,
-          t.updated_at DESC NULLS LAST,
-          t.created_at DESC NULLS LAST,
-          t.id DESC
-        LIMIT 1
-      ) linked_task ON TRUE
-      LEFT JOIN users assignee
-        ON assignee.employee_id = linked_task.assigned_to
-      WHERE f.scope_id = $1
-      ORDER BY f.fixture_no ASC, f.id ASC
-    `,
-    [scopeId, [...OPEN_TASK_STATUSES]],
-  );
-
-  return result.rows;
-}
-
 async function getFixturesForProject(projectId) {
   const result = await pool.query(
     `
       SELECT
         p.project_no,
-        s.scope_name,
+        p.project_name,
         f.id AS fixture_id,
         f.fixture_no,
         f.op_no,
@@ -1470,10 +1363,8 @@ async function getFixturesForProject(projectId) {
         linked_task.assigned_to AS task_assigned_to,
         assignee.name AS task_assignee_name
       FROM design.fixtures f
-      JOIN design.scopes s
-        ON s.id = f.scope_id
       JOIN design.projects p
-        ON p.id = s.project_id
+        ON p.id = f.project_id
       LEFT JOIN LATERAL (
         SELECT
           t.id,
@@ -1491,7 +1382,6 @@ async function getFixturesForProject(projectId) {
               t.fixture_id IS NULL
               AND t.project_no = p.project_no
               AND t.department_id = p.department_id
-              AND t.scope_name = s.scope_name
               AND t.quantity_index = f.fixture_no
             )
           )
@@ -1504,8 +1394,8 @@ async function getFixturesForProject(projectId) {
       ) linked_task ON TRUE
       LEFT JOIN users assignee
         ON assignee.employee_id = linked_task.assigned_to
-      WHERE s.project_id = $1
-      ORDER BY s.scope_name ASC, f.fixture_no ASC, f.id ASC
+      WHERE f.project_id = $1
+      ORDER BY f.fixture_no ASC, f.id ASC
     `,
     [projectId, [...OPEN_TASK_STATUSES]],
   );
@@ -1608,7 +1498,7 @@ async function getTaskAttachmentsByTaskIds(taskIds) {
 }
 
 async function exportDesignReport(user, query = {}, options = {}) {
-  const reportType = String(query.report_type || REPORT_TYPES.SCOPE).trim().toLowerCase();
+  const reportType = REPORT_TYPES.PROJECT;
   const departmentId = resolveReportDepartmentId(user, query.department_id);
   let context = null;
   let fixtures = [];
@@ -1621,14 +1511,6 @@ async function exportDesignReport(user, query = {}, options = {}) {
 
     context = await getProjectContext(user, projectId, departmentId);
     fixtures = await getFixturesForProject(projectId);
-  } else {
-    const scopeId = String(query.scope_id || "").trim();
-    if (!scopeId) {
-      throw new AppError(400, "scope_id is required");
-    }
-
-    context = await getScopeContext(user, scopeId, departmentId);
-    fixtures = await getFixturesForScope(scopeId);
   }
 
   if (!fixtures.length) {
@@ -1647,7 +1529,7 @@ async function exportDesignReport(user, query = {}, options = {}) {
   const normalizedRows = await normalizeScopeReportData(sourceRows);
   const fixtureLookup = sourceRows.reduce((map, row) => {
     try {
-      const fixtureKey = `${String(row.project_no || "").trim()}::${String(row.scope_name || "").trim()}::${String(row.fixture_no || "").trim()}`;
+      const fixtureKey = `${String(row.project_no || "").trim()}::${String(row.fixture_no || "").trim()}`;
       map.set(fixtureKey, {
         image1Url: row.image1Url || null,
         image2Url: row.image2Url || null,
@@ -1719,21 +1601,11 @@ async function exportDesignReport(user, query = {}, options = {}) {
   }
 }
 
-async function exportScopeDesignReport(user, scopeId, options = {}) {
-  return exportDesignReport(user, {
-    report_type: REPORT_TYPES.SCOPE,
-    scope_id: scopeId,
-    department_id: user?.department_id,
-  }, options);
-}
-
 module.exports = {
   exportDesignReport,
-  exportScopeDesignReport,
   generateRawScopeExcel,
   normalizeStoredImageUrl,
   runPythonFormatter,
-  getFixturesForScope,
   getFixturesForProject,
   getFixtureProgressRows,
   getFixtureAttemptRows,

@@ -3,12 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DesignProjectOption, DesignScopeOption } from "@/types";
-
-const reportTypeOptions = [
-  { value: "scope", label: "Scope Wise" },
-  { value: "project", label: "Project Wise" },
-] as const;
+import { DesignProjectOption } from "@/types";
+import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 interface ReportFiltersProps {
   canExportReports: boolean;
@@ -17,18 +13,11 @@ interface ReportFiltersProps {
   selectedDepartmentId: string;
   onDepartmentChange: (value: string) => void;
   selectedDepartmentName: string;
-  reportType: "scope" | "project";
-  onReportTypeChange: (value: "scope" | "project") => void;
   projects: DesignProjectOption[];
-  scopes: DesignScopeOption[];
   selectedProjectId: string;
   onProjectChange: (value: string) => void;
-  selectedScopeId: string;
-  onScopeChange: (value: string) => void;
   selectedProject: DesignProjectOption | null;
-  selectedScope: DesignScopeOption | null;
   projectsLoading: boolean;
-  scopesLoading: boolean;
   exportLoading: boolean;
   canDownloadReport: boolean;
   onDownload: () => void;
@@ -41,18 +30,11 @@ export function ReportFilters({
   selectedDepartmentId,
   onDepartmentChange,
   selectedDepartmentName,
-  reportType,
-  onReportTypeChange,
   projects,
-  scopes,
   selectedProjectId,
   onProjectChange,
-  selectedScopeId,
-  onScopeChange,
   selectedProject,
-  selectedScope,
   projectsLoading,
-  scopesLoading,
   exportLoading,
   canDownloadReport,
   onDownload,
@@ -65,11 +47,7 @@ export function ReportFilters({
     ? "Choose a department to load report data."
     : !selectedProject
       ? "Choose a project to continue."
-      : reportType === "project"
-        ? `Export a project-wise report for ${selectedProject.project_name}.`
-        : selectedScope
-          ? `Export a scope-wise report for ${selectedScope.scope_name}.`
-          : "Choose a scope to generate the report.";
+      : `Export a project report for ${formatDesignProjectLabel(selectedProject)}.`;
 
   return (
     <Card className="md:col-span-3">
@@ -80,7 +58,7 @@ export function ReportFilters({
         </div>
       </CardHeader>
       <CardContent className="space-y-4 p-4 pt-2">
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-3">
           <div className="space-y-1.5">
             <Label className="text-xs">Department</Label>
             <Select
@@ -103,26 +81,6 @@ export function ReportFilters({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs">Report Type</Label>
-            <Select
-              value={reportType}
-              onValueChange={(value) => onReportTypeChange(value as "scope" | "project")}
-              disabled={exportLoading}
-            >
-              <SelectTrigger className="h-9 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {reportTypeOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
             <Label className="text-xs">Project</Label>
             <Select
               value={selectedProjectId || "__none__"}
@@ -136,38 +94,7 @@ export function ReportFilters({
                 <SelectItem value="__none__">Select project</SelectItem>
                 {projects.map((project) => (
                   <SelectItem key={project.project_id} value={project.project_id}>
-                    {project.project_code} · {project.project_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs">Scope</Label>
-            <Select
-              value={selectedScopeId || "__none__"}
-              onValueChange={(value) => onScopeChange(value === "__none__" ? "" : value)}
-              disabled={reportType === "project" || !selectedProjectId || scopesLoading || exportLoading}
-            >
-              <SelectTrigger className="h-9 text-sm">
-                <SelectValue
-                  placeholder={
-                    reportType === "project"
-                      ? "Not required"
-                      : scopesLoading
-                        ? "Loading scopes..."
-                        : "Select scope"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">
-                  {reportType === "project" ? "Not required" : "Select scope"}
-                </SelectItem>
-                {scopes.map((scope) => (
-                  <SelectItem key={scope.scope_id} value={scope.scope_id}>
-                    {scope.scope_name}
+                    {formatDesignProjectLabel(project)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -178,7 +105,7 @@ export function ReportFilters({
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="text-sm text-muted-foreground">
             {selectedDepartmentId
-              ? `${selectedDepartmentName} data is loaded dynamically for the selected project and scope. ${helperText}`
+              ? `${selectedDepartmentName} data is loaded dynamically for the selected project. ${helperText}`
               : helperText}
           </div>
 

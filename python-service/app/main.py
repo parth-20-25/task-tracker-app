@@ -152,6 +152,57 @@ def normalize_text(value: Any) -> str:
     return str(value).strip()
 
 
+def normalize_wbs_header_text(value: Any) -> str:
+    """
+    Normalize WBS header text for robust matching.
+    Handles variations like:
+    - WBS - PARC2600M001-Fuel Tank weld Line
+    - WBS- PARC2600M001 Fuel Tank weld Line
+    - WBS - PARC2600M001_Fuel Tank weld Line
+    - WBS_PARC2600M001 - Fuel Tank weld Line
+    - WBS -PARC2600M001- Fuel Tank weld Line
+    - WBS - PARC2600M001-Fuel Tank weld Line_Belrise Industries Limited
+    """
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    # Step 1: Collapse multiple spaces to single space
+    text = re.sub(r"\s+", " ", text)
+
+    # Step 2: Normalize WBS prefix variations
+    # Match: WBS, WBS-, WBS_, WBS -, WBS- , WBS_ , etc.
+    wbs_pattern = re.compile(r"^WBS\s*[-_]?\s*", re.IGNORECASE)
+    text = wbs_pattern.sub("WBS-", text)
+
+    # Step 3: Normalize separators between project code and project name
+    # Look for pattern like: WBS-PARC2600M001 followed by various separators
+    # Normalize to: WBS-PARC2600M001-ProjectName_CompanyName
+
+    # Step 4: Collapse multiple dashes/underscores/mixed separators
+    # Replace patterns like "-_", "_-", "--", "__" with single "-"
+    text = re.sub(r"[-_]{2,}", "-", text)
+
+    # Step 5: Normalize spaces around dashes in the project name portion
+    # Pattern: "word - word" or "word- word" or "word -word" → "word-word"
+    # But preserve the separator between project code and project name
+    parts = text.split("-", 2)  # Split into max 3 parts: WBS, PARC..., rest
+    if len(parts) >= 3:
+        # parts[0] = WBS, parts[1] = PARC..., parts[2] = rest
+        project_code = parts[1].strip()
+        remainder = parts[2].strip()
+
+        # Normalize spaces within the remainder
+        remainder = re.sub(r"\s*-\s*", "-", remainder)
+        remainder = re.sub(r"\s*_\s*", "_", remainder)
+        remainder = re.sub(r"\s+", " ", remainder)
+
+        text = f"WBS-{project_code}-{remainder}"
+
+    return text
+
+
 def normalize_header(value: Any) -> str:
     return "".join(ch for ch in normalize_text(value).lower() if ch.isalnum())
 
@@ -183,27 +234,83 @@ def build_error_response(status_code: int, message: str, errors: list[dict[str, 
 
 
 def parse_wbs_header(raw_header: str) -> dict[str, str]:
-    header = normalize_text(raw_header)
-    if not header.startswith("WBS-"):
-        raise ValueError("Invalid header format: missing 'WBS-' prefix.")
+    """
+    Parse WBS header with flexible separator support.
+    Handles formats like:
+    - WBS-PARC2600M001-Fuel Tank weld Line_Belrise Industries Limited
+    - WBS-PARC2600M001-Fuel Tank weld Line-Belrise Industries Limited
+    - WBS-PARC2600M001 Fuel Tank weld Line (space separator)
+    - WBS-PARC2600M001-Fuel-Tank-weld-Line_Belrise-Industries-Limited
+    """
+    # First normalize spacing in the raw header
+    header = re.sub(r"\s+", " ", str(raw_header).strip())
 
-    without_prefix = header[4:]
-    first_dash = without_prefix.find("-")
-    if first_dash == -1:
-        raise ValueError("Invalid header format: missing '-' after project code.")
+    if not header.upper().startswith("WBS"):
+        raise ValueError("Invalid header format: missing 'WBS' prefix.")
 
-    project_code = without_prefix[:first_dash].strip()
-    remainder = without_prefix[first_dash + 1 :].strip()
-    parts = remainder.split("_")
+    # Extract project code using regex - look for PARC followed by 4+ digits
+    # The code can be followed by space, dash, underscore, or end of string
+    wbs_code_match = re.search(r"WBS\s*[-_]?\s*(PARC\d{4,}[A-Z0-9]*)(?:\s|[-_]|$)", header, re.IGNORECASE)
+    if not wbs_code_match:
+        raise ValueError("Invalid header format: could not extract project code.")
 
-    if len(parts) < 2:
-        raise ValueError("Invalid header format: missing '_' separator for company name.")
+    project_code = wbs_code_match.group(1).upper()
 
-    project_name = parts[0].strip()
-    company_name = "_".join(parts[1:]).strip()
+    # Get everything after the project code
+    code_end_pos = wbs_code_match.end(1)
+    remainder = header[code_end_pos:].strip()
 
-    if not project_code or not project_name or not company_name:
-        raise ValueError("Invalid header format: project code, project name, and company name are required.")
+    # Remove leading separator from remainder
+    remainder = re.sub(r"^[-_\s]+", "", remainder)
+
+    # Find the separator between project name and company name
+    # Priority: underscore is strongest separator, then check for space+Capital pattern
+    # that suggests a company name (e.g., "Line Belrise Industries")
+    project_name = ""
+    company_name = ""
+
+    # 1. Look for underscore separator (strongest indicator of company name)
+    # Use FIRST underscore to split (not last), so "CLIENT_ONE" stays together as company
+    if "_" in remainder:
+        underscore_pos = remainder.find("_")
+        project_name = remainder[:underscore_pos].strip("-_")
+        company_name = remainder[underscore_pos + 1:].strip("-_")
+    else:
+        # 2. No underscore - check for company name pattern:
+        # Space followed by capital letter that looks like a company name
+        # (2+ capitalized words at the end, e.g., "Belrise Industries Limited")
+        # We need at least 2 words that look like proper nouns (Capitalized)
+        company_match = re.search(r"\s+([A-Z][a-zA-Z]+\s+(?:[A-Z][a-zA-Z]+\s*)+)\s*$", remainder)
+        if company_match:
+            # Check that the potential company name is multi-word (at least 2 capitalized words)
+            potential_company = company_match.group(1).strip()
+            capitalized_words = re.findall(r"\b[A-Z][a-zA-Z]+\b", potential_company)
+            if len(capitalized_words) >= 2:
+                company_name = potential_company
+                project_name = remainder[:company_match.start()].strip()
+            else:
+                # Single capitalized word at end - likely part of project name
+                project_name = remainder.strip()
+                company_name = "Unknown"
+        else:
+            # 3. No company pattern found - everything is project name
+            project_name = remainder.strip()
+            company_name = "Unknown"
+
+    # Clean up project name: normalize dashes/underscores to spaces for readability
+    project_name = re.sub(r"[-_]+", " ", project_name).strip()
+
+    # Clean up company name: normalize dashes/underscores to spaces
+    company_name = re.sub(r"[-_]+", " ", company_name).strip()
+
+    if not project_code:
+        raise ValueError("Invalid header format: project code is required.")
+
+    if not project_name:
+        project_name = "Unnamed Project"
+
+    if not company_name:
+        company_name = "Unknown Company"
 
     return {
         "project_code": project_code,
@@ -213,11 +320,31 @@ def parse_wbs_header(raw_header: str) -> dict[str, str]:
 
 
 def find_metadata_row(worksheet) -> tuple[int, str]:
-    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=1, max_row=25, values_only=True), start=1):
+    """
+    Find the WBS metadata row using robust pattern matching.
+    Supports flexible formatting: WBS -, WBS-, WBS_, with various spacing.
+    """
+    # WBS pattern: PARC followed by 4+ digits and optional M + digits
+    wbs_code_pattern = re.compile(r"PARC\d{4,}[A-Z0-9]*", re.IGNORECASE)
+
+    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=1, max_row=50, values_only=True), start=1):
         for cell_value in row_values:
-            cell_text = normalize_text(cell_value)
-            if cell_text.startswith("WBS-"):
-                return row_index, cell_text
+            if cell_value is None:
+                continue
+
+            # Normalize the cell text for flexible matching
+            normalized = normalize_wbs_header_text(cell_value)
+
+            # Check if normalized text starts with WBS- and contains a PARC code
+            if normalized.startswith("WBS-") and wbs_code_pattern.search(normalized):
+                return row_index, normalized
+
+            # Fallback: Check raw text for WBS-like patterns
+            raw_text = normalize_text(cell_value).upper()
+            if raw_text.startswith(("WBS", "WBS-", "WBS_", "WBS ")) and wbs_code_pattern.search(raw_text):
+                # Normalize and return
+                return row_index, normalize_wbs_header_text(cell_value)
+
     raise ValueError("Could not find the WBS metadata row in the workbook.")
 
 

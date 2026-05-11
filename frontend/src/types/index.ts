@@ -81,7 +81,6 @@ export interface Task {
   machine_name?: string;
   location_tag?: string;
   project_id?: string | null;
-  scope_id?: string | null;
   fixture_id?: string | null;
   project_no?: string | null;
   fixture_no?: string | null;
@@ -90,7 +89,6 @@ export interface Task {
   customer_name?: string | null;
   company_name?: string | null;
   project_description?: string | null;
-  scope_name?: string | null;
   quantity_index?: string | null;
   instance_count?: number | null;
   rework_date?: string | null;
@@ -160,12 +158,10 @@ export interface UploadBatch {
   id: string;
   batch_id: string;
   project_id: string;
-  scope_id: string;
   project_no: string;
   project_name: string;
   customer_name: string;
   department_id: string;
-  scope_name: string;
   uploaded_by?: string | null;
   uploaded_by_user_id?: string | null;
   uploaded_at: string;
@@ -304,16 +300,9 @@ export interface UserDrilldownTask {
   status: string;
   priority: string | null;
   project_name: string | null;
-  scope_name: string | null;
   remarks: string | null;
   due_date: string | null;
   submitted_at: string | null;
-  approved_at: string | null;
-  rejection_count: number;
-  completion_minutes: number | null;
-  is_on_time: boolean;
-  is_overdue: boolean;
-  delay_hours: number | null;
 }
 
 export interface UserApprovalTimelineEntry {
@@ -332,7 +321,6 @@ export interface UserReworkHistoryEntry {
   approved_at: string | null;
   remarks: string | null;
   project_name: string | null;
-  scope_name: string | null;
 }
 
 export interface DelayPatternBucket {
@@ -491,12 +479,10 @@ export interface MetricCard {
 
 export interface DepartmentProject {
   project_id: string;
-  scope_id: string;
   project_code: string;
   project_name: string;
   company_name: string;
   project_description: string;
-  scope_name: string;
   quantity_index: string;
   instance_count: number | null;
   rework_date: string | null;
@@ -514,17 +500,10 @@ export interface DesignProjectOption {
   department_id: string;
 }
 
-export interface DesignScopeOption {
-  scope_id: string;
-  project_id: string;
-  scope_name: string;
-}
-
 export interface DesignFixtureOption {
   fixture_id: string;
   project_id: string | null;
   batch_id?: string | null;
-  scope_id: string;
   fixture_no: string;
   op_no: string;
   part_name: string;
@@ -552,8 +531,6 @@ export interface DesignExcelPreviewRow {
   qty: number;
   image_1_url?: string | null;
   image_2_url?: string | null;
-  scope_status?: "PARC" | "CUSTOMER" | "AMBIGUOUS";
-  scope_reason?: string | null;
 }
 
 export interface DesignExcelRejectedRow {
@@ -568,14 +545,13 @@ export interface DesignExcelRejectedRow {
 
 export interface DesignExcelSkippedRow extends DesignExcelPreviewRow {
   raw_data: Record<string, any>;
-  scope_status: "CUSTOMER";
   skip_reason: string;
 }
 
 export interface DesignExcelUploadResponse {
   file_info: {
     project_code: string;
-    scope_name_display: string;
+    project_name: string;
     company_name: string;
     metadata_source?: string;
   };
@@ -628,7 +604,7 @@ export interface ConfirmDesignUploadPayload {
   resolved_items: Array<{
     data: DesignExcelPreviewRow;
     resolution: "incoming" | "existing";
-    scope_decision?: "add_fixture" | "skip_fixture";
+    fixture_decision?: "add_fixture" | "skip_fixture";
   }>;
   rejected_items: DesignExcelUploadResponse["preview"]["rejected"];
   skipped_items: DesignExcelUploadResponse["preview"]["skipped"];

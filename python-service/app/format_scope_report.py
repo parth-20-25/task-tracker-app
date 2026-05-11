@@ -198,8 +198,8 @@ def parse_wbs_title(raw: str) -> tuple[str, str, str]:
     return s, "", ""
 
 
-def format_title(project: str, scope: str, company: str) -> str:
-    return f"  PROJECT : {project}   |   SCOPE : {scope}   |   COMPANY : {company}"
+def format_title(project: str, project_name: str, company: str) -> str:
+    return f"  PROJECT : {project}   |   PROJECT NAME : {project_name}   |   COMPANY : {company}"
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +300,8 @@ def read_raw(path: str) -> tuple[str, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def build_formatted(wbs_title: str, raw_rows: list[dict]) -> Workbook:
-    project, scope, company = parse_wbs_title(wbs_title)
-    display_title = format_title(project, scope, company)
+    project, project_name, company = parse_wbs_title(wbs_title)
+    display_title = format_title(project, project_name, company)
 
     wb = Workbook()
     ws = wb.active

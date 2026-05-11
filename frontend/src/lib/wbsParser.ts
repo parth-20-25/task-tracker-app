@@ -14,7 +14,6 @@
 export interface WBSParseResult {
   project_code: string;
   project_name: string;
-  scope_name: string;
   company_name: string;
 }
 
@@ -96,7 +95,6 @@ export function parseWBSHeader(input: string): WBSParseOutcome {
     valid: true,
     project_code,
     project_name,
-    scope_name: project_name,
     company_name,
   };
 }

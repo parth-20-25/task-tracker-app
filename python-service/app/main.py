@@ -93,7 +93,7 @@ HEADER_FIELD_ALIASES = {
         "category",
     },
     "qty": {"qty", "quantity", "nos", "noofqty"},
-    "remark": {"remark", "remarks", "scope", "scoperemarks", "comment", "comments"},
+    "remark": {"remark", "remarks", "comment", "comments"},
 }
 
 logger = logging.getLogger("design_extraction")
@@ -200,15 +200,15 @@ def parse_wbs_header(raw_header: str) -> dict[str, str]:
     if len(parts) < 2:
         raise ValueError("Invalid header format: missing '_' separator for company name.")
 
-    scope_name = parts[0].strip()
+    project_name = parts[0].strip()
     company_name = "_".join(parts[1:]).strip()
 
-    if not project_code or not scope_name or not company_name:
-        raise ValueError("Invalid header format: project code, scope name, and company name are required.")
+    if not project_code or not project_name or not company_name:
+        raise ValueError("Invalid header format: project code, project name, and company name are required.")
 
     return {
         "project_code": project_code,
-        "scope_name": scope_name,
+        "project_name": project_name,
         "company_name": company_name,
     }
 
@@ -984,8 +984,7 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
     return {
         "file_info": {
             "project_code": file_info["project_code"],
-            "scope_name": file_info["scope_name"],
-            "scope_name_display": file_info["scope_name"],
+            "project_name": file_info["project_name"],
             "company_name": file_info["company_name"],
         },
         "rows": deduped_rows,

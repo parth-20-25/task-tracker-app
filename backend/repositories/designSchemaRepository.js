@@ -85,41 +85,6 @@ async function backfillDesignIntegrity(client) {
   await client.query(`
     DO $$
     BEGIN
-      IF to_regclass('design.scopes') IS NOT NULL
-         AND EXISTS (
-           SELECT 1
-           FROM information_schema.columns
-           WHERE table_schema = 'design'
-             AND table_name = 'upload_batches'
-             AND column_name = 'scope_id'
-         ) THEN
-        UPDATE design.upload_batches ub
-        SET project_id = s.project_id
-        FROM design.scopes s
-        WHERE ub.scope_id = s.id
-          AND ub.project_id IS DISTINCT FROM s.project_id;
-      END IF;
-
-      IF to_regclass('design.scopes') IS NOT NULL
-         AND EXISTS (
-           SELECT 1
-           FROM information_schema.columns
-           WHERE table_schema = 'design'
-             AND table_name = 'fixtures'
-             AND column_name = 'scope_id'
-         ) THEN
-        UPDATE design.fixtures f
-        SET project_id = s.project_id
-        FROM design.scopes s
-        WHERE f.scope_id = s.id
-          AND f.project_id IS DISTINCT FROM s.project_id;
-      END IF;
-    END $$;
-  `);
-
-  await client.query(`
-    DO $$
-    BEGIN
       IF EXISTS (
         SELECT 1
         FROM design.projects p

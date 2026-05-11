@@ -23,7 +23,6 @@ export interface NewTaskInput {
   project_no?: string;
   project_name?: string;
   customer_name?: string;
-  scope_name?: string;
   quantity_index?: string;
   instance_count?: number;
   rework_date?: string | null;

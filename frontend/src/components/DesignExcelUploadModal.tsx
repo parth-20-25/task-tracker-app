@@ -1536,7 +1536,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background/50">
                 <div className="shrink-0 border-b bg-card p-4">
                   <h4 className="text-lg font-semibold">
-                    {preview.file_info.project_code} - {preview.file_info.scope_name_display}
+                    {preview.file_info.project_code} - {preview.file_info.project_name}
                   </h4>
                   <p className="text-sm text-muted-foreground">{preview.file_info.company_name}</p>
                 </div>

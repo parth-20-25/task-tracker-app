@@ -2,6 +2,7 @@ const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
 const { mapUserRow } = require("./mappers");
 const { buildUserColumns } = require("./sqlFragments");
+const { buildVisibleUsersCte } = require("./projectVisibility");
 
 const ACTIVE_TASK_STATUSES = ["created", "assigned", "in_progress", "on_hold", "under_review", "rework"];
 
@@ -104,26 +105,7 @@ async function getVisibleUserIdsForEmployee(employeeId, client = pool) {
 
   const result = await client.query(
     `
-      WITH RECURSIVE visible_users AS (
-        SELECT
-          u.id::text AS user_uuid,
-          u.employee_id,
-          u.department_id
-        FROM users u
-        WHERE u.employee_id = $1
-
-        UNION
-
-        SELECT
-          child.id::text AS user_uuid,
-          child.employee_id,
-          child.department_id
-        FROM users child
-        JOIN visible_users parent_tree
-          ON child.parent_id::text IN (parent_tree.user_uuid, parent_tree.employee_id)
-        WHERE parent_tree.department_id IS NOT NULL
-          AND child.department_id = parent_tree.department_id
-      )
+      ${buildVisibleUsersCte("$1")}
       SELECT employee_id
       FROM visible_users
       ORDER BY employee_id ASC

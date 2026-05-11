@@ -40,6 +40,9 @@ function taskSelectQuery(whereClause = "") {
       COALESCE(project.project_name, NULLIF(t.project_name, ''), NULLIF(t.project_description, '')) AS resolved_project_name,
       COALESCE(project.customer_name, NULLIF(t.customer_name, '')) AS resolved_customer_name,
       COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
+      project.uploaded_by AS project_uploaded_by,
+      fixture_batch.uploaded_by AS fixture_batch_uploaded_by,
+      fixture_batch.uploaded_by_user_id AS fixture_batch_uploaded_by_user_id,
       t.workflow_id,
       t.current_stage_id,
       t.lifecycle_status,
@@ -76,6 +79,8 @@ function taskSelectQuery(whereClause = "") {
         AND fixture.project_id = project.id
         AND fixture.fixture_no = COALESCE(NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, ''))
       )
+    LEFT JOIN design.upload_batches fixture_batch
+      ON fixture_batch.id = fixture.batch_id
     LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id

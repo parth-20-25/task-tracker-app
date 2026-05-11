@@ -4,17 +4,16 @@ const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const { instrumentModuleExports } = require("../lib/observability");
 const { pool } = require("../db");
 const {
-  requireDepartmentContext,
   resolveAccessibleDepartmentId,
   requireUserDepartment,
 } = require("../lib/departmentContext");
 const { isDesignDepartment } = require("../lib/designDepartment");
 const {
-  findFixtureByIdForDepartment,
-  findProjectByIdForDepartment,
-  listDepartmentProjectsByDepartment,
-  listFixturesByProjectForDepartment,
-  listProjectOptionsByDepartment,
+  findFixtureByIdForUser,
+  findProjectByIdForUser,
+  listDepartmentProjectsForUser: listDepartmentProjectsByUserVisibility,
+  listFixturesByProjectForUser,
+  listProjectOptionsForUser,
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
 const { createAuditLog } = require("../repositories/auditRepository");
@@ -62,12 +61,12 @@ function validateResolvedDesignTaskContext({ projectId, fixtureId, currentStage,
 
 async function listDepartmentProjectsForUser(user) {
   requireDesignDepartment(user);
-  return listDepartmentProjectsByDepartment(requireUserDepartment(user));
+  return listDepartmentProjectsByUserVisibility(user, requireUserDepartment(user));
 }
 
 async function listDesignProjectsForUser(user, requestedDepartmentId) {
   const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
-  return listProjectOptionsByDepartment(departmentId);
+  return listProjectOptionsForUser(user, departmentId);
 }
 
 async function listDesignFixturesForUser(user, projectId, requestedDepartmentId) {
@@ -80,13 +79,13 @@ async function listDesignFixturesForUser(user, projectId, requestedDepartmentId)
   }
 
   const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
-  const project = await findProjectByIdForDepartment(normalizedProjectId, departmentId);
+  const project = await findProjectByIdForUser(normalizedProjectId, user, departmentId);
 
   if (!project) {
     throw new AppError(404, "Project not found for the selected department");
   }
 
-  return listFixturesByProjectForDepartment(normalizedProjectId, departmentId);
+  return listFixturesByProjectForUser(normalizedProjectId, user, departmentId);
 }
 
 function normalizeProjectUploadRow(row = {}) {
@@ -194,12 +193,12 @@ async function createDesignTaskFromProject(user, payload = {}) {
     payload.department_id,
     "A department is required to create workflow tasks",
   );
-  const project = await findProjectByIdForDepartment(projectId, departmentId);
+  const project = await findProjectByIdForUser(projectId, user, departmentId);
   if (!project) {
     throw new AppError(404, "Project not found for the selected department");
   }
 
-  const fixture = await findFixtureByIdForDepartment(fixtureId, departmentId);
+  const fixture = await findFixtureByIdForUser(fixtureId, user, departmentId);
   if (!fixture) {
     throw new AppError(404, "Fixture not found");
   }

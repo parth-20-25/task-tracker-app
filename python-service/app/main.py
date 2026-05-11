@@ -54,46 +54,36 @@ HEADER_FIELD_ALIASES = {
         "srno",
         "serialno",
         "serialnumber",
-        "rowno",
-        "lineno",
-        "sequenceno",
-        "sequencenumber",
     },
     "fixture_no": {
         "fixtureno",
-        "fixtureno.",
-        "fixture",
-        "fixtureid",
-        "fixtureidentifier",
         "fixturenumber",
-        "fixturecode",
     },
     "op_no": {
         "opno",
-        "opnumber",
         "operationno",
-        "operationnumber",
-        "operation",
-        "op",
     },
     "part_name": {
         "partname",
-        "partdescription",
-        "componentname",
-        "componentdescription",
-        "particular",
-        "itemdescription",
-        "description",
     },
     "fixture_type": {
         "fixturetype",
-        "typeoffixture",
-        "fixturedescription",
-        "type",
-        "fixturecategory",
-        "category",
     },
-    "qty": {"qty", "quantity", "nos", "noofqty"},
+    "qty": {"qty", "quantity"},
+    "remark": {"remark", "remarks"},
+}
+REQUIRED_HEADER_FIELDS = ("fixture_no", "op_no", "part_name", "fixture_type", "qty")
+EXPECTED_HEADER_LABELS = {
+    "fixture_no": "Fixture No",
+    "op_no": "OP.NO",
+    "part_name": "Part Name",
+    "fixture_type": "Fixture Type",
+    "qty": "QTY",
+}
+METADATA_FIELD_ALIASES = {
+    "project_code": {"wbsprojectno", "wbsprojectnumber", "projectno", "projectnumber"},
+    "project_name": {"projectname"},
+    "company_name": {"companyname", "customername"},
 }
 
 logger = logging.getLogger("design_extraction")
@@ -278,39 +268,15 @@ def parse_wbs_header(raw_header: str) -> dict[str, str]:
     # Remove leading separator from remainder
     remainder = re.sub(r"^[-_\s]+", "", remainder)
 
-    # Find the separator between project name and company name
-    # Priority: underscore is strongest separator, then check for space+Capital pattern
-    # that suggests a company name (e.g., "Line Belrise Industries")
     project_name = ""
     company_name = ""
 
-    # 1. Look for underscore separator (strongest indicator of company name)
-    # Use FIRST underscore to split (not last), so "CLIENT_ONE" stays together as company
-    if "_" in remainder:
-        underscore_pos = remainder.find("_")
-        project_name = remainder[:underscore_pos].strip("-_")
-        company_name = remainder[underscore_pos + 1:].strip("-_")
-    else:
-        # 2. No underscore - check for company name pattern:
-        # Space followed by capital letter that looks like a company name
-        # (2+ capitalized words at the end, e.g., "Belrise Industries Limited")
-        # We need at least 2 words that look like proper nouns (Capitalized)
-        company_match = re.search(r"\s+([A-Z][a-zA-Z]+\s+(?:[A-Z][a-zA-Z]+\s*)+)\s*$", remainder)
-        if company_match:
-            # Check that the potential company name is multi-word (at least 2 capitalized words)
-            potential_company = company_match.group(1).strip()
-            capitalized_words = re.findall(r"\b[A-Z][a-zA-Z]+\b", potential_company)
-            if len(capitalized_words) >= 2:
-                company_name = potential_company
-                project_name = remainder[:company_match.start()].strip()
-            else:
-                # Single capitalized word at end - likely part of project name
-                project_name = remainder.strip()
-                company_name = "Unknown"
-        else:
-            # 3. No company pattern found - everything is project name
-            project_name = remainder.strip()
-            company_name = "Unknown"
+    if "_" not in remainder:
+        raise ValueError("Invalid WBS format: expected WBS-<Project No>-<Project Name>_<Company Name>.")
+
+    underscore_pos = remainder.find("_")
+    project_name = remainder[:underscore_pos].strip("-_")
+    company_name = remainder[underscore_pos + 1:].strip("-_")
 
     # Clean up project name: normalize dashes/underscores to spaces for readability
     project_name = re.sub(r"[-_]+", " ", project_name).strip()
@@ -322,10 +288,10 @@ def parse_wbs_header(raw_header: str) -> dict[str, str]:
         raise ValueError("Invalid header format: project code is required.")
 
     if not project_name:
-        project_name = "Unnamed Project"
+        raise ValueError("Invalid WBS format: Project Name is required.")
 
     if not company_name:
-        company_name = "Unknown Company"
+        raise ValueError("Invalid WBS format: Company Name is required.")
 
     return {
         "project_code": project_code,
@@ -359,6 +325,50 @@ def find_metadata_row(worksheet) -> tuple[int, str]:
             if raw_text.startswith(("WBS", "WBS-", "WBS_", "WBS ")) and wbs_code_pattern.search(raw_text):
                 # Normalize and return
                 return row_index, normalize_wbs_header_text(cell_value)
+
+    labeled_values: dict[str, str] = {}
+    labeled_rows: list[int] = []
+    for row_index, row_values in enumerate(worksheet.iter_rows(min_row=1, max_row=50, values_only=True), start=1):
+        normalized_values = [normalize_text(value) for value in row_values]
+        for column_index, cell_text in enumerate(normalized_values):
+            if not cell_text:
+                continue
+
+            label_text = cell_text
+            inline_value = ""
+            if ":" in cell_text:
+                label_text, inline_value = [part.strip() for part in cell_text.split(":", 1)]
+
+            normalized_label = normalize_header(label_text)
+            field_name = next(
+                (
+                    candidate_field
+                    for candidate_field, aliases in METADATA_FIELD_ALIASES.items()
+                    if normalized_label in aliases
+                ),
+                None,
+            )
+            if not field_name or field_name in labeled_values:
+                continue
+
+            next_value = inline_value
+            if not next_value:
+                for candidate_value in normalized_values[column_index + 1:]:
+                    if candidate_value:
+                        next_value = candidate_value
+                        break
+
+            if next_value:
+                labeled_values[field_name] = next_value
+                labeled_rows.append(row_index)
+
+    if all(field_name in labeled_values for field_name in ("project_code", "project_name", "company_name")):
+        project_code = normalize_fixture_number(labeled_values["project_code"])
+        if not wbs_code_pattern.fullmatch(project_code):
+            raise ValueError("Invalid WBS format: Project No must be a PARC project code.")
+
+        metadata_value = f"WBS-{project_code}-{labeled_values['project_name']}_{labeled_values['company_name']}"
+        return min(labeled_rows) if labeled_rows else 1, metadata_value
 
     raise ValueError("Could not find the WBS metadata row in the workbook.")
 
@@ -663,43 +673,20 @@ def tokenize_header(value: Any) -> set[str]:
 
 def match_header_field(cell_text: str) -> str | None:
     normalized = normalize_header(cell_text)
-    tokens = tokenize_header(cell_text)
 
     for field_name, aliases in HEADER_FIELD_ALIASES.items():
         if normalized in aliases:
             return field_name
 
-    if {"s", "no"} <= tokens or {"sr", "no"} <= tokens:
-        return "row_reference"
-
-    if {"serial", "no"} <= tokens or {"serial", "number"} <= tokens:
-        return "row_reference"
-
-    if {"row", "no"} <= tokens or {"line", "no"} <= tokens:
-        return "row_reference"
-
-    if {"fixture", "no"} <= tokens or {"fixture", "number"} <= tokens:
-        return "fixture_no"
-
-    if "fixture" in tokens and "type" in tokens:
-        return "fixture_type"
-
-    if ("op" in tokens and ("no" in tokens or "number" in tokens)) or ({"operation", "no"} <= tokens):
-        return "op_no"
-
-    if "qty" in tokens or "quantity" in tokens:
-        return "qty"
-
-    if "part" in tokens and ("name" in tokens or "description" in tokens):
-        return "part_name"
-
-    if "component" in tokens and ("name" in tokens or "description" in tokens):
-        return "part_name"
-
-    if {"item", "description"} <= tokens:
-        return "part_name"
-
     return None
+
+
+def missing_required_headers(header_hints: dict[str, int]) -> list[str]:
+    return [
+        EXPECTED_HEADER_LABELS[field_name]
+        for field_name in REQUIRED_HEADER_FIELDS
+        if field_name not in header_hints
+    ]
 
 
 def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
@@ -711,7 +698,10 @@ def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
         end_row = min(max(start_row + 30, 30), worksheet.max_row)
 
         # Pre-compile the header detection to avoid repeated function calls
-        for row_values in worksheet.iter_rows(min_row=start_row, max_row=end_row, values_only=True):
+        for row_index, row_values in enumerate(
+            worksheet.iter_rows(min_row=start_row, max_row=end_row, values_only=True),
+            start=start_row,
+        ):
             current_mapping: dict[str, int] = {}
             for column_index, cell_value in enumerate(row_values, start=1):
                 field_name = match_header_field(normalize_text(cell_value))
@@ -719,13 +709,14 @@ def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
                     current_mapping[field_name] = column_index
 
             match_count = len(current_mapping)
-            has_primary_identity = "fixture_no" in current_mapping or ("part_name" in current_mapping and "qty" in current_mapping)
+            has_required_headers = all(field_name in current_mapping for field_name in REQUIRED_HEADER_FIELDS)
 
-            if has_primary_identity and match_count > best_match_count:
+            if has_required_headers and match_count > best_match_count:
                 best_match_count = len(current_mapping)
+                current_mapping["__row"] = row_index
                 best_mapping = current_mapping
 
-        result = best_mapping if best_match_count >= 3 else {}
+        result = best_mapping
         log_event("header_hints_detected", hints_found=len(result), match_count=best_match_count)
         return result
 
@@ -925,6 +916,104 @@ def parse_fixture_candidate_optimized(
         "fixture_type": "",
         "qty": "",
     }
+    if header_hints.get("remark"):
+        used_columns.add(header_hints["remark"])
+
+    if all(field_name in header_hints for field_name in REQUIRED_HEADER_FIELDS):
+        direct_values = {
+            field_name: normalize_text(cell_map.get(header_hints[field_name], ""))
+            for field_name in REQUIRED_HEADER_FIELDS
+        }
+        has_required_column_data = any(direct_values.values()) or bool(row_images)
+        if not has_required_column_data:
+            return None, None
+
+        parsed["fixture_no"] = normalize_fixture_number(direct_values["fixture_no"])
+        parsed["op_no"] = parse_op_value(direct_values["op_no"]) or ""
+        parsed["part_name"] = direct_values["part_name"]
+        parsed["fixture_type"] = direct_values["fixture_type"]
+        qty_value = parse_qty_value(direct_values["qty"])
+        parsed["qty"] = str(qty_value) if qty_value is not None else ""
+
+        validation_errors: list[tuple[str, str, str, str]] = []
+        if not direct_values["fixture_no"]:
+            validation_errors.append(("Fixture No", "Missing Fixture No.", direct_values["fixture_no"], "A PARC fixture number such as PARC25119001"))
+        elif not looks_like_fixture_number(direct_values["fixture_no"]):
+            validation_errors.append(("Fixture No", "Invalid Fixture No format.", direct_values["fixture_no"], "A PARC fixture number such as PARC25119001"))
+
+        if not direct_values["op_no"]:
+            validation_errors.append(("OP.NO", "Missing OP.NO.", direct_values["op_no"], "OP format such as OP 10"))
+        elif not parsed["op_no"]:
+            validation_errors.append(("OP.NO", "Invalid OP.NO format.", direct_values["op_no"], "OP format such as OP 10"))
+
+        if not direct_values["part_name"]:
+            validation_errors.append(("Part Name", "Missing Part Name.", direct_values["part_name"], "Non-empty part name"))
+
+        if not direct_values["fixture_type"]:
+            validation_errors.append(("Fixture Type", "Missing Fixture Type.", direct_values["fixture_type"], "Non-empty fixture type"))
+
+        if not direct_values["qty"]:
+            validation_errors.append(("QTY", "Missing QTY.", direct_values["qty"], "A positive number such as 1"))
+        elif qty_value is None:
+            validation_errors.append(("QTY", "Invalid QTY format.", direct_values["qty"], "A positive number such as 1"))
+
+        if validation_errors:
+            field_name, message, detected_value, expected_value = validation_errors[0]
+            return None, build_error(
+                message,
+                excel_row=row_index,
+                raw_data={
+                    **snapshot,
+                    "parsed": parsed,
+                    "candidate_field": field_name,
+                    "detected_value": detected_value,
+                    "expected": expected_value,
+                },
+            )
+
+        hint_row_reference_column = header_hints.get("row_reference")
+        business_row_reference = normalize_business_row_reference(
+            choose_hint_text(cell_map, hint_row_reference_column)
+        )
+        row_reference = business_row_reference or str(row_index)
+        row_reference_source = "business_serial" if business_row_reference else "excel_row"
+        row_number = int(business_row_reference) if business_row_reference and re.fullmatch(r"\d+", business_row_reference) else row_index
+
+        return (
+            {
+                "excel_row": row_index,
+                "row_number": row_number,
+                "row_reference": row_reference,
+                "row_reference_source": row_reference_source,
+                "business_row_reference": business_row_reference,
+                "fixture_no": parsed["fixture_no"],
+                "op_no": parsed["op_no"],
+                "part_name": parsed["part_name"],
+                "fixture_type": parsed["fixture_type"],
+                "qty": parsed["qty"],
+                "remark": None,
+                "image_1_url": row_images.get("image_1_url"),
+                "image_2_url": None,
+                "parser_confidence": "HIGH",
+                "raw_data": {
+                    **snapshot,
+                    "excel_row": row_index,
+                    "row_reference": row_reference,
+                    "row_reference_source": row_reference_source,
+                    "business_row_reference": business_row_reference,
+                    "normalized_fields": {
+                        "fixture_no": parsed["fixture_no"] or None,
+                        "op_no": parsed["op_no"] or None,
+                        "part_name": parsed["part_name"] or None,
+                        "fixture_type": parsed["fixture_type"] or None,
+                        "qty": parsed["qty"] or None,
+                        "image_1_url": row_images.get("image_1_url"),
+                        "image_2_url": None,
+                    },
+                },
+            },
+            None,
+        )
 
     # Performance: Use pre-compiled patterns for faster matching
     fixture_candidates = [cell for cell in cells if fixture_pattern.match(cell["text"])]
@@ -1181,6 +1270,20 @@ def build_rows(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    missing_headers = missing_required_headers(header_hints)
+
+    if missing_headers:
+        return [], [
+            build_error(
+                f"Missing required Excel headers: {', '.join(missing_headers)}.",
+                excel_row=metadata_row if metadata_row > 0 else None,
+                raw_data={
+                    "reason": "missing_required_headers",
+                    "missing_fields": missing_headers,
+                    "expected_headers": EXPECTED_HEADER_LABELS,
+                },
+            )
+        ]
 
     # Performance: Build merge lookup only if needed
     merge_lookup_start = time.perf_counter()
@@ -1192,7 +1295,8 @@ def build_rows(
              merged_ranges=len(worksheet.merged_cells.ranges))
 
     carry_hints: dict[str, str] = {}
-    start_row = max(1, metadata_row + 1)
+    header_row = int(header_hints.get("__row") or metadata_row)
+    start_row = max(1, metadata_row + 1, header_row + 1)
     max_row = worksheet.max_row
     max_column = worksheet.max_column
 
@@ -1272,6 +1376,8 @@ def build_rows(
             
             # Performance: Optimized hint processing
             for field_name, column_index in header_hints.items():
+                if field_name.startswith("__"):
+                    continue
                 if not column_index:
                     continue
 
@@ -1365,6 +1471,10 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
             # Performance: Header detection optimization
             with Timer(f"detect_header_hints_{worksheet.title}"):
                 header_hints = detect_header_hints(worksheet, metadata_row)
+
+            if metadata_row == 0 and missing_required_headers(header_hints):
+                log_event("worksheet_skipped_no_wbs_or_strict_headers", sheet_title=worksheet.title)
+                continue
             
             # Performance: Image extraction with detailed timing
             image_extraction_start = time.perf_counter()

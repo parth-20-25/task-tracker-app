@@ -483,6 +483,16 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_upload_batches_project_uploader
+    ON design.upload_batches (project_id, uploaded_by_user_id, uploaded_by)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_projects_department_uploader
+    ON design.projects (department_id, uploaded_by)
+  `);
+
+  await client.query(`
     CREATE INDEX IF NOT EXISTS idx_fixture_workflow_revisions_fixture_changed
     ON fixture_workflow_revisions (fixture_id, changed_at DESC)
   `);

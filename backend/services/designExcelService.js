@@ -4,13 +4,19 @@ const { instrumentModuleExports } = require("../lib/observability");
 const { logger } = require("../lib/logger");
 const { createAuditLog } = require("../repositories/auditRepository");
 const { getActiveWorkflowForDepartment, initProgressForFixture } = require("../repositories/fixtureWorkflowRepository");
+const {
+  buildVisibleUsersCte,
+  visibleFixturePredicate,
+  visibleProjectPredicate,
+} = require("../repositories/projectVisibility");
 const { pool } = require("../db");
 const {
   upsertProjectByNumber,
-  findFixturesByProjectForDedupe,
   createUploadBatch,
   createUploadErrors,
   createUploadRowCorrections,
+  findFixtureByIdForUser,
+  updateFixtureReferenceImageForDepartment,
   upsertFixture
 } = require("../repositories/designProjectCatalogRepository");
 
@@ -144,6 +150,9 @@ function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
     candidate_values: Array.isArray(rawData.candidate_values) ? rawData.candidate_values : [],
     missing_fields: parsedMissingFields,
     problem_fields: problemFields,
+    rejected_field: rawData.rejected_field || rawData.candidate_field || candidateField || parsedMissingFields[0] || null,
+    detected_value: rawData.detected_value ?? null,
+    expected: rawData.expected || null,
     snapshot_cells: Array.isArray(rawData.cells) ? rawData.cells : [],
   };
 }
@@ -203,11 +212,12 @@ function assertImportableFixtureShape(fixtureData) {
   }
 
   const fixtureNo = String(fixtureData.fixture_no || "").trim();
+  const opNo = String(fixtureData.op_no || "").trim();
   const partName = String(fixtureData.part_name || "").trim();
   const fixtureType = String(fixtureData.fixture_type || "").trim();
   const qty = Number(fixtureData.qty);
 
-  if (!fixtureNo || !partName || !fixtureType || !Number.isInteger(qty) || qty <= 0) {
+  if (!fixtureNo || !opNo || !partName || !fixtureType || !Number.isInteger(qty) || qty <= 0) {
     throw new AppError(400, buildDecisionErrorMessage("Fixture confirmation payload failed strict validation", fixtureData));
   }
 }
@@ -220,22 +230,117 @@ async function resolveExistingFixturesForProject(user, fileInfo) {
   try {
     const projectCheck = await client.query(
       `
-        SELECT id AS project_id
-        FROM design.projects
-        WHERE project_no = $1
-          AND department_id = $2
+        ${buildVisibleUsersCte("$1")}
+        SELECT p.id AS project_id
+        FROM design.projects p
+        WHERE p.project_no = $2
+          AND p.department_id = $3
+          AND ${visibleProjectPredicate("p")}
       `,
-      [project_code_clean, departmentId],
+      [user.employee_id, project_code_clean, departmentId],
     );
 
     if (projectCheck.rows.length === 0) {
+      await assertProjectNumberVisibleForImport(user, project_code_clean, departmentId, client);
       return [];
     }
 
     const projectId = projectCheck.rows[0].project_id;
-    return findFixturesByProjectForDedupe(projectId, client);
+    const fixtureResult = await client.query(
+      `
+        ${buildVisibleUsersCte("$1")}
+        SELECT
+          f.id AS fixture_id,
+          f.project_id,
+          f.batch_id,
+          f.fixture_no,
+          f.op_no,
+          f.part_name,
+          f.fixture_type,
+          f.remark,
+          f.qty,
+          f.image_1_url,
+          f.image_2_url,
+          f.ingestion_source,
+          f.revision_no,
+          f.is_legacy_workflow
+        FROM design.fixtures f
+        JOIN design.projects p
+          ON p.id = f.project_id
+        WHERE f.project_id = $2
+          AND ${visibleFixturePredicate("f", "p")}
+      `,
+      [user.employee_id, projectId],
+    );
+
+    return fixtureResult.rows.map((row) => ({
+      fixture_id: row.fixture_id,
+      project_id: row.project_id,
+      batch_id: row.batch_id,
+      fixture_no: row.fixture_no,
+      op_no: row.op_no,
+      part_name: row.part_name,
+      fixture_type: row.fixture_type,
+      remark: row.remark || null,
+      qty: Number(row.qty),
+      image_1_url: row.image_1_url || null,
+      image_2_url: row.image_2_url || null,
+      ingestion_source: row.ingestion_source || null,
+      revision_no: Number(row.revision_no || 0),
+      is_legacy_workflow: row.is_legacy_workflow === true,
+    }));
   } finally {
     client.release();
+  }
+}
+
+async function assertProjectNumberVisibleForImport(user, projectNo, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT p.id
+      FROM design.projects p
+      WHERE p.project_no = $2
+        AND p.department_id = $3
+        AND NOT (${visibleProjectPredicate("p")})
+      LIMIT 1
+    `,
+    [user.employee_id, projectNo, departmentId],
+  );
+
+  if (result.rows.length > 0) {
+    throw new AppError(403, "Project No is outside your reporting-tree visibility and cannot be imported or updated.");
+  }
+}
+
+async function assertNoHiddenFixtureConflicts(user, projectId, fixtureNumbers, client = pool) {
+  const normalizedFixtureNumbers = [...new Set(
+    fixtureNumbers
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  )];
+
+  if (normalizedFixtureNumbers.length === 0) {
+    return;
+  }
+
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT f.fixture_no
+      FROM design.fixtures f
+      JOIN design.projects p
+        ON p.id = f.project_id
+      WHERE f.project_id = $2
+        AND f.fixture_no = ANY($3::text[])
+        AND NOT (${visibleFixturePredicate("f", "p")})
+      LIMIT 1
+    `,
+    [user.employee_id, projectId, normalizedFixtureNumbers],
+  );
+
+  if (result.rows.length > 0) {
+    throw new AppError(403, "One or more Fixture No values are outside your reporting-tree visibility and cannot be updated.");
   }
 }
 
@@ -673,6 +778,8 @@ async function confirmUpload(user, payload = {}) {
       throw new AppError(409, `No workflow configured for department ${departmentId}`);
     }
 
+    await assertProjectNumberVisibleForImport(user, file_info.project_code, departmentId, client);
+
     const project = await upsertProjectByNumber({
       project_no: file_info.project_code,
       project_name: file_info.project_name_display,
@@ -711,6 +818,13 @@ async function confirmUpload(user, payload = {}) {
     if (!project?.project_id) {
       throw new AppError(500, "Project resolution failed during controlled import");
     }
+
+    await assertNoHiddenFixtureConflicts(
+      user,
+      project.project_id,
+      actionableItems.map((fixtureData) => fixtureData.fixture_no),
+      client,
+    );
 
     const batchId = await createUploadBatch({
       project_id: project.project_id,
@@ -881,6 +995,11 @@ async function uploadFixtureReferenceImage(
   imageType,
   imageUrl,
 ) {
+  const fixture = await findFixtureByIdForUser(fixtureId, user, departmentId);
+  if (!fixture) {
+    throw new AppError(404, "Fixture not found");
+  }
+
   const result = await updateFixtureReferenceImageForDepartment({
     fixtureId,
     departmentId,

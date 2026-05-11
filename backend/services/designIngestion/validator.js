@@ -158,6 +158,10 @@ function buildProblemFields(reason, missingFields = [], candidateField) {
     derived.add("qty");
   }
 
+  if (reason === "op_no_missing" || reason === "op_no_invalid") {
+    derived.add("op_no");
+  }
+
   return Array.from(derived);
 }
 
@@ -333,6 +337,8 @@ function validateParsedData(parsedRows) {
       rejectedRows.push(buildRejectedRow(rowMeta, "Fixture No is mandatory for import.", raw_data, diagnostics, {
         reason: "fixture_no_missing",
         expected: "A PARC fixture number such as PARC25119001",
+        rejected_field: "Fixture No",
+        detected_value: fixture_no || "",
         missing_fields: [toFieldLabel("fixture_no")],
       }));
       continue;
@@ -342,6 +348,29 @@ function validateParsedData(parsedRows) {
       rejectedRows.push(buildRejectedRow(rowMeta, "Fixture No must match the PARC fixture format.", raw_data, diagnostics, {
         reason: "fixture_no_invalid",
         expected: "A PARC fixture number such as PARC25119001",
+        rejected_field: "Fixture No",
+        detected_value: fixture_no || "",
+      }));
+      continue;
+    }
+
+    if (!normalizedOpNo) {
+      rejectedRows.push(buildRejectedRow(rowMeta, "OP.NO is mandatory for import.", raw_data, diagnostics, {
+        reason: "op_no_missing",
+        expected: "OP format such as OP 10",
+        rejected_field: "OP.NO",
+        detected_value: op_no || "",
+        missing_fields: [toFieldLabel("op_no")],
+      }));
+      continue;
+    }
+
+    if (!/^OP\s+\d+[A-Z0-9._/-]*$/i.test(normalizedOpNo)) {
+      rejectedRows.push(buildRejectedRow(rowMeta, "OP.NO must match the expected OP format.", raw_data, diagnostics, {
+        reason: "op_no_invalid",
+        expected: "OP format such as OP 10",
+        rejected_field: "OP.NO",
+        detected_value: op_no || "",
       }));
       continue;
     }
@@ -360,6 +389,9 @@ function validateParsedData(parsedRows) {
         {
           reason: "required_field_missing",
           missing_fields: missing,
+          rejected_field: missing[0] || "Required Field",
+          detected_value: "",
+          expected: "All required fields must be present: Fixture No, OP.NO, Part Name, Fixture Type, QTY",
         },
       ));
       continue;
@@ -369,6 +401,8 @@ function validateParsedData(parsedRows) {
       rejectedRows.push(buildRejectedRow(rowMeta, "QTY must be a valid numeric value.", raw_data, diagnostics, {
         reason: "qty_invalid",
         expected: "A positive number such as 1, 2, or 2.0",
+        rejected_field: "QTY",
+        detected_value: qtyRaw || "",
       }));
       continue;
     }
@@ -378,6 +412,9 @@ function validateParsedData(parsedRows) {
     if (seenFixtureNumbers.has(fixtureNoKey)) {
       rejectedRows.push(buildRejectedRow(rowMeta, "Duplicate fixture number found in uploaded file.", raw_data, diagnostics, {
         reason: "duplicate_fixture_no",
+        rejected_field: "Fixture No",
+        detected_value: normalizedFixtureNo,
+        expected: "Fixture No must be unique within the uploaded file",
       }));
       continue;
     }

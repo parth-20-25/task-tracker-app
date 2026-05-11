@@ -18,8 +18,8 @@ const {
   validateRejectedUploadRow,
 } = require("../services/designExcelService");
 const {
-  findProjectByIdForDepartment,
-  listFixturesByUploadBatchForDepartment,
+  findProjectByIdForUser,
+  listFixturesByUploadBatchForUser,
   updateFixtureReferenceImageForDepartment,
 } = require("../repositories/designProjectCatalogRepository");
 const { createAuditLog } = require("../repositories/auditRepository");
@@ -78,7 +78,7 @@ router.get(
     );
 
     if (req.query.project_id) {
-      const project = await findProjectByIdForDepartment(req.query.project_id, departmentId);
+      const project = await findProjectByIdForUser(req.query.project_id, req.user, departmentId);
 
       if (!project) {
         throw new AppError(404, "Project not found for the selected department");
@@ -165,7 +165,7 @@ router.get(
     );
 
     const batchId = req.params.batchId;
-    const fixtures = await listFixturesByUploadBatchForDepartment(batchId, departmentId);
+    const fixtures = await listFixturesByUploadBatchForUser(batchId, req.user, departmentId);
 
     return sendSuccess(res, fixtures, 200);
   }),

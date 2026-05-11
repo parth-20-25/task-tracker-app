@@ -1,5 +1,6 @@
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
+const { buildVisibleUsersCte, visibleBatchPredicate } = require("./projectVisibility");
 
 const BATCH_DELETE_BLOCK_REASON = "Cannot delete batch. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
@@ -152,6 +153,42 @@ async function listBatchesWithSummary(departmentId, client = pool) {
   return result.rows.map(mapBatchSummary);
 }
 
+async function listBatchesWithSummaryForUser(user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        ub.id,
+        ub.project_id,
+        dp.project_no,
+        COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
+        dp.customer_name,
+        dp.department_id,
+        ub.uploaded_by,
+        ub.uploaded_by_user_id,
+        ub.uploaded_at,
+        ub.accepted_rows,
+        ub.rejected_rows,
+        COUNT(DISTINCT f.id)::integer AS total_fixtures,
+        COUNT(DISTINCT f.id) FILTER (
+          WHERE fwp.status IS NOT NULL
+            AND NOT (fwp.status = ANY($3::text[]))
+        )::integer AS active_count
+      FROM design.upload_batches ub
+      JOIN design.projects dp ON dp.id = ub.project_id
+      LEFT JOIN design.fixtures f ON f.batch_id = ub.id
+      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
+      WHERE ($2::text IS NULL OR dp.department_id = $2)
+        AND ${visibleBatchPredicate("ub")}
+      GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
+      ORDER BY ub.uploaded_at DESC
+    `,
+    [user.employee_id, departmentId, DELETABLE_FIXTURE_STATUSES],
+  );
+
+  return result.rows.map(mapBatchSummary);
+}
+
 async function getBatchById(batchId, client = pool) {
   const result = await client.query(
     `
@@ -180,6 +217,41 @@ async function getBatchById(batchId, client = pool) {
       GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
     `,
     [batchId, DELETABLE_FIXTURE_STATUSES],
+  );
+
+  return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
+}
+
+async function getBatchByIdForUser(batchId, user, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        ub.id,
+        ub.project_id,
+        dp.project_no,
+        COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
+        dp.customer_name,
+        dp.department_id,
+        ub.uploaded_by,
+        ub.uploaded_by_user_id,
+        ub.uploaded_at,
+        ub.accepted_rows,
+        ub.rejected_rows,
+        COUNT(DISTINCT f.id)::integer AS total_fixtures,
+        COUNT(DISTINCT f.id) FILTER (
+          WHERE fwp.status IS NOT NULL
+            AND NOT (fwp.status = ANY($3::text[]))
+        )::integer AS active_count
+      FROM design.upload_batches ub
+      JOIN design.projects dp ON dp.id = ub.project_id
+      LEFT JOIN design.fixtures f ON f.batch_id = ub.id
+      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
+      WHERE ub.id = $2
+        AND ${visibleBatchPredicate("ub")}
+      GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
+    `,
+    [user.employee_id, batchId, DELETABLE_FIXTURE_STATUSES],
   );
 
   return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
@@ -281,5 +353,7 @@ module.exports = instrumentModuleExports("repository.batchRepository", {
   checkBatchDeletionBlocked,
   deleteBatchCascade,
   getBatchById,
+  getBatchByIdForUser,
   listBatchesWithSummary,
+  listBatchesWithSummaryForUser,
 });

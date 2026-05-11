@@ -1,6 +1,11 @@
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
 const { AppError } = require("../lib/AppError");
+const {
+  buildVisibleUsersCte,
+  visibleFixturePredicate,
+  visibleProjectPredicate,
+} = require("./projectVisibility");
 
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
@@ -133,6 +138,27 @@ async function listProjectOptionsByDepartment(departmentId, client = pool) {
   return result.rows.map(mapProjectOptionRow);
 }
 
+async function listProjectOptionsForUser(user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        p.customer_name,
+        p.department_id
+      FROM design.projects p
+      WHERE p.department_id = $2
+        AND ${visibleProjectPredicate("p")}
+      ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
+    `,
+    [user.employee_id, departmentId],
+  );
+
+  return result.rows.map(mapProjectOptionRow);
+}
+
 async function countProjectsByDepartment(departmentId, client = pool) {
   const result = await client.query(
     `
@@ -161,6 +187,28 @@ async function findProjectByIdForDepartment(projectId, departmentId, client = po
       LIMIT 1
     `,
     [projectId, departmentId],
+  );
+
+  return mapProjectOptionRow(result.rows[0]);
+}
+
+async function findProjectByIdForUser(projectId, user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        p.customer_name,
+        p.department_id
+      FROM design.projects p
+      WHERE p.id = $2
+        AND p.department_id = $3
+        AND ${visibleProjectPredicate("p")}
+      LIMIT 1
+    `,
+    [user.employee_id, projectId, departmentId],
   );
 
   return mapProjectOptionRow(result.rows[0]);
@@ -197,6 +245,39 @@ async function listDepartmentProjectsByDepartment(departmentId, client = pool) {
       ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
     `,
     [departmentId],
+  );
+
+  return result.rows.map(mapDepartmentProjectRow);
+}
+
+async function listDepartmentProjectsForUser(user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        p.customer_name,
+        p.project_name AS project_description,
+        (
+          SELECT COUNT(*)::integer
+          FROM design.fixtures visible_fixture
+          WHERE visible_fixture.project_id = p.id
+            AND ${visibleFixturePredicate("visible_fixture", "p")}
+        ) AS instance_count,
+        NULL::text AS quantity_index,
+        NULL::date AS rework_date,
+        p.department_id,
+        p.uploaded_by,
+        p.created_at,
+        p.updated_at
+      FROM design.projects p
+      WHERE p.department_id = $2
+        AND ${visibleProjectPredicate("p")}
+      ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
+    `,
+    [user.employee_id, departmentId],
   );
 
   return result.rows.map(mapDepartmentProjectRow);
@@ -286,6 +367,38 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, clien
   return result.rows.map(mapFixtureOptionRow);
 }
 
+async function listFixturesByProjectForUser(projectId, user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        di.id AS fixture_id,
+        di.project_id,
+        di.batch_id,
+        di.fixture_no,
+        di.op_no,
+        di.part_name,
+        di.fixture_type,
+        di.remark,
+        di.qty,
+        di.image_1_url,
+        di.image_2_url,
+        di.ingestion_source
+      FROM design.fixtures di
+      JOIN design.projects dp
+        ON dp.id = di.project_id
+      WHERE dp.id = $2
+        AND dp.department_id = $3
+        AND di.is_workflow_complete = FALSE
+        AND ${visibleFixturePredicate("di", "dp")}
+      ORDER BY di.fixture_no ASC, di.id ASC
+    `,
+    [user.employee_id, projectId, departmentId],
+  );
+
+  return result.rows.map(mapFixtureOptionRow);
+}
+
 async function findFixtureByIdForDepartment(fixtureId, departmentId, client = pool) {
   const result = await client.query(
     `
@@ -310,6 +423,37 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
       LIMIT 1
     `,
     [fixtureId, departmentId],
+  );
+
+  return mapFixtureOptionRow(result.rows[0]);
+}
+
+async function findFixtureByIdForUser(fixtureId, user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        di.id AS fixture_id,
+        di.project_id,
+        di.batch_id,
+        di.fixture_no,
+        di.op_no,
+        di.part_name,
+        di.fixture_type,
+        di.remark,
+        di.qty,
+        di.image_1_url,
+        di.image_2_url,
+        di.ingestion_source
+      FROM design.fixtures di
+      JOIN design.projects dp
+        ON dp.id = di.project_id
+      WHERE di.id = $2
+        AND dp.department_id = $3
+        AND ${visibleFixturePredicate("di", "dp")}
+      LIMIT 1
+    `,
+    [user.employee_id, fixtureId, departmentId],
   );
 
   return mapFixtureOptionRow(result.rows[0]);
@@ -471,6 +615,40 @@ async function listFixturesByUploadBatchForDepartment(batchId, departmentId, cli
   }));
 }
 
+async function listFixturesByUploadBatchForUser(batchId, user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        di.id AS fixture_id,
+        di.fixture_no,
+        di.image_1_url,
+        di.image_2_url,
+        di.ingestion_source,
+        di.revision_no,
+        di.is_legacy_workflow
+      FROM design.fixtures di
+      JOIN design.upload_batches ub
+        ON ub.id = di.batch_id
+      JOIN design.projects dp
+        ON dp.id = di.project_id
+      WHERE ub.id = $2
+        AND dp.department_id = $3
+        AND ${visibleFixturePredicate("di", "dp")}
+      ORDER BY di.fixture_no ASC, di.id ASC
+    `,
+    [user.employee_id, batchId, departmentId],
+  );
+
+  return result.rows.map((row) => ({
+    fixture_id: row.fixture_id,
+    fixture_no: row.fixture_no,
+    image_1_url: row.image_1_url || null,
+    image_2_url: row.image_2_url || null,
+    ingestion_source: row.ingestion_source || null,
+  }));
+}
+
 async function updateFixtureReferenceImageForDepartment({
   fixtureId,
   departmentId,
@@ -596,13 +774,19 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   createUploadRowCorrections,
   findDepartmentProjectByIdForDepartment,
   findFixtureByIdForDepartment,
+  findFixtureByIdForUser,
   findFixturesByProjectForDedupe,
   findProjectByIdForDepartment,
+  findProjectByIdForUser,
   findProjectByNumberForDepartment,
   listDepartmentProjectsByDepartment,
+  listDepartmentProjectsForUser,
   listFixturesByProjectForDepartment,
+  listFixturesByProjectForUser,
   listFixturesByUploadBatchForDepartment,
+  listFixturesByUploadBatchForUser,
   listProjectOptionsByDepartment,
+  listProjectOptionsForUser,
   touchProject,
   updateFixtureReferenceImageForDepartment,
   upsertFixture,

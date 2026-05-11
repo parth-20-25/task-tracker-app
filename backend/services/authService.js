@@ -9,7 +9,6 @@ const {
 } = require("../repositories/usersRepository");
 const { loadPermissions } = require("../middleware/authorize");
 const { generateToken } = require("../auth");
-const { isAdmin } = require("./accessControlService");
 
 function normalizeIdentifier(identifier) {
   if (typeof identifier !== "string") {
@@ -55,9 +54,7 @@ async function loginUser(identifier, password) {
   }
 
   user.permissions = await loadPermissions(user.role);
-  user.visible_user_ids = isAdmin(user)
-    ? null
-    : await getVisibleUserIdsForEmployee(user.employee_id);
+  user.visible_user_ids = await getVisibleUserIdsForEmployee(user.employee_id);
   const token = generateToken(canonicalEmployeeId);
 
   await createAuditLog({
@@ -88,9 +85,7 @@ async function getAuthenticatedUser(employeeId) {
   }
 
   user.permissions = await loadPermissions(user.role);
-  user.visible_user_ids = isAdmin(user)
-    ? null
-    : await getVisibleUserIdsForEmployee(user.employee_id);
+  user.visible_user_ids = await getVisibleUserIdsForEmployee(user.employee_id);
   return user;
 }
 

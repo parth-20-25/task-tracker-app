@@ -78,7 +78,7 @@ class SemanticFixtureParserTests(unittest.TestCase):
 
         self.assertEqual(rows, [])
         self.assertEqual(len(errors), 1)
-        self.assertIn("Could not confidently extract required field", errors[0]["error_message"])
+        self.assertIn("Missing required Excel headers", errors[0]["error_message"])
 
     def test_build_rows_skips_non_fixture_garbage_rows(self):
         workbook = Workbook()
@@ -92,7 +92,8 @@ class SemanticFixtureParserTests(unittest.TestCase):
         rows, errors = build_rows(worksheet, metadata_row, header_hints, {})
 
         self.assertEqual(rows, [])
-        self.assertEqual(errors, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Missing required Excel headers", errors[0]["error_message"])
 
     def test_build_rows_rejects_ambiguous_part_name_without_guessing(self):
         workbook = Workbook()
@@ -112,7 +113,7 @@ class SemanticFixtureParserTests(unittest.TestCase):
 
         self.assertEqual(rows, [])
         self.assertEqual(len(errors), 1)
-        self.assertIn("Multiple possible values found for Part Name", errors[0]["error_message"])
+        self.assertIn("Missing required Excel headers", errors[0]["error_message"])
 
     def test_build_rows_carries_vertical_merged_fixture_values(self):
         workbook = Workbook()
@@ -143,6 +144,56 @@ class SemanticFixtureParserTests(unittest.TestCase):
         self.assertEqual(rows[1]["fixture_no"], "PARC26001005")
         self.assertEqual(rows[1]["op_no"], "OP 22")
         self.assertEqual(rows[1]["qty"], "2")
+
+    def test_build_rows_ignores_remark_column_for_validation(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
+        worksheet["A3"] = "Fixture No"
+        worksheet["B3"] = "OP.NO"
+        worksheet["C3"] = "Part Name"
+        worksheet["D3"] = "Fixture Type"
+        worksheet["E3"] = "QTY"
+        worksheet["F3"] = "Remark"
+        worksheet["A4"] = "PARC26001006"
+        worksheet["B4"] = "OP 31"
+        worksheet["C4"] = "REMARK SAFE PART"
+        worksheet["D4"] = "Custom type text"
+        worksheet["E4"] = 1
+        worksheet["F4"] = ""
+        worksheet["A5"] = "PARC26001007"
+        worksheet["B5"] = "OP 32"
+        worksheet["C5"] = "REMARK FREE PART"
+        worksheet["D5"] = "Another custom type"
+        worksheet["E5"] = 2
+        worksheet["F5"] = "Any invalid free text here"
+
+        metadata_row, _ = find_metadata_row(worksheet)
+        header_hints = detect_header_hints(worksheet, metadata_row)
+        rows, errors = build_rows(worksheet, metadata_row, header_hints, {})
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(rows), 2)
+        self.assertIsNone(rows[0]["remark"])
+        self.assertIsNone(rows[1]["remark"])
+
+    def test_detect_header_hints_rejects_loose_renamed_columns(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
+        worksheet["A3"] = "Fixture Identifier"
+        worksheet["B3"] = "Operation"
+        worksheet["C3"] = "Description"
+        worksheet["D3"] = "Type"
+        worksheet["E3"] = "Nos"
+
+        metadata_row, _ = find_metadata_row(worksheet)
+        header_hints = detect_header_hints(worksheet, metadata_row)
+        rows, errors = build_rows(worksheet, metadata_row, header_hints, {})
+
+        self.assertEqual(rows, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Missing required Excel headers", errors[0]["error_message"])
 
     def test_process_workbook_uses_fixture_sheet_not_first_cost_sheet(self):
         workbook = Workbook()

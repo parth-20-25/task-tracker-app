@@ -5,6 +5,11 @@ const { instrumentModuleExports } = require("../lib/observability");
 const { TASK_STATUSES } = require("../config/constants");
 const { listTasksByAccess } = require("../repositories/tasksRepository");
 const { getTaskAccess, getVisibleUserIds, isAdmin } = require("./accessControlService");
+const {
+  buildVisibleUsersCte,
+  visibleFixturePredicate,
+  visibleProjectPredicate,
+} = require("../repositories/projectVisibility");
 
 const REPORTABLE_STATUSES = new Set([
   TASK_STATUSES.ASSIGNED,
@@ -411,8 +416,27 @@ async function buildReworkHistoryMap(reportRows) {
 }
 
 function buildReportAccessClause(user, params) {
+  function projectVisibilityClause() {
+    params.push(user?.employee_id || "");
+    const rootParam = `$${params.length}`;
+    return `
+      (
+        project.id IS NULL
+        OR EXISTS (
+          ${buildVisibleUsersCte(rootParam)}
+          SELECT 1
+          WHERE ${visibleProjectPredicate("project")}
+            AND (
+              fixture.id IS NULL
+              OR ${visibleFixturePredicate("fixture", "project")}
+            )
+        )
+      )
+    `;
+  }
+
   if (isAdmin(user)) {
-    return "";
+    return projectVisibilityClause();
   }
 
   const visibleUserIds = getVisibleUserIds(user);
@@ -431,6 +455,7 @@ function buildReportAccessClause(user, params) {
         WHERE task_assignee.employee_id = ANY($${params.length}::text[])
       )
     )
+    AND ${projectVisibilityClause()}
   `;
 }
 
@@ -520,6 +545,22 @@ async function listTaskReportRows(user, filters = {}) {
       LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
       LEFT JOIN departments task_department ON task_department.id = t.department_id
       LEFT JOIN users assigner ON assigner.employee_id = t.assigned_by
+      LEFT JOIN design.projects project
+        ON (
+          t.project_id IS NOT NULL
+          AND project.id = t.project_id
+        ) OR (
+          t.project_id IS NULL
+          AND project.project_no = NULLIF(t.project_no, '')
+          AND project.department_id = t.department_id
+        )
+      LEFT JOIN design.fixtures fixture
+        ON fixture.id = t.fixture_id
+        OR (
+          t.fixture_id IS NULL
+          AND fixture.project_id = project.id
+          AND fixture.fixture_no = COALESCE(NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, ''))
+        )
       ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : ""}
       ORDER BY COALESCE(t.assigned_at, t.created_at) DESC, t.id DESC
     `,

@@ -1,4 +1,9 @@
 const { PERMISSIONS, ROLE_LEVELS, USER_SCOPES } = require("../config/constants");
+const {
+  buildVisibleUsersCte,
+  visibleFixturePredicate,
+  visibleProjectPredicate,
+} = require("../repositories/projectVisibility");
 
 const PERMISSION_ALIASES = {
   can_assign_task: [PERMISSIONS.ASSIGN_TASK],
@@ -83,10 +88,6 @@ function getVisibleUserIds(user) {
     return [];
   }
 
-  if (isAdmin(user)) {
-    return null;
-  }
-
   const visibleUserIds = Array.isArray(user.visible_user_ids)
     ? user.visible_user_ids.filter(Boolean)
     : [];
@@ -131,6 +132,19 @@ function canAccessTask(user, task) {
     return false;
   }
 
+  const visibleUserIds = getVisibleUserIds(user);
+  if (task.project_id && !task.fixture_uploaded_by && !task.project_uploaded_by) {
+    return false;
+  }
+
+  if (task.project_id && task.fixture_uploaded_by && !visibleUserIds.includes(task.fixture_uploaded_by)) {
+    return false;
+  }
+
+  if (task.project_id && !task.fixture_uploaded_by && task.project_uploaded_by && !visibleUserIds.includes(task.project_uploaded_by)) {
+    return false;
+  }
+
   if (isAdmin(user)) {
     return true;
   }
@@ -139,7 +153,6 @@ function canAccessTask(user, task) {
     return true;
   }
 
-  const visibleUserIds = getVisibleUserIds(user);
   const taskAssigneeIds = [
     task.assigned_user_id,
     task.assigned_to,
@@ -196,14 +209,38 @@ function isTaskAssignee(user, task) {
 }
 
 function getTaskAccess(user) {
+  const projectVisibilityPredicate = (params) => {
+    params.push(user?.employee_id || "");
+    const rootParam = `$${params.length}`;
+    return `
+      (
+        project.id IS NULL
+        OR EXISTS (
+          ${buildVisibleUsersCte(rootParam)}
+          SELECT 1
+          WHERE ${visibleProjectPredicate("project")}
+            AND (
+              fixture.id IS NULL
+              OR ${visibleFixturePredicate("fixture", "project")}
+            )
+        )
+      )
+    `;
+  };
+
   if (isAdmin(user)) {
-    return { clause: "WHERE t.status <> 'cancelled'", params: [] };
+    const params = [];
+    return {
+      clause: `WHERE t.status <> 'cancelled' AND ${projectVisibilityPredicate(params)}`,
+      params,
+    };
   }
 
   if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS) && user?.department_id) {
+    const params = [user.department_id];
     return {
-      clause: "WHERE t.status <> 'cancelled' AND t.department_id = $1",
-      params: [user.department_id],
+      clause: `WHERE t.status <> 'cancelled' AND t.department_id = $1 AND ${projectVisibilityPredicate(params)}`,
+      params,
     };
   }
 
@@ -213,6 +250,7 @@ function getTaskAccess(user) {
     return { clause: "WHERE 1 = 0", params: [] };
   }
 
+  const params = [visibleUserIds];
   return {
     clause: `
       WHERE t.status <> 'cancelled'
@@ -224,8 +262,9 @@ function getTaskAccess(user) {
             WHERE task_assignee.employee_id = ANY($1::text[])
           )
         )
+        AND ${projectVisibilityPredicate(params)}
     `,
-    params: [visibleUserIds],
+    params,
   };
 }
 

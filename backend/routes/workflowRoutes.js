@@ -6,6 +6,7 @@ const { PERMISSIONS } = require("../config/constants");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
+const { findFixtureByIdForUser } = require("../repositories/designProjectCatalogRepository");
 const {
   getWorkflowForDepartment,
   getCurrentStageForFixture,
@@ -22,6 +23,13 @@ const {
 const router = express.Router();
 
 router.use(authenticate);
+
+async function ensureVisibleFixtureForWorkflow(user, fixtureId, departmentId) {
+  const fixture = await findFixtureByIdForUser(fixtureId, user, departmentId);
+  if (!fixture) {
+    throw new AppError(404, "Fixture not found");
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/workflows/by-department
@@ -57,10 +65,9 @@ router.get(
       throw new AppError(400, "fixture_id query parameter is required");
     }
 
-    const departmentId = req.query.department_id
-      ? resolveAccessibleDepartmentId(req.user, req.query.department_id, "A department is required")
-      : null;
+    const departmentId = resolveAccessibleDepartmentId(req.user, req.query.department_id, "A department is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await getCurrentStageForFixture(fixtureId, departmentId);
     return sendSuccess(res, result ?? null);
   }),
@@ -84,6 +91,7 @@ router.get(
       throw new AppError(400, "fixture_id query parameter is required");
     }
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await getFullProgressForFixture(fixtureId, departmentId);
     return sendSuccess(res, result);
   }),
@@ -107,6 +115,7 @@ router.post(
       throw new AppError(400, "fixture_id is required");
     }
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await validateAssignment(fixtureId, departmentId);
     return sendSuccess(res, result);
   }),
@@ -132,6 +141,7 @@ router.post(
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
     if (!assignedTo) throw new AppError(400, "assigned_to is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await assignFixtureStage(fixtureId, departmentId, assignedTo, req.user);
     return sendSuccess(res, result, 200);
   }),
@@ -154,6 +164,7 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await completeFixtureStage(fixtureId, departmentId);
     return sendSuccess(res, result);
   }),
@@ -176,6 +187,7 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await approveFixtureStage(fixtureId, departmentId);
     return sendSuccess(res, result);
   }),
@@ -198,6 +210,7 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await rejectFixtureStage(fixtureId, departmentId);
     return sendSuccess(res, result);
   }),
@@ -216,6 +229,7 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await reopenFixtureStage({
       actor: req.user,
       fixtureId,
@@ -245,6 +259,7 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await manipulateFixtureStage({
       actor: req.user,
       fixtureId,

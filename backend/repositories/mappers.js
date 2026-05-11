@@ -161,6 +161,8 @@ function mapTaskRow(row) {
     recurrence_rule: row.recurrence_rule,
     project_id: row.resolved_project_id || null,
     fixture_id: row.resolved_fixture_id || null,
+    project_uploaded_by: row.project_uploaded_by || null,
+    fixture_uploaded_by: row.fixture_batch_uploaded_by_user_id || row.fixture_batch_uploaded_by || null,
     project_no: projectNo,
     fixture_no: fixtureNo,
     project_code: projectNo,

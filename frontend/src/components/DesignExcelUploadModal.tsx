@@ -309,9 +309,12 @@ function RejectedRowCorrectionCard({
   const problemFields = getRejectedProblemFields(rejected);
   const missingFields = Array.isArray(validation.missing_fields) ? validation.missing_fields : [];
   const candidateValues = Array.isArray(validation.candidate_values) ? validation.candidate_values : [];
+  const rejectedField = normalizeCorrectionValue(validation.rejected_field || validation.candidate_field);
+  const detectedValue = normalizeCorrectionValue(validation.detected_value);
+  const expectedValue = normalizeCorrectionValue(validation.expected);
 
   return (
-    <div className="rounded-2xl border border-red-200 bg-white/90 p-4 shadow-sm dark:border-red-900/40 dark:bg-red-950/10">
+    <div className="rounded-md border border-red-200 bg-white p-4 shadow-sm dark:border-red-900/40 dark:bg-red-950/10">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold text-red-700 dark:text-red-300">{getRowReferenceSummary(rejected)}</div>
@@ -323,11 +326,26 @@ function RejectedRowCorrectionCard({
           onClick={onValidate}
           disabled={isValidating || Object.keys(fieldErrors).length > 0}
         >
-          {isValidating ? "Validating..." : "Validate & Add"}
+          {isValidating ? "Revalidating..." : "Save & Revalidate"}
         </Button>
       </div>
 
-      <div className="mt-3 grid gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground md:grid-cols-2">
+      <div className="mt-3 grid gap-2 rounded-md border border-border/70 bg-muted/20 p-3 text-xs md:grid-cols-4">
+        <div>
+          <div className="font-semibold text-foreground">Rejected Field</div>
+          <div className="mt-1 text-muted-foreground">{formatRejectedValue(rejectedField || problemFields.join(", "))}</div>
+        </div>
+        <div>
+          <div className="font-semibold text-foreground">Detected Value</div>
+          <div className="mt-1 text-muted-foreground">{formatRejectedValue(detectedValue)}</div>
+        </div>
+        <div className="md:col-span-2">
+          <div className="font-semibold text-foreground">Expected Format</div>
+          <div className="mt-1 text-muted-foreground">{formatRejectedValue(expectedValue)}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 rounded-md border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground md:grid-cols-2">
         <div>
           <div className="font-semibold text-foreground">Raw Values</div>
           <div className="mt-1 space-y-1">
@@ -364,7 +382,7 @@ function RejectedRowCorrectionCard({
       </div>
 
       {candidateValues.length > 0 ? (
-        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
           <div className="font-semibold">Multiple candidate values detected</div>
           <div className="mt-1 flex flex-wrap gap-2">
             {candidateValues.map((candidate: { column?: number; value?: string }, index: number) => (

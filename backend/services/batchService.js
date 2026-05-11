@@ -4,7 +4,9 @@ const { instrumentModuleExports } = require("../lib/observability");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
   listBatchesWithSummary,
+  listBatchesWithSummaryForUser,
   getBatchById,
+  getBatchByIdForUser,
   checkBatchDeletionBlocked,
   deleteBatchCascade,
 } = require("../repositories/batchRepository");
@@ -15,14 +17,12 @@ function isBatchOwner(user, batch) {
   return Boolean(user?.employee_id && ownerId && user.employee_id === ownerId);
 }
 
-/**
- * Returns all upload batches visible to the user with their status summary.
- * Admins see all batches; department users see only their department's batches.
- */
 async function getBatches(user) {
-  const departmentId = isAdmin(user) ? null : user.department_id;
-  const batches = await listBatchesWithSummary(departmentId);
-  return batches;
+  if (!user?.department_id && !isAdmin(user)) {
+    throw new AppError(400, "User missing department_id");
+  }
+
+  return listBatchesWithSummaryForUser(user, isAdmin(user) ? null : user.department_id);
 }
 
 /**
@@ -36,14 +36,13 @@ async function getBatches(user) {
  * @param {boolean} force - bypass safety check (admin only)
  */
 async function deleteBatch(user, batchId, force = false) {
-  const batch = await getBatchById(batchId);
+  const batch = await getBatchByIdForUser(batchId, user);
   if (!batch) {
     throw new AppError(404, "Batch not found");
   }
 
   const userIsAdmin = isAdmin(user);
 
-  // Department-scope check for non-admins
   if (!userIsAdmin && batch.department_id !== user.department_id) {
     throw new AppError(403, "You do not have access to this batch");
   }

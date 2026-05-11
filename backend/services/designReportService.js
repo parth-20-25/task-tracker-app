@@ -12,6 +12,11 @@ const {
 const { logger } = require("../lib/logger");
 const { isAdmin } = require("./accessControlService");
 const { normalizeScopeReportData, validateNormalizedRow } = require("./reportService");
+const {
+  buildVisibleUsersCte,
+  visibleFixturePredicate,
+  visibleProjectPredicate,
+} = require("../repositories/projectVisibility");
 
 const STATUS_LABELS = {
   ASSIGNED: "Assigned",
@@ -1312,11 +1317,9 @@ function resolveReportDepartmentId(user, requestedDepartmentId) {
 }
 
 async function getProjectContext(user, projectId, departmentId) {
-  const params = [projectId, departmentId];
-  const whereClauses = ["p.id = $1", "p.department_id = $2"];
-
   const result = await pool.query(
     `
+      ${buildVisibleUsersCte("$1")}
       SELECT
         p.id AS project_id,
         p.project_no,
@@ -1324,10 +1327,12 @@ async function getProjectContext(user, projectId, departmentId) {
         p.customer_name,
         p.department_id
       FROM design.projects p
-      WHERE ${whereClauses.join(" AND ")}
+      WHERE p.id = $2
+        AND p.department_id = $3
+        AND ${visibleProjectPredicate("p")}
       LIMIT 1
     `,
-    params,
+    [user.employee_id, projectId, departmentId],
   );
 
   const project = result.rows[0];
@@ -1341,9 +1346,10 @@ async function getProjectContext(user, projectId, departmentId) {
   };
 }
 
-async function getFixturesForProject(projectId) {
+async function getFixturesForProject(projectId, user) {
   const result = await pool.query(
     `
+      ${buildVisibleUsersCte("$1")}
       SELECT
         p.project_no,
         p.project_name,
@@ -1386,7 +1392,7 @@ async function getFixturesForProject(projectId) {
             )
           )
         ORDER BY
-          CASE WHEN t.status = ANY($2::text[]) THEN 0 ELSE 1 END,
+          CASE WHEN t.status = ANY($3::text[]) THEN 0 ELSE 1 END,
           t.updated_at DESC NULLS LAST,
           t.created_at DESC NULLS LAST,
           t.id DESC
@@ -1394,10 +1400,11 @@ async function getFixturesForProject(projectId) {
       ) linked_task ON TRUE
       LEFT JOIN users assignee
         ON assignee.employee_id = linked_task.assigned_to
-      WHERE f.project_id = $1
+      WHERE f.project_id = $2
+        AND ${visibleFixturePredicate("f", "p")}
       ORDER BY f.fixture_no ASC, f.id ASC
     `,
-    [projectId, [...OPEN_TASK_STATUSES]],
+    [user.employee_id, projectId, [...OPEN_TASK_STATUSES]],
   );
 
   return result.rows;
@@ -1510,7 +1517,7 @@ async function exportDesignReport(user, query = {}, options = {}) {
     }
 
     context = await getProjectContext(user, projectId, departmentId);
-    fixtures = await getFixturesForProject(projectId);
+    fixtures = await getFixturesForProject(projectId, user);
   }
 
   if (!fixtures.length) {

@@ -116,8 +116,6 @@ function isHeaderLikeCell(value) {
     || key === "fixturetype"
     || key === "qty"
     || key === "quantity"
-    || key === "remarks"
-    || key === "remark"
     || key === "designer"
     || key === "partimage"
     || key === "fixtureimage"
@@ -154,9 +152,6 @@ function isOpCell(value) {
   return /\bOP\b/i.test(text) || /\bOP\.?\s*NO\b/i.test(text);
 }
 
-function isRemarkCell(_value) {
-  return false;
-}
 
 function isFixtureTypeCell(value) {
   const normalized = normalizePastedCell(value).toLowerCase();
@@ -231,15 +226,11 @@ function buildParsedRow(cells, rowNumber) {
     .map((cell, index) => ({ cell, index }))
     .find(({ cell, index }) => index !== fixtureIndex && isOpCell(cell));
 
-  const remarkCell = cells
-    .map((cell, index) => ({ cell, index }))
-    .find(({ cell }) => isRemarkCell(cell));
 
   const ignoredIndexes = new Set();
   if (fixtureIndex >= 0) ignoredIndexes.add(fixtureIndex);
   if (qtyCell) ignoredIndexes.add(qtyCell.index);
   if (opCell) ignoredIndexes.add(opCell.index);
-  if (remarkCell) ignoredIndexes.add(remarkCell.index);
 
   const residualCells = cells
     .map((cell, index) => ({ cell, index }))
@@ -290,7 +281,6 @@ function buildParsedRow(cells, rowNumber) {
     || qtyCell?.cell
     || partNameCandidate?.cell
     || fixtureTypeCandidate?.cell
-    || remarkCell?.cell
   );
 
   return {
@@ -299,7 +289,6 @@ function buildParsedRow(cells, rowNumber) {
     op_no: opCell ? normalizePastedCell(opCell.cell) : "",
     part_name: partNameCandidate ? normalizePastedCell(partNameCandidate.cell) : "",
     fixture_type: fixtureTypeCandidate ? normalizePastedCell(fixtureTypeCandidate.cell) : "",
-    remark: remarkCell ? normalizePastedCell(remarkCell.cell) : "",
     designer: designerCandidate ? normalizePastedCell(designerCandidate.cell) : "",
     qty: qtyCell ? normalizePastedCell(qtyCell.cell) : "",
     image_1_url: null,

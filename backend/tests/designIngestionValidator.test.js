@@ -12,7 +12,7 @@ function runTest(name, fn) {
   }
 }
 
-runTest("accepts rows without classifying remarks", () => {
+runTest("accepts valid fixture rows", () => {
   const result = validateParsedData([
     {
       excel_row: 8,
@@ -24,7 +24,6 @@ runTest("accepts rows without classifying remarks", () => {
       op_no: "OP 11",
       part_name: "STIFFNER MTG BKT LH/RH SUB ASSLY",
       fixture_type: "Robotic MIG Welding fixture",
-      remark: "PARC scope",
       qty: "2",
       parser_confidence: "HIGH",
     },
@@ -38,7 +37,7 @@ runTest("accepts rows without classifying remarks", () => {
   assert.equal(result.rejectedRows.length, 0);
 });
 
-runTest("accepts rows even when remarks previously looked like customer labels", () => {
+runTest("accepts valid fixture rows with any text data", () => {
   const result = validateParsedData([
     {
       excel_row: 9,
@@ -46,7 +45,6 @@ runTest("accepts rows even when remarks previously looked like customer labels",
       op_no: "OP 12",
       part_name: "STIFFNER MTG BKT LH/RH SUB ASSLY",
       fixture_type: "Robotic MIG Welding fixture",
-      remark: "Customer scope",
       qty: "1",
       parser_confidence: "HIGH",
     },
@@ -57,7 +55,7 @@ runTest("accepts rows even when remarks previously looked like customer labels",
   assert.equal(result.rejectedRows.length, 0);
 });
 
-runTest("accepts rows with blank remarks without classification", () => {
+runTest("accepts rows with minimal required fields", () => {
   const result = validateParsedData([
     {
       excel_row: 10,
@@ -65,7 +63,6 @@ runTest("accepts rows with blank remarks without classification", () => {
       op_no: "OP 13",
       part_name: "INNER BRACKET SUB ASSLY",
       fixture_type: "Checking fixture",
-      remark: "",
       qty: "4",
       parser_confidence: "HIGH",
     },
@@ -83,7 +80,6 @@ runTest("does not reject rows only because parser confidence is low", () => {
       op_no: "OP 14",
       part_name: "LOW CONFIDENCE ROW",
       fixture_type: "Checking fixture",
-      remark: "PARC scope",
       qty: "2",
       parser_confidence: "LOW",
     },
@@ -101,7 +97,6 @@ runTest("rejects duplicate fixture numbers in the same upload", () => {
       op_no: "OP 15",
       part_name: "OUTER BRACKET SUB ASSLY",
       fixture_type: "Checking fixture",
-      remark: "PARC scope",
       qty: "2",
       parser_confidence: "HIGH",
     },
@@ -111,7 +106,6 @@ runTest("rejects duplicate fixture numbers in the same upload", () => {
       op_no: "OP 16",
       part_name: "OUTER BRACKET SUB ASSLY RH",
       fixture_type: "Checking fixture",
-      remark: "PARC scope",
       qty: "3",
       parser_confidence: "HIGH",
     },
@@ -132,9 +126,8 @@ runTest("rejects rows that do not contain a fixture number", () => {
       business_row_reference: "14",
       fixture_no: "",
       op_no: "OP 170",
-      part_name: "Customer Scope",
+      part_name: "Some Part",
       fixture_type: "Checking fixture",
-      remark: "Customer Scope",
       qty: "1",
       parser_confidence: "MEDIUM",
     },
@@ -156,7 +149,6 @@ runTest("accepts equipment-level fixture rows without OP.NO when other mandatory
       op_no: "",
       part_name: "Dry Leak Testing SPM",
       fixture_type: "LEAK TEST SPM",
-      remark: "PARC scope",
       qty: "1",
       parser_confidence: "HIGH",
     },
@@ -175,7 +167,6 @@ runTest("normalizes numeric formatting noise for QTY and OP.NO", () => {
       op_no: "10.0",
       part_name: "LH BRACKET SUB ASSLY",
       fixture_type: "Checking fixture",
-      remark: "PARC scope",
       qty: "2.0",
       parser_confidence: "HIGH",
     },
@@ -194,7 +185,6 @@ runTest("normalizes safe formatting noise without changing business meaning", ()
       op_no: " OP 110&OP 120. ",
       part_name: " STIFFNER   MTG \n BKT. ",
       fixture_type: " Checking fixture. ",
-      remark: " PARC   scope. ",
       qty: "2",
       parser_confidence: "HIGH",
     },
@@ -204,7 +194,6 @@ runTest("normalizes safe formatting noise without changing business meaning", ()
   assert.equal(result.validRows[0].fixture_no, "PARC26001006");
   assert.equal(result.validRows[0].op_no, "OP 110&OP 120");
   assert.equal(result.validRows[0].part_name, "STIFFNER MTG BKT");
-  assert.equal(result.validRows[0].remark, "PARC scope");
 });
 
 console.log("designIngestion validator checks passed");

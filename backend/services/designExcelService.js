@@ -20,7 +20,7 @@ const { diffWithDatabase } = require("./designIngestion/differ");
 const { formatPreview } = require("./designIngestion/formatter");
 const { extractDesignWorkbook } = require("./pythonExtractionClient");
 
-const CORRECTIONABLE_FIELDS = ["fixture_no", "op_no", "part_name", "fixture_type", "qty", "remark"];
+const CORRECTIONABLE_FIELDS = ["fixture_no", "op_no", "part_name", "fixture_type", "qty"];
 const FIELD_LABEL_TO_KEY = {
   "fixture no": "fixture_no",
   "fixture number": "fixture_no",
@@ -29,8 +29,6 @@ const FIELD_LABEL_TO_KEY = {
   "part name": "part_name",
   "fixture type": "fixture_type",
   qty: "qty",
-  remark: "remark",
-  remarks: "remark",
 };
 
 function normalizeRowReferenceSource(value) {
@@ -89,7 +87,7 @@ function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
     : {};
   const candidateField = typeof rawData.candidate_field === "string" ? rawData.candidate_field : null;
   const parsedMissingFields = CORRECTIONABLE_FIELDS
-    .filter((fieldName) => fieldName !== "remark" && !String(parsed[fieldName] || "").trim())
+    .filter((fieldName) => !String(parsed[fieldName] || "").trim())
     .map((fieldName) => {
       switch (fieldName) {
         case "fixture_no":
@@ -133,7 +131,6 @@ function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
       part_name: parsed.part_name || null,
       fixture_type: parsed.fixture_type || null,
       qty: parsed.qty || null,
-      remark: parsed.remark || null,
     },
     normalized: {
       fixture_no: normalizedFields.fixture_no || parsed.fixture_no || null,
@@ -141,7 +138,6 @@ function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
       part_name: normalizedFields.part_name || parsed.part_name || null,
       fixture_type: normalizedFields.fixture_type || parsed.fixture_type || null,
       qty: normalizedFields.qty || parsed.qty || null,
-      remark: parsed.remark || null,
     },
     inherited: rawData.inherited_hints || {},
     candidate_field: candidateField,
@@ -285,7 +281,6 @@ function buildCorrectionAudit(originalRow, correctedRow, classification) {
     part_name: correctedRow?.part_name ?? "",
     fixture_type: correctedRow?.fixture_type ?? "",
     qty: correctedRow?.qty ?? "",
-    remark: correctedRow?.remark ?? "",
   };
 
   const corrected_fields = CORRECTIONABLE_FIELDS.filter((fieldName) => (

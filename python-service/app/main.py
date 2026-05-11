@@ -17,7 +17,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 ALLOWED_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ALLOWED_EXTENSION = ".xlsx"
-ALLOWED_IMAGE_COLUMNS = {6: "image_1_url", 9: "image_2_url"}
+ALLOWED_IMAGE_COLUMNS = {6: "image_1_url"}
 EXPECTED_UPLOAD_FIELD = "file"
 MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTION_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 SERVICE_TOKEN = (os.getenv("EXTRACTION_SERVICE_TOKEN") or os.getenv("DESIGN_EXTRACTION_SERVICE_TOKEN") or "").strip()
@@ -93,7 +93,6 @@ HEADER_FIELD_ALIASES = {
         "category",
     },
     "qty": {"qty", "quantity", "nos", "noofqty"},
-    "remark": {"remark", "remarks", "comment", "comments"},
 }
 
 logger = logging.getLogger("design_extraction")
@@ -263,7 +262,7 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
         if excel_column not in ALLOWED_IMAGE_COLUMNS:
             errors.append(
                 build_error(
-                    "Image must be anchored in column F or I.",
+                    "Image must be anchored in column F only.",
                     excel_row=excel_row,
                     raw_data={"column": excel_column},
                 )
@@ -359,12 +358,6 @@ def match_header_field(cell_text: str) -> str | None:
 
     if {"item", "description"} <= tokens:
         return "part_name"
-
-    if "remark" in tokens or "remarks" in tokens or "comment" in tokens or "comments" in tokens:
-        return "remark"
-
-    if "scope" in tokens:
-        return "remark"
 
     return None
 
@@ -489,10 +482,6 @@ def looks_like_fixture_type(value: str) -> bool:
     return any(keyword in normalized for keyword in FIXTURE_TYPE_KEYWORDS)
 
 
-def looks_like_scope_text(value: str) -> bool:
-    normalized = normalize_key(value)
-    return "scope" in normalized or "parc" in normalized or "customer" in normalized
-
 
 def choose_hint_text(cell_map: dict[int, str], column_index: int | None, validator=None) -> str:
     if not column_index:
@@ -518,15 +507,13 @@ def is_valid_field_value(field_name: str, value: str) -> bool:
         return parse_qty_value(value) is not None
     if field_name == "fixture_type":
         return looks_like_fixture_type(value)
-    if field_name == "remark":
-        return looks_like_scope_text(value)
     if field_name == "part_name":
         return True
     return False
 
 
 def should_carry_field_value(field_name: str) -> bool:
-    return field_name in {"fixture_no", "fixture_type", "remark", "qty"}
+    return field_name in {"fixture_no", "fixture_type", "qty"}
 
 
 def normalize_business_row_reference(value: Any) -> str | None:
@@ -589,7 +576,6 @@ def parse_fixture_candidate(
         "op_no": "",
         "part_name": "",
         "fixture_type": "",
-        "remark": "",
         "qty": "",
     }
 
@@ -663,29 +649,6 @@ def parse_fixture_candidate(
             if inherited_qty is not None:
                 parsed["qty"] = str(inherited_qty)
 
-    hint_remark_column = header_hints.get("remark")
-    hint_remark = choose_hint_text(cell_map, hint_remark_column)
-    if hint_remark:
-        parsed["remark"] = hint_remark
-        if hint_remark_column:
-            used_columns.add(hint_remark_column)
-    else:
-        remark_candidates = [cell for cell in cells if cell["column"] not in used_columns and looks_like_scope_text(cell["text"])]
-        if len(remark_candidates) > 1:
-            return None, build_error(
-                "Multiple possible values found for Remarks; row rejected to avoid guessing.",
-                excel_row=row_index,
-                raw_data={
-                    **snapshot,
-                    "candidate_field": "Remarks",
-                    "candidate_values": [{"column": cell["column"], "value": cell["text"]} for cell in remark_candidates],
-                },
-            )
-        if len(remark_candidates) == 1:
-            parsed["remark"] = remark_candidates[0]["text"]
-            used_columns.add(remark_candidates[0]["column"])
-        elif inherited_hints.get("remark"):
-            parsed["remark"] = inherited_hints["remark"]
 
     hint_fixture_type_column = header_hints.get("fixture_type")
     hint_fixture_type = choose_hint_text(cell_map, hint_fixture_type_column)
@@ -723,8 +686,6 @@ def parse_fixture_candidate(
             if cell["column"] in used_columns:
                 continue
             if match_header_field(cell["text"]):
-                continue
-            if looks_like_scope_text(cell["text"]):
                 continue
             if looks_like_fixture_type(cell["text"]):
                 continue
@@ -798,10 +759,8 @@ def parse_fixture_candidate(
             "op_no": parsed["op_no"],
             "part_name": parsed["part_name"],
             "fixture_type": parsed["fixture_type"],
-            "remark": parsed["remark"],
             "qty": parsed["qty"],
             "image_1_url": row_images.get("image_1_url"),
-            "image_2_url": row_images.get("image_2_url"),
             "parser_confidence": "HIGH",
             "raw_data": {
                 **snapshot,
@@ -905,7 +864,7 @@ def build_rows(
             continue
 
         if parsed_row:
-            for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "remark", "qty"):
+            for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "qty"):
                 if parsed_row.get(field_name):
                     carry_hints[field_name] = str(parsed_row[field_name])
             rows.append(parsed_row)

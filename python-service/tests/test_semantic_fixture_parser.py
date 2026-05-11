@@ -17,13 +17,13 @@ class SemanticFixtureParserTests(unittest.TestCase):
         worksheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
         worksheet["B3"] = "Part Name"
         worksheet["C3"] = "QTY"
-        worksheet["D3"] = "Remark"
+        worksheet["D3"] = "Image"
         worksheet["E3"] = "Fixture Type"
         worksheet["G3"] = "OP.NO"
         worksheet["H3"] = "Fixture No"
         worksheet["B4"] = "STIFFNER MTG BKT LH/RH SUB ASSLY"
         worksheet["C4"] = 2
-        worksheet["D4"] = "PARC scope"
+        worksheet["D4"] = ""
         worksheet["E4"] = "Robotic MIG Welding fixture"
         worksheet["G4"] = "OP 11"
         worksheet["H4"] = "PARC26001001"
@@ -39,7 +39,6 @@ class SemanticFixtureParserTests(unittest.TestCase):
         self.assertEqual(rows[0]["part_name"], "STIFFNER MTG BKT LH/RH SUB ASSLY")
         self.assertEqual(rows[0]["fixture_type"], "Robotic MIG Welding fixture")
         self.assertEqual(rows[0]["qty"], "2")
-        self.assertEqual(rows[0]["remark"], "PARC scope")
         self.assertEqual(rows[0]["parser_confidence"], "HIGH")
 
     def test_build_rows_skips_title_and_header_rows(self):

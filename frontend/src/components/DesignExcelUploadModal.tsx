@@ -58,7 +58,7 @@ function ImagePreviewStrip({ row }: { row: DesignExcelPreviewRow }) {
   if (images.length === 0) {
     return (
       <div className="mt-3 rounded-md border border-dashed border-border/70 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        No mapped images found for columns F or I.
+        No mapped image found for column F.
       </div>
     );
   }
@@ -79,10 +79,6 @@ function ImagePreviewStrip({ row }: { row: DesignExcelPreviewRow }) {
   );
 }
 
-function formatRemark(value: string | null | undefined) {
-  const normalized = String(value || "").trim();
-  return normalized || "—";
-}
 
 function formatRejectedValue(value: unknown) {
   const normalized = String(value ?? "").trim();
@@ -93,7 +89,7 @@ function getRowDecisionKey(row: DesignExcelPreviewRow) {
   return `${row.fixture_no}::${row.row_number}`;
 }
 
-type CorrectionFieldName = "fixture_no" | "op_no" | "part_name" | "fixture_type" | "qty" | "remark";
+type CorrectionFieldName = "fixture_no" | "op_no" | "part_name" | "fixture_type" | "qty";
 
 interface RejectedRowCorrectionDraft {
   fixture_no: string;
@@ -101,21 +97,18 @@ interface RejectedRowCorrectionDraft {
   part_name: string;
   fixture_type: string;
   qty: string;
-  remark: string;
 }
 
 const CORRECTION_FIELDS: Array<{
   name: CorrectionFieldName;
   label: string;
   placeholder: string;
-  kind?: "textarea";
 }> = [
   { name: "fixture_no", label: "Fixture No", placeholder: "PARC25119001" },
   { name: "fixture_type", label: "Fixture Type", placeholder: "Checking fixture" },
   { name: "qty", label: "QTY", placeholder: "1" },
   { name: "op_no", label: "OP.NO", placeholder: "OP 10" },
   { name: "part_name", label: "Part Name", placeholder: "Sub assembly or part name" },
-  { name: "remark", label: "Remark", placeholder: "Optional note", kind: "textarea" },
 ];
 
 const FIXTURE_NUMBER_PATTERN = /^PARC\d{8,}$/i;
@@ -199,7 +192,6 @@ function buildRejectedRowDraft(rejected: DesignExcelRejectedRow): RejectedRowCor
     part_name: pickDraftValue(validation, "part_name"),
     fixture_type: pickDraftValue(validation, "fixture_type"),
     qty: pickDraftValue(validation, "qty"),
-    remark: pickDraftValue(validation, "remark"),
   };
 }
 
@@ -218,7 +210,6 @@ function buildCorrectedPreviewRow(
     part_name: draft.part_name,
     fixture_type: draft.fixture_type,
     qty: draft.qty,
-    remark: draft.remark || null,
   };
 }
 
@@ -393,7 +384,7 @@ function RejectedRowCorrectionCard({
           }
 
           return (
-            <div key={field.name} className={cn("space-y-2", field.kind === "textarea" && "md:col-span-2 xl:col-span-3")}>
+            <div key={field.name} className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label className="text-xs font-semibold">{field.label}</Label>
                 {(similarCounts[field.name] || 0) > 0 && normalizeCorrectionValue(draft[field.name]) ? (
@@ -406,22 +397,12 @@ function RejectedRowCorrectionCard({
                   </button>
                 ) : null}
               </div>
-              {field.kind === "textarea" ? (
-                <textarea
-                  value={draft[field.name]}
-                  onChange={(event) => onDraftChange(field.name, event.target.value)}
-                  placeholder={field.placeholder}
-                  rows={2}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
-                />
-              ) : (
-                <Input
+              <Input
                   value={draft[field.name]}
                   onChange={(event) => onDraftChange(field.name, event.target.value)}
                   placeholder={field.placeholder}
                   className="h-9 text-sm"
                 />
-              )}
               {fieldErrors[field.name] ? (
                 <div className="text-[11px] font-medium text-red-600 dark:text-red-300">{fieldErrors[field.name]}</div>
               ) : null}
@@ -565,7 +546,6 @@ function PostConfirmReviewStage({
                     </div>
                     <div className="flex gap-2">
                       <ImageStatusBadge hasImage={!partImageMissing} imageType="Part" />
-                      <ImageStatusBadge hasImage={!fixtureImageMissing} imageType="Fixture" />
                     </div>
                   </div>
 
@@ -574,7 +554,7 @@ function PostConfirmReviewStage({
                       {partImageMissing && (
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm">
-                            <div className="font-medium text-amber-900 dark:text-amber-200">Part Image Missing</div>
+                            <div className="font-medium text-amber-900 dark:text-amber-200">Image Missing</div>
                             <div className="text-xs text-amber-800/80 dark:text-amber-300">Column F reference image</div>
                           </div>
                           <input
@@ -611,7 +591,7 @@ function PostConfirmReviewStage({
                             ) : (
                               <>
                                 <ImageIconSolid className="mr-1 h-4 w-4" />
-                                Upload Part Image
+                                Upload Image
                               </>
                             )}
                           </Button>
@@ -620,8 +600,8 @@ function PostConfirmReviewStage({
                       {!partImageMissing && fixture.image_1_url && (
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm">
-                            <div className="font-medium text-amber-900 dark:text-amber-200">Part Image Ready</div>
-                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Optional support image</div>
+                            <div className="font-medium text-amber-900 dark:text-amber-200">Image Ready</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Column F reference image</div>
                           </div>
                           <div className="flex gap-2">
                             <Button asChild size="sm" variant="outline">
@@ -1503,7 +1483,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <ImageIcon className="h-4 w-4" />
                     {uploadMode === "excel"
-                      ? "Images in columns F (part) and I (fixture) will be extracted and mapped."
+                      ? "Images in column F will be extracted and mapped."
                       : "Reference images can be uploaded after confirmation."}
                   </div>
                   <Button
@@ -1566,9 +1546,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                               <div className="mt-2 text-xs text-muted-foreground">
                                 Type: <span className="font-medium text-foreground">{item.incoming.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.incoming.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.incoming.qty}</span>
                               </div>
-                              <div className="mt-1 text-xs text-muted-foreground">
-                                Remark: <span className="font-medium text-foreground">{formatRemark(item.incoming.remark)}</span>
-                              </div>
                               {uploadMode === "paste" ? (
                                 <PreviewReferenceImageControls
                                   row={item.incoming}
@@ -1625,7 +1602,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                       <div>Type: <span className="font-medium text-foreground">{conflict.existing.fixture_type}</span></div>
                                       <div>OP: <span className="font-medium text-foreground">{conflict.existing.op_no}</span></div>
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.existing.qty}</span></div>
-                                      <div>Remark: <span className="font-medium text-foreground">{formatRemark(conflict.existing.remark)}</span></div>
                                     </div>
                                     <ImagePreviewStrip row={conflict.existing} />
                                   </Label>
@@ -1639,7 +1615,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                       <div>Type: <span className="font-medium text-foreground">{conflict.incoming.fixture_type}</span></div>
                                       <div>OP: <span className="font-medium text-foreground">{conflict.incoming.op_no}</span></div>
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.incoming.qty}</span></div>
-                                      <div>Remark: <span className="font-medium text-foreground">{formatRemark(conflict.incoming.remark)}</span></div>
                                     </div>
                                     {uploadMode === "paste" ? (
                                       <PreviewReferenceImageControls
@@ -1677,9 +1652,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                               </div>
                               <div className="mt-2 text-xs text-muted-foreground">
                                 Type: <span className="font-medium text-foreground">{item.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.qty}</span>
-                              </div>
-                              <div className="mt-1 text-xs text-muted-foreground">
-                                Remark: <span className="font-medium text-foreground">{formatRemark(item.remark)}</span>
                               </div>
                               <div className="mt-2 rounded-md border border-slate-200 bg-background/70 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:text-slate-300">
                                 {item.skip_reason}

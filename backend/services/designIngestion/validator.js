@@ -6,7 +6,6 @@ const FIELD_LABELS = {
   part_name: "Part Name",
   fixture_type: "Fixture Type",
   qty: "QTY",
-  remark: "Remark",
 };
 
 function normalizeTextCell(value) {
@@ -133,7 +132,6 @@ function toFieldKey(label) {
   if (normalized === "part_name") return "part_name";
   if (normalized === "fixture_type") return "fixture_type";
   if (normalized === "qty") return "qty";
-  if (normalized === "remark" || normalized === "remarks") return "remark";
   return null;
 }
 
@@ -176,15 +174,13 @@ function buildFieldDiagnostics(fields) {
       part_name: fields.part_name_raw ?? null,
       fixture_type: fields.fixture_type_raw ?? null,
       qty: fields.qty_raw ?? null,
-      remark: fields.remark_raw ?? null,
     },
     normalized: {
       fixture_no: fields.fixture_no ?? null,
       op_no: fields.op_no ?? null,
       part_name: fields.part_name ?? null,
       fixture_type: fields.fixture_type ?? null,
-      qty: fields.qty ?? null,
-      remark: fields.remark ?? null,
+      qty: fields.qty || null,
     },
     inherited: fields?.inherited || {},
   };
@@ -236,8 +232,6 @@ function extractRowFields(item) {
       op_no: cols[2],
       part_name: cols[3],
       fixture_type: cols[4],
-      remark: "",
-      designer: cols[6] || "",
       qty: cols[5],
       image_1_url: null,
       image_2_url: null,
@@ -262,8 +256,6 @@ function extractRowFields(item) {
     op_no: normalizeTextCell(item?.op_no),
     part_name: normalizeTextCell(item?.part_name),
     fixture_type: normalizeTextCell(item?.fixture_type),
-    remark: normalizeTextCell(item?.remark),
-    designer: normalizeTextCell(item?.designer),
     qty: item?.qty,
     image_1_url: null,
     image_2_url: null,
@@ -273,11 +265,7 @@ function extractRowFields(item) {
       op_no: item?.op_no ?? null,
       part_name: item?.part_name ?? null,
       fixture_type: item?.fixture_type ?? null,
-      remark: item?.remark ?? null,
-      designer: item?.designer ?? null,
       qty: item?.qty ?? null,
-      image_1_url: null,
-      image_2_url: null,
       excel_row: getExcelRow(item),
       row_reference: getRowReference(item),
       row_reference_source: getRowReferenceSource(item),
@@ -303,8 +291,6 @@ function validateParsedData(parsedRows) {
       op_no,
       part_name,
       fixture_type,
-      remark,
-      designer,
       qty: qtyRaw,
       image_1_url,
       image_2_url,
@@ -323,8 +309,6 @@ function validateParsedData(parsedRows) {
     const normalizedOpNo = normalizeOpNo(op_no);
     const normalizedPartName = normalizeNormalizedText(part_name);
     const normalizedFixtureType = normalizeNormalizedText(fixture_type);
-    const normalizedRemark = normalizeNormalizedText(remark);
-    const normalizedDesigner = normalizeNormalizedText(designer);
     const qtyInfo = normalizeQty(qtyRaw);
     const diagnostics = buildFieldDiagnostics({
       sheet_name: raw_data?.sheet_name || null,
@@ -337,13 +321,11 @@ function validateParsedData(parsedRows) {
       part_name_raw: part_name,
       fixture_type_raw: fixture_type,
       qty_raw: qtyInfo.raw,
-      remark_raw: remark,
       fixture_no: normalizedFixtureNo,
       op_no: normalizedOpNo || null,
       part_name: normalizedPartName || null,
       fixture_type: normalizedFixtureType || null,
       qty: qtyInfo.normalized,
-      remark: normalizedRemark || null,
       inherited: raw_data?.inherited_hints || {},
     });
 
@@ -412,8 +394,6 @@ function validateParsedData(parsedRows) {
       op_no: normalizedOpNo,
       part_name: normalizedPartName,
       fixture_type: normalizedFixtureType,
-      remark: normalizedRemark || null,
-      designer: normalizedDesigner || null,
       qty,
       image_1_url,
       image_2_url,

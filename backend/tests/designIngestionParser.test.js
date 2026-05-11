@@ -32,8 +32,6 @@ runTest("parses semantic rows without relying on fixed headers", () => {
   assert.equal(result.parsedRows[0].op_no, "OP 110&OP 120");
   assert.equal(result.parsedRows[0].qty, "2");
   assert.equal(result.parsedRows[0].designer, "John Doe");
-  assert.equal(result.parsedRows[0].remark, "");
-  assert.equal(result.parsedRows[1].remark, "");
   assert.equal(result.parsedRows[1].parser_confidence, "HIGH");
 });
 
@@ -49,7 +47,6 @@ runTest("keeps data-like rows without fixture numbers for hard rejection later",
   assert.equal(result.parsedRows.length, 1);
   assert.equal(result.parsedRows[0].fixture_no, "");
   assert.equal(result.parsedRows[0].op_no, "OP 170");
-  assert.equal(result.parsedRows[0].remark, "");
 });
 
 console.log("designIngestion parser checks passed");

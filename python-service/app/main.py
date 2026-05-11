@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -97,7 +98,21 @@ HEADER_FIELD_ALIASES = {
 
 logger = logging.getLogger("design_extraction")
 if not logger.handlers:
-    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(message)s")
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "DEBUG").upper(), format="%(asctime)s - %(message)s")
+
+# Performance timing context manager
+class Timer:
+    def __init__(self, name: str):
+        self.name = name
+        self.start = None
+
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        elapsed = time.perf_counter() - self.start
+        log_event("timing", operation=self.name, elapsed_ms=round(elapsed * 1000, 2))
 
 app = FastAPI()
 
@@ -375,25 +390,136 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
     images_by_row: dict[int, dict[str, str]] = {}
     errors: list[dict[str, Any]] = []
 
-    for image in getattr(worksheet, "_images", []):
-        anchor = getattr(image, "anchor", None)
-        anchor_from = getattr(anchor, "_from", None)
+    # DEBUG: Log worksheet image detection details
+    log_event("image_extraction_start", sheet_title=worksheet.title)
 
-        if anchor_from is None:
-            errors.append(build_error("Found an image without a readable anchor position."))
+    # Check all possible image locations in openpyxl 3.1.5
+    direct_images = getattr(worksheet, "_images", [])
+    drawings = getattr(worksheet, "_drawing", None)
+
+    # Log worksheet attributes for debugging
+    ws_attrs = [attr for attr in dir(worksheet) if not attr.startswith('__') and 'image' in attr.lower() or 'drawing' in attr.lower() or attr in ['_images', '_charts', '_rels']]
+    log_event("worksheet_attributes",
+              sheet_title=worksheet.title,
+              relevant_attrs=ws_attrs[:10])
+
+    log_event("image_detection_debug",
+              sheet_title=worksheet.title,
+              direct_images_count=len(direct_images),
+              has_drawing=drawings is not None,
+              drawing_type=type(drawings).__name__ if drawings else None)
+
+    # DEBUG: Inspect drawing structure if present
+    if drawings:
+        drawing_attrs = [attr for attr in dir(drawings) if not attr.startswith('__')]
+        log_event("drawing_attributes", attributes=drawing_attrs[:15])
+        drawing_images = getattr(drawings, "_images", [])
+        drawing_charts = getattr(drawings, "_charts", [])
+        log_event("drawing_structure_debug",
+                  drawing_images_count=len(drawing_images),
+                  drawing_charts_count=len(drawing_charts))
+
+    # Try multiple sources for images
+    all_images = []
+
+    # Source 1: Direct _images attribute (primary source in openpyxl 3.1.5)
+    if direct_images:
+        all_images.extend(direct_images)
+        log_event("image_source_direct", count=len(direct_images))
+        # Log first image details for debugging
+        if direct_images:
+            first_img = direct_images[0]
+            log_event("first_image_debug",
+                      image_type=type(first_img).__name__,
+                      has_anchor=hasattr(first_img, "anchor"),
+                      anchor_type=type(getattr(first_img, "anchor", None)).__name__)
+
+    # Source 2: Drawing _images attribute (fallback)
+    if drawings and hasattr(drawings, "_images"):
+        drawing_img_list = drawings._images
+        if drawing_img_list:
+            all_images.extend(drawing_img_list)
+            log_event("image_source_drawing", count=len(drawing_img_list))
+
+    log_event("image_total_found", total_images=len(all_images))
+
+    for idx, image in enumerate(all_images):
+        anchor = getattr(image, "anchor", None)
+
+        # Handle different anchor types
+        anchor_from = None
+        anchor_type = type(anchor).__name__ if anchor else None
+
+        if anchor is None:
+            log_event("image_no_anchor", image_index=idx, image_type=type(image).__name__)
+            errors.append(build_error("Found an image without an anchor.", excel_row=None))
             continue
 
-        excel_row = int(anchor_from.row) + 1
-        excel_column = int(anchor_from.col) + 1
+        # Get _from attribute from anchor
+        anchor_from = getattr(anchor, "_from", None)
+
+        # Handle different anchor structures
+        if anchor_from is None:
+            # Try direct row/col on anchor (for some Excel versions)
+            if hasattr(anchor, "row") and hasattr(anchor, "col"):
+                anchor_from = anchor
+            else:
+                log_event("image_anchor_missing",
+                          image_index=idx,
+                          image_type=type(image).__name__,
+                          anchor_type=anchor_type,
+                          anchor_attrs=[a for a in dir(anchor) if not a.startswith('_')][:10])
+                errors.append(build_error(
+                    f"Found an image without a readable anchor position. Anchor type: {anchor_type}",
+                    excel_row=None
+                ))
+                continue
+
+        # Extract row and column from anchor
+        try:
+            # Handle both AnchorMarker objects and direct row/col attributes
+            if hasattr(anchor_from, "row") and hasattr(anchor_from, "col"):
+                row_val = anchor_from.row
+                col_val = anchor_from.col
+            else:
+                row_val = getattr(anchor_from, "row", 0)
+                col_val = getattr(anchor_from, "col", 0)
+
+            excel_row = int(row_val) + 1  # Convert 0-indexed to 1-indexed
+            excel_column = int(col_val) + 1  # Convert 0-indexed to 1-indexed
+        except (ValueError, TypeError, AttributeError) as e:
+            log_event("image_anchor_parse_error",
+                      image_index=idx,
+                      error=str(e),
+                      anchor_attrs=dir(anchor_from))
+            errors.append(build_error(
+                f"Could not parse image anchor position: {e}",
+                excel_row=None
+            ))
+            continue
+
+        log_event("image_anchor_debug",
+                  image_index=idx,
+                  anchor_type=anchor_type,
+                  anchor_row=row_val,
+                  anchor_col=col_val,
+                  excel_row=excel_row,
+                  excel_column=excel_column)
 
         if excel_column not in ALLOWED_IMAGE_COLUMNS:
-            errors.append(
-                build_error(
-                    "Image must be anchored in column F only.",
-                    excel_row=excel_row,
-                    raw_data={"column": excel_column},
+            log_event("image_column_rejected",
+                      excel_row=excel_row,
+                      excel_column=excel_column,
+                      allowed_columns=list(ALLOWED_IMAGE_COLUMNS.keys()))
+            # Only log as error if NOT column I (9) which is header image
+            if excel_column != 9:
+                errors.append(
+                    build_error(
+                        "Image must be anchored in column F only.",
+                        excel_row=excel_row,
+                        raw_data={"column": excel_column},
+                    )
                 )
-            )
             continue
 
         slot_name = ALLOWED_IMAGE_COLUMNS[excel_column]
@@ -410,9 +536,19 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
             continue
 
         image_format = normalize_text(getattr(image, "format", "")) or "png"
+        log_event("image_processing",
+                  excel_row=excel_row,
+                  slot_name=slot_name,
+                  format=image_format,
+                  has_data_method=hasattr(image, "_data"))
         try:
             image_bytes = image._data()
-            row_images[slot_name] = save_image_bytes(image_bytes, excel_row, slot_name, image_format.lower())
+            saved_url = save_image_bytes(image_bytes, excel_row, slot_name, image_format.lower())
+            row_images[slot_name] = saved_url
+            log_event("image_saved_success",
+                      excel_row=excel_row,
+                      slot_name=slot_name,
+                      url=saved_url[:50] if saved_url else None)
         except Exception as exc:
             errors.append(
                 build_error(
@@ -422,6 +558,10 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
                 )
             )
 
+    log_event("image_extraction_complete",
+              sheet_title=worksheet.title,
+              images_mapped=len(images_by_row),
+              errors_count=len(errors))
     return images_by_row, errors
 
 
@@ -490,27 +630,31 @@ def match_header_field(cell_text: str) -> str | None:
 
 
 def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
-    best_match_count = 0
-    best_mapping: dict[str, int] = {}
+    with Timer("detect_header_hints_internal"):
+        best_match_count = 0
+        best_mapping: dict[str, int] = {}
 
-    start_row = max(1, metadata_row + 1)
-    end_row = min(max(start_row + 30, 30), worksheet.max_row)
+        start_row = max(1, metadata_row + 1)
+        end_row = min(max(start_row + 30, 30), worksheet.max_row)
 
-    for row_values in worksheet.iter_rows(min_row=start_row, max_row=end_row, values_only=True):
-        current_mapping: dict[str, int] = {}
-        for column_index, cell_value in enumerate(row_values, start=1):
-            field_name = match_header_field(normalize_text(cell_value))
-            if field_name and field_name not in current_mapping:
-                current_mapping[field_name] = column_index
+        # Pre-compile the header detection to avoid repeated function calls
+        for row_values in worksheet.iter_rows(min_row=start_row, max_row=end_row, values_only=True):
+            current_mapping: dict[str, int] = {}
+            for column_index, cell_value in enumerate(row_values, start=1):
+                field_name = match_header_field(normalize_text(cell_value))
+                if field_name and field_name not in current_mapping:
+                    current_mapping[field_name] = column_index
 
-        match_count = len(current_mapping)
-        has_primary_identity = "fixture_no" in current_mapping or ("part_name" in current_mapping and "qty" in current_mapping)
+            match_count = len(current_mapping)
+            has_primary_identity = "fixture_no" in current_mapping or ("part_name" in current_mapping and "qty" in current_mapping)
 
-        if has_primary_identity and match_count > best_match_count:
-            best_match_count = len(current_mapping)
-            best_mapping = current_mapping
+            if has_primary_identity and match_count > best_match_count:
+                best_match_count = len(current_mapping)
+                best_mapping = current_mapping
 
-    return best_mapping if best_match_count >= 3 else {}
+        result = best_mapping if best_match_count >= 3 else {}
+        log_event("header_hints_detected", hints_found=len(result), match_count=best_match_count)
+        return result
 
 
 def build_semantic_cells(row_values: tuple[Any, ...]) -> list[dict[str, Any]]:
@@ -927,15 +1071,27 @@ def build_vertical_merge_lookup(worksheet) -> dict[tuple[int, int], Any]:
     return lookup
 
 
-def get_effective_row_values(worksheet, row_index: int, max_column: int, vertical_merge_lookup: dict[tuple[int, int], Any]) -> tuple[Any, ...]:
-    values: list[Any] = []
+def get_effective_row_values_fast(worksheet, row_index: int, max_column: int, vertical_merge_lookup: dict[tuple[int, int], Any]) -> tuple[Any, ...]:
+    """Optimized row value extraction using iter_rows for better performance."""
+    # Use iter_rows with values_only for much faster bulk cell access
+    row_values = next(worksheet.iter_rows(min_row=row_index, max_row=row_index, max_col=max_column, values_only=True), ())
 
-    for column_index in range(1, max_column + 1):
-        cell_value = worksheet.cell(row=row_index, column=column_index).value
-        if cell_value in (None, ""):
-            cell_value = vertical_merge_lookup.get((row_index, column_index), cell_value)
-        values.append(cell_value)
+    # Apply merge lookup only for cells that are empty
+    if vertical_merge_lookup:
+        values: list[Any] = []
+        for col_idx, cell_value in enumerate(row_values, start=1):
+            if cell_value in (None, ""):
+                cell_value = vertical_merge_lookup.get((row_index, col_idx), cell_value)
+            values.append(cell_value)
+        # Pad with None if row is shorter than max_column
+        while len(values) < max_column:
+            values.append(vertical_merge_lookup.get((row_index, len(values) + 1), None))
+        return tuple(values)
 
+    # Pad with None if row is shorter than max_column (no merge lookup needed)
+    values = list(row_values)
+    while len(values) < max_column:
+        values.append(None)
     return tuple(values)
 
 
@@ -947,91 +1103,127 @@ def build_rows(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    vertical_merge_lookup = build_vertical_merge_lookup(worksheet)
+
+    with Timer("build_vertical_merge_lookup"):
+        vertical_merge_lookup = build_vertical_merge_lookup(worksheet)
+
     carry_hints: dict[str, str] = {}
     start_row = max(1, metadata_row + 1)
+    max_row = worksheet.max_row
+    max_column = worksheet.max_column
 
-    for row_index in range(start_row, worksheet.max_row + 1):
-        row_images = images_by_row.get(row_index, {})
-        row_values = get_effective_row_values(worksheet, row_index, worksheet.max_column, vertical_merge_lookup)
-        cells = build_semantic_cells(row_values)
+    log_event("build_rows_start", start_row=start_row, max_row=max_row, max_column=max_column)
 
-        if not cells and not row_images:
-            continue
+    # Use iter_rows for efficient iteration
+    row_count = 0
+    with Timer("iterate_rows"):
+        for row_index, row_values in enumerate(
+            worksheet.iter_rows(min_row=start_row, max_row=max_row, max_col=max_column, values_only=True),
+            start=start_row
+        ):
+            row_count += 1
+            row_images = images_by_row.get(row_index, {})
 
-        if is_separator_row(cells):
-            continue
+            # Apply merge lookup for empty cells (only if we have merged cells)
+            if vertical_merge_lookup:
+                effective_values: list[Any] = []
+                for col_idx, cell_value in enumerate(row_values, start=1):
+                    if cell_value in (None, ""):
+                        cell_value = vertical_merge_lookup.get((row_index, col_idx), cell_value)
+                    effective_values.append(cell_value)
+                # Pad with None and apply merge lookup
+                for col_idx in range(len(row_values) + 1, max_column + 1):
+                    effective_values.append(vertical_merge_lookup.get((row_index, col_idx), None))
+                row_values = tuple(effective_values)
 
-        if any(cell["text"].startswith("WBS-") for cell in cells):
-            continue
+            cells = build_semantic_cells(row_values)
 
-        if is_header_row(cells):
-            continue
-
-        row_has_structured_content = bool(cells or row_images)
-        inherited_hints: dict[str, str] = {}
-        for field_name, column_index in header_hints.items():
-            if not column_index:
+            if not cells and not row_images:
                 continue
 
-            raw_value = normalize_text(row_values[column_index - 1]) if column_index - 1 < len(row_values) else ""
-            if raw_value and is_valid_field_value(field_name, raw_value):
-                carry_hints[field_name] = raw_value
+            if is_separator_row(cells):
                 continue
 
-            if row_has_structured_content and field_name in carry_hints and should_carry_field_value(field_name):
-                inherited_hints[field_name] = carry_hints[field_name]
+            if any(cell["text"].startswith("WBS-") for cell in cells):
+                continue
 
-        parsed_row, error = parse_fixture_candidate(
-            row_index,
-            cells,
-            header_hints,
-            row_images,
-            sheet_name=worksheet.title,
-            inherited_hints=inherited_hints,
-        )
+            if is_header_row(cells):
+                continue
 
-        if error:
-            errors.append(error)
-            continue
+            row_has_structured_content = bool(cells or row_images)
+            inherited_hints: dict[str, str] = {}
+            for field_name, column_index in header_hints.items():
+                if not column_index:
+                    continue
 
-        if parsed_row:
-            for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "qty"):
-                if parsed_row.get(field_name):
-                    carry_hints[field_name] = str(parsed_row[field_name])
-            rows.append(parsed_row)
-            continue
+                raw_value = normalize_text(row_values[column_index - 1]) if column_index - 1 < len(row_values) else ""
+                if raw_value and is_valid_field_value(field_name, raw_value):
+                    carry_hints[field_name] = raw_value
+                    continue
 
-        if row_images:
-            errors.append(
-                build_error(
-                    "Row contains mapped images but no valid fixture data.",
-                    excel_row=row_index,
-                    raw_data=build_row_snapshot(cells, row_images),
-                )
+                if row_has_structured_content and field_name in carry_hints and should_carry_field_value(field_name):
+                    inherited_hints[field_name] = carry_hints[field_name]
+
+            parsed_row, error = parse_fixture_candidate(
+                row_index,
+                cells,
+                header_hints,
+                row_images,
+                sheet_name=worksheet.title,
+                inherited_hints=inherited_hints,
             )
 
+            if error:
+                errors.append(error)
+                continue
+
+            if parsed_row:
+                for field_name in ("fixture_no", "op_no", "part_name", "fixture_type", "qty"):
+                    if parsed_row.get(field_name):
+                        carry_hints[field_name] = str(parsed_row[field_name])
+                rows.append(parsed_row)
+                continue
+
+            if row_images:
+                errors.append(
+                    build_error(
+                        "Row contains mapped images but no valid fixture data.",
+                        excel_row=row_index,
+                        raw_data=build_row_snapshot(cells, row_images),
+                    )
+                )
+
+    log_event("build_rows_complete", rows_processed=row_count, rows_accepted=len(rows), errors_count=len(errors))
     return rows, errors
 
 
 def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
-    workbook = open_excel_workbook(file_bytes, read_only=False)
+    with Timer("workbook_load"):
+        workbook = open_excel_workbook(file_bytes, read_only=False)
     try:
-        _metadata_sheet_name, _metadata_row, metadata_value = find_workbook_metadata(workbook)
-        file_info = parse_wbs_header(metadata_value)
+        log_event("process_workbook_start", file_size_bytes=len(file_bytes))
+        with Timer("find_metadata"):
+            _metadata_sheet_name, _metadata_row, metadata_value = find_workbook_metadata(workbook)
+        with Timer("parse_wbs_header"):
+            file_info = parse_wbs_header(metadata_value)
 
         all_rows: list[dict[str, Any]] = []
         all_errors: list[dict[str, Any]] = []
 
         for worksheet in workbook.worksheets:
+            log_event("processing_worksheet", sheet_title=worksheet.title, max_row=worksheet.max_row, max_column=worksheet.max_column)
             try:
-                metadata_row, _ = find_metadata_row(worksheet)
+                with Timer(f"find_metadata_{worksheet.title}"):
+                    metadata_row, _ = find_metadata_row(worksheet)
             except ValueError:
                 metadata_row = 0
 
-            header_hints = detect_header_hints(worksheet, metadata_row)
-            images_by_row, image_errors = extract_anchored_images(worksheet)
-            rows, parsing_errors = build_rows(worksheet, metadata_row, header_hints, images_by_row)
+            with Timer(f"detect_header_hints_{worksheet.title}"):
+                header_hints = detect_header_hints(worksheet, metadata_row)
+            with Timer(f"extract_images_{worksheet.title}"):
+                images_by_row, image_errors = extract_anchored_images(worksheet)
+            with Timer(f"build_rows_{worksheet.title}"):
+                rows, parsing_errors = build_rows(worksheet, metadata_row, header_hints, images_by_row)
 
             all_rows.extend(rows)
             all_errors.extend(image_errors)
@@ -1039,18 +1231,19 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
     finally:
         workbook.close()
 
-    deduped_rows: list[dict[str, Any]] = []
-    seen_row_keys: set[tuple[str, int, str]] = set()
-    for row in all_rows:
-        row_key = (
-            row.get("raw_data", {}).get("sheet_name", ""),
-            int(row["excel_row"]),
-            row["fixture_no"],
-        )
-        if row_key in seen_row_keys:
-            continue
-        seen_row_keys.add(row_key)
-        deduped_rows.append(row)
+    with Timer("deduplication"):
+        deduped_rows: list[dict[str, Any]] = []
+        seen_row_keys: set[tuple[str, int, str]] = set()
+        for row in all_rows:
+            row_key = (
+                row.get("raw_data", {}).get("sheet_name", ""),
+                int(row["excel_row"]),
+                row["fixture_no"],
+            )
+            if row_key in seen_row_keys:
+                continue
+            seen_row_keys.add(row_key)
+            deduped_rows.append(row)
 
     errors = all_errors
     if not deduped_rows and not errors:
@@ -1200,7 +1393,8 @@ async def extract_workbook(
     )
 
     try:
-        result = await asyncio.to_thread(_process_workbook, file_bytes)
+        with Timer("total_processing"):
+            result = await asyncio.to_thread(_process_workbook, file_bytes)
         log_event(
             "extract_processing_completed",
             filename=normalize_text(uploaded_file.filename),

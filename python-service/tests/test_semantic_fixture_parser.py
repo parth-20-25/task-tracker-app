@@ -41,6 +41,29 @@ class SemanticFixtureParserTests(unittest.TestCase):
         self.assertEqual(rows[0]["qty"], "2")
         self.assertEqual(rows[0]["parser_confidence"], "HIGH")
 
+    def test_build_rows_preserves_letter_suffix_in_op_number(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
+        worksheet["A3"] = "Fixture No"
+        worksheet["B3"] = "OP.NO"
+        worksheet["C3"] = "Part Name"
+        worksheet["D3"] = "Fixture Type"
+        worksheet["E3"] = "QTY"
+        worksheet["A4"] = "PARC26001009"
+        worksheet["B4"] = "Op. 10AB"
+        worksheet["C4"] = "SUFFIX PART"
+        worksheet["D4"] = "Checking fixture"
+        worksheet["E4"] = 1
+
+        metadata_row, _ = find_metadata_row(worksheet)
+        header_hints = detect_header_hints(worksheet, metadata_row)
+        rows, errors = build_rows(worksheet, metadata_row, header_hints, {})
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["op_no"], "OP 10AB")
+
     def test_build_rows_skips_title_and_header_rows(self):
         workbook = Workbook()
         worksheet = workbook.active
@@ -229,6 +252,31 @@ class SemanticFixtureParserTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["op_no"], "OP 10")
         self.assertEqual(result["rows"][0]["qty"], "2")
         self.assertEqual(result["errors"], [])
+
+    def test_process_workbook_rejects_invalid_op_number_with_letters_before_digits(self):
+        workbook = Workbook()
+        fixture_sheet = workbook.active
+        fixture_sheet.title = "WBS-PARC2600M001"
+        fixture_sheet["A1"] = "WBS-PARC2600M001-Fuel Tank weld Line_CLIENT_ONE"
+        fixture_sheet["A3"] = "Fixture No"
+        fixture_sheet["B3"] = "OP.NO"
+        fixture_sheet["C3"] = "Part Name"
+        fixture_sheet["D3"] = "Fixture Type"
+        fixture_sheet["E3"] = "QTY"
+        fixture_sheet["A4"] = "PARC26001010"
+        fixture_sheet["B4"] = "OP A10"
+        fixture_sheet["C4"] = "INVALID OP PART"
+        fixture_sheet["D4"] = "Checking fixture"
+        fixture_sheet["E4"] = 1
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+
+        result = _process_workbook(buffer.getvalue())
+
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn("Invalid OP.NO format", result["errors"][0]["error_message"])
 
 
 class ExtractEndpointValidationTests(unittest.TestCase):

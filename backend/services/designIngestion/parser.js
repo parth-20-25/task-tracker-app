@@ -1,6 +1,7 @@
 const { AppError } = require("../../lib/AppError");
 
 const FIXTURE_NO_REGEX = /^PARC\d{8,}$/i;
+const OP_NO_REGEX = /^OP\.?\s*\d+[A-Z]*$/i;
 
 const FIXTURE_TYPE_KEYWORDS = [
   "fixture",
@@ -149,7 +150,7 @@ function isOpCell(value) {
     return false;
   }
 
-  return /\bOP\b/i.test(text) || /\bOP\.?\s*NO\b/i.test(text);
+  return OP_NO_REGEX.test(text) || /\bOP\.?\s*NO\b/i.test(text);
 }
 
 
@@ -342,6 +343,7 @@ function parsePasteData(text) {
 
 module.exports = {
   FIXTURE_NO_REGEX,
+  OP_NO_REGEX,
   normalize,
   normalizePastedCell,
   parsePasteData,

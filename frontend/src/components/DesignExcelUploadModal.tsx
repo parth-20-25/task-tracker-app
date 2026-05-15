@@ -112,7 +112,7 @@ const CORRECTION_FIELDS: Array<{
 ];
 
 const FIXTURE_NUMBER_PATTERN = /^PARC\d{8,}$/i;
-const OP_NUMBER_PATTERN = /^OP[\s._/-]*\d+[A-Z0-9._/-]*$/i;
+const OP_NUMBER_PATTERN = /^OP\.?\s*\d+[A-Z]*$/i;
 
 function normalizeCorrectionValue(value: unknown) {
   return String(value ?? "").trim();
@@ -241,7 +241,7 @@ function buildClientFieldErrors(
   }
 
   if (normalizeCorrectionValue(draft.op_no) && !OP_NUMBER_PATTERN.test(normalizeCorrectionValue(draft.op_no)) && !/^\d+(?:\.0+)?$/.test(normalizeCorrectionValue(draft.op_no))) {
-    errors.op_no = "Use OP format like OP 10.";
+    errors.op_no = "Use OP format like OP 10, OP 10A, or OP 10AB.";
   }
 
   if (problemFields.includes("part_name") && !normalizeCorrectionValue(draft.part_name)) {

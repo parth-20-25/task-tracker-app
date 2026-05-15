@@ -28,7 +28,7 @@ DEFAULT_IMAGE_DIR = Path(__file__).resolve().parents[2] / "backend" / "uploads" 
 IMAGE_OUTPUT_DIR = Path(os.getenv("EXTRACTED_IMAGE_DIR", str(DEFAULT_IMAGE_DIR))).resolve()
 
 FIXTURE_NUMBER_PATTERN = re.compile(r"^PARC\d{4,}$", re.IGNORECASE)
-OP_NUMBER_PATTERN = re.compile(r"^OP[\s._/-]*\d+[A-Z0-9._/-]*$", re.IGNORECASE)
+OP_NUMBER_PATTERN = re.compile(r"^OP\.?\s*\d+[A-Z]*$", re.IGNORECASE)
 FIXTURE_TYPE_KEYWORDS = (
     "fixture",
     "weld",
@@ -772,10 +772,11 @@ def parse_op_value(value: Any) -> str | None:
         return None
 
     if looks_like_op_number(text):
-        normalized = re.sub(r"[\s._/-]+", " ", text).strip()
-        normalized = re.sub(r"^OP\b", "OP", normalized, flags=re.IGNORECASE)
-        normalized = re.sub(r"^OP\s*", "OP ", normalized, flags=re.IGNORECASE)
-        return normalized.upper()
+        match = re.fullmatch(r"OP\.?\s*(\d+)([A-Z]*)", text.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        digits, suffix = match.groups()
+        return f"OP {digits}{suffix.upper()}"
 
     if re.fullmatch(r"\d+(?:\.0+)?", text):
         numeric_text = text.split(".", 1)[0]
@@ -1304,7 +1305,7 @@ def build_rows(
 
     # Performance: Pre-compile regex patterns for faster matching
     fixture_pattern = re.compile(r"^PARC\d{4,}$", re.IGNORECASE)
-    op_pattern = re.compile(r"^OP[\s._/-]*\d+[A-Z0-9._/-]*$", re.IGNORECASE)
+    op_pattern = re.compile(r"^OP\.?\s*\d+[A-Z]*$", re.IGNORECASE)
     qty_pattern = re.compile(r"^\d+(?:\.0+)?$")
     
     # Performance: Batch process rows for better memory usage

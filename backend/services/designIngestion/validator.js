@@ -1,4 +1,4 @@
-const { FIXTURE_NO_REGEX, normalizePastedCell } = require("./parser");
+const { FIXTURE_NO_REGEX, OP_NO_REGEX, normalizePastedCell } = require("./parser");
 
 const FIELD_LABELS = {
   fixture_no: "Fixture No",
@@ -38,12 +38,14 @@ function normalizeOpNo(value) {
     return "";
   }
 
-  if (/^OP[\s._/-]*\d+[A-Z0-9._/-]*$/i.test(text)) {
-    return text
-      .replace(/[\s._/-]+/g, " ")
-      .replace(/^OP\s*/i, "OP ")
-      .trim()
-      .toUpperCase();
+  if (OP_NO_REGEX.test(text)) {
+    const match = text.match(/^OP\.?\s*(\d+)([A-Z]*)$/i);
+    if (!match) {
+      return text;
+    }
+
+    const [, digits, suffix] = match;
+    return `OP ${digits}${suffix.toUpperCase()}`;
   }
 
   if (/^\d+(?:\.0+)?$/.test(text)) {
@@ -365,10 +367,10 @@ function validateParsedData(parsedRows) {
       continue;
     }
 
-    if (!/^OP\s+\d+[A-Z0-9._/-]*$/i.test(normalizedOpNo)) {
+    if (!OP_NO_REGEX.test(normalizedOpNo)) {
       rejectedRows.push(buildRejectedRow(rowMeta, "OP.NO must match the expected OP format.", raw_data, diagnostics, {
         reason: "op_no_invalid",
-        expected: "OP format such as OP 10",
+        expected: "OP format such as OP 10, OP 10A, or OP 10AB",
         rejected_field: "OP.NO",
         detected_value: op_no || "",
       }));

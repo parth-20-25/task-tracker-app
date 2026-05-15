@@ -72,6 +72,34 @@ runTest("accepts rows with minimal required fields", () => {
   assert.equal(result.skippedRows.length, 0);
 });
 
+runTest("accepts OP.NO values with letter suffixes and preserves them exactly", () => {
+  const result = validateParsedData([
+    {
+      excel_row: 10,
+      fixture_no: "PARC26001003",
+      op_no: "Op. 10AB",
+      part_name: "INNER BRACKET SUB ASSLY",
+      fixture_type: "Checking fixture",
+      qty: "4",
+      parser_confidence: "HIGH",
+    },
+    {
+      excel_row: 11,
+      fixture_no: "PARC26001004",
+      op_no: "OP7A",
+      part_name: "OUTER BRACKET SUB ASSLY",
+      fixture_type: "Checking fixture",
+      qty: "2",
+      parser_confidence: "HIGH",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 2);
+  assert.equal(result.validRows[0].op_no, "OP 10AB");
+  assert.equal(result.validRows[1].op_no, "OP 7A");
+  assert.equal(result.rejectedRows.length, 0);
+});
+
 runTest("does not reject rows only because parser confidence is low", () => {
   const result = validateParsedData([
     {
@@ -141,7 +169,7 @@ runTest("rejects rows that do not contain a fixture number", () => {
   assert.match(result.rejectedRows[0].error_message, /Fixture No is mandatory/i);
 });
 
-runTest("accepts equipment-level fixture rows without OP.NO when other mandatory fields are present", () => {
+runTest("rejects rows without OP.NO", () => {
   const result = validateParsedData([
     {
       row_number: 16,
@@ -154,9 +182,9 @@ runTest("accepts equipment-level fixture rows without OP.NO when other mandatory
     },
   ]);
 
-  assert.equal(result.validRows.length, 1);
-  assert.equal(result.validRows[0].op_no, "");
-  assert.equal(result.rejectedRows.length, 0);
+  assert.equal(result.validRows.length, 0);
+  assert.equal(result.rejectedRows.length, 1);
+  assert.equal(result.rejectedRows[0].raw_data.validation.problem_fields[0], "op_no");
 });
 
 runTest("normalizes numeric formatting noise for QTY and OP.NO", () => {
@@ -177,23 +205,22 @@ runTest("normalizes numeric formatting noise for QTY and OP.NO", () => {
   assert.equal(result.validRows[0].qty, 2);
 });
 
-runTest("normalizes safe formatting noise without changing business meaning", () => {
+runTest("rejects OP.NO values where letters appear before the number", () => {
   const result = validateParsedData([
     {
       row_number: 15,
-      fixture_no: " parc26001006. ",
-      op_no: " OP 110&OP 120. ",
-      part_name: " STIFFNER   MTG \n BKT. ",
-      fixture_type: " Checking fixture. ",
+      fixture_no: "PARC26001006",
+      op_no: "OP A10",
+      part_name: "STIFFNER MTG BKT",
+      fixture_type: "Checking fixture",
       qty: "2",
       parser_confidence: "HIGH",
     },
   ]);
 
-  assert.equal(result.validRows.length, 1);
-  assert.equal(result.validRows[0].fixture_no, "PARC26001006");
-  assert.equal(result.validRows[0].op_no, "OP 110&OP 120");
-  assert.equal(result.validRows[0].part_name, "STIFFNER MTG BKT");
+  assert.equal(result.validRows.length, 0);
+  assert.equal(result.rejectedRows.length, 1);
+  assert.equal(result.rejectedRows[0].raw_data.validation.problem_fields[0], "op_no");
 });
 
 console.log("designIngestion validator checks passed");

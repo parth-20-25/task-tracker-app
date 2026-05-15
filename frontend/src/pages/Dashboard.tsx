@@ -153,7 +153,9 @@ export default function Dashboard() {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Project Command Center</h2>
-            <p className="text-xs text-muted-foreground">Sorted Active -> On Hold -> Completed</p>
+            <p className="text-xs text-muted-foreground">
+              Sorted Active → On Hold → Completed
+            </p>
           </div>
           {projectSummaryQuery.isLoading ? (
             <TaskGridSkeleton count={6} />

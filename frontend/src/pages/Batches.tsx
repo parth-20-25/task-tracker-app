@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, RefreshCw, Trash2 } from "lucide-react";
-import { deleteBatch, fetchBatches } from "@/api/batchApi";
+import { Eye, PauseCircle, RefreshCw, Rocket, Trash2 } from "lucide-react";
+import { deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -14,11 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
-import { batchQueryKeys } from "@/lib/queryKeys";
+import { isProjectAuthorityUser } from "@/lib/permissions";
+import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
-import { UploadBatch } from "@/types";
+import { ProjectStatus, UploadBatch } from "@/types";
 
 function formatDateTime(value: string) {
   if (!value) {
@@ -29,6 +31,28 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function projectStatusLabel(status: ProjectStatus | string | undefined) {
+  switch (status) {
+    case "on_hold":
+      return "On Hold";
+    case "completed":
+      return "Completed";
+    default:
+      return "Active";
+  }
+}
+
+function projectStatusClass(status: ProjectStatus | string | undefined) {
+  switch (status) {
+    case "on_hold":
+      return "border-amber-200 bg-amber-50 text-amber-900";
+    case "completed":
+      return "border-emerald-200 bg-emerald-50 text-emerald-800";
+    default:
+      return "border-sky-200 bg-sky-50 text-sky-800";
+  }
 }
 
 function DeleteAction({
@@ -88,6 +112,7 @@ export default function Batches() {
   const queryClient = useQueryClient();
   const { access, role, user } = useAuth();
   const isAdmin = role?.hierarchy_level === 1;
+  const isProjectAuthority = isProjectAuthorityUser(user);
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
 
   const batchesQuery = useQuery({
@@ -98,7 +123,12 @@ export default function Batches() {
   const deleteMutation = useMutation({
     mutationFn: ({ batchId, force }: { batchId: string; force: boolean }) => deleteBatch(batchId, force),
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: batchQueryKeys.all });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      ]);
       toast({
         title: result.force ? "Batch force deleted" : "Batch deleted",
         description: result.message,
@@ -108,6 +138,41 @@ export default function Batches() {
       toast({
         title: "Delete failed",
         description: error instanceof Error ? error.message : "Could not delete the batch.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const holdMutation = useMutation({
+    mutationFn: (batchId: string) => holdBatchProject(batchId),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      ]);
+      toast({ title: "Project on hold", description: result.message });
+    },
+    onError: (error) => {
+      toast({
+        title: "On Hold failed",
+        description: error instanceof Error ? error.message : "Could not place the project on hold.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const releaseMutation = useMutation({
+    mutationFn: (batchId: string) => releaseBatchProject(batchId),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: batchQueryKeys.all });
+      toast({ title: "Project released", description: result.message });
+    },
+    onError: (error) => {
+      toast({
+        title: "Release failed",
+        description: error instanceof Error ? error.message : "Could not release the project.",
         variant: "destructive",
       });
     },
@@ -125,6 +190,22 @@ export default function Batches() {
     }
 
     deleteMutation.mutate({ batchId: batch.id, force });
+  };
+
+  const handleHold = (batch: UploadBatch) => {
+    if (!window.confirm(`Place project ${batch.project_no} on hold? Active assignment workflow will stop for this project.`)) {
+      return;
+    }
+
+    holdMutation.mutate(batch.id);
+  };
+
+  const handleRelease = (batch: UploadBatch) => {
+    if (!window.confirm(`Release project ${batch.project_no}? This marks all fixtures and tasks completed.`)) {
+      return;
+    }
+
+    releaseMutation.mutate(batch.id);
   };
 
   return (
@@ -157,14 +238,16 @@ export default function Batches() {
                 <TableHead>Created</TableHead>
                 <TableHead>Project</TableHead>
                 <TableHead>Total Fixtures</TableHead>
-                <TableHead>Status Summary</TableHead>
+                <TableHead>Project Status</TableHead>
+                <TableHead>Completion</TableHead>
+                <TableHead>Workflow Summary</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {batchesQuery.isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground">
                     Loading batches...
                   </TableCell>
                 </TableRow>
@@ -176,6 +259,10 @@ export default function Batches() {
                   && ((batch.uploaded_by_user_id || batch.uploaded_by) === user.employee_id),
                 );
                 const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
+                const canManageProject = isProjectAuthority || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
+                const projectCompleted = batch.project_status === "completed";
+                const projectOnHold = batch.project_status === "on_hold";
+                const lifecyclePending = holdMutation.isPending || releaseMutation.isPending;
 
                 return (
                   <TableRow key={batch.id}>
@@ -186,6 +273,18 @@ export default function Batches() {
                       <div className="text-xs text-muted-foreground">{batch.project_name}</div>
                     </TableCell>
                     <TableCell>{batch.total_fixtures}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={cn(projectStatusClass(batch.project_status))}>
+                        {projectStatusLabel(batch.project_status)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="min-w-[160px]">
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="font-semibold">{batch.project_completion_percent.toFixed(0)}%</span>
+                        <span className="text-muted-foreground">{batch.completed_tasks}/{batch.total_tasks} tasks</span>
+                      </div>
+                      <Progress value={batch.project_completion_percent} className="mt-2 h-2" />
+                    </TableCell>
                     <TableCell>
                       <Badge
                         variant="outline"
@@ -204,6 +303,26 @@ export default function Batches() {
                           <Eye className="h-4 w-4 mr-2" />
                           View
                         </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!canManageProject || projectOnHold || projectCompleted || lifecyclePending}
+                          onClick={() => handleHold(batch)}
+                        >
+                          <PauseCircle className="h-4 w-4 mr-2" />
+                          On Hold
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!canManageProject || projectCompleted || lifecyclePending}
+                          onClick={() => handleRelease(batch)}
+                        >
+                          <Rocket className="h-4 w-4 mr-2" />
+                          Release
+                        </Button>
                         <DeleteAction
                           batch={batch}
                           canDelete={canDelete}
@@ -219,7 +338,7 @@ export default function Batches() {
 
               {!batchesQuery.isLoading && batchesQuery.data?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground">
                     No upload batches found.
                   </TableCell>
                 </TableRow>
@@ -244,6 +363,18 @@ export default function Batches() {
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Project Name</span>
                 <span>{selectedBatch.project_name}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <span className="text-muted-foreground">Project Status</span>
+                <span>{projectStatusLabel(selectedBatch.project_status)}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <span className="text-muted-foreground">Completion</span>
+                <span>{selectedBatch.project_completion_percent.toFixed(0)}%</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <span className="text-muted-foreground">Tasks</span>
+                <span>{selectedBatch.completed_tasks} completed / {selectedBatch.pending_tasks} pending</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Uploaded By</span>

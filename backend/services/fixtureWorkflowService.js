@@ -1,4 +1,5 @@
 const { AppError } = require("../lib/AppError");
+const { PROJECT_STATUSES } = require("../config/constants");
 const { pool } = require("../db");
 const {
   getDesignStageDisplayName,
@@ -57,6 +58,30 @@ async function assertFixtureBelongsToDepartment(fixtureId, departmentId) {
   if (row.department_id !== departmentId) {
     throw new AppError(403, "Cross-department access is not allowed");
   }
+}
+
+function buildInactiveProjectReason(projectStatus) {
+  return projectStatus === PROJECT_STATUSES.ON_HOLD
+    ? "Project is on hold and cannot continue active fixture workflow"
+    : "Project is completed and cannot continue active fixture workflow";
+}
+
+async function assertFixtureProjectIsActive(fixtureId, departmentId) {
+  const fixture = await getFixtureWorkflowContext(fixtureId);
+  if (!fixture) {
+    throw new AppError(404, "Fixture not found");
+  }
+
+  if (departmentId && fixture.department_id !== departmentId) {
+    throw new AppError(404, "Fixture not found for the selected department");
+  }
+
+  const projectStatus = fixture.project_status || PROJECT_STATUSES.ACTIVE;
+  if (projectStatus !== PROJECT_STATUSES.ACTIVE) {
+    throw new AppError(409, buildInactiveProjectReason(projectStatus));
+  }
+
+  return fixture;
 }
 
 /**
@@ -330,6 +355,12 @@ async function validateAssignment(fixtureId, departmentId) {
     return { canAssign: false, reason: "fixture_id and department_id are required", currentStage: null };
   }
 
+  const fixture = await getFixtureWorkflowContext(fixtureId);
+  const projectStatus = fixture?.project_status || PROJECT_STATUSES.ACTIVE;
+  if (projectStatus !== PROJECT_STATUSES.ACTIVE) {
+    return { canAssign: false, reason: buildInactiveProjectReason(projectStatus), currentStage: null };
+  }
+
   // Rule 1: no workflow
   const workflow = await getActiveWorkflowForDepartment(departmentId);
   if (!workflow || !workflow.stages || workflow.stages.length === 0) {
@@ -375,6 +406,7 @@ async function validateAssignment(fixtureId, departmentId) {
  */
 async function assignFixtureStage(fixtureId, departmentId, assignedTo, actor = null) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
 
   const assignee = await findUserByEmployeeId(assignedTo);
   if (!assignee) {
@@ -424,6 +456,7 @@ async function completeFixtureStage(fixtureId, departmentId) {
  */
 async function approveFixtureStage(fixtureId, departmentId) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
 
   const fixture = await getFixtureWorkflowContext(fixtureId);
   if (!fixture) {
@@ -450,6 +483,7 @@ async function approveFixtureStage(fixtureId, departmentId) {
  */
 async function rejectFixtureStage(fixtureId, departmentId) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
 
   const progress = await getProgressForFixture(fixtureId, departmentId);
   const current = deriveCurrentStageByStatus(progress);
@@ -789,6 +823,7 @@ async function reopenFixtureStage({
   approvedBy = null,
 }) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
 
   const normalizedRevisionType = normalizeRevisionType(revisionType);
   const normalizedRevisionReason = normalizeRequiredReason(revisionReason);
@@ -876,6 +911,7 @@ async function manipulateFixtureStage({
   remarks = null,
 }) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
 
   const fixture = await getFixtureWorkflowContext(fixtureId);
   if (!fixture?.is_legacy_workflow) {

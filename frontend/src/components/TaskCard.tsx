@@ -12,6 +12,7 @@ import { TaskExecutionDialog } from '@/components/TaskExecutionDialog';
 import { hasUserPermission } from '@/lib/permissions';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { API_ROOT_URL } from '@/api/config';
+import { Progress } from '@/components/ui/progress';
 
 interface TaskCardProps {
   task: Task;
@@ -85,6 +86,14 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
           {(task.status === 'under_review' || task.status === 'rework' || task.status === 'closed') && (
             <StatusChip type="verification" value={task.verification_status} />
           )}
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Completion</span>
+            <span className="font-medium text-foreground">{task.completion_percent ?? 0}%</span>
+          </div>
+          <Progress value={task.completion_percent ?? 0} className="h-2" />
         </div>
 
         <div className="flex items-center gap-4 text-xs text-muted-foreground">

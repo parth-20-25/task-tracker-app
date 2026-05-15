@@ -1,5 +1,6 @@
 export type TaskStatus = 'created' | 'assigned' | 'in_progress' | 'on_hold' | 'under_review' | 'rework' | 'closed' | 'cancelled';
 export type VerificationStatus = 'pending' | 'manager_approved' | 'quality_pending' | 'approved' | 'rejected';
+export type ProjectStatus = 'active' | 'on_hold' | 'completed';
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type RoleScope = 'global' | 'department' | 'team' | 'self';
 export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed' | 'cancelled';
@@ -54,6 +55,7 @@ export interface Task {
   workflow_template_id?: string | null;
   workflow_template_name?: string | null;
   status: TaskStatus;
+  completion_percent: number;
   verification_status: VerificationStatus;
   priority: Priority;
   deadline: string;
@@ -81,6 +83,7 @@ export interface Task {
   machine_name?: string;
   location_tag?: string;
   project_id?: string | null;
+  project_status?: ProjectStatus;
   fixture_id?: string | null;
   project_no?: string | null;
   fixture_no?: string | null;
@@ -170,9 +173,33 @@ export interface UploadBatch {
   rejected_rows: number;
   total_fixtures: number;
   active_count: number;
+  project_status: ProjectStatus;
+  project_completion_percent: number;
+  total_tasks: number;
+  pending_tasks: number;
+  completed_tasks: number;
   status_summary: string;
   deletion_blocked: boolean;
   delete_blocked_reason?: string | null;
+}
+
+export interface ProjectDashboardSummary {
+  project_id: string;
+  project_no: string;
+  project_name: string;
+  customer_name: string;
+  department_id: string;
+  department_name?: string | null;
+  project_status: ProjectStatus;
+  completion_percent: number;
+  total_fixtures: number;
+  total_tasks: number;
+  pending_tasks: number;
+  active_tasks: number;
+  completed_tasks: number;
+  uploaded_by?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface IssueComment {
@@ -487,6 +514,7 @@ export interface DepartmentProject {
   instance_count: number | null;
   rework_date: string | null;
   department_id: string;
+  project_status?: ProjectStatus;
   uploaded_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -498,6 +526,7 @@ export interface DesignProjectOption {
   project_name: string;
   company_name: string;
   department_id: string;
+  project_status?: ProjectStatus;
 }
 
 export interface DesignFixtureOption {

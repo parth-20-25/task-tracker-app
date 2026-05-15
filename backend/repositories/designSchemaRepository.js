@@ -261,9 +261,13 @@ async function ensureDesignDepartmentSchema(client) {
       project_name TEXT NOT NULL,
       customer_name TEXT NOT NULL,
       department_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      status_changed_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
       uploaded_by VARCHAR(50),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT design_projects_status_check CHECK (status IN ('active', 'on_hold', 'completed')),
       CONSTRAINT design_projects_project_no_department_key UNIQUE (project_no, department_id)
     )
   `);
@@ -271,8 +275,33 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     ALTER TABLE design.projects
     ADD COLUMN IF NOT EXISTS uploaded_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+    ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `);
+
+  await client.query(`
+    UPDATE design.projects
+    SET status = 'active'
+    WHERE status IS NULL
+       OR status NOT IN ('active', 'on_hold', 'completed')
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'design_projects_status_check'
+      ) THEN
+        ALTER TABLE design.projects
+        ADD CONSTRAINT design_projects_status_check
+        CHECK (status IN ('active', 'on_hold', 'completed'));
+      END IF;
+    END $$;
   `);
 
   await client.query(`
@@ -490,6 +519,11 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_design_projects_department_uploader
     ON design.projects (department_id, uploaded_by)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_projects_department_status
+    ON design.projects (department_id, status, updated_at DESC)
   `);
 
   await client.query(`

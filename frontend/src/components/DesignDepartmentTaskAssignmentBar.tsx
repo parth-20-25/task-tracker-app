@@ -264,7 +264,7 @@ export function DesignDepartmentTaskAssignmentBar() {
 
   const projectsQuery = useQuery({
     queryKey: projectQueryKeys.designProjects(designDepartmentKey),
-    queryFn: () => fetchDesignProjects(currentUser?.department_id),
+    queryFn: () => fetchDesignProjects(currentUser?.department_id, { activeOnly: true }),
   });
 
   const [open, setOpen] = useState(false);
@@ -293,7 +293,7 @@ export function DesignDepartmentTaskAssignmentBar() {
 
   const fixturesQuery = useQuery({
     queryKey: ["designFixtures", designDepartmentKey, projectId || "unselected"],
-    queryFn: () => fetchDesignFixtures(projectId, currentUser?.department_id),
+    queryFn: () => fetchDesignFixtures(projectId, currentUser?.department_id, { activeOnly: true }),
     enabled: Boolean(projectId),
   });
 

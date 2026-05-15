@@ -134,6 +134,9 @@ function mapTaskRow(row) {
     workflow_template_id: row.workflow_template_id || null,
     workflow_template_name: row.workflow_template_name || null,
     status: row.status,
+    completion_percent: row.completion_percent === null || row.completion_percent === undefined
+      ? 0
+      : Number(row.completion_percent),
     verification_status: row.verification_status,
     priority: row.priority,
     deadline: row.deadline,
@@ -162,6 +165,7 @@ function mapTaskRow(row) {
     project_id: row.resolved_project_id || null,
     fixture_id: row.resolved_fixture_id || null,
     project_uploaded_by: row.project_uploaded_by || null,
+    project_status: row.project_status || "active",
     fixture_uploaded_by: row.fixture_batch_uploaded_by_user_id || row.fixture_batch_uploaded_by || null,
     project_no: projectNo,
     fixture_no: fixtureNo,

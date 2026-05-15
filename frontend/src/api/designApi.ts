@@ -7,6 +7,7 @@ import {
   DesignExcelUploadResponse,
   DesignFixtureOption,
   DesignProjectOption,
+  ProjectDashboardSummary,
   Task,
   ValidateRejectedDesignRowResponse,
 } from "@/types";
@@ -135,14 +136,22 @@ export function fetchDepartmentProjects() {
   return apiRequest<DepartmentProject[]>("/department-projects");
 }
 
-export function fetchDesignProjects(departmentId?: string) {
-  const url = departmentId
-    ? `/design/projects?department_id=${encodeURIComponent(departmentId)}`
-    : "/design/projects";
-  return apiRequest<DesignProjectOption[]>(url);
+export function fetchDesignProjects(departmentId?: string, options: { activeOnly?: boolean } = {}) {
+  const params = new URLSearchParams();
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  if (options.activeOnly) {
+    params.set("active_only", "true");
+  }
+
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiRequest<DesignProjectOption[]>(`/design/projects${suffix}`);
 }
 
-export function fetchDesignFixtures(projectId: string, departmentId?: string) {
+export function fetchDesignFixtures(projectId: string, departmentId?: string, options: { activeOnly?: boolean } = {}) {
   const params = new URLSearchParams();
   params.set("project_id", projectId);
 
@@ -150,7 +159,21 @@ export function fetchDesignFixtures(projectId: string, departmentId?: string) {
     params.set("department_id", departmentId);
   }
 
+  if (options.activeOnly) {
+    params.set("active_only", "true");
+  }
+
   return apiRequest<DesignFixtureOption[]>(`/design/fixtures?${params.toString()}`);
+}
+
+export function fetchProjectDashboardSummary(departmentId?: string) {
+  const params = new URLSearchParams();
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<ProjectDashboardSummary[]>(`/projects/summary${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
 export function fetchDepartmentWorkflowPreview(projectId?: string) {

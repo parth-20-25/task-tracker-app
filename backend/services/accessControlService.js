@@ -15,6 +15,8 @@ const PERMISSION_ALIASES = {
   [PERMISSIONS.APPROVE_COMPLETED_TASK]: ["can_verify_task"],
 };
 
+const PROJECT_AUTHORITY_ROLE_NAMES = new Set(["admin", "ceo", "director"]);
+
 function getEquivalentPermissions(permission) {
   return [...new Set([permission, ...(PERMISSION_ALIASES[permission] || [])])];
 }
@@ -47,6 +49,18 @@ function getRoleLevel(user) {
   const roleDetails = getRoleDetails(user);
   const roleId = getRoleId(user);
   return roleDetails?.hierarchy_level ?? ROLE_LEVELS[roleId] ?? null;
+}
+
+function normalizeRoleName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isProjectAuthorityRole(user) {
+  const roleDetails = getRoleDetails(user);
+  const roleName = normalizeRoleName(roleDetails?.name);
+  const roleId = normalizeRoleName(getRoleId(user));
+
+  return PROJECT_AUTHORITY_ROLE_NAMES.has(roleName) || PROJECT_AUTHORITY_ROLE_NAMES.has(roleId);
 }
 
 function getRolePermissionFlags(user) {
@@ -349,6 +363,7 @@ module.exports = {
   getVisibleUserIds,
   hasPermission,
   isAdmin,
+  isProjectAuthorityRole,
   isSupervisor,
   isTaskAssignee,
 };

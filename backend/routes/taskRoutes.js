@@ -11,7 +11,7 @@ const {
   sanitizeOriginalFileName,
 } = require("../lib/taskProofUpload");
 const { authenticate } = require("../middleware/authenticate");
-const { PERMISSIONS } = require("../config/constants");
+const { PERMISSIONS, PROJECT_STATUSES } = require("../config/constants");
 const {
   cancelTaskForUser,
   createTaskForUser,
@@ -59,6 +59,22 @@ async function loadTaskForAccess(user, taskId) {
   }
 
   return task;
+}
+
+function ensureActiveProjectTaskWrite(task) {
+  if (!task?.project_id) {
+    return;
+  }
+
+  const projectStatus = task.project_status || PROJECT_STATUSES.ACTIVE;
+  if (projectStatus !== PROJECT_STATUSES.ACTIVE) {
+    throw new AppError(
+      409,
+      projectStatus === PROJECT_STATUSES.ON_HOLD
+        ? "Project is on hold and cannot continue active task workflow"
+        : "Project is completed and cannot continue active task workflow",
+    );
+  }
 }
 
 router.get(
@@ -184,7 +200,8 @@ router.post(
   authorize("can_edit_task"),
   asyncHandler(async (req, res) => {
     const body = req.body || {};
-    await loadTaskForAccess(req.user, req.params.taskId);
+    const task = await loadTaskForAccess(req.user, req.params.taskId);
+    ensureActiveProjectTaskWrite(task);
 
     const stepName = String(body.step_name || body.action || "").trim();
     const stepStatus = String(body.status || "").trim() || "recorded";
@@ -223,7 +240,8 @@ router.post(
   authorize("can_edit_task"),
   asyncHandler(async (req, res) => {
     const body = req.body || {};
-    await loadTaskForAccess(req.user, req.params.taskId);
+    const task = await loadTaskForAccess(req.user, req.params.taskId);
+    ensureActiveProjectTaskWrite(task);
 
     const item = String(body.item || "").trim();
 
@@ -248,7 +266,8 @@ router.post(
 
 async function updateChecklistItem(req, res) {
   const body = req.body || {};
-  await loadTaskForAccess(req.user, req.params.taskId);
+  const task = await loadTaskForAccess(req.user, req.params.taskId);
+  ensureActiveProjectTaskWrite(task);
 
   const payload = {};
 
@@ -305,7 +324,8 @@ router.delete(
   "/tasks/:taskId/checklists/:checklistId",
   authorize("can_edit_task"),
   asyncHandler(async (req, res) => {
-    await loadTaskForAccess(req.user, req.params.taskId);
+    const task = await loadTaskForAccess(req.user, req.params.taskId);
+    ensureActiveProjectTaskWrite(task);
 
     const deletedChecklistId = await deleteTaskChecklist(req.params.taskId, req.params.checklistId);
 

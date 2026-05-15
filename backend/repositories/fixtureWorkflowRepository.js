@@ -447,6 +447,7 @@ async function getFixtureWorkflowContext(fixtureId, client = pool) {
        dp.project_no,
        dp.project_name,
        dp.department_id,
+       COALESCE(dp.status, 'active') AS project_status,
        df.revision_no,
        df.is_legacy_workflow
      FROM design.fixtures df
@@ -472,7 +473,8 @@ async function resolveFixtureByCanonicalIdentity({ project_id, fixture_no }, dep
        df.project_id,
        dp.project_no,
        dp.project_name,
-       dp.department_id
+       dp.department_id,
+       COALESCE(dp.status, 'active') AS project_status
      FROM design.fixtures df
      JOIN design.projects dp ON dp.id = df.project_id
      WHERE df.project_id = $1
@@ -493,6 +495,7 @@ async function listAssignableFixtures(departmentId, projectId, client = pool) {
      WHERE df.project_id = $1
        AND dp.department_id = $2
        AND df.is_workflow_complete = FALSE
+       AND COALESCE(dp.status, 'active') = 'active'
      ORDER BY df.fixture_no ASC, df.id ASC`,
     [projectId, departmentId],
   );

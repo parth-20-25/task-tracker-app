@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const { PROJECT_STATUSES } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
 const { AppError } = require("../lib/AppError");
 const {
@@ -16,6 +17,7 @@ const DEPARTMENT_PROJECT_SELECT = `
     COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
     p.customer_name,
     p.project_name AS project_description,
+    COALESCE(p.status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
     COALESCE(fixture_stats.fixture_count, 0)::integer AS instance_count,
     NULL::text AS quantity_index,
     NULL::date AS rework_date,
@@ -51,6 +53,7 @@ function mapDepartmentProjectRow(row) {
       : Number(row.instance_count),
     rework_date: row.rework_date || null,
     department_id: row.department_id,
+    project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -68,6 +71,7 @@ function mapDesignProjectRow(row) {
     project_name: row.project_name,
     company_name: row.customer_name,
     department_id: row.department_id,
+    project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -85,6 +89,49 @@ function mapProjectOptionRow(row) {
     project_name: row.project_name,
     company_name: row.customer_name,
     department_id: row.department_id,
+    project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+  };
+}
+
+function normalizeProjectCompletionPercent(row) {
+  if (!row) {
+    return 0;
+  }
+
+  if ((row.project_status || row.status) === PROJECT_STATUSES.COMPLETED) {
+    return 100;
+  }
+
+  const value = row.project_completion_percent;
+  if (value === null || value === undefined) {
+    return 0;
+  }
+
+  return Number(value);
+}
+
+function mapProjectSummaryRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    project_id: row.project_id,
+    project_no: row.project_no,
+    project_name: row.project_name,
+    customer_name: row.customer_name,
+    department_id: row.department_id,
+    department_name: row.department_name || null,
+    project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+    completion_percent: normalizeProjectCompletionPercent(row),
+    total_fixtures: Number(row.total_fixtures || 0),
+    total_tasks: Number(row.total_tasks || 0),
+    pending_tasks: Number(row.pending_tasks || 0),
+    active_tasks: Number(row.active_tasks || 0),
+    completed_tasks: Number(row.completed_tasks || 0),
+    uploaded_by: row.uploaded_by || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -207,7 +254,7 @@ async function logVisibilityDecision({
   }
 }
 
-async function listProjectOptionsByDepartment(departmentId, client = pool) {
+async function listProjectOptionsByDepartment(departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       SELECT
@@ -215,18 +262,20 @@ async function listProjectOptionsByDepartment(departmentId, client = pool) {
         p.project_no,
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
-        p.department_id
+        p.department_id,
+        COALESCE(p.status, $2) AS project_status
       FROM design.projects p
       WHERE p.department_id = $1
+        AND ($3::boolean = FALSE OR COALESCE(p.status, $2) = $2)
       ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
     `,
-    [departmentId],
+    [departmentId, PROJECT_STATUSES.ACTIVE, activeOnly === true],
   );
 
   return result.rows.map(mapProjectOptionRow);
 }
 
-async function listProjectOptionsForUser(user, departmentId, client = pool) {
+async function listProjectOptionsForUser(user, departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       ${buildVisibleUsersCte("$1")}
@@ -235,32 +284,129 @@ async function listProjectOptionsForUser(user, departmentId, client = pool) {
         p.project_no,
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
-        p.department_id
+        p.department_id,
+        COALESCE(p.status, $4) AS project_status
       FROM design.projects p
       WHERE p.department_id = $2
         AND ${visibleProjectPredicate("p")}
+        AND ($3::boolean = FALSE OR COALESCE(p.status, $4) = $4)
       ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
     `,
-    [user.employee_id, departmentId],
+    [user.employee_id, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
   );
 
   return result.rows.map(mapProjectOptionRow);
 }
 
-async function countProjectsByDepartment(departmentId, client = pool) {
+async function countProjectsByDepartment(departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       SELECT COUNT(*)::integer AS count
       FROM design.projects
       WHERE department_id = $1
+        AND ($2::boolean = FALSE OR COALESCE(status, $3) = $3)
     `,
-    [departmentId],
+    [departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
   );
 
   return Number(result.rows[0]?.count || 0);
 }
 
-async function findProjectByIdForDepartment(projectId, departmentId, client = pool) {
+async function getProjectStatusById(projectId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT COALESCE(status, $2) AS status
+      FROM design.projects
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [projectId, PROJECT_STATUSES.ACTIVE],
+  );
+
+  return result.rows[0]?.status || null;
+}
+
+async function listProjectSummariesForUser(user, { departmentId = null } = {}, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        p.customer_name,
+        p.department_id,
+        d.name AS department_name,
+        COALESCE(p.status, $3) AS project_status,
+        p.uploaded_by,
+        p.created_at,
+        p.updated_at,
+        COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
+        COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
+        COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
+        COALESCE(task_stats.active_tasks, 0)::integer AS active_tasks,
+        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks,
+        CASE
+          WHEN COALESCE(p.status, $3) = $4 THEN 100::numeric
+          WHEN COALESCE(task_stats.total_tasks, 0) = 0 THEN 0::numeric
+          ELSE ROUND(task_stats.avg_completion_percent::numeric, 2)
+        END AS project_completion_percent
+      FROM design.projects p
+      LEFT JOIN departments d
+        ON d.id = p.department_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::integer AS total_fixtures
+        FROM design.fixtures f
+        WHERE f.project_id = p.id
+      ) fixture_stats ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::integer AS total_tasks,
+          COUNT(*) FILTER (
+            WHERE COALESCE(t.status, '') NOT IN ('closed', 'cancelled')
+          )::integer AS pending_tasks,
+          COUNT(*) FILTER (
+            WHERE COALESCE(t.status, '') IN ('assigned', 'in_progress', 'on_hold', 'under_review', 'rework')
+          )::integer AS active_tasks,
+          COUNT(*) FILTER (
+            WHERE COALESCE(t.status, '') = 'closed'
+          )::integer AS completed_tasks,
+          AVG(
+            COALESCE(
+              t.completion_percent,
+              CASE WHEN t.status = 'closed' OR t.verification_status = 'approved' THEN 100 ELSE 0 END
+            )
+          ) AS avg_completion_percent
+        FROM tasks t
+        WHERE t.project_id = p.id
+          AND COALESCE(t.status, '') <> 'cancelled'
+      ) task_stats ON TRUE
+      WHERE ($2::text IS NULL OR p.department_id = $2)
+        AND ${visibleProjectPredicate("p")}
+      ORDER BY
+        CASE COALESCE(p.status, $3)
+          WHEN $3 THEN 0
+          WHEN $5 THEN 1
+          WHEN $4 THEN 2
+          ELSE 3
+        END,
+        p.updated_at DESC,
+        p.created_at DESC,
+        p.project_no ASC
+    `,
+    [
+      user.employee_id,
+      departmentId || null,
+      PROJECT_STATUSES.ACTIVE,
+      PROJECT_STATUSES.COMPLETED,
+      PROJECT_STATUSES.ON_HOLD,
+    ],
+  );
+
+  return result.rows.map(mapProjectSummaryRow);
+}
+
+async function findProjectByIdForDepartment(projectId, departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       SELECT
@@ -268,19 +414,21 @@ async function findProjectByIdForDepartment(projectId, departmentId, client = po
         project_no,
         COALESCE(NULLIF(BTRIM(project_name), ''), project_no) AS project_name,
         customer_name,
-        department_id
+        department_id,
+        COALESCE(status, $3) AS project_status
       FROM design.projects
       WHERE id = $1
         AND department_id = $2
+        AND ($4::boolean = FALSE OR COALESCE(status, $3) = $3)
       LIMIT 1
     `,
-    [projectId, departmentId],
+    [projectId, departmentId, PROJECT_STATUSES.ACTIVE, activeOnly === true],
   );
 
   return mapProjectOptionRow(result.rows[0]);
 }
 
-async function findProjectByIdForUser(projectId, user, departmentId, client = pool) {
+async function findProjectByIdForUser(projectId, user, departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       ${buildVisibleUsersCte("$1")}
@@ -289,14 +437,16 @@ async function findProjectByIdForUser(projectId, user, departmentId, client = po
         p.project_no,
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
-        p.department_id
+        p.department_id,
+        COALESCE(p.status, $4) AS project_status
       FROM design.projects p
       WHERE p.id = $2
         AND p.department_id = $3
         AND ${visibleProjectPredicate("p")}
+        AND ($5::boolean = FALSE OR COALESCE(p.status, $4) = $4)
       LIMIT 1
     `,
-    [user.employee_id, projectId, departmentId],
+    [user.employee_id, projectId, departmentId, PROJECT_STATUSES.ACTIVE, activeOnly === true],
   );
 
   const project = mapProjectOptionRow(result.rows[0]);
@@ -322,6 +472,7 @@ async function findProjectByNumberForDepartment(projectNo, departmentId, client 
         project_name,
         customer_name,
         department_id,
+        COALESCE(status, $3) AS project_status,
         uploaded_by,
         created_at,
         updated_at
@@ -330,7 +481,7 @@ async function findProjectByNumberForDepartment(projectNo, departmentId, client 
         AND department_id = $2
       LIMIT 1
     `,
-    [projectNo, departmentId],
+    [projectNo, departmentId, PROJECT_STATUSES.ACTIVE],
   );
 
   return mapDesignProjectRow(result.rows[0]);
@@ -359,6 +510,7 @@ async function listDepartmentProjectsForUser(user, departmentId, client = pool) 
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
         p.project_name AS project_description,
+        COALESCE(p.status, $3) AS project_status,
         (
           SELECT COUNT(*)::integer
           FROM design.fixtures visible_fixture
@@ -376,7 +528,7 @@ async function listDepartmentProjectsForUser(user, departmentId, client = pool) 
         AND ${visibleProjectPredicate("p")}
       ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
     `,
-    [user.employee_id, departmentId],
+    [user.employee_id, departmentId, PROJECT_STATUSES.ACTIVE],
   );
 
   return result.rows.map(mapDepartmentProjectRow);
@@ -420,6 +572,7 @@ async function upsertProjectByNumber(project, client = pool) {
         project_name,
         customer_name,
         department_id,
+        COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
         uploaded_by,
         created_at,
         updated_at
@@ -436,7 +589,7 @@ async function upsertProjectByNumber(project, client = pool) {
   return mapDesignProjectRow(insertedProject.rows[0]);
 }
 
-async function listFixturesByProjectForDepartment(projectId, departmentId, client = pool) {
+async function listFixturesByProjectForDepartment(projectId, departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       SELECT
@@ -455,18 +608,19 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, clien
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
-      WHERE dp.id = $1
-        AND dp.department_id = $2
-        AND di.is_workflow_complete = FALSE
-      ORDER BY di.fixture_no ASC, di.id ASC
+     WHERE dp.id = $1
+       AND dp.department_id = $2
+       AND di.is_workflow_complete = FALSE
+       AND ($3::boolean = FALSE OR COALESCE(dp.status, $4) = $4)
+     ORDER BY di.fixture_no ASC, di.id ASC
     `,
-    [projectId, departmentId],
+    [projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
   );
 
   return result.rows.map(mapFixtureOptionRow);
 }
 
-async function listFixturesByProjectForUser(projectId, user, departmentId, client = pool) {
+async function listFixturesByProjectForUser(projectId, user, departmentId, { activeOnly = false } = {}, client = pool) {
   const result = await client.query(
     `
       ${buildVisibleUsersCte("$1")}
@@ -490,9 +644,10 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, clien
         AND dp.department_id = $3
         AND di.is_workflow_complete = FALSE
         AND ${visibleFixturePredicate("di", "dp")}
+        AND ($4::boolean = FALSE OR COALESCE(dp.status, $5) = $5)
       ORDER BY di.fixture_no ASC, di.id ASC
     `,
-    [user.employee_id, projectId, departmentId],
+    [user.employee_id, projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
   );
 
   return result.rows.map(mapFixtureOptionRow);
@@ -889,12 +1044,14 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   findProjectByIdForDepartment,
   findProjectByIdForUser,
   findProjectByNumberForDepartment,
+  getProjectStatusById,
   listDepartmentProjectsByDepartment,
   listDepartmentProjectsForUser,
   listFixturesByProjectForDepartment,
   listFixturesByProjectForUser,
   listFixturesByUploadBatchForDepartment,
   listFixturesByUploadBatchForUser,
+  listProjectSummariesForUser,
   listProjectOptionsByDepartment,
   listProjectOptionsForUser,
   touchProject,

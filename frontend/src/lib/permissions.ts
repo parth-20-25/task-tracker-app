@@ -168,8 +168,17 @@ export function hasAnyUserPermission(user: User | null | undefined, permissions:
   return permissions.some((permission) => hasUserPermission(user, permission));
 }
 
-function isAdminUser(user: User | null | undefined) {
+export function isAdminUser(user: User | null | undefined) {
   return user?.role?.hierarchy_level === 1 || user?.role?.id === "r1" || user?.role_id === "r1";
+}
+
+export function isProjectAuthorityUser(user: User | null | undefined) {
+  const roleName = String(user?.role?.name || "").trim().toLowerCase();
+  const roleId = String(user?.role?.id || user?.role_id || "").trim().toLowerCase();
+
+  return ["admin", "ceo", "director"].includes(roleName)
+    || ["admin", "ceo", "director"].includes(roleId)
+    || isAdminUser(user);
 }
 
 export function buildUiAccess(user: User | null | undefined): UiAccess {

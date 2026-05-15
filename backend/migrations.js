@@ -268,7 +268,37 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS project_id UUID,
       ADD COLUMN IF NOT EXISTS fixture_id UUID,
       ADD COLUMN IF NOT EXISTS fixture_no TEXT,
-      ADD COLUMN IF NOT EXISTS stage TEXT
+      ADD COLUMN IF NOT EXISTS stage TEXT,
+      ADD COLUMN IF NOT EXISTS completion_percent INTEGER NOT NULL DEFAULT 0
+    `);
+
+    await client.query(`
+      UPDATE tasks
+      SET completion_percent = CASE
+        WHEN status = 'closed' OR verification_status = 'approved' THEN 100
+        WHEN completion_percent < 0 THEN 0
+        WHEN completion_percent > 100 THEN 100
+        ELSE completion_percent
+      END
+      WHERE completion_percent IS NULL
+         OR completion_percent < 0
+         OR completion_percent > 100
+         OR ((status = 'closed' OR verification_status = 'approved') AND completion_percent < 100)
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'tasks_completion_percent_check'
+        ) THEN
+          ALTER TABLE tasks
+          ADD CONSTRAINT tasks_completion_percent_check
+          CHECK (completion_percent BETWEEN 0 AND 100);
+        END IF;
+      END $$;
     `);
 
     await client.query(`
@@ -481,7 +511,32 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS customer_name TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS quantity_index TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS instance_count INTEGER NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS rework_date DATE
+      ADD COLUMN IF NOT EXISTS rework_date DATE,
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+      ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ
+    `);
+
+    await client.query(`
+      UPDATE projects
+      SET status = 'active'
+      WHERE status IS NULL
+         OR status NOT IN ('active', 'on_hold', 'completed')
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'projects_status_check'
+        ) THEN
+          ALTER TABLE projects
+          ADD CONSTRAINT projects_status_check
+          CHECK (status IN ('active', 'on_hold', 'completed'));
+        END IF;
+      END $$;
     `);
 
     await client.query(`

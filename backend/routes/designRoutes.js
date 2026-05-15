@@ -28,6 +28,7 @@ const {
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
+  listProjectDashboardForUser,
   uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
 
@@ -55,7 +56,9 @@ router.post(
 router.get(
   "/design/projects",
   asyncHandler(async (req, res) => {
-    const projects = await listDesignProjectsForUser(req.user, req.query.department_id);
+    const projects = await listDesignProjectsForUser(req.user, req.query.department_id, {
+      activeOnly: req.query.active_only === "true",
+    });
     return sendSuccess(res, projects);
   }),
 );
@@ -63,8 +66,18 @@ router.get(
 router.get(
   "/design/fixtures",
   asyncHandler(async (req, res) => {
-    const fixtures = await listDesignFixturesForUser(req.user, req.query.project_id, req.query.department_id);
+    const fixtures = await listDesignFixturesForUser(req.user, req.query.project_id, req.query.department_id, {
+      activeOnly: req.query.active_only === "true",
+    });
     return sendSuccess(res, fixtures);
+  }),
+);
+
+router.get(
+  "/projects/summary",
+  asyncHandler(async (req, res) => {
+    const projects = await listProjectDashboardForUser(req.user, req.query.department_id);
+    return sendSuccess(res, projects);
   }),
 );
 
@@ -78,10 +91,10 @@ router.get(
     );
 
     if (req.query.project_id) {
-      const project = await findProjectByIdForUser(req.query.project_id, req.user, departmentId);
+      const project = await findProjectByIdForUser(req.query.project_id, req.user, departmentId, { activeOnly: true });
 
       if (!project) {
-        throw new AppError(404, "Project not found for the selected department");
+        throw new AppError(409, "Project is not active for assignment");
       }
 
       departmentId = resolveAccessibleDepartmentId(req.user, project.department_id, "Invalid department context");

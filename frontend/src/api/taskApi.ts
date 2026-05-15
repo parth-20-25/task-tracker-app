@@ -18,6 +18,7 @@ interface UpdateTaskPayload {
   action?: "start" | "resume" | "hold" | "submit";
   verification_action?: "approve" | "reject";
   status?: TaskStatus;
+  completion_percent?: number;
   verification_status?: VerificationStatus;
   remarks?: string;
   proof_url?: string;

@@ -41,6 +41,7 @@ function taskSelectQuery(whereClause = "") {
       COALESCE(project.customer_name, NULLIF(t.customer_name, '')) AS resolved_customer_name,
       COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
       project.uploaded_by AS project_uploaded_by,
+      COALESCE(project.status, 'active') AS project_status,
       fixture_batch.uploaded_by AS fixture_batch_uploaded_by,
       fixture_batch.uploaded_by_user_id AS fixture_batch_uploaded_by_user_id,
       t.workflow_id,
@@ -365,6 +366,7 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
           submitted_at = CASE WHEN $10::boolean THEN $11::timestamp ELSE submitted_at END,
           approved_at = CASE WHEN $12::boolean THEN $13::timestamp ELSE approved_at END,
           approved_by = CASE WHEN $14::boolean THEN $15::varchar(50) ELSE approved_by END,
+          completion_percent = CASE WHEN $1::text = 'closed' THEN 100 ELSE completion_percent END,
           updated_at = NOW()
       WHERE id = $16::int
     `,
@@ -429,6 +431,7 @@ async function updateTaskVerification(taskId, values, client = pool) {
           approved_by = CASE WHEN $19::boolean THEN $20::varchar(50) ELSE approved_by END,
           submitted_at = CASE WHEN $21::boolean THEN $22::timestamp ELSE submitted_at END,
           rejection_count = COALESCE(rejection_count, 0) + $23::int,
+          completion_percent = CASE WHEN $5::text = 'closed' THEN 100 ELSE completion_percent END,
           updated_at = NOW()
       WHERE id = $24::int
     `,
@@ -598,6 +601,18 @@ async function updateTaskDetails(taskId, values, client = pool) {
       values.last_escalated_at ?? null,
       taskId,
     ],
+  );
+}
+
+async function updateTaskCompletionPercent(taskId, completionPercent, client = pool) {
+  await client.query(
+    `
+      UPDATE tasks
+      SET completion_percent = $2::int,
+          updated_at = NOW()
+      WHERE id = $1::int
+    `,
+    [taskId, completionPercent],
   );
 }
 
@@ -932,6 +947,7 @@ module.exports = instrumentModuleExports("repository.tasksRepository", {
   listTasksForWorkflowInstance,
   listVerificationTasksByAccess,
   updateTaskChecklist,
+  updateTaskCompletionPercent,
   updateTaskDetails,
   updateTaskProof,
   updateTaskStatus,

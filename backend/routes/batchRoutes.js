@@ -2,7 +2,12 @@ const express = require("express");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
-const { deleteBatch, getBatches } = require("../services/batchService");
+const {
+  deleteBatch,
+  getBatches,
+  holdProjectForBatch,
+  releaseProjectForBatch,
+} = require("../services/batchService");
 
 const router = express.Router();
 
@@ -20,6 +25,22 @@ router.delete(
   "/batches/:id",
   asyncHandler(async (req, res) => {
     const result = await deleteBatch(req.user, req.params.id, req.query.force === "true");
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/batches/:id/on-hold",
+  asyncHandler(async (req, res) => {
+    const result = await holdProjectForBatch(req.user, req.params.id);
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/batches/:id/release",
+  asyncHandler(async (req, res) => {
+    const result = await releaseProjectForBatch(req.user, req.params.id);
     return sendSuccess(res, result);
   }),
 );

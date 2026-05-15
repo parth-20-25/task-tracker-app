@@ -11,3 +11,15 @@ export function deleteBatch(batchId: string, force = false) {
     method: "DELETE",
   });
 }
+
+export function holdBatchProject(batchId: string) {
+  return apiRequest<{ project_id: string; batch_id: string; status: string; message: string }>(`/batches/${batchId}/on-hold`, {
+    method: "POST",
+  });
+}
+
+export function releaseBatchProject(batchId: string) {
+  return apiRequest<{ project_id: string; batch_id: string; status: string; message: string }>(`/batches/${batchId}/release`, {
+    method: "POST",
+  });
+}

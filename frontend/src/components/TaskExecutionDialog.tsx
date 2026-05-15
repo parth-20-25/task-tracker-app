@@ -1,17 +1,21 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, FileImage, History, Loader2, NotebookText, Trash2, Upload } from "lucide-react";
-import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
+import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, updateTask, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
 import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
+import { isProjectAuthorityUser } from "@/lib/permissions";
+import { batchQueryKeys } from "@/lib/queryKeys";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
 import { API_ROOT_URL } from "@/api/config";
 
@@ -54,8 +58,9 @@ function isAllowedTaskProofFile(file: File) {
 }
 
 export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
-  const { user } = useAuth();
+  const { access, user } = useAuth();
   const { refreshTasks } = useTasks();
+  const queryClient = useQueryClient();
   const taskDisplay = getTaskCardDisplay(task);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -67,9 +72,20 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const [logNotes, setLogNotes] = useState("");
   const [checklistText, setChecklistText] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [completionInput, setCompletionInput] = useState(String(task.completion_percent ?? 0));
+  const [savingCompletion, setSavingCompletion] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
-  const isAssignee = user?.employee_id === task.assigned_to;
+  const isAssignee = user
+    ? user.employee_id === task.assigned_to || task.assignee_ids?.includes(user.employee_id)
+    : false;
+  const actorLevel = Number(user?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
+  const assigneeLevel = Number(task.assignee?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
+  const canEditCompletion = task.status !== "closed" && (
+    isAssignee
+    || isProjectAuthorityUser(user)
+    || (access.canEditTasks && actorLevel < assigneeLevel)
+  );
   const proofUrls = task.proof_url ?? [];
 
   const latestProof = useMemo(() => {
@@ -176,9 +192,43 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
 
   useEffect(() => {
     if (open) {
+      setCompletionInput(String(task.completion_percent ?? 0));
       loadExecutionData().catch(() => undefined);
     }
-  }, [open, loadExecutionData]);
+  }, [open, loadExecutionData, task.completion_percent]);
+
+  const handleCompletionSave = useCallback(async () => {
+    const nextCompletion = Number(completionInput);
+
+    if (!Number.isInteger(nextCompletion) || nextCompletion < 0 || nextCompletion > 100) {
+      toast({
+        title: "Invalid completion",
+        description: "Completion percent must be a whole number from 0 to 100.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingCompletion(true);
+
+    try {
+      await updateTask(task.id, { completion_percent: nextCompletion });
+      await Promise.all([
+        refreshTasks(),
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      ]);
+      toast({ title: "Completion updated", description: `Task progress saved at ${nextCompletion}%.` });
+    } catch (error) {
+      toast({
+        title: "Could not save completion",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingCompletion(false);
+    }
+  }, [completionInput, queryClient, refreshTasks, task.id]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -199,7 +249,46 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
             Loading task execution details...
           </div>
         ) : (
-          <Tabs defaultValue="activity" className="w-full">
+          <div className="space-y-4">
+            <div className="rounded-xl border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div className="space-y-1.5">
+                  <div className="text-sm font-semibold">Task Completion</div>
+                  <div className="text-xs text-muted-foreground">
+                    Assignees update real progress here. Project completion is calculated automatically from these task percentages.
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={completionInput}
+                    onChange={(event) => setCompletionInput(event.target.value)}
+                    disabled={!canEditCompletion || savingCompletion}
+                    className="w-24"
+                    aria-label="Task completion percent"
+                  />
+                  <span className="text-sm text-muted-foreground">%</span>
+                  <Button
+                    type="button"
+                    onClick={() => { handleCompletionSave().catch(() => undefined); }}
+                    disabled={!canEditCompletion || savingCompletion || completionInput === String(task.completion_percent ?? 0)}
+                  >
+                    Save
+                  </Button>
+                </div>
+              </div>
+              <Progress value={Number(task.completion_percent ?? 0)} className="mt-3 h-2" />
+              {!canEditCompletion && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Only the assignee or an authorized higher role can edit this value while the project and task are active.
+                </p>
+              )}
+            </div>
+
+            <Tabs defaultValue="activity" className="w-full">
             <TabsList>
               <TabsTrigger value="activity"><History className="h-3.5 w-3.5 mr-1.5" />Activity</TabsTrigger>
               <TabsTrigger value="logs"><NotebookText className="h-3.5 w-3.5 mr-1.5" />Logs</TabsTrigger>
@@ -422,7 +511,8 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 </div>
               )}
             </TabsContent>
-          </Tabs>
+            </Tabs>
+          </div>
         )}
       </DialogContent>
     </Dialog>

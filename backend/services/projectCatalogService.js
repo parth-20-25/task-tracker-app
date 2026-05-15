@@ -13,6 +13,7 @@ const {
   findProjectByIdForUser,
   listDepartmentProjectsForUser: listDepartmentProjectsByUserVisibility,
   listFixturesByProjectForUser,
+  listProjectSummariesForUser: listProjectSummariesByUserVisibility,
   listProjectOptionsForUser,
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
@@ -64,12 +65,12 @@ async function listDepartmentProjectsForUser(user) {
   return listDepartmentProjectsByUserVisibility(user, requireUserDepartment(user));
 }
 
-async function listDesignProjectsForUser(user, requestedDepartmentId) {
+async function listDesignProjectsForUser(user, requestedDepartmentId, options = {}) {
   const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
-  return listProjectOptionsForUser(user, departmentId);
+  return listProjectOptionsForUser(user, departmentId, { activeOnly: options.activeOnly === true });
 }
 
-async function listDesignFixturesForUser(user, projectId, requestedDepartmentId) {
+async function listDesignFixturesForUser(user, projectId, requestedDepartmentId, options = {}) {
   const normalizedProjectId = String(
     typeof projectId === "object" && projectId !== null ? projectId.project_id : projectId || "",
   ).trim();
@@ -79,13 +80,36 @@ async function listDesignFixturesForUser(user, projectId, requestedDepartmentId)
   }
 
   const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
-  const project = await findProjectByIdForUser(normalizedProjectId, user, departmentId);
+  const project = await findProjectByIdForUser(
+    normalizedProjectId,
+    user,
+    departmentId,
+    { activeOnly: options.activeOnly === true },
+  );
 
   if (!project) {
-    throw new AppError(404, "Project not found for the selected department");
+    throw new AppError(
+      options.activeOnly === true ? 409 : 404,
+      options.activeOnly === true
+        ? "Project is not active for assignment"
+        : "Project not found for the selected department",
+    );
   }
 
-  return listFixturesByProjectForUser(normalizedProjectId, user, departmentId);
+  return listFixturesByProjectForUser(
+    normalizedProjectId,
+    user,
+    departmentId,
+    { activeOnly: options.activeOnly === true },
+  );
+}
+
+async function listProjectDashboardForUser(user, requestedDepartmentId) {
+  const departmentId = requestedDepartmentId
+    ? resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project dashboard access")
+    : null;
+
+  return listProjectSummariesByUserVisibility(user, { departmentId });
 }
 
 function normalizeProjectUploadRow(row = {}) {
@@ -193,9 +217,9 @@ async function createDesignTaskFromProject(user, payload = {}) {
     payload.department_id,
     "A department is required to create workflow tasks",
   );
-  const project = await findProjectByIdForUser(projectId, user, departmentId);
+  const project = await findProjectByIdForUser(projectId, user, departmentId, { activeOnly: true });
   if (!project) {
-    throw new AppError(404, "Project not found for the selected department");
+    throw new AppError(409, "Project is not active for assignment");
   }
 
   const fixture = await findFixtureByIdForUser(fixtureId, user, departmentId);
@@ -251,5 +275,6 @@ module.exports = instrumentModuleExports("service.projectCatalogService", {
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
+  listProjectDashboardForUser,
   uploadDepartmentProjectsForUser,
 });

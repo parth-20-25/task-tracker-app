@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cancelTask, createTask, updateTask } from "@/api/taskApi";
-import { adminQueryKeys, analyticsQueryKeys, notificationQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
+import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, notificationQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { Task, TaskStatus, VerificationStatus } from "@/types";
 
 interface CreateTaskInput {
@@ -28,6 +28,7 @@ interface UpdateTaskInput {
   action?: "start" | "resume" | "hold" | "submit";
   verification_action?: "approve" | "reject";
   status?: TaskStatus;
+  completion_percent?: number;
   verification_status?: VerificationStatus;
   remarks?: string;
   proof_url?: string;
@@ -54,6 +55,8 @@ export function useTaskMutations() {
       queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
       queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs }),
       queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
       queryClient.invalidateQueries({ queryKey: notificationQueryKeys.all }),
     ]);
   };

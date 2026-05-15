@@ -3,6 +3,8 @@ const {
   TASK_STATUSES,
   TASK_TRANSITIONS,
   TASK_TYPES,
+  PERMISSIONS,
+  PROJECT_STATUSES,
   VERIFICATION_STATUSES,
 } = require("../config/constants");
 const { pool } = require("../db");
@@ -20,6 +22,7 @@ const {
   listTaskActivity,
   listTasksByAccess,
   listVerificationTasksByAccess,
+  updateTaskCompletionPercent,
   updateTaskDetails,
   updateTaskProof,
   updateTaskStatus,
@@ -30,12 +33,22 @@ const {
   listUsers,
 } = require("../repositories/usersRepository");
 const { listDepartments } = require("../repositories/departmentsRepository");
-const { countProjectsByDepartment } = require("../repositories/designProjectCatalogRepository");
+const { countProjectsByDepartment, getProjectStatusById } = require("../repositories/designProjectCatalogRepository");
 const {
   findWorkflowTemplateById,
   listWorkflowTemplates,
 } = require("../repositories/workflowTemplatesRepository");
-const { canAccessTask, canAssignTo, canVerifyTask, getTaskAccess, isAdmin, isTaskAssignee } = require("./accessControlService");
+const {
+  canAccessTask,
+  canAssignTo,
+  canVerifyTask,
+  getRoleLevel,
+  getTaskAccess,
+  hasPermission,
+  isAdmin,
+  isProjectAuthorityRole,
+  isTaskAssignee,
+} = require("./accessControlService");
 const { getEscalationSchedule } = require("./escalationService");
 const { notifyDepartment, notifyTaskAssignees } = require("./notificationService");
 const { refreshPerformanceAnalyticsForDepartment } = require("./performanceAnalyticsService");
@@ -220,6 +233,28 @@ function hasTaskDetailUpdate(payload) {
   ].some((field) => hasOwn(payload, field));
 }
 
+function hasCompletionPercentUpdate(payload) {
+  return hasOwn(payload, "completion_percent");
+}
+
+function normalizeCompletionPercent(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isInteger(numericValue)) {
+    throw new AppError(400, "completion_percent must be an integer between 0 and 100");
+  }
+
+  if (numericValue < 0) {
+    throw new AppError(400, "completion_percent cannot be below 0");
+  }
+
+  if (numericValue > 100) {
+    throw new AppError(400, "completion_percent cannot be above 100");
+  }
+
+  return numericValue;
+}
+
 function hasExecutionUpdate(payload) {
   return hasOwn(payload, "action") || hasOwn(payload, "status");
 }
@@ -257,6 +292,14 @@ function validateTaskUpdatePayload(payload) {
 
   if (hasExecutionUpdate(payload) && hasVerificationUpdate(payload)) {
     throw new AppError(400, "Execution and verification updates must be sent separately");
+  }
+
+  if (hasCompletionPercentUpdate(payload) && (hasExecutionUpdate(payload) || hasVerificationUpdate(payload))) {
+    throw new AppError(400, "Completion percent updates must be sent separately");
+  }
+
+  if (hasCompletionPercentUpdate(payload)) {
+    normalizeCompletionPercent(payload.completion_percent);
   }
 }
 
@@ -724,6 +767,8 @@ async function createTaskForUser(user, payload = {}) {
   const resolvedProjectNo = fixtureContext?.project_no || projectNo;
   const stage = fixtureContext?.stage_name || null;
 
+  await assertProjectIsActive(resolvedProjectId);
+
   if (fixtureId && stage) {
     const dupCheck = await pool.query(`
       SELECT 1 FROM tasks
@@ -943,7 +988,7 @@ async function resolveDepartmentAssignmentContextForUser(user, departmentId) {
     throw new AppError(403, "You do not have access to this department");
   }
 
-  const projectCount = await countProjectsByDepartment(normalizedDepartmentId);
+  const projectCount = await countProjectsByDepartment(normalizedDepartmentId, { activeOnly: true });
   const hasProjectCatalog = projectCount > 0;
 
   return {
@@ -979,6 +1024,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
   const verificationStatus = normalizeVerificationStatus(payload);
   const hasProofUpdate = hasTaskProofUpdate(payload);
   const hasDetailUpdate = hasTaskDetailUpdate(payload);
+  const hasCompletionUpdate = hasCompletionPercentUpdate(payload);
   const workflowAction = isWorkflowManagedTask(existingTask) && !verificationStatus && hasExecutionUpdate(payload)
     ? mapLegacyPayloadToWorkflowAction(existingTask, payload)
     : null;
@@ -997,6 +1043,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
     }
 
     if (workflowAction) {
+      assertTaskProjectIsActive(taskForWorkflow);
       await applyWorkflowActionUpdate(user, taskForWorkflow, workflowAction, payload.remarks);
       handled = true;
     } else if (hasExecutionUpdate(payload)) {
@@ -1013,6 +1060,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
       : null;
 
     if (nextStatus) {
+      assertTaskProjectIsActive(taskForWorkflow);
       await applyTaskStatusUpdate(user, taskForWorkflow, nextStatus);
       handled = true;
     } else if (hasExecutionUpdate(payload)) {
@@ -1022,6 +1070,11 @@ async function updateTaskForUser(user, taskId, payload = {}) {
 
   if (hasDetailUpdate) {
     await applyTaskDetailUpdate(user, existingTask, payload);
+    handled = true;
+  }
+
+  if (hasCompletionUpdate) {
+    await applyTaskCompletionPercentUpdate(user, existingTask, payload);
     handled = true;
   }
 
@@ -1064,6 +1117,8 @@ async function transitionTaskForUser(user, taskId, nextStageId) {
   if (!canAccessTask(user, task)) {
     throw new AppError(403, "You do not have permission to update this task");
   }
+
+  assertTaskProjectIsActive(task);
 
   const workflow = await getWorkflow(task.workflow_id);
 
@@ -1290,6 +1345,8 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
 }
 
 async function applyTaskVerificationUpdate(user, task, verificationStatus, remarks) {
+  assertTaskProjectIsActive(task);
+
   if (!canVerifyTask(user, task)) {
     throw new AppError(403, "You do not have permission to verify this task");
   }
@@ -1448,6 +1505,44 @@ function calculateActualMinutes(task, closedAt) {
   return Math.max(1, Math.round((new Date(endTime).getTime() - new Date(task.started_at).getTime()) / 60000));
 }
 
+function assertTaskProjectIsActive(task) {
+  if (!task?.project_id) {
+    return;
+  }
+
+  const projectStatus = task.project_status || PROJECT_STATUSES.ACTIVE;
+  if (projectStatus === PROJECT_STATUSES.ACTIVE) {
+    return;
+  }
+
+  throw new AppError(
+    409,
+    projectStatus === PROJECT_STATUSES.ON_HOLD
+      ? "Project is on hold and cannot continue active task workflow"
+      : "Project is completed and cannot continue active task workflow",
+  );
+}
+
+async function assertProjectIsActive(projectId) {
+  if (!projectId) {
+    return;
+  }
+
+  const projectStatus = await getProjectStatusById(projectId);
+  if (!projectStatus) {
+    return;
+  }
+
+  if (projectStatus !== PROJECT_STATUSES.ACTIVE) {
+    throw new AppError(
+      409,
+      projectStatus === PROJECT_STATUSES.ON_HOLD
+        ? "Project is on hold and cannot be assigned"
+        : "Project is completed and cannot be assigned",
+    );
+  }
+}
+
 async function ensureDependenciesClosed(task) {
   const dependencyIds = task.dependency_ids || [];
 
@@ -1464,6 +1559,7 @@ async function ensureDependenciesClosed(task) {
 }
 
 async function applyTaskProofUpdate(user, task, payload) {
+  assertTaskProjectIsActive(task);
   ensureTaskProofUpdateAllowed(user, task);
 
   const proofPayload = {};
@@ -1521,6 +1617,60 @@ async function applyTaskProofUpdate(user, task, payload) {
   });
 }
 
+function canUpdateTaskCompletionPercent(user, task) {
+  if (isTaskAssignee(user, task)) {
+    return true;
+  }
+
+  if (!hasPermission(user, PERMISSIONS.EDIT_TASK) || !canAccessTask(user, task)) {
+    return false;
+  }
+
+  if (isAdmin(user) || isProjectAuthorityRole(user)) {
+    return true;
+  }
+
+  const actorLevel = Number(getRoleLevel(user));
+  const assigneeLevel = Number(task?.assignee?.role?.hierarchy_level ?? NaN);
+
+  return Number.isFinite(actorLevel) && Number.isFinite(assigneeLevel) && actorLevel < assigneeLevel;
+}
+
+async function applyTaskCompletionPercentUpdate(user, task, payload) {
+  assertTaskProjectIsActive(task);
+
+  if (!canUpdateTaskCompletionPercent(user, task)) {
+    throw new AppError(403, "Only the assignee or an authorized higher role can update completion percent");
+  }
+
+  if (task.status === TASK_STATUSES.CLOSED) {
+    throw new AppError(409, "Completion percent cannot be changed after task completion");
+  }
+
+  const completionPercent = normalizeCompletionPercent(payload.completion_percent);
+  await updateTaskCompletionPercent(task.id, completionPercent);
+
+  await appendTaskActivity(task.id, {
+    userEmployeeId: user.employee_id,
+    actionType: "task_completion_percent_updated",
+    metadata: {
+      from: task.completion_percent ?? 0,
+      to: completionPercent,
+    },
+  });
+
+  await createAuditLog({
+    userEmployeeId: user.employee_id,
+    actionType: "task_completion_percent_updated",
+    targetType: "task",
+    targetId: task.id,
+    metadata: {
+      from: task.completion_percent ?? 0,
+      to: completionPercent,
+    },
+  });
+}
+
 async function applyTaskDetailUpdate(user, task, payload) {
   if (!canAccessTask(user, task)) {
     throw new AppError(403, "You do not have permission to edit this task");
@@ -1529,6 +1679,10 @@ async function applyTaskDetailUpdate(user, task, payload) {
   const normalizedPayload = { ...payload };
   const hasReassignment = hasOwn(payload, "assigned_to") || hasOwn(payload, "assignee_ids");
   const hasDepartmentUpdate = hasOwn(payload, "department_id");
+
+  if (hasReassignment) {
+    assertTaskProjectIsActive(task);
+  }
 
   if (hasOwn(payload, "title") && task.task_type !== TASK_TYPES.CUSTOM) {
     throw new AppError(400, "Workflow task titles are controlled by the workflow template");

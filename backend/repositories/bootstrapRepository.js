@@ -135,11 +135,41 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by VARCHAR(50)`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS approved_by VARCHAR(50)`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completion_percent INTEGER NOT NULL DEFAULT 0`,
   ];
 
   for (const statement of taskColumnStatements) {
     await client.query(statement);
   }
+
+  await client.query(`
+    UPDATE tasks
+    SET completion_percent = CASE
+      WHEN status = 'closed' OR verification_status = 'approved' THEN 100
+      WHEN completion_percent < 0 THEN 0
+      WHEN completion_percent > 100 THEN 100
+      ELSE completion_percent
+    END
+    WHERE completion_percent IS NULL
+       OR completion_percent < 0
+       OR completion_percent > 100
+       OR ((status = 'closed' OR verification_status = 'approved') AND completion_percent < 100)
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'tasks_completion_percent_check'
+      ) THEN
+        ALTER TABLE tasks
+        ADD CONSTRAINT tasks_completion_percent_check
+        CHECK (completion_percent BETWEEN 0 AND 100);
+      END IF;
+    END $$;
+  `);
 
   await client.query(`
     DO $$

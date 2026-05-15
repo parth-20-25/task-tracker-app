@@ -216,7 +216,7 @@ function SupervisorPanel({
     },
   });
 
-  if (currentStatus !== "COMPLETED") return null;
+  if (!["COMPLETED", "IN_PROGRESS"].includes(currentStatus)) return null;
 
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
@@ -360,8 +360,7 @@ export function DesignDepartmentTaskAssignmentBar() {
   const projects = projectsQuery.data ?? [];
   const fixtures = fixturesQuery.data ?? [];
 
-  const canVerify = hasUserPermission(currentUser, PERMISSIONS.APPROVE_COMPLETED_TASK)
-    || hasUserPermission(currentUser, PERMISSIONS.APPROVE_QUALITY);
+  const canVerify = hasUserPermission(currentUser, PERMISSIONS.CHANGE_FIXTURE_STAGE);
 
   const validation = validationQuery.data;
   const currentStage = workflow;
@@ -374,7 +373,7 @@ export function DesignDepartmentTaskAssignmentBar() {
   const canSubmitAssignment = canAssign || isReassignmentBlocked;
   const workflowProgress = progressQuery.data;
   const reviewStage = workflowProgress?.stages
-    ? [...workflowProgress.stages].reverse().find((stage) => stage.status === "COMPLETED") || null
+    ? [...workflowProgress.stages].reverse().find((stage) => ["COMPLETED", "IN_PROGRESS"].includes(stage.status)) || null
     : null;
 
   const filteredUsers = useMemo(

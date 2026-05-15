@@ -38,7 +38,7 @@ const validTabs = ["users", "roles", "departments", "shifts", "machines", "workf
 type AdminTab = typeof validTabs[number];
 
 export default function AdminPanel() {
-  const { access } = useAuth();
+  const { access, refreshSession } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const routeTab = location.pathname.split("/")[2];
@@ -124,6 +124,7 @@ export default function AdminPanel() {
                 try {
                   await saveUser(payload.employee_id, payload);
                   setUsers(await fetchUsers("accessible"));
+                  await refreshSession();
                   toast({ title: `User ${payload.employee_id} saved` });
                 } catch (error) {
                   toast({ title: "User save failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
@@ -134,6 +135,7 @@ export default function AdminPanel() {
                 try {
                   await updateUserStatus(employeeId, isActive);
                   setUsers(await fetchUsers("accessible"));
+                  await refreshSession();
                   toast({ title: `User ${isActive ? "activated" : "deactivated"}` });
                 } catch (error) {
                   toast({ title: "User status update failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
@@ -144,6 +146,7 @@ export default function AdminPanel() {
                 try {
                   await deleteUser(employeeId);
                   setUsers(await fetchUsers("accessible"));
+                  await refreshSession();
                   toast({ title: `User ${employeeId} deleted` });
                 } catch (error) {
                   toast({ title: "User delete failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
@@ -161,6 +164,7 @@ export default function AdminPanel() {
               onSave={async (payload) => {
                 try {
                   setRoles(await saveRole(payload.id, payload));
+                  await refreshSession();
                   toast({ title: `Role ${payload.id} saved` });
                 } catch (error) {
                   toast({ title: "Role save failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
@@ -171,6 +175,7 @@ export default function AdminPanel() {
                 try {
                   await deleteRole(roleId);
                   setRoles(await fetchRoles());
+                  await refreshSession();
                   toast({ title: `Role ${roleId} deactivated` });
                 } catch (error) {
                   toast({ title: "Role delete failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });

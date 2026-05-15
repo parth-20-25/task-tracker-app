@@ -2,7 +2,9 @@ const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
 const { AppError } = require("../lib/AppError");
 const {
+  GetAccessibleUserIds,
   buildVisibleUsersCte,
+  getAccessibleProjectIds,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("./projectVisibility");
@@ -119,6 +121,92 @@ function requireRow(result, errorMessage) {
   return row;
 }
 
+async function logVisibilityDecision({
+  event,
+  user,
+  requestedProjectId = null,
+  requestedFixtureId = null,
+  requestedDepartmentId = null,
+  queryFilter,
+  permissionResult,
+  client = pool,
+}) {
+  try {
+    const currentUserId = user?.id || null;
+    const currentEmployeeId = user?.employee_id || null;
+    const accessibleUserIds = await GetAccessibleUserIds(currentEmployeeId || currentUserId, client);
+    const accessibleProjectIds = await getAccessibleProjectIds(
+      currentEmployeeId || currentUserId,
+      requestedDepartmentId,
+      client,
+    );
+
+    let projectContext = null;
+    if (requestedProjectId) {
+      const projectResult = await client.query(
+        `
+          SELECT id::text AS project_id, department_id, uploaded_by
+          FROM design.projects
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [requestedProjectId],
+      );
+      projectContext = projectResult.rows[0] || null;
+    }
+
+    let fixtureContext = null;
+    if (requestedFixtureId) {
+      const fixtureResult = await client.query(
+        `
+          SELECT
+            f.id::text AS fixture_id,
+            f.project_id::text AS project_id,
+            f.batch_id::text AS batch_id,
+            p.department_id,
+            p.uploaded_by
+          FROM design.fixtures f
+          JOIN design.projects p ON p.id = f.project_id
+          WHERE f.id = $1
+          LIMIT 1
+        `,
+        [requestedFixtureId],
+      );
+      fixtureContext = fixtureResult.rows[0] || null;
+      if (!projectContext && fixtureContext?.project_id) {
+        projectContext = {
+          project_id: fixtureContext.project_id,
+          department_id: fixtureContext.department_id,
+          uploaded_by: fixtureContext.uploaded_by,
+        };
+      }
+    }
+
+    console.info("[project-visibility]", {
+      event,
+      requested_fixture_id: requestedFixtureId,
+      requested_project_id: requestedProjectId || fixtureContext?.project_id || null,
+      requested_department_id: requestedDepartmentId,
+      current_user_id: currentUserId,
+      current_employee_id: currentEmployeeId,
+      uploader_id: projectContext?.uploaded_by || fixtureContext?.uploaded_by || null,
+      accessible_user_ids: accessibleUserIds,
+      accessible_project_ids: accessibleProjectIds,
+      generated_query_filter: queryFilter,
+      permission_result: permissionResult,
+      project_context: projectContext,
+      fixture_context: fixtureContext,
+    });
+  } catch (error) {
+    console.warn("[project-visibility] diagnostic logging failed", {
+      event,
+      requested_fixture_id: requestedFixtureId,
+      requested_project_id: requestedProjectId,
+      error: error?.message || "Unknown error",
+    });
+  }
+}
+
 async function listProjectOptionsByDepartment(departmentId, client = pool) {
   const result = await client.query(
     `
@@ -211,7 +299,18 @@ async function findProjectByIdForUser(projectId, user, departmentId, client = po
     [user.employee_id, projectId, departmentId],
   );
 
-  return mapProjectOptionRow(result.rows[0]);
+  const project = mapProjectOptionRow(result.rows[0]);
+  await logVisibilityDecision({
+    event: "find_project_by_id_for_user",
+    user,
+    requestedProjectId: projectId,
+    requestedDepartmentId: departmentId,
+    queryFilter: "p.id = $2 AND p.department_id = $3 AND p.uploaded_by IN GetAccessibleUserIds($1)",
+    permissionResult: Boolean(project),
+    client,
+  });
+
+  return project;
 }
 
 async function findProjectByNumberForDepartment(projectNo, departmentId, client = pool) {
@@ -456,7 +555,18 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
     [user.employee_id, fixtureId, departmentId],
   );
 
-  return mapFixtureOptionRow(result.rows[0]);
+  const fixture = mapFixtureOptionRow(result.rows[0]);
+  await logVisibilityDecision({
+    event: "find_fixture_by_id_for_user",
+    user,
+    requestedFixtureId: fixtureId,
+    requestedDepartmentId: departmentId,
+    queryFilter: "di.id = $2 AND dp.department_id = $3 AND dp.uploaded_by IN GetAccessibleUserIds($1)",
+    permissionResult: Boolean(fixture),
+    client,
+  });
+
+  return fixture;
 }
 
 async function touchProject(projectId, client = pool) {

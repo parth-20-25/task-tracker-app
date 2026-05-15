@@ -1,6 +1,6 @@
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
-const { buildVisibleUsersCte, visibleBatchPredicate } = require("./projectVisibility");
+const { buildVisibleUsersCte, visibleProjectPredicate } = require("./projectVisibility");
 
 const BATCH_DELETE_BLOCK_REASON = "Cannot delete batch. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
@@ -179,7 +179,7 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
       LEFT JOIN design.fixtures f ON f.batch_id = ub.id
       LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
       WHERE ($2::text IS NULL OR dp.department_id = $2)
-        AND ${visibleBatchPredicate("ub")}
+        AND ${visibleProjectPredicate("dp")}
       GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
       ORDER BY ub.uploaded_at DESC
     `,
@@ -248,7 +248,7 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
       LEFT JOIN design.fixtures f ON f.batch_id = ub.id
       LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
       WHERE ub.id = $2
-        AND ${visibleBatchPredicate("ub")}
+        AND ${visibleProjectPredicate("dp")}
       GROUP BY ub.id, ub.project_id, dp.project_no, dp.project_name, dp.customer_name, dp.department_id
     `,
     [user.employee_id, batchId, DELETABLE_FIXTURE_STATUSES],

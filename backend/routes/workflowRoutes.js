@@ -127,7 +127,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/assign",
-  authorize("can_create_task"),
+  authorize(PERMISSIONS.CREATE_TASK),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -153,7 +153,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/complete",
-  authorize("can_create_task"),
+  authorize(PERMISSIONS.CREATE_TASK),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,

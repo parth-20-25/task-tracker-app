@@ -1,18 +1,16 @@
-function buildVisibleUsersCte(rootEmployeeParam = "$1", cteName = "visible_users") {
+const { pool } = require("../db");
+
+function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
   return `
     WITH RECURSIVE ${cteName} AS (
       SELECT
         u.id::text AS user_uuid,
         u.employee_id,
         u.department_id,
-        COALESCE(r.hierarchy_level, 0) AS hierarchy_level,
         u.employee_id AS root_employee_id,
-        u.department_id AS root_department_id,
-        COALESCE(r.hierarchy_level, 0) AS root_hierarchy_level,
-        ARRAY[u.employee_id]::text[] AS path
+        ARRAY[u.id::text, u.employee_id]::text[] AS path
       FROM users u
-      LEFT JOIN roles r ON r.id = u.role
-      WHERE u.employee_id = ${rootEmployeeParam}
+      WHERE (u.id::text = ${rootUserParam} OR u.employee_id = ${rootUserParam})
         AND COALESCE(u.is_active, TRUE) = TRUE
 
       UNION ALL
@@ -21,77 +19,78 @@ function buildVisibleUsersCte(rootEmployeeParam = "$1", cteName = "visible_users
         child.id::text AS user_uuid,
         child.employee_id,
         child.department_id,
-        COALESCE(child_role.hierarchy_level, 999999) AS hierarchy_level,
         parent_tree.root_employee_id,
-        parent_tree.root_department_id,
-        parent_tree.root_hierarchy_level,
-        parent_tree.path || child.employee_id
+        parent_tree.path || child.id::text || child.employee_id
       FROM users child
-      LEFT JOIN roles child_role ON child_role.id = child.role
       JOIN ${cteName} parent_tree
         ON child.parent_id::text IN (parent_tree.user_uuid, parent_tree.employee_id)
       WHERE COALESCE(child.is_active, TRUE) = TRUE
+        AND NOT child.id::text = ANY(parent_tree.path)
         AND NOT child.employee_id = ANY(parent_tree.path)
-        AND COALESCE(child_role.hierarchy_level, 999999) > parent_tree.hierarchy_level
-        AND (
-          child.department_id = parent_tree.department_id
-          OR (
-            parent_tree.department_id IS NULL
-            AND parent_tree.root_hierarchy_level = 1
-          )
-        )
     )
   `;
 }
 
 function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") {
   return `
-    COALESCE((
-      ${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName})
-      OR EXISTS (
-        SELECT 1
-        FROM design.upload_batches visibility_batch
-        WHERE visibility_batch.project_id = ${projectAlias}.id
-          AND COALESCE(visibility_batch.uploaded_by_user_id, visibility_batch.uploaded_by) IN (
-            SELECT employee_id FROM ${cteName}
-          )
-      )
-    ), FALSE)
+    COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
   `;
 }
 
 function visibleFixturePredicate(fixtureAlias = "f", projectAlias = "p", cteName = "visible_users") {
+  void fixtureAlias;
   return `
-    COALESCE((
-      EXISTS (
-        SELECT 1
-        FROM design.upload_batches visibility_batch
-        WHERE visibility_batch.id = ${fixtureAlias}.batch_id
-          AND COALESCE(visibility_batch.uploaded_by_user_id, visibility_batch.uploaded_by) IN (
-            SELECT employee_id FROM ${cteName}
-          )
-      )
-      OR (
-        ${fixtureAlias}.batch_id IS NULL
-        AND ${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName})
-      )
-    ), FALSE)
+    ${visibleProjectPredicate(projectAlias, cteName)}
   `;
 }
 
-function visibleBatchPredicate(batchAlias = "ub", cteName = "visible_users") {
-  return `
-    COALESCE((
-      COALESCE(${batchAlias}.uploaded_by_user_id, ${batchAlias}.uploaded_by) IN (
-      SELECT employee_id FROM ${cteName}
-      )
-    ), FALSE)
-  `;
+async function GetAccessibleUserIds(currentUserId, client = pool) {
+  const normalizedUserId = String(currentUserId || "").trim();
+
+  if (!normalizedUserId) {
+    return [];
+  }
+
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT employee_id
+      FROM visible_users
+      ORDER BY employee_id ASC
+    `,
+    [normalizedUserId],
+  );
+
+  return result.rows.map((row) => row.employee_id).filter(Boolean);
+}
+
+async function getAccessibleProjectIds(currentUserId, departmentId = null, client = pool) {
+  const normalizedUserId = String(currentUserId || "").trim();
+
+  if (!normalizedUserId) {
+    return [];
+  }
+
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT p.id::text AS project_id
+      FROM design.projects p
+      WHERE ($2::text IS NULL OR p.department_id = $2)
+        AND ${visibleProjectPredicate("p")}
+      ORDER BY p.updated_at DESC, p.created_at DESC, p.id ASC
+    `,
+    [normalizedUserId, departmentId || null],
+  );
+
+  return result.rows.map((row) => row.project_id).filter(Boolean);
 }
 
 module.exports = {
+  GetAccessibleUserIds,
   buildVisibleUsersCte,
-  visibleBatchPredicate,
+  getAccessibleProjectIds,
+  getAccessibleUserIds: GetAccessibleUserIds,
   visibleFixturePredicate,
   visibleProjectPredicate,
 };

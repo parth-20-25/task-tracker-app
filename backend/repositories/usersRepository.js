@@ -2,7 +2,7 @@ const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
 const { mapUserRow } = require("./mappers");
 const { buildUserColumns } = require("./sqlFragments");
-const { buildVisibleUsersCte } = require("./projectVisibility");
+const { GetAccessibleUserIds } = require("./projectVisibility");
 
 const ACTIVE_TASK_STATUSES = ["created", "assigned", "in_progress", "on_hold", "under_review", "rework"];
 
@@ -99,21 +99,7 @@ async function listUsersByRoleAndDepartment(roleId, departmentId, client = pool)
 }
 
 async function getVisibleUserIdsForEmployee(employeeId, client = pool) {
-  if (!employeeId) {
-    return [];
-  }
-
-  const result = await client.query(
-    `
-      ${buildVisibleUsersCte("$1")}
-      SELECT employee_id
-      FROM visible_users
-      ORDER BY employee_id ASC
-    `,
-    [employeeId],
-  );
-
-  return result.rows.map((row) => row.employee_id).filter(Boolean);
+  return GetAccessibleUserIds(employeeId, client);
 }
 
 async function createUser(user, client = pool) {

@@ -1,6 +1,6 @@
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
-const { hasPermission, isAdmin } = require("../services/accessControlService");
+const { HasPermission, isAdmin } = require("../services/accessControlService");
 const { normalizePermissionIds } = require("../repositories/permissionRepository");
 
 function normalizeRoleId(role) {
@@ -66,8 +66,22 @@ function authorize(requiredPermission) {
         req.user.permissions = await loadPermissions(req.user.role);
       }
 
-      // Check if the user has the required permission
-      if (hasPermission(req.user, requiredPermission)) {
+      // Check if the user has the required permission.
+      // req.user is rebuilt from the database per request, so role-permission changes
+      // do not depend on stale JWT claims.
+      const permissionGranted = await HasPermission(req.user, requiredPermission);
+
+      console.info("[authorization]", {
+        event: "permission_check",
+        current_user_id: req.user.id || null,
+        current_employee_id: req.user.employee_id || null,
+        required_permission: requiredPermission,
+        permission_result: permissionGranted,
+        path: req.originalUrl || req.url,
+        method: req.method,
+      });
+
+      if (permissionGranted) {
         return next();
       }
 

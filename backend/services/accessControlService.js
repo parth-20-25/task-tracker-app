@@ -1,9 +1,12 @@
 const { PERMISSIONS, ROLE_LEVELS, USER_SCOPES } = require("../config/constants");
+const { pool } = require("../db");
 const {
+  GetAccessibleUserIds,
   buildVisibleUsersCte,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
+const { normalizePermissionIds } = require("../repositories/permissionRepository");
 
 const PERMISSION_ALIASES = {
   can_assign_task: [PERMISSIONS.ASSIGN_TASK],
@@ -73,6 +76,56 @@ function hasPermission(user, permission) {
   ]);
 
   return getEquivalentPermissions(permission).some((candidatePermission) => grantedPermissions.has(candidatePermission));
+}
+
+async function HasPermission(userOrId, permission, client = pool) {
+  if (!permission) {
+    return false;
+  }
+
+  if (userOrId && typeof userOrId === "object") {
+    return hasPermission(userOrId, permission);
+  }
+
+  const normalizedUserId = String(userOrId || "").trim();
+  if (!normalizedUserId) {
+    return false;
+  }
+
+  const result = await client.query(
+    `
+      SELECT
+        u.employee_id,
+        u.role AS role_id,
+        r.permissions AS role_permissions_json,
+        COALESCE(
+          ARRAY_AGG(rp.permission_id) FILTER (WHERE rp.permission_id IS NOT NULL),
+          ARRAY[]::text[]
+        ) AS relational_permissions
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role
+      LEFT JOIN role_permissions rp ON rp.role_id = u.role
+      WHERE (u.id::text = $1 OR u.employee_id = $1 OR u.email = $1)
+        AND COALESCE(u.is_active, TRUE) = TRUE
+      GROUP BY u.employee_id, u.role, r.permissions
+      LIMIT 1
+    `,
+    [normalizedUserId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return false;
+  }
+
+  return hasPermission({
+    employee_id: row.employee_id,
+    role: {
+      id: row.role_id,
+      permissions: row.role_permissions_json || {},
+    },
+    permissions: normalizePermissionIds(row.relational_permissions || []),
+  }, permission);
 }
 
 function isAdmin(user) {
@@ -281,6 +334,8 @@ function filterUsersForScope(currentUser, users, scope = USER_SCOPES.ACCESSIBLE)
 }
 
 module.exports = {
+  GetAccessibleUserIds,
+  HasPermission,
   canAccessUser,
   canAccessDepartment,
   canAccessTask,
@@ -290,6 +345,7 @@ module.exports = {
   getRoleId,
   getRoleLevel,
   getTaskAccess,
+  getAccessibleUserIds: GetAccessibleUserIds,
   getVisibleUserIds,
   hasPermission,
   isAdmin,

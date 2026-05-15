@@ -48,7 +48,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { hasUserPermission, PERMISSIONS } from "@/lib/permissions";
+import { getResolvedUserPermissionIds, hasUserPermission, PERMISSIONS } from "@/lib/permissions";
 import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -392,9 +392,8 @@ export function DesignTaskAssignmentBar({
   const projects = projectsQuery.data ?? [];
   const fixtures = fixturesQuery.data ?? [];
 
-  const canVerify = hasUserPermission(currentUser, PERMISSIONS.CHANGE_FIXTURE_STAGE);
-  const canReopenFixtureStage = hasUserPermission(currentUser, PERMISSIONS.REOPEN_FIXTURE_STAGE);
-  const canManipulateFixtureStage = hasUserPermission(currentUser, PERMISSIONS.MANIPULATE_FIXTURE_STAGE);
+  const resolvedPermissions = useMemo(() => getResolvedUserPermissionIds(currentUser), [currentUser]);
+  const canChangeFixtureStage = hasUserPermission(currentUser, PERMISSIONS.CHANGE_FIXTURE_STAGE);
 
   const validation = validationQuery.data;
   const currentStage = workflow;
@@ -409,6 +408,27 @@ export function DesignTaskAssignmentBar({
   const reviewStage = workflowProgress?.stages
     ? [...workflowProgress.stages].reverse().find((stage) => ["COMPLETED", "IN_PROGRESS"].includes(stage.status)) || null
     : null;
+
+  useEffect(() => {
+    console.info("[permissions][change_fixture_stage][frontend]", {
+      component: "DesignTaskAssignmentBar",
+      current_user_id: currentUser?.employee_id || null,
+      current_role: currentUser?.role?.id || currentUser?.role_id || null,
+      resolved_permissions: resolvedPermissions,
+      permission_check_result: canChangeFixtureStage,
+      fixture_id: fixtureId || null,
+      change_stage_bar_visible: Boolean(fixtureId && hasWorkflow && canChangeFixtureStage),
+      hidden_reason: canChangeFixtureStage ? null : "missing change_fixture_stage",
+    });
+  }, [
+    canChangeFixtureStage,
+    currentUser?.employee_id,
+    currentUser?.role?.id,
+    currentUser?.role_id,
+    fixtureId,
+    hasWorkflow,
+    resolvedPermissions,
+  ]);
 
   const filteredUsers = useMemo(
     () =>
@@ -737,8 +757,13 @@ export function DesignTaskAssignmentBar({
                   fixtureId={fixtureId}
                   departmentId={contextDepartmentId}
                   progress={workflowProgress}
-                  canReopen={canReopenFixtureStage}
-                  canManipulate={canManipulateFixtureStage}
+                  canChangeStage={canChangeFixtureStage}
+                  permissionTrace={{
+                    currentUserId: currentUser?.employee_id || null,
+                    currentRole: currentUser?.role?.id || currentUser?.role_id || null,
+                    resolvedPermissions,
+                    source: "DesignTaskAssignmentBar",
+                  }}
                   onChanged={() => {
                     refreshWorkflowState();
                     queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] });
@@ -758,7 +783,7 @@ export function DesignTaskAssignmentBar({
               )}
 
               {/* Supervisor panel */}
-              {canVerify && hasWorkflow && reviewStage && (
+              {canChangeFixtureStage && hasWorkflow && reviewStage && (
                 <SupervisorPanel
                   fixtureId={fixtureId}
                   departmentId={contextDepartmentId}

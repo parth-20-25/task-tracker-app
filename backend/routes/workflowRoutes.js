@@ -6,6 +6,7 @@ const { PERMISSIONS } = require("../config/constants");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
+const { HasPermission } = require("../services/accessControlService");
 const { findFixtureByIdForUser } = require("../repositories/designProjectCatalogRepository");
 const {
   getWorkflowForDepartment,
@@ -29,6 +30,25 @@ async function ensureVisibleFixtureForWorkflow(user, fixtureId, departmentId) {
   if (!fixture) {
     throw new AppError(404, "Fixture not found");
   }
+}
+
+async function logChangeFixtureStageTrace(req, context) {
+  const role = typeof req.user?.role === "object" ? req.user.role : req.user?.role_details;
+  const resolvedPermissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+  const permissionResult = await HasPermission(req.user, PERMISSIONS.CHANGE_FIXTURE_STAGE);
+
+  console.info("[workflow][change_fixture_stage]", {
+    event: "fixture_stage_permission_trace",
+    current_user_id: req.user?.id || null,
+    current_employee_id: req.user?.employee_id || null,
+    current_role: role?.id || req.user?.role_id || req.user?.role || null,
+    current_role_name: role?.name || null,
+    resolved_permissions: resolvedPermissions,
+    permission_check_result: permissionResult,
+    path: req.originalUrl || req.url,
+    method: req.method,
+    ...context,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,7 +238,7 @@ router.post(
 
 router.post(
   "/workflows/reopen-stage",
-  authorize(PERMISSIONS.REOPEN_FIXTURE_STAGE),
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -229,6 +249,13 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await logChangeFixtureStageTrace(req, {
+      operation: "reopen_fixture_stage",
+      fixture_id: fixtureId,
+      department_id: departmentId,
+      target_stage_name: req.body?.target_stage_name || null,
+      target_stage_order: req.body?.target_stage_order || null,
+    });
     await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await reopenFixtureStage({
       actor: req.user,
@@ -248,7 +275,7 @@ router.post(
 
 router.post(
   "/workflows/manual-stage",
-  authorize(PERMISSIONS.MANIPULATE_FIXTURE_STAGE),
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -259,6 +286,14 @@ router.post(
     const fixtureId = String(req.body?.fixture_id || "").trim();
     if (!fixtureId) throw new AppError(400, "fixture_id is required");
 
+    await logChangeFixtureStageTrace(req, {
+      operation: "manual_fixture_stage",
+      fixture_id: fixtureId,
+      department_id: departmentId,
+      target_stage_name: req.body?.target_stage_name || null,
+      target_stage_order: req.body?.target_stage_order || null,
+      target_status: req.body?.target_status || null,
+    });
     await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await manipulateFixtureStage({
       actor: req.user,

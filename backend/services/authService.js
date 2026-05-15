@@ -1,5 +1,6 @@
 const bcrypt = require("bcrypt");
 const { AppError } = require("../lib/AppError");
+const { PERMISSIONS } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
@@ -16,6 +17,20 @@ function normalizeIdentifier(identifier) {
   }
 
   return identifier.trim();
+}
+
+function logPermissionHydration(user, source) {
+  const resolvedPermissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  console.info("[auth][permissions]", {
+    event: "session_permission_hydrated",
+    source,
+    current_user_id: user?.id || null,
+    current_employee_id: user?.employee_id || null,
+    current_role: user?.role?.id || user?.role_id || null,
+    current_role_name: user?.role?.name || null,
+    resolved_permissions: resolvedPermissions,
+    change_fixture_stage: resolvedPermissions.includes(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  });
 }
 
 async function loginUser(identifier, password) {
@@ -55,6 +70,7 @@ async function loginUser(identifier, password) {
 
   user.permissions = await loadPermissions(user.role);
   user.visible_user_ids = await getVisibleUserIdsForEmployee(user.employee_id);
+  logPermissionHydration(user, "login");
   const token = generateToken(canonicalEmployeeId);
 
   await createAuditLog({
@@ -86,6 +102,7 @@ async function getAuthenticatedUser(employeeId) {
 
   user.permissions = await loadPermissions(user.role);
   user.visible_user_ids = await getVisibleUserIdsForEmployee(user.employee_id);
+  logPermissionHydration(user, "authenticate");
   return user;
 }
 

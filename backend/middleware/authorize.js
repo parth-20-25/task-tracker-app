@@ -70,11 +70,17 @@ function authorize(requiredPermission) {
       // req.user is rebuilt from the database per request, so role-permission changes
       // do not depend on stale JWT claims.
       const permissionGranted = await HasPermission(req.user, requiredPermission);
+      const role = typeof req.user.role === "object" ? req.user.role : req.user.role_details;
+      const currentRole = role?.id || req.user.role_id || req.user.role || null;
+      const resolvedPermissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
 
       console.info("[authorization]", {
         event: "permission_check",
         current_user_id: req.user.id || null,
         current_employee_id: req.user.employee_id || null,
+        current_role: currentRole,
+        current_role_name: role?.name || null,
+        resolved_permissions: resolvedPermissions,
         required_permission: requiredPermission,
         permission_result: permissionGranted,
         path: req.originalUrl || req.url,
@@ -89,6 +95,18 @@ function authorize(requiredPermission) {
       if (isAdmin(req.user)) {
         return next();
       }
+
+      console.warn("[authorization]", {
+        event: "permission_rejected",
+        current_user_id: req.user.id || null,
+        current_employee_id: req.user.employee_id || null,
+        current_role: currentRole,
+        required_permission: requiredPermission,
+        permission_result: false,
+        reject_reason: "missing_required_permission",
+        path: req.originalUrl || req.url,
+        method: req.method,
+      });
 
       return next(new AppError(403, `Forbidden: You do not have the required permission "${requiredPermission}"`));
     } catch (error) {

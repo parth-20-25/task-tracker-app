@@ -150,6 +150,20 @@ export function hasUserPermission(user: User | null | undefined, permission: str
   );
 }
 
+export function getResolvedUserPermissionIds(user: User | null | undefined) {
+  if (!user) {
+    return [];
+  }
+
+  const permissionSet = buildRolePermissionSet(user.role);
+
+  (user.permissions || []).forEach((permissionId) => {
+    permissionSet.add(normalizePermissionId(permissionId));
+  });
+
+  return [...permissionSet].sort();
+}
+
 export function hasAnyUserPermission(user: User | null | undefined, permissions: readonly string[]) {
   return permissions.some((permission) => hasUserPermission(user, permission));
 }

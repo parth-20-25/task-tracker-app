@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { History, RotateCcw, ShieldAlert } from "lucide-react";
 import {
@@ -60,8 +60,13 @@ interface FixtureRevisionPanelProps {
   fixtureId: string;
   departmentId?: string;
   progress?: FixtureFullProgress;
-  canReopen: boolean;
-  canManipulate: boolean;
+  canChangeStage: boolean;
+  permissionTrace?: {
+    currentUserId?: string | null;
+    currentRole?: string | null;
+    resolvedPermissions: string[];
+    source: string;
+  };
   onChanged: () => void;
 }
 
@@ -69,8 +74,8 @@ export function FixtureRevisionPanel({
   fixtureId,
   departmentId,
   progress,
-  canReopen,
-  canManipulate,
+  canChangeStage,
+  permissionTrace,
   onChanged,
 }: FixtureRevisionPanelProps) {
   const stages = progress?.stages ?? [];
@@ -88,6 +93,28 @@ export function FixtureRevisionPanel({
     return getDefaultTargetStage(stages);
   }, [stages, targetStage]);
 
+  useEffect(() => {
+    console.info("[permissions][change_fixture_stage][frontend]", {
+      component: "FixtureRevisionPanel",
+      source: permissionTrace?.source || "unknown",
+      current_user_id: permissionTrace?.currentUserId || null,
+      current_role: permissionTrace?.currentRole || null,
+      resolved_permissions: permissionTrace?.resolvedPermissions || [],
+      permission_check_result: canChangeStage,
+      fixture_id: fixtureId || null,
+      stage_dropdown_visible: Boolean(progress && canChangeStage),
+      hidden_reason: canChangeStage ? null : "missing change_fixture_stage",
+    });
+  }, [
+    canChangeStage,
+    fixtureId,
+    permissionTrace?.currentRole,
+    permissionTrace?.currentUserId,
+    permissionTrace?.resolvedPermissions,
+    permissionTrace?.source,
+    progress,
+  ]);
+
   const reopenMutation = useMutation({
     mutationFn: () => reopenFixtureStage({
       fixture_id: fixtureId,
@@ -100,13 +127,13 @@ export function FixtureRevisionPanel({
     onSuccess: () => {
       setReason("");
       setRemarks("");
-      toast({ title: "Fixture stage reopened", description: "Revision history was preserved." });
+      toast({ title: "Fixture stage updated", description: "The controlled stage change was saved." });
       onChanged();
     },
     onError: (error) => {
       toast({
-        title: "Revision failed",
-        description: error instanceof Error ? error.message : "Could not reopen the fixture stage.",
+        title: "Stage update failed",
+        description: error instanceof Error ? error.message : "Could not update the fixture stage.",
         variant: "destructive",
       });
     },
@@ -124,13 +151,13 @@ export function FixtureRevisionPanel({
     onSuccess: () => {
       setReason("");
       setRemarks("");
-      toast({ title: "Legacy stage adjusted", description: "Manual override was recorded in the revision timeline." });
+      toast({ title: "Fixture stage updated", description: "The legacy stage change was saved." });
       onChanged();
     },
     onError: (error) => {
       toast({
-        title: "Manual override failed",
-        description: error instanceof Error ? error.message : "Could not manipulate the fixture stage.",
+        title: "Stage update failed",
+        description: error instanceof Error ? error.message : "Could not update the fixture stage.",
         variant: "destructive",
       });
     },
@@ -140,7 +167,10 @@ export function FixtureRevisionPanel({
     return null;
   }
 
-  const hasActions = canReopen || (canManipulate && progress.is_legacy_workflow);
+  if (!canChangeStage) {
+    return null;
+  }
+
   const actionDisabled = !effectiveTargetStage || !reason.trim() || reopenMutation.isPending || manualMutation.isPending;
 
   return (
@@ -149,7 +179,7 @@ export function FixtureRevisionPanel({
         <div>
           <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             <History className="h-3.5 w-3.5" />
-            Revision Timeline
+            Change Fixture Stage
           </p>
           <p className="text-xs text-muted-foreground">
             Current revision: R{progress.revision_no || 0}
@@ -185,106 +215,102 @@ export function FixtureRevisionPanel({
         </p>
       )}
 
-      {hasActions ? (
-        <div className="grid gap-3 border-t pt-3 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold">Target stage</Label>
-            <Select value={effectiveTargetStage} onValueChange={setTargetStage}>
-              <SelectTrigger className="h-9 text-sm">
-                <SelectValue placeholder="Choose stage" />
-              </SelectTrigger>
-              <SelectContent>
-                {stages.map((stage) => (
-                  <SelectItem key={stage.stage_name} value={stage.stage_name}>
-                    {stage.stage_order}. {stage.stage_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+      <div className="grid gap-3 border-t pt-3 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold">Target stage</Label>
+          <Select value={effectiveTargetStage} onValueChange={setTargetStage}>
+            <SelectTrigger className="h-9 text-sm">
+              <SelectValue placeholder="Choose stage" />
+            </SelectTrigger>
+            <SelectContent>
+              {stages.map((stage) => (
+                <SelectItem key={stage.stage_name} value={stage.stage_name}>
+                  {stage.stage_order}. {stage.stage_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold">Revision type</Label>
+          <Select value={revisionType} onValueChange={(value) => setRevisionType(value as FixtureRevisionType)}>
+            <SelectTrigger className="h-9 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {REVISION_TYPES.map((type) => (
+                <SelectItem key={type.value} value={type.value}>
+                  {type.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {progress.is_legacy_workflow ? (
           <div className="space-y-2">
-            <Label className="text-xs font-semibold">Revision type</Label>
-            <Select value={revisionType} onValueChange={(value) => setRevisionType(value as FixtureRevisionType)}>
+            <Label className="text-xs font-semibold">Manual target status</Label>
+            <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as FixtureStageStatus)}>
               <SelectTrigger className="h-9 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {REVISION_TYPES.map((type) => (
-                  <SelectItem key={type.value} value={type.value}>
-                    {type.label}
+                {MANUAL_STATUSES.map((status) => (
+                  <SelectItem key={status} value={status}>
+                    {status}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+        ) : null}
 
-          {canManipulate && progress.is_legacy_workflow ? (
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold">Manual target status</Label>
-              <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as FixtureStageStatus)}>
-                <SelectTrigger className="h-9 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MANUAL_STATUSES.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {status}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
-
-          <div className="space-y-2 md:col-span-2">
-            <Label className="text-xs font-semibold">Reason *</Label>
-            <Textarea
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="Explain why this stage needs revision or controlled correction."
-              rows={2}
-            />
-          </div>
-
-          <div className="space-y-2 md:col-span-2">
-            <Label className="text-xs font-semibold">Remarks</Label>
-            <Textarea
-              value={remarks}
-              onChange={(event) => setRemarks(event.target.value)}
-              placeholder="Optional supporting context."
-              rows={2}
-            />
-          </div>
-
-          <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
-            {canReopen ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={actionDisabled}
-                onClick={() => reopenMutation.mutate()}
-              >
-                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-                Reopen Stage
-              </Button>
-            ) : null}
-            {canManipulate && progress.is_legacy_workflow ? (
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={actionDisabled}
-                onClick={() => manualMutation.mutate()}
-              >
-                <ShieldAlert className="mr-1.5 h-3.5 w-3.5" />
-                Legacy Override
-              </Button>
-            ) : null}
-          </div>
+        <div className="space-y-2 md:col-span-2">
+          <Label className="text-xs font-semibold">Reason *</Label>
+          <Textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Explain why this stage needs revision or controlled correction."
+            rows={2}
+          />
         </div>
-      ) : null}
+
+        <div className="space-y-2 md:col-span-2">
+          <Label className="text-xs font-semibold">Remarks</Label>
+          <Textarea
+            value={remarks}
+            onChange={(event) => setRemarks(event.target.value)}
+            placeholder="Optional supporting context."
+            rows={2}
+          />
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={actionDisabled}
+            onClick={() => reopenMutation.mutate()}
+          >
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            Update Stage
+          </Button>
+          {progress.is_legacy_workflow ? (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={actionDisabled}
+              onClick={() => manualMutation.mutate()}
+            >
+              <ShieldAlert className="mr-1.5 h-3.5 w-3.5" />
+              Legacy Override
+            </Button>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

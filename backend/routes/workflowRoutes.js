@@ -127,7 +127,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/assign",
-  authorize(PERMISSIONS.CREATE_TASK),
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -153,7 +153,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/complete",
-  authorize(PERMISSIONS.CREATE_TASK),
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,

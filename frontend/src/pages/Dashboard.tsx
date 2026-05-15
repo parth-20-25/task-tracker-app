@@ -25,6 +25,7 @@ export default function Dashboard() {
   const canUploadProjectData = access.canUploadData && !!user?.department_id;
   const canUploadDesignProjectData = canUploadProjectData && isDesignUser;
   const isAdminUser = role?.hierarchy_level === 1;
+  const canUseDesignWorkflowBar = isDesignUser && (access.canAssignTasks || access.canChangeFixtureStage);
 
   const myTasks = safeTasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
   const viewTasks = access.canViewAllTasks ? safeTasks : myTasks;
@@ -58,10 +59,12 @@ export default function Dashboard() {
 
       {canUploadDesignProjectData && <DesignExcelUploadModal />}
 
-      {access.canAssignTasks && (
-        isAdminUser
-          ? <AdminDashboardDepartmentExperience />
-          : (isDesignUser ? <DesignDepartmentTaskAssignmentBar /> : <TaskAssignmentBar />)
+      {isAdminUser ? (
+        access.canAssignTasks && <AdminDashboardDepartmentExperience />
+      ) : isDesignUser ? (
+        canUseDesignWorkflowBar && <DesignDepartmentTaskAssignmentBar />
+      ) : (
+        access.canAssignTasks && <TaskAssignmentBar />
       )}
 
       <div>

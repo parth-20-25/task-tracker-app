@@ -25,6 +25,7 @@ const { validateParsedData } = require("./designIngestion/validator");
 const { diffWithDatabase } = require("./designIngestion/differ");
 const { formatPreview } = require("./designIngestion/formatter");
 const { extractDesignWorkbook } = require("./pythonExtractionClient");
+const { uploadExtractedDesignImage } = require("../lib/supabaseStorage");
 
 const CORRECTIONABLE_FIELDS = ["fixture_no", "op_no", "part_name", "fixture_type", "qty"];
 const FIELD_LABEL_TO_KEY = {
@@ -204,6 +205,81 @@ function buildDecisionErrorMessage(prefix, fixtureData) {
   return Number.isFinite(rowNumber) && rowNumber > 0
     ? `${prefix} (${fixtureNo}, row ${rowNumber})`
     : `${prefix} (${fixtureNo})`;
+}
+
+function stripExtractedImageUploads(row = {}) {
+  const { image_1_upload, image_2_upload, ...rest } = row;
+  return rest;
+}
+
+function hasExtractedImageUpload(row = {}) {
+  return Boolean(row.image_1_upload || row.image_2_upload);
+}
+
+async function materializeExtractedWorkbookImages(fileInfo, rows = []) {
+  let uploadedCount = 0;
+  const materializedRows = [];
+
+  for (const row of rows) {
+    let nextRow = stripExtractedImageUploads(row);
+
+    if (row.image_1_upload) {
+      const uploaded = await uploadExtractedDesignImage({
+        image: row.image_1_upload,
+        fileInfo,
+        row,
+        slotName: "image_1_url",
+      });
+      nextRow = {
+        ...nextRow,
+        image_1_url: uploaded.publicUrl,
+        raw_data: {
+          ...(nextRow.raw_data || {}),
+          image_storage: {
+            ...(nextRow.raw_data?.image_storage || {}),
+            image_1_url: {
+              bucket: uploaded.bucket,
+              path: uploaded.path,
+              anchor: row.image_1_upload.anchor || {},
+            },
+          },
+        },
+      };
+      uploadedCount += 1;
+    }
+
+    if (row.image_2_upload) {
+      const uploaded = await uploadExtractedDesignImage({
+        image: row.image_2_upload,
+        fileInfo,
+        row,
+        slotName: "image_2_url",
+      });
+      nextRow = {
+        ...nextRow,
+        image_2_url: uploaded.publicUrl,
+        raw_data: {
+          ...(nextRow.raw_data || {}),
+          image_storage: {
+            ...(nextRow.raw_data?.image_storage || {}),
+            image_2_url: {
+              bucket: uploaded.bucket,
+              path: uploaded.path,
+              anchor: row.image_2_upload.anchor || {},
+            },
+          },
+        },
+      };
+      uploadedCount += 1;
+    }
+
+    materializedRows.push(nextRow);
+  }
+
+  return {
+    rows: materializedRows,
+    uploadedCount,
+  };
 }
 
 function assertImportableFixtureShape(fixtureData) {
@@ -501,11 +577,16 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
 
   try {
     const extractionResult = await extractDesignWorkbook(file);
+    const extractedImageCount = extractionResult.rows.filter(hasExtractedImageUpload).length;
+    const materializedImages = await materializeExtractedWorkbookImages(
+      extractionResult.file_info,
+      extractionResult.rows,
+    );
     const {
       validRows,
       rejectedRows: validationErrors,
       skippedRows,
-    } = validateParsedData(extractionResult.rows);
+    } = validateParsedData(materializedImages.rows);
     const acceptedRowNumbers = new Set(validRows.map((row) => Number(row.excel_row ?? row.row_number)));
     const extractionErrors = mapExtractionErrors(extractionResult.errors).filter((error) => {
       if (!isNonBlockingImageExtractionError(error)) {
@@ -525,6 +606,8 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
       rejected_rows: rejectedRows.length,
       skipped_rows: skippedRows.length,
       extraction_errors_count: extractionResult.errors.length,
+      extracted_image_rows: extractedImageCount,
+      supabase_images_uploaded: materializedImages.uploadedCount,
     });
 
     return buildPreviewPayload(user, {
@@ -586,7 +669,7 @@ async function validateRejectedUploadRow(user, payload = {}) {
     op_no: corrected_row.op_no,
     part_name: corrected_row.part_name,
     fixture_type: corrected_row.fixture_type,
-    remark: corrected_row.remark,
+    remark: null,
     qty: corrected_row.qty,
     image_1_url: corrected_row.image_1_url ?? original_row.image_1_url ?? original_row.raw_data?.image_1_url ?? null,
     image_2_url: corrected_row.image_2_url ?? original_row.image_2_url ?? original_row.raw_data?.image_2_url ?? null,
@@ -843,7 +926,7 @@ async function confirmUpload(user, payload = {}) {
         op_no: fixtureData.op_no,
         part_name: fixtureData.part_name,
         fixture_type: fixtureData.fixture_type,
-        remark: fixtureData.remark || null,
+        remark: null,
         qty: fixtureData.qty,
         image_1_url: fixtureData.image_1_url || null,
         image_2_url: fixtureData.image_2_url || null,

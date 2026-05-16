@@ -5,11 +5,16 @@ const {
   getDesignStageDisplayName,
   normalizeDesignStageName,
 } = require("../lib/designWorkflowStages");
+const {
+  formatStageVersionLabel,
+  normalizeStageVersion,
+} = require("../lib/workflowStageVersioning");
 const { instrumentModuleExports } = require("../lib/observability");
 const {
   approveStageAttempt,
   getActiveWorkflowForDepartment,
   getProgressForFixture,
+  getNextStageReentryVersion,
   initProgressForFixture,
   incrementFixtureRevision,
   listFixtureRevisions,
@@ -147,6 +152,19 @@ function resolveStageFromProgress(progressRows, { targetStageName = null, target
   }) || null;
 }
 
+function getBaseStageDisplayName(stageName) {
+  const normalizedStageKey = normalizeDesignStageName(stageName);
+  return getDesignStageDisplayName(normalizedStageKey, stageName || null) || stageName || null;
+}
+
+function getProgressStageLabel(stage) {
+  if (!stage) {
+    return null;
+  }
+
+  return formatStageVersionLabel(getBaseStageDisplayName(stage.stage_name), stage.stage_version);
+}
+
 function normalizeRevisionType(value, fallback = "OTHER") {
   const normalized = String(value || fallback).trim().toUpperCase();
   if (!FIXTURE_REVISION_TYPES.has(normalized)) {
@@ -177,10 +195,12 @@ async function applyProgressReopenState({ fixtureId, progress, targetStage, clie
       continue;
     }
 
+    const stageVersion = await getNextStageReentryVersion(fixtureId, stage.stage_name, client);
     await updateProgressRow(
       fixtureId,
       stage.stage_name,
       {
+        stage_version: stageVersion,
         status: "PENDING",
         assigned_to: null,
         assigned_at: null,
@@ -204,10 +224,12 @@ async function applyManualStageState({ fixtureId, progress, targetStage, targetS
     }
 
     if (stageOrder === targetOrder) {
+      const stageVersion = await getNextStageReentryVersion(fixtureId, stage.stage_name, client);
       await updateProgressRow(
         fixtureId,
         stage.stage_name,
         {
+          stage_version: stageVersion,
           status: targetStatus,
           assigned_to: null,
           assigned_at: null,
@@ -220,10 +242,12 @@ async function applyManualStageState({ fixtureId, progress, targetStage, targetS
       continue;
     }
 
+    const stageVersion = await getNextStageReentryVersion(fixtureId, stage.stage_name, client);
     await updateProgressRow(
       fixtureId,
       stage.stage_name,
       {
+        stage_version: stageVersion,
         status: "PENDING",
         assigned_to: null,
         assigned_at: null,
@@ -243,10 +267,10 @@ function buildCurrentStageResponse(progressRows, workflow) {
     return { stage: null, status: "APPROVED", stage_order: null, is_complete: true };
   }
 
-  const normalizedStageKey = normalizeDesignStageName(current.stage_name);
-
   return {
-    stage: getDesignStageDisplayName(normalizedStageKey, current.stage_name || null),
+    stage: getBaseStageDisplayName(current.stage_name),
+    stage_label: getProgressStageLabel(current),
+    stage_version: normalizeStageVersion(current.stage_version),
     status: current.status || "PENDING",
     stage_order: current.stage_order ?? null,
     is_complete: false,
@@ -772,6 +796,8 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
     is_legacy_workflow: fixture?.is_legacy_workflow === true,
     stages: progress.map((row) => ({
       stage_name: row.stage_name,
+      stage_label: getProgressStageLabel(row),
+      stage_version: normalizeStageVersion(row.stage_version),
       stage_order: row.stage_order,
       status: row.status,
       assigned_to: row.assigned_to,
@@ -869,6 +895,11 @@ async function reopenFixtureStage({
       targetStage: lockedTargetStage,
       client,
     });
+    const reopenedProgress = await getProgressForFixture(fixtureId, departmentId, client);
+    const versionedTargetStage = resolveStageFromProgress(reopenedProgress, { targetStageName, targetStageOrder })
+      || lockedTargetStage;
+    const fromStageLabel = getProgressStageLabel(lockedFromStage);
+    const toStageLabel = getProgressStageLabel(versionedTargetStage);
 
     await recordFixtureRevision({
       fixture_id: fixtureId,
@@ -877,13 +908,19 @@ async function reopenFixtureStage({
       revision_type: normalizedRevisionType,
       revision_reason: normalizedRevisionReason,
       revision_remarks: String(remarks || "").trim() || null,
-      reverted_from_stage: lockedFromStage.stage_name,
-      reverted_to_stage: lockedTargetStage.stage_name,
+      reverted_from_stage: fromStageLabel || lockedFromStage.stage_name,
+      reverted_to_stage: toStageLabel || lockedTargetStage.stage_name,
       requested_by: String(requestedBy || actor?.employee_id || "").trim(),
       approved_by: String(approvedBy || "").trim() || null,
       changed_by: actor.employee_id,
       metadata: {
         operation: "reopen_fixture_stage",
+        from_stage_name: lockedFromStage.stage_name,
+        from_stage_version: normalizeStageVersion(lockedFromStage.stage_version),
+        from_stage_label: fromStageLabel,
+        to_stage_name: lockedTargetStage.stage_name,
+        to_stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
+        to_stage_label: toStageLabel,
         from_status: lockedFromStage.status,
         to_status: "PENDING",
       },
@@ -959,6 +996,11 @@ async function manipulateFixtureStage({
       targetStatus: normalizedTargetStatus,
       client,
     });
+    const manipulatedProgress = await getProgressForFixture(fixtureId, departmentId, client);
+    const versionedTargetStage = resolveStageFromProgress(manipulatedProgress, { targetStageName, targetStageOrder })
+      || lockedTargetStage;
+    const fromStageLabel = getProgressStageLabel(lockedFromStage);
+    const toStageLabel = getProgressStageLabel(versionedTargetStage);
 
     if (
       normalizedTargetStatus === "APPROVED"
@@ -976,13 +1018,19 @@ async function manipulateFixtureStage({
       revision_type: "MANUAL_OVERRIDE",
       revision_reason: normalizedRevisionReason,
       revision_remarks: String(remarks || "").trim() || null,
-      reverted_from_stage: lockedFromStage.stage_name,
-      reverted_to_stage: lockedTargetStage.stage_name,
+      reverted_from_stage: fromStageLabel || lockedFromStage.stage_name,
+      reverted_to_stage: toStageLabel || lockedTargetStage.stage_name,
       requested_by: actor.employee_id,
       approved_by: actor.employee_id,
       changed_by: actor.employee_id,
       metadata: {
         operation: "manual_fixture_stage_manipulation",
+        from_stage_name: lockedFromStage.stage_name,
+        from_stage_version: normalizeStageVersion(lockedFromStage.stage_version),
+        from_stage_label: fromStageLabel,
+        to_stage_name: lockedTargetStage.stage_name,
+        to_stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
+        to_stage_label: toStageLabel,
         from_status: lockedFromStage.status,
         target_status: normalizedTargetStatus,
         legacy_only: true,

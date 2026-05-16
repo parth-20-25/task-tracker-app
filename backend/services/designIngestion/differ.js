@@ -16,6 +16,11 @@ function diffWithDatabase(validRows, existingFixtures) {
       continue;
     }
 
+    const effectiveIncoming = {
+      ...incoming,
+      image_1_url: incoming.image_1_url || existing.image_1_url || null,
+      image_2_url: incoming.image_2_url || existing.image_2_url || null,
+    };
     const isQtyDiff = existing.qty !== incoming.qty;
     const isPartDiff = normalizeValue(existing.part_name) !== normalizeValue(incoming.part_name);
     const incomingHasAnyImage = Boolean(incoming.image_1_url || incoming.image_2_url);
@@ -32,21 +37,21 @@ function diffWithDatabase(validRows, existingFixtures) {
     }
 
     if (isQtyDiff && !isPartDiff && !isOtherDiff && !isImageDiff) {
-      diffResults.push({ type: 'UPDATE_QTY', incoming, existing });
+      diffResults.push({ type: 'UPDATE_QTY', incoming: effectiveIncoming, existing });
       continue;
     }
 
     if (isPartDiff) {
-      diffResults.push({ type: 'CONFLICT_PART_NAME', incoming, existing });
+      diffResults.push({ type: 'CONFLICT_PART_NAME', incoming: effectiveIncoming, existing });
       continue;
     }
 
     if (isImageDiff) {
-      diffResults.push({ type: 'CONFLICT_IMAGES', incoming, existing });
+      diffResults.push({ type: 'CONFLICT_IMAGES', incoming: effectiveIncoming, existing });
       continue;
     }
 
-    diffResults.push({ type: 'CONFLICT_OTHER', incoming, existing });
+    diffResults.push({ type: 'CONFLICT_OTHER', incoming: effectiveIncoming, existing });
   }
 
   return diffResults;

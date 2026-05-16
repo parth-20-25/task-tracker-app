@@ -573,7 +573,7 @@ function PostConfirmReviewStage({
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm">
                             <div className="font-medium text-amber-900 dark:text-amber-200">Image Missing</div>
-                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Column F reference image</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Main image column reference image</div>
                           </div>
                           <input
                             ref={fileUploadRef}
@@ -619,7 +619,7 @@ function PostConfirmReviewStage({
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm">
                             <div className="font-medium text-amber-900 dark:text-amber-200">Image Ready</div>
-                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Column F reference image</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Main image column reference image</div>
                           </div>
                           <div className="flex gap-2">
                             <Button asChild size="sm" variant="outline">
@@ -643,7 +643,7 @@ function PostConfirmReviewStage({
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm">
                             <div className="font-medium text-amber-900 dark:text-amber-200">Fixture Image Missing</div>
-                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Column I reference image</div>
+                            <div className="text-xs text-amber-800/80 dark:text-amber-300">Optional support image</div>
                           </div>
                           <input
                             ref={fileUploadRef}
@@ -1501,7 +1501,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <ImageIcon className="h-4 w-4" />
                     {uploadMode === "excel"
-                      ? "Images in column F will be extracted and mapped."
+                      ? "Embedded images in the detected main image column will be extracted and mapped."
                       : "Reference images can be uploaded after confirmation."}
                   </div>
                   <Button

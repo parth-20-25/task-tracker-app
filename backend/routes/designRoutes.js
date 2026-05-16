@@ -4,7 +4,8 @@ const { AppError } = require("../lib/AppError");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { handleDesignExcelUpload } = require("../lib/designExcelUpload");
-const { handleReferenceImageUpload, buildFixtureReferenceImageFileUrl } = require("../lib/designFixtureReferenceImageUpload");
+const { handleReferenceImageUpload } = require("../lib/designFixtureReferenceImageUpload");
+const { uploadFixtureReferenceImageFile } = require("../lib/supabaseStorage");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
@@ -205,21 +206,24 @@ router.post(
     }
 
     const fixtureId = req.params.fixtureId;
-    const fileName = req.file.filename;
-    const imageUrl = buildFixtureReferenceImageFileUrl(fileName);
-
     console.info("[design-reference-image-upload]", {
       event: "reference_image_upload_start",
       fixture_id: fixtureId,
       department_id: departmentId,
       image_type: imageType,
       file_name: req.file.originalname,
-      stored_file_name: fileName,
       file_size_bytes: req.file.size,
       mime_type: req.file.mimetype,
       user_id: req.user.id,
       employee_id: req.user.employee_id,
     });
+
+    const uploadedImage = await uploadFixtureReferenceImageFile({
+      fixtureId,
+      imageType,
+      file: req.file,
+    });
+    const imageUrl = uploadedImage.publicUrl;
 
     const result = await uploadFixtureReferenceImage(
       req.user,
@@ -237,6 +241,8 @@ router.post(
       metadata: {
         image_type: imageType,
         image_url: imageUrl,
+        storage_bucket: uploadedImage.bucket,
+        storage_path: uploadedImage.path,
         previous_image_url: result.previous_image_url,
         fixture_no: result.fixture_no,
       },

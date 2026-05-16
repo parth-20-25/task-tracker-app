@@ -37,6 +37,11 @@ const env = {
     token: process.env.DESIGN_EXTRACTION_SERVICE_TOKEN || "",
     timeoutMs: parseNumber(process.env.DESIGN_EXTRACTION_TIMEOUT_MS, 120000),
   },
+  supabase: {
+    url: process.env.SUPABASE_URL || "",
+    serviceKey: process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+    storageBucket: process.env.SUPABASE_STORAGE_BUCKET || process.env.SUPABASE_BUCKET_NAME || "",
+  },
   smtp: {
     host: process.env.SMTP_HOST || "",
     port: parseNumber(process.env.SMTP_PORT, 587),

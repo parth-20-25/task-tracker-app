@@ -18,6 +18,8 @@ export type FixtureStageStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPR
 
 export interface FixtureCurrentStage {
   stage: string | null;
+  stage_label?: string | null;
+  stage_version?: number;
   status: FixtureStageStatus | "APPROVED";
   stage_order: number | null;
   is_complete: boolean;
@@ -25,6 +27,8 @@ export interface FixtureCurrentStage {
 
 export interface FixtureProgressStage {
   stage_name: string;
+  stage_label?: string | null;
+  stage_version?: number;
   stage_order: number;
   status: FixtureStageStatus;
   assigned_to: string | null;

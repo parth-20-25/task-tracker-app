@@ -64,4 +64,29 @@ runTest("detects compact and dotted OP.NO values during paste parsing", () => {
   assert.equal(result.parsedRows[1].op_no, "Op. 10B");
 });
 
+runTest("parses WBS titles with mixed underscore and dash separators", () => {
+  const inputs = [
+    [
+      "WBS-PARC2500M119_Oil Retainer Parts_Belrise Industries LTD_Pune",
+      "Sr No\tFixture No\tOP.NO\tPart Name\tFixture Type\tQty",
+      "1\tPARC25001191\tOP 10\tOil seal\tChecking fixture\t1",
+    ].join("\n"),
+    [
+      "WBS - PARC2600M001 - Fuel Tank weld Line - Belrise Industries Limited",
+      "Sr No\tFixture Number\tOperation No\tPart Name\tFixture Type\tQTY",
+      "1\tPARC26000001\tOP 20\tTank bracket\tChecking fixture\t2",
+    ].join("\n"),
+  ];
+
+  const first = parsePasteData(inputs[0]);
+  assert.equal(first.file_info.project_code, "PARC2500M119");
+  assert.equal(first.file_info.project_name, "Oil Retainer Parts");
+  assert.equal(first.file_info.company_name, "Belrise Industries LTD");
+
+  const second = parsePasteData(inputs[1]);
+  assert.equal(second.file_info.project_code, "PARC2600M001");
+  assert.equal(second.file_info.project_name, "Fuel Tank weld Line");
+  assert.equal(second.file_info.company_name, "Belrise Industries Limited");
+});
+
 console.log("designIngestion parser checks passed");

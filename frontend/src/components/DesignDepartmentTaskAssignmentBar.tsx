@@ -146,9 +146,9 @@ function WorkflowTimeline({ progress }: { progress?: FixtureFullProgress }) {
       </p>
       <div className="flex items-center gap-1 flex-wrap">
         {progress.stages.map((stage, idx) => (
-          <div key={stage.stage_name} className="flex items-center gap-1">
+          <div key={`${stage.stage_name}-${stage.stage_version ?? 0}`} className="flex items-center gap-1">
             <div className="flex flex-col items-center gap-0.5">
-              <span className="text-[10px] font-medium text-foreground">{stage.stage_name}</span>
+              <span className="text-[10px] font-medium text-foreground">{stage.stage_label || stage.stage_name}</span>
               <StageStatusBadge status={stage.status} />
               <span className="max-w-[128px] text-center text-[9px] leading-tight text-muted-foreground">
                 {stage.assigned_at || stage.completed_at
@@ -370,7 +370,7 @@ export function DesignDepartmentTaskAssignmentBar() {
   const validation = validationQuery.data;
   const currentStage = workflow;
   const hasWorkflow = workflow !== null;
-  const resolvedStageName = currentStage?.is_complete ? null : currentStage?.stage || null;
+  const resolvedStageName = currentStage?.is_complete ? null : currentStage?.stage_label || currentStage?.stage || null;
   const blockingReason = hasWorkflow ? validation?.reason ?? null : null;
   const isReassignmentBlocked = blockingReason === "Stage already assigned";
   const visibleBlockingReason = blockingReason === "Stage already assigned" ? null : blockingReason;

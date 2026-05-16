@@ -35,6 +35,31 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
+function normalizeImageUploadPayload(value, rowIndex, fieldName) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new AppError(502, "Failed to process file", `Python row ${rowIndex + 1} returned an invalid ${fieldName} payload`, "DESIGN_EXTRACTION_INVALID_RESPONSE");
+  }
+
+  const contentBase64 = normalizeString(value.content_base64);
+  const mimeType = normalizeString(value.mime_type);
+  const extension = normalizeString(value.extension);
+
+  if (!contentBase64 || !mimeType || !extension) {
+    throw new AppError(502, "Failed to process file", `Python row ${rowIndex + 1} returned an incomplete ${fieldName} payload`, "DESIGN_EXTRACTION_INVALID_RESPONSE");
+  }
+
+  return {
+    content_base64: contentBase64,
+    mime_type: mimeType,
+    extension,
+    anchor: value.anchor && typeof value.anchor === "object" ? value.anchor : {},
+  };
+}
+
 function normalizeParserConfidence(value) {
   const normalized = normalizeString(value).toUpperCase();
   return normalized || "HIGH";
@@ -112,10 +137,12 @@ function validatePythonRows(rows) {
       op_no: normalizeString(row.op_no),
       part_name: normalizeString(row.part_name),
       fixture_type: normalizeString(row.fixture_type),
-      remark: normalizeOptionalString(row.remark || row.remarks),
+      remark: null,
       qty: row.qty,
       image_1_url: normalizeOptionalImageUrl(row.image_1_url),
       image_2_url: normalizeOptionalImageUrl(row.image_2_url),
+      image_1_upload: normalizeImageUploadPayload(row.image_1_upload, index, "image_1_upload"),
+      image_2_upload: normalizeImageUploadPayload(row.image_2_upload, index, "image_2_upload"),
       parser_confidence: normalizeParserConfidence(row.parser_confidence),
       raw_data: row.raw_data && typeof row.raw_data === "object" ? row.raw_data : {},
     };

@@ -66,22 +66,33 @@ function splitRowIntoCells(row) {
 }
 
 function extractFileInfo(rawRows) {
-  const wbsRow = rawRows.find((row) => /WBS\s*-/i.test(row));
+  const wbsRow = rawRows.find((row) => /\bWBS\b.*PARC/i.test(row));
 
   if (!wbsRow) {
     throw new AppError(400, "Could not find a valid WBS header in pasted data.");
   }
 
   const wbsText = normalizePastedCell(wbsRow).replace(/\t+/g, " ");
-  const match = wbsText.match(/WBS\s*-\s*([A-Za-z0-9]+)\s*-\s*(.+?)\s*_\s*(.+)$/i);
+  const codeMatch = wbsText.match(/\bWBS\b\s*[-_]?\s*(PARC[A-Z0-9]+)(?=\s|[-_]|$)/i);
 
-  if (!match) {
+  if (!codeMatch) {
     throw new AppError(400, "Invalid WBS header format in pasted data.");
   }
 
-  const project_code = normalizePastedCell(match[1]);
-  const project_name = normalizePastedCell(match[2]);
-  const company_name = normalizePastedCell(match[3]);
+  const project_code = normalizePastedCell(codeMatch[1]).toUpperCase();
+  const remainder = normalizePastedCell(wbsText.slice(codeMatch.index + codeMatch[0].length))
+    .replace(/^[-_\s]+/, "")
+    .trim();
+  const parts = remainder.includes("_")
+    ? remainder.split(/\s*_\s*/).map((part) => normalizePastedCell(part).replace(/^[-_\s]+|[-_\s]+$/g, "")).filter(Boolean)
+    : remainder.split(/\s+-\s+/).map((part) => normalizePastedCell(part).replace(/^[-_\s]+|[-_\s]+$/g, "")).filter(Boolean);
+
+  if (parts.length < 2) {
+    throw new AppError(400, "Invalid WBS header format in pasted data.");
+  }
+
+  const project_name = normalizePastedCell(parts[0].replace(/_+/g, " "));
+  const company_name = normalizePastedCell(parts[1].replace(/_+/g, " "));
 
   if (!project_code || !project_name || !company_name) {
     throw new AppError(400, "Invalid WBS header format: project code, project name, and company name are required.");

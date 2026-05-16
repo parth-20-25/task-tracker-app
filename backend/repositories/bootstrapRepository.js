@@ -676,6 +676,7 @@ async function ensureReferenceTables(client) {
       department_id TEXT NOT NULL REFERENCES departments(id),
       stage_name TEXT NOT NULL,
       stage_order INTEGER NOT NULL,
+      stage_version INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'PENDING',
       assigned_to VARCHAR(50),
       assigned_at TIMESTAMPTZ,
@@ -697,6 +698,11 @@ async function ensureReferenceTables(client) {
     CREATE INDEX IF NOT EXISTS idx_fwp_department_status
     ON fixture_workflow_progress (department_id, status)
   `, "idx_fwp_department_status");
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_progress
+    ADD COLUMN IF NOT EXISTS stage_version INTEGER NOT NULL DEFAULT 0
+  `);
 
   await client.query(`
     ALTER TABLE fixture_workflow_progress
@@ -751,6 +757,7 @@ async function ensureReferenceTables(client) {
       department_id TEXT NOT NULL REFERENCES departments(id),
       stage_name TEXT NOT NULL,
       attempt_no INTEGER NOT NULL,
+      stage_version INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
       assigned_to VARCHAR(50),
       assigned_at TIMESTAMPTZ,
@@ -785,7 +792,35 @@ async function ensureReferenceTables(client) {
 
   await client.query(`
     ALTER TABLE fixture_workflow_stage_attempts
+    ADD COLUMN IF NOT EXISTS stage_version INTEGER NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_stage_attempts
     ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_stage_attempts
+    SET stage_version = GREATEST(COALESCE(attempt_no, 1) - 1, 0)
+    WHERE stage_version = 0
+      AND COALESCE(attempt_no, 1) > 1
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_progress progress
+    SET stage_version = latest.stage_version
+    FROM (
+      SELECT DISTINCT ON (fixture_id, stage_name)
+        fixture_id,
+        stage_name,
+        stage_version
+      FROM fixture_workflow_stage_attempts
+      ORDER BY fixture_id, stage_name, attempt_no DESC
+    ) latest
+    WHERE progress.fixture_id = latest.fixture_id
+      AND progress.stage_name = latest.stage_name
+      AND COALESCE(progress.stage_version, 0) < COALESCE(latest.stage_version, 0)
   `);
 
   await client.query(`

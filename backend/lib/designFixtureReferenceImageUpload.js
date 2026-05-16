@@ -1,12 +1,8 @@
-const { generateUUID } = require("./uuid");
-const fs = require("fs");
 const multer = require("multer");
 const path = require("path");
 const { AppError } = require("./AppError");
 
 const FIXTURE_REFERENCE_IMAGE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
-const FIXTURE_REFERENCE_IMAGE_UPLOAD_DIR = path.join(__dirname, "../uploads/design-fixture-references");
-
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/bmp",
   "image/gif",
@@ -41,8 +37,6 @@ const MIME_TYPE_EXTENSIONS = {
 
 const SAFE_FILE_NAME_PATTERN = /[^a-zA-Z0-9._() -]/g;
 
-fs.mkdirSync(FIXTURE_REFERENCE_IMAGE_UPLOAD_DIR, { recursive: true });
-
 function normalizeMimeType(mimeType) {
   return String(mimeType || "").trim().toLowerCase();
 }
@@ -66,14 +60,14 @@ function getSafeFileExtension(file) {
   return MIME_TYPE_EXTENSIONS[mimeType] || null;
 }
 
-function buildStoredFileName(file) {
+function assertSafeFileExtension(file) {
   const extension = getSafeFileExtension(file);
 
   if (!extension) {
     throw new AppError(400, "Only JPEG, PNG, WEBP, GIF, BMP, HEIC, and HEIF images are allowed");
   }
 
-  return `${Date.now()}-${generateUUID()}${extension}`;
+  return extension;
 }
 
 function sanitizeOriginalFileName(originalName) {
@@ -89,26 +83,15 @@ function sanitizeOriginalFileName(originalName) {
 
 function handleReferenceImageUpload(req, res, next) {
   const upload = multer({
-    storage: multer.diskStorage({
-      destination: (_req, _file, cb) => {
-        cb(null, FIXTURE_REFERENCE_IMAGE_UPLOAD_DIR);
-      },
-      filename: (_req, file, cb) => {
-        try {
-          cb(null, buildStoredFileName(file));
-        } catch (error) {
-          cb(error);
-        }
-        },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: FIXTURE_REFERENCE_IMAGE_MAX_SIZE_BYTES },
     fileFilter: (_req, file, cb) => {
-      const mimeType = normalizeMimeType(file.mimetype);
-      if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
-        cb(new AppError(400, "Only JPEG, PNG, WEBP, GIF, BMP, HEIC, and HEIF images are allowed"));
-        return;
+      try {
+        assertSafeFileExtension(file);
+        cb(null, true);
+      } catch (error) {
+        cb(error);
       }
-      cb(null, true);
     },
   });
 
@@ -132,13 +115,8 @@ function handleReferenceImageUpload(req, res, next) {
   });
 }
 
-function buildFixtureReferenceImageFileUrl(fileName) {
-  return `/uploads/design-fixture-references/${fileName}`;
-}
-
 module.exports = {
   FIXTURE_REFERENCE_IMAGE_MAX_SIZE_BYTES,
   sanitizeOriginalFileName,
-  buildFixtureReferenceImageFileUrl,
   handleReferenceImageUpload,
 };

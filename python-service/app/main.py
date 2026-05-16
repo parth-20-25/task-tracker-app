@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
 import time
-import uuid
 from io import BytesIO
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, Request
@@ -18,14 +17,10 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 ALLOWED_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ALLOWED_EXTENSION = ".xlsx"
-ALLOWED_IMAGE_COLUMNS = {6: "image_1_url"}
 EXPECTED_UPLOAD_FIELD = "file"
 MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTION_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 SERVICE_TOKEN = (os.getenv("EXTRACTION_SERVICE_TOKEN") or os.getenv("DESIGN_EXTRACTION_SERVICE_TOKEN") or "").strip()
-BACKEND_API_URL = (os.getenv("BACKEND_API_URL") or "").strip()
-PUBLIC_UPLOAD_BASE_URL = (os.getenv("PUBLIC_UPLOAD_BASE_URL") or "").strip()
-DEFAULT_IMAGE_DIR = Path(__file__).resolve().parents[2] / "backend" / "uploads" / "design-excel"
-IMAGE_OUTPUT_DIR = Path(os.getenv("EXTRACTED_IMAGE_DIR", str(DEFAULT_IMAGE_DIR))).resolve()
+IMAGE_SLOT_NAME = "image_1_url"
 
 FIXTURE_NUMBER_PATTERN = re.compile(r"^PARC\d{4,}$", re.IGNORECASE)
 OP_NUMBER_PATTERN = re.compile(r"^OP\.?\s*\d+[A-Z]*$", re.IGNORECASE)
@@ -122,23 +117,6 @@ def log_event(event: str, **payload: Any) -> None:
     logger.info(json.dumps(record, default=str))
 
 
-def normalize_base_url(value: str) -> str:
-    return value.strip().rstrip("/")
-
-
-def resolve_public_upload_base_url() -> str:
-    configured_public_url = normalize_base_url(PUBLIC_UPLOAD_BASE_URL)
-    if configured_public_url:
-        return configured_public_url
-
-    configured_backend_api_url = normalize_base_url(BACKEND_API_URL)
-    if not configured_backend_api_url:
-        raise RuntimeError("BACKEND_API_URL or PUBLIC_UPLOAD_BASE_URL must be configured.")
-
-    backend_origin = configured_backend_api_url[:-4] if configured_backend_api_url.endswith("/api") else configured_backend_api_url
-    return f"{backend_origin}/uploads/design-excel"
-
-
 def get_database_connection():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -173,39 +151,8 @@ def normalize_wbs_header_text(value: Any) -> str:
 
     text = str(value).strip()
 
-    # Step 1: Collapse multiple spaces to single space
     text = re.sub(r"\s+", " ", text)
-
-    # Step 2: Normalize WBS prefix variations
-    # Match: WBS, WBS-, WBS_, WBS -, WBS- , WBS_ , etc.
-    wbs_pattern = re.compile(r"^WBS\s*[-_]?\s*", re.IGNORECASE)
-    text = wbs_pattern.sub("WBS-", text)
-
-    # Step 3: Normalize separators between project code and project name
-    # Look for pattern like: WBS-PARC2600M001 followed by various separators
-    # Normalize to: WBS-PARC2600M001-ProjectName_CompanyName
-
-    # Step 4: Collapse multiple dashes/underscores/mixed separators
-    # Replace patterns like "-_", "_-", "--", "__" with single "-"
-    text = re.sub(r"[-_]{2,}", "-", text)
-
-    # Step 5: Normalize spaces around dashes in the project name portion
-    # Pattern: "word - word" or "word- word" or "word -word" → "word-word"
-    # But preserve the separator between project code and project name
-    parts = text.split("-", 2)  # Split into max 3 parts: WBS, PARC..., rest
-    if len(parts) >= 3:
-        # parts[0] = WBS, parts[1] = PARC..., parts[2] = rest
-        project_code = parts[1].strip()
-        remainder = parts[2].strip()
-
-        # Normalize spaces within the remainder
-        remainder = re.sub(r"\s*-\s*", "-", remainder)
-        remainder = re.sub(r"\s*_\s*", "_", remainder)
-        remainder = re.sub(r"\s+", " ", remainder)
-
-        text = f"WBS-{project_code}-{remainder}"
-
-    return text
+    return re.sub(r"^WBS\s*[-_]?\s*", "WBS-", text, flags=re.IGNORECASE)
 
 
 def normalize_header(value: Any) -> str:
@@ -242,50 +189,37 @@ def parse_wbs_header(raw_header: str) -> dict[str, str]:
     """
     Parse WBS header with flexible separator support.
     Handles formats like:
-    - WBS-PARC2600M001-Fuel Tank weld Line_Belrise Industries Limited
-    - WBS-PARC2600M001-Fuel Tank weld Line-Belrise Industries Limited
-    - WBS-PARC2600M001 Fuel Tank weld Line (space separator)
-    - WBS-PARC2600M001-Fuel-Tank-weld-Line_Belrise-Industries-Limited
+    - WBS-PARC2500M119_Oil Retainer Parts_Belrise Industries LTD_Pune
+    - WBS-PARC2500M119 - Oil Retainer Parts_ Belrise Industries LTD_ Pune
+    - WBS - PARC2600M001-Fuel Tank weld Line_Belrise Industries Limited
+    - WBS - PARC2600M001 - Fuel Tank weld Line - Belrise Industries Limited
     """
-    # First normalize spacing in the raw header
     header = re.sub(r"\s+", " ", str(raw_header).strip())
 
     if not header.upper().startswith("WBS"):
         raise ValueError("Invalid header format: missing 'WBS' prefix.")
 
-    # Extract project code using regex - look for PARC followed by 4+ digits
-    # The code can be followed by space, dash, underscore, or end of string
-    wbs_code_match = re.search(r"WBS\s*[-_]?\s*(PARC\d{4,}[A-Z0-9]*)(?:\s|[-_]|$)", header, re.IGNORECASE)
+    wbs_code_match = re.search(r"\bWBS\b\s*[-_]?\s*(PARC[A-Z0-9]+)(?=\s|[-_]|$)", header, re.IGNORECASE)
     if not wbs_code_match:
         raise ValueError("Invalid header format: could not extract project code.")
 
     project_code = wbs_code_match.group(1).upper()
-
-    # Get everything after the project code
-    code_end_pos = wbs_code_match.end(1)
-    remainder = header[code_end_pos:].strip()
-
-    # Remove leading separator from remainder
+    remainder = header[wbs_code_match.end(1):].strip()
     remainder = re.sub(r"^[-_\s]+", "", remainder)
 
-    project_name = ""
-    company_name = ""
+    if not remainder:
+        raise ValueError("Invalid WBS format: expected project name and company name after Project No.")
 
-    if "_" not in remainder:
+    if "_" in remainder:
+        parts = [part.strip(" -_") for part in re.split(r"\s*_\s*", remainder) if part.strip(" -_")]
+    else:
+        parts = [part.strip(" -_") for part in re.split(r"\s+-\s+", remainder) if part.strip(" -_")]
+
+    if len(parts) < 2:
         raise ValueError("Invalid WBS format: expected WBS-<Project No>-<Project Name>_<Company Name>.")
 
-    underscore_pos = remainder.find("_")
-    project_name = remainder[:underscore_pos].strip("-_")
-    company_name = remainder[underscore_pos + 1:].strip("-_")
-
-    # Clean up project name: normalize dashes/underscores to spaces for readability
-    project_name = re.sub(r"[-_]+", " ", project_name).strip()
-
-    # Clean up company name: normalize dashes/underscores to spaces
-    company_name = re.sub(r"[-_]+", " ", company_name).strip()
-
-    if not project_code:
-        raise ValueError("Invalid header format: project code is required.")
+    project_name = re.sub(r"\s+", " ", re.sub(r"[_]+", " ", parts[0])).strip()
+    company_name = re.sub(r"\s+", " ", re.sub(r"[_]+", " ", parts[1])).strip()
 
     if not project_name:
         raise ValueError("Invalid WBS format: Project Name is required.")
@@ -384,21 +318,86 @@ def find_workbook_metadata(workbook) -> tuple[str, int, str]:
     raise ValueError("Could not find the WBS metadata row in the workbook.")
 
 
-def build_public_image_url(file_name: str) -> str:
-    return f"{resolve_public_upload_base_url()}/{file_name}"
+IMAGE_MIME_TYPES = {
+    "bmp": "image/bmp",
+    "gif": "image/gif",
+    "heic": "image/heic",
+    "heif": "image/heif",
+    "jpeg": "image/jpeg",
+    "jpg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
 
 
-def save_image_bytes(image_bytes: bytes, excel_row: int, slot_name: str, extension: str) -> str:
-    IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    file_name = f"{excel_row}-{slot_name}-{uuid.uuid4().hex}.{extension}"
-    output_path = IMAGE_OUTPUT_DIR / file_name
-    output_path.write_bytes(image_bytes)
-    return build_public_image_url(file_name)
+def normalize_image_extension(value: Any) -> str:
+    extension = normalize_text(value).lower().replace(".", "")
+    if extension == "jpeg":
+        return "jpg"
+    if extension in IMAGE_MIME_TYPES:
+        return extension
+    return "png"
 
 
-def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[dict[str, Any]]]:
-    images_by_row: dict[int, dict[str, str]] = {}
+def build_image_payload(image_bytes: bytes, excel_row: int, excel_column: int, slot_name: str, extension: str) -> dict[str, Any]:
+    normalized_extension = normalize_image_extension(extension)
+    return {
+        "content_base64": base64.b64encode(image_bytes).decode("ascii"),
+        "mime_type": IMAGE_MIME_TYPES.get(normalized_extension, "image/png"),
+        "extension": normalized_extension,
+        "anchor": {
+            "row": excel_row,
+            "column": excel_column,
+            "slot": slot_name,
+        },
+    }
+
+
+def get_main_image_column(header_hints: dict[str, Any]) -> int | None:
+    value = header_hints.get("__main_image_column")
+    try:
+        column = int(value)
+    except (TypeError, ValueError):
+        return None
+    return column if column > 0 else None
+
+
+def get_image_header_columns(header_hints: dict[str, Any]) -> set[int]:
+    columns = header_hints.get("__image_columns")
+    if not isinstance(columns, list):
+        return set()
+    resolved: set[int] = set()
+    for column in columns:
+        try:
+            column_number = int(column)
+        except (TypeError, ValueError):
+            continue
+        if column_number > 0:
+            resolved.add(column_number)
+    return resolved
+
+
+def resolve_image_slot_for_anchor(excel_column: int, header_hints: dict[str, Any]) -> str | None:
+    main_image_column = get_main_image_column(header_hints)
+    if not main_image_column:
+        return None
+
+    if excel_column == main_image_column:
+        return IMAGE_SLOT_NAME
+
+    image_header_columns = get_image_header_columns(header_hints)
+    if abs(excel_column - main_image_column) <= 1 and excel_column not in image_header_columns:
+        return IMAGE_SLOT_NAME
+
+    return None
+
+
+def extract_anchored_images(worksheet, header_hints: dict[str, Any] | None = None) -> tuple[dict[int, dict[str, dict[str, Any]]], list[dict[str, Any]]]:
+    header_hints = header_hints or {}
+    images_by_row: dict[int, dict[str, dict[str, Any]]] = {}
     errors: list[dict[str, Any]] = []
+    main_image_column = get_main_image_column(header_hints)
+    image_header_columns = sorted(get_image_header_columns(header_hints))
 
     # DEBUG: Log worksheet image detection details
     log_event("image_extraction_start", sheet_title=worksheet.title)
@@ -457,6 +456,8 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
               sheet_title=worksheet.title,
               total_images_found=len(all_images),
               sources=image_sources,
+              main_image_column=main_image_column,
+              image_header_columns=image_header_columns,
               worksheet_attrs=[attr for attr in dir(worksheet) if not attr.startswith('__') and any(keyword in attr.lower() for keyword in ['image', 'drawing', 'chart'])][:10])
 
     if not all_images:
@@ -589,23 +590,15 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
                   excel_row=excel_row,
                   excel_column=excel_column)
 
-        if excel_column not in ALLOWED_IMAGE_COLUMNS:
+        slot_name = resolve_image_slot_for_anchor(excel_column, header_hints)
+        if not slot_name:
             log_event("image_column_rejected",
                       excel_row=excel_row,
                       excel_column=excel_column,
-                      allowed_columns=list(ALLOWED_IMAGE_COLUMNS.keys()))
-            # Only log as error if NOT column I (9) which is header image
-            if excel_column != 9:
-                errors.append(
-                    build_error(
-                        "Image must be anchored in column F only.",
-                        excel_row=excel_row,
-                        raw_data={"column": excel_column},
-                    )
-                )
+                      main_image_column=main_image_column,
+                      image_header_columns=image_header_columns)
             continue
 
-        slot_name = ALLOWED_IMAGE_COLUMNS[excel_column]
         row_images = images_by_row.setdefault(excel_row, {})
 
         if slot_name in row_images:
@@ -626,16 +619,16 @@ def extract_anchored_images(worksheet) -> tuple[dict[int, dict[str, str]], list[
                   has_data_method=hasattr(image, "_data"))
         try:
             image_bytes = image._data()
-            saved_url = save_image_bytes(image_bytes, excel_row, slot_name, image_format.lower())
-            row_images[slot_name] = saved_url
-            log_event("image_saved_success",
+            row_images[slot_name] = build_image_payload(image_bytes, excel_row, excel_column, slot_name, image_format.lower())
+            log_event("image_extracted_success",
                       excel_row=excel_row,
                       slot_name=slot_name,
-                      url=saved_url[:50] if saved_url else None)
+                      byte_count=len(image_bytes),
+                      extension=normalize_image_extension(image_format))
         except Exception as exc:
             errors.append(
                 build_error(
-                    "Failed to save an extracted image.",
+                    "Failed to extract an embedded image.",
                     excel_row=excel_row,
                     raw_data={"details": str(exc)},
                 )
@@ -657,11 +650,14 @@ def open_excel_workbook(file_bytes: bytes, *, read_only: bool) -> Any:
     )
 
 
-def extract_images_from_workbook(file_bytes: bytes) -> tuple[dict[int, dict[str, str]], list[dict[str, Any]]]:
+def extract_images_from_workbook(
+    file_bytes: bytes,
+    header_hints: dict[str, Any] | None = None,
+) -> tuple[dict[int, dict[str, dict[str, Any]]], list[dict[str, Any]]]:
     workbook = open_excel_workbook(file_bytes, read_only=False)
     try:
         worksheet = workbook.active
-        return extract_anchored_images(worksheet)
+        return extract_anchored_images(worksheet, header_hints or {})
     finally:
         workbook.close()
 
@@ -679,6 +675,30 @@ def match_header_field(cell_text: str) -> str | None:
             return field_name
 
     return None
+
+
+def is_image_header(cell_text: str) -> bool:
+    normalized = normalize_header(cell_text)
+    tokens = tokenize_header(cell_text)
+
+    if not normalized:
+        return False
+
+    if normalized in {
+        "image",
+        "images",
+        "mainimage",
+        "partimage",
+        "fixtureimage",
+        "referenceimage",
+        "refimage",
+        "picture",
+        "photo",
+        "photograph",
+    }:
+        return True
+
+    return bool(tokens & {"image", "images", "picture", "photo", "photograph"})
 
 
 def missing_required_headers(header_hints: dict[str, int]) -> list[str]:
@@ -703,17 +723,29 @@ def detect_header_hints(worksheet, metadata_row: int) -> dict[str, int]:
             start=start_row,
         ):
             current_mapping: dict[str, int] = {}
+            image_columns: list[int] = []
             for column_index, cell_value in enumerate(row_values, start=1):
-                field_name = match_header_field(normalize_text(cell_value))
+                cell_text = normalize_text(cell_value)
+                field_name = match_header_field(cell_text)
                 if field_name and field_name not in current_mapping:
                     current_mapping[field_name] = column_index
+                if is_image_header(cell_text):
+                    image_columns.append(column_index)
 
-            match_count = len(current_mapping)
+            match_count = len([field_name for field_name in current_mapping if not field_name.startswith("__")])
             has_required_headers = all(field_name in current_mapping for field_name in REQUIRED_HEADER_FIELDS)
 
-            if has_required_headers and match_count > best_match_count:
-                best_match_count = len(current_mapping)
+            has_better_mapping = has_required_headers and (
+                match_count > best_match_count
+                or (match_count == best_match_count and image_columns and not best_mapping.get("__main_image_column"))
+            )
+
+            if has_better_mapping:
+                best_match_count = match_count
                 current_mapping["__row"] = row_index
+                if image_columns:
+                    current_mapping["__image_columns"] = image_columns
+                    current_mapping["__main_image_column"] = image_columns[-1]
                 best_mapping = current_mapping
 
         result = best_mapping
@@ -741,7 +773,7 @@ def build_semantic_cells(row_values: tuple[Any, ...]) -> list[dict[str, Any]]:
     return cells
 
 
-def build_row_snapshot(cells: list[dict[str, Any]], row_images: dict[str, str]) -> dict[str, Any]:
+def build_row_snapshot(cells: list[dict[str, Any]], row_images: dict[str, Any]) -> dict[str, Any]:
     return {
         "cells": [{"column": cell["column"], "value": cell["text"]} for cell in cells],
         "images_present": sorted(row_images.keys()),
@@ -894,7 +926,7 @@ def parse_fixture_candidate_optimized(
     row_index: int,
     cells: list[dict[str, Any]],
     header_hints: dict[str, int],
-    row_images: dict[str, str],
+    row_images: dict[str, Any],
     *,
     sheet_name: str,
     inherited_hints: dict[str, str] | None = None,
@@ -993,8 +1025,10 @@ def parse_fixture_candidate_optimized(
                 "fixture_type": parsed["fixture_type"],
                 "qty": parsed["qty"],
                 "remark": None,
-                "image_1_url": row_images.get("image_1_url"),
+                "image_1_url": None,
                 "image_2_url": None,
+                "image_1_upload": row_images.get("image_1_url"),
+                "image_2_upload": None,
                 "parser_confidence": "HIGH",
                 "raw_data": {
                     **snapshot,
@@ -1008,7 +1042,7 @@ def parse_fixture_candidate_optimized(
                         "part_name": parsed["part_name"] or None,
                         "fixture_type": parsed["fixture_type"] or None,
                         "qty": parsed["qty"] or None,
-                        "image_1_url": row_images.get("image_1_url"),
+                        "image_1_present": bool(row_images.get("image_1_url")),
                         "image_2_url": None,
                     },
                 },
@@ -1200,8 +1234,10 @@ def parse_fixture_candidate_optimized(
             "fixture_type": parsed["fixture_type"],
             "qty": parsed["qty"],
             "remark": None,
-            "image_1_url": row_images.get("image_1_url"),
+            "image_1_url": None,
             "image_2_url": None,
+            "image_1_upload": row_images.get("image_1_url"),
+            "image_2_upload": None,
             "parser_confidence": "HIGH",
             "raw_data": {
                 **snapshot,
@@ -1216,7 +1252,7 @@ def parse_fixture_candidate_optimized(
                     "fixture_type": parsed["fixture_type"] or None,
                     "qty": parsed["qty"] or None,
                     "remark": None,
-                    "image_1_url": row_images.get("image_1_url"),
+                    "image_1_present": bool(row_images.get("image_1_url")),
                     "image_2_url": None,
                 },
             },
@@ -1267,7 +1303,7 @@ def build_rows(
     worksheet,
     metadata_row: int,
     header_hints: dict[str, int],
-    images_by_row: dict[int, dict[str, str]],
+    images_by_row: dict[int, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -1480,7 +1516,7 @@ def _process_workbook(file_bytes: bytes) -> dict[str, Any]:
             # Performance: Image extraction with detailed timing
             image_extraction_start = time.perf_counter()
             with Timer(f"extract_images_{worksheet.title}"):
-                images_by_row, image_errors = extract_anchored_images(worksheet)
+                images_by_row, image_errors = extract_anchored_images(worksheet, header_hints)
             image_extraction_time = time.perf_counter() - image_extraction_start
             log_event("image_extraction_timing",
                      sheet_title=worksheet.title,

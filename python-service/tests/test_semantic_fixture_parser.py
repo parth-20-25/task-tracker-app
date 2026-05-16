@@ -1,6 +1,12 @@
 import unittest
+import base64
 from io import BytesIO
 from openpyxl import Workbook
+
+try:
+    from openpyxl.drawing.image import Image as OpenpyxlImage
+except Exception:  # pragma: no cover - local env may omit Pillow
+    OpenpyxlImage = None
 
 try:
     from fastapi.testclient import TestClient
@@ -8,6 +14,17 @@ except Exception:  # pragma: no cover - local env may omit httpx
     TestClient = None
 
 from app.main import app, build_rows, detect_header_hints, find_metadata_row, _process_workbook
+
+
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+
+def add_test_image(worksheet, cell: str):
+    if OpenpyxlImage is None:
+        raise unittest.SkipTest("openpyxl image tests require Pillow")
+    worksheet.add_image(OpenpyxlImage(BytesIO(PNG_BYTES)), cell)
 
 
 class SemanticFixtureParserTests(unittest.TestCase):
@@ -277,6 +294,111 @@ class SemanticFixtureParserTests(unittest.TestCase):
         self.assertEqual(result["rows"], [])
         self.assertEqual(len(result["errors"]), 1)
         self.assertIn("Invalid OP.NO format", result["errors"][0]["error_message"])
+
+    def test_process_workbook_parses_wbs_with_dash_only_company_separator(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS - PARC2600M001 - Fuel Tank weld Line - Belrise Industries Limited"
+        worksheet["A3"] = "Sr No"
+        worksheet["B3"] = "Fixture Number"
+        worksheet["C3"] = "Operation No"
+        worksheet["D3"] = "Part Name"
+        worksheet["E3"] = "Image"
+        worksheet["F3"] = "Main Image"
+        worksheet["G3"] = "Fixture Type"
+        worksheet["H3"] = "QTY"
+        worksheet["I3"] = "Remarks"
+        worksheet["A4"] = 1
+        worksheet["B4"] = "PARC26001011"
+        worksheet["C4"] = "OP 11"
+        worksheet["D4"] = "FUEL TANK"
+        worksheet["E4"] = "#VALUE!"
+        worksheet["F4"] = "#VALUE!"
+        worksheet["G4"] = "Checking fixture"
+        worksheet["H4"] = 1
+        worksheet["I4"] = "Customer Scope"
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+
+        result = _process_workbook(buffer.getvalue())
+
+        self.assertEqual(result["file_info"]["project_code"], "PARC2600M001")
+        self.assertEqual(result["file_info"]["project_name"], "Fuel Tank weld Line")
+        self.assertEqual(result["file_info"]["company_name"], "Belrise Industries Limited")
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertIsNone(result["rows"][0]["image_1_url"])
+        self.assertIsNone(result["rows"][0]["image_1_upload"])
+
+    def test_process_workbook_format_a_uses_rightmost_main_image_column(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS-PARC2600M001_Fuel Tank weld Line_Belrise Industries Limited_Pune"
+        worksheet["B3"] = "SR NO"
+        worksheet["C3"] = "FIXTURE NO"
+        worksheet["D3"] = "OP NO."
+        worksheet["E3"] = "PART NAME"
+        worksheet["F3"] = "Legacy Image"
+        worksheet["G3"] = "Main Image"
+        worksheet["H3"] = "FIXTURE TYPE"
+        worksheet["I3"] = "QTY"
+        worksheet["J3"] = "Remarks"
+        worksheet["B4"] = 1
+        worksheet["C4"] = "PARC26001012"
+        worksheet["D4"] = "OP 12"
+        worksheet["E4"] = "FORMAT A PART"
+        worksheet["F4"] = "#VALUE!"
+        worksheet["H4"] = "Checking fixture"
+        worksheet["I4"] = 1
+        worksheet["J4"] = "PARC Scope"
+        add_test_image(worksheet, "G4")
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+
+        result = _process_workbook(buffer.getvalue())
+
+        self.assertEqual(result["file_info"]["company_name"], "Belrise Industries Limited")
+        self.assertEqual(len(result["rows"]), 1)
+        row = result["rows"][0]
+        self.assertIsNotNone(row["image_1_upload"])
+        self.assertEqual(row["image_1_upload"]["anchor"]["column"], 7)
+        self.assertIsNone(row["remark"])
+
+    def test_process_workbook_format_b_uses_rightmost_main_image_column(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet["A1"] = "WBS-PARC2600M001 - Fuel Tank weld Line_ Belrise Industries Limited_ Pune"
+        worksheet["A3"] = "Sr No"
+        worksheet["B3"] = "Fixture No"
+        worksheet["C3"] = "Op No"
+        worksheet["D3"] = "Part Name"
+        worksheet["E3"] = "Legacy Image"
+        worksheet["F3"] = "Main Image"
+        worksheet["G3"] = "Fixture Type"
+        worksheet["H3"] = "Qty"
+        worksheet["I3"] = "Remarks"
+        worksheet["A4"] = 1
+        worksheet["B4"] = "PARC26001013"
+        worksheet["C4"] = "OP 13"
+        worksheet["D4"] = "FORMAT B PART"
+        worksheet["E4"] = "#VALUE!"
+        worksheet["G4"] = "Checking fixture"
+        worksheet["H4"] = 1
+        worksheet["I4"] = "Free text that must not affect parsing"
+        add_test_image(worksheet, "F4")
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+
+        result = _process_workbook(buffer.getvalue())
+
+        self.assertEqual(len(result["rows"]), 1)
+        row = result["rows"][0]
+        self.assertEqual(row["fixture_no"], "PARC26001013")
+        self.assertIsNotNone(row["image_1_upload"])
+        self.assertEqual(row["image_1_upload"]["anchor"]["column"], 6)
+        self.assertNotIn("#VALUE!", row["image_1_upload"]["content_base64"])
 
 
 class ExtractEndpointValidationTests(unittest.TestCase):

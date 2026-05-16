@@ -180,16 +180,17 @@ async function run() {
       const worksheet = workbook.getWorksheet("Design Report");
 
       assert.equal(worksheet.getCell("A1").value, "WBS-P-105-Roof-DemoCustomer");
-      assert.equal(worksheet.getCell("A2").value, "S.No");
-      assert.equal(worksheet.getCell("B2").value, "Fixture No");
-      assert.equal(worksheet.getCell("S2").value, "Proof");
-      assert.equal(worksheet.getCell("E3").value.text, "View");
-      assert.equal(worksheet.getCell("E3").value.hyperlink, "https://example.com/ref.png");
-      assert.equal(worksheet.getCell("J3").value, "03/04/26 - 03/04/26");
-      assert.equal(worksheet.getCell("L3").value, "TBD");
-      assert.equal(worksheet.getCell("K3").value, "2h 30m");
-      assert.equal(worksheet.getCell("S3").value.hyperlink, "https://example.com/proof.png");
-      assert.equal(worksheet.getCell("B3").fill.fgColor.argb, "FF28A745");
+      assert.equal(worksheet.getCell("A2").value, "S. No");
+      assert.equal(worksheet.getCell("B2").value, "FIXTURE NO");
+      assert.equal(worksheet.getCell("S2").value, "Part Image");
+      assert.equal(worksheet.getCell("U2").value, "Work Proof");
+      assert.equal(worksheet.getCell("I3").value, "03/04/26 08:00 → 03/04/26 10:30");
+      assert.equal(worksheet.getCell("J3").value, "2h 30m");
+      assert.equal(worksheet.getCell("K3").value, "TBD");
+      assert.equal(worksheet.getCell("S3").value.text, "View");
+      assert.equal(worksheet.getCell("S3").value.hyperlink, "https://example.com/ref.png");
+      assert.equal(worksheet.getCell("T3").value.hyperlink, "https://example.com/work.png");
+      assert.equal(worksheet.getCell("U3").value.hyperlink, "https://example.com/proof.png");
     } finally {
       await fs.rm(tempDirectory, { recursive: true, force: true });
     }

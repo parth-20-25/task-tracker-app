@@ -5,6 +5,7 @@ const {
   ensureDepartmentWorkflow,
   repairProjectDepartmentForFixture,
 } = require("../services/workflowRecoveryService");
+const { getStageVersionFromCompletedCount } = require("../lib/workflowStageVersioning");
 
 function mapWorkflowStageRows(stageRows) {
   return stageRows.map((stage, index) => ({
@@ -116,8 +117,8 @@ async function initProgressForFixture(fixtureId, departmentId, stages, client = 
   for (const stage of stages) {
     await client.query(
       `INSERT INTO fixture_workflow_progress
-         (fixture_id, department_id, stage_name, stage_order, status)
-       VALUES ($1, $2, $3, $4, 'PENDING')
+         (fixture_id, department_id, stage_name, stage_order, stage_version, status)
+       VALUES ($1, $2, $3, $4, 0, 'PENDING')
        ON CONFLICT (fixture_id, stage_name) DO NOTHING`,
       [fixtureId, departmentId, stage.name, stage.order],
     );
@@ -156,6 +157,10 @@ async function updateProgressRow(fixtureId, stageName, fields, client = pool) {
     setClauses.push(`duration_minutes = $${idx++}`);
     values.push(fields.duration_minutes);
   }
+  if (fields.stage_version !== undefined) {
+    setClauses.push(`stage_version = $${idx++}`);
+    values.push(fields.stage_version);
+  }
 
   if (setClauses.length === 0) return;
 
@@ -181,6 +186,7 @@ async function listStageAttemptsForFixtures(fixtureIds, client = pool) {
        department_id,
        stage_name,
        attempt_no,
+       stage_version,
        status,
        assigned_to,
        assigned_at,
@@ -205,6 +211,7 @@ async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
        department_id,
        stage_name,
        attempt_no,
+       stage_version,
        status,
        assigned_to,
        assigned_at,
@@ -224,8 +231,38 @@ async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
   return result.rows[0] || null;
 }
 
+async function getProgressRowForStage(fixtureId, stageName, client = pool) {
+  const result = await client.query(
+    `SELECT *
+     FROM fixture_workflow_progress
+     WHERE fixture_id = $1
+       AND stage_name = $2
+     LIMIT 1`,
+    [fixtureId, stageName],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getNextStageReentryVersion(fixtureId, stageName, client = pool) {
+  const result = await client.query(
+    `SELECT COUNT(*)::integer AS completed_count
+     FROM fixture_workflow_stage_attempts
+     WHERE fixture_id = $1
+       AND stage_name = $2
+       AND status IN ('COMPLETED', 'APPROVED')`,
+    [fixtureId, stageName],
+  );
+
+  return getStageVersionFromCompletedCount(result.rows[0]?.completed_count || 0);
+}
+
 async function startStageAttempt(fixtureId, departmentId, stageName, assignedTo, timestamp = new Date(), client = pool) {
   const latestAttempt = await getLatestStageAttempt(fixtureId, stageName, client);
+  const progressRow = await getProgressRowForStage(fixtureId, stageName, client);
+  const stageVersion = Number.isInteger(Number(progressRow?.stage_version))
+    ? Number(progressRow.stage_version)
+    : await getNextStageReentryVersion(fixtureId, stageName, client);
 
   if (!latestAttempt || ["APPROVED", "REJECTED"].includes(latestAttempt.status)) {
     const nextAttemptNo = latestAttempt ? Number(latestAttempt.attempt_no) + 1 : 1;
@@ -235,6 +272,7 @@ async function startStageAttempt(fixtureId, departmentId, stageName, assignedTo,
          department_id,
          stage_name,
          attempt_no,
+         stage_version,
          status,
          assigned_to,
          assigned_at,
@@ -242,8 +280,8 @@ async function startStageAttempt(fixtureId, departmentId, stageName, assignedTo,
          duration_minutes,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, 'IN_PROGRESS', $5, $6, $6, NULL, $6)`,
-      [fixtureId, departmentId, stageName, nextAttemptNo, assignedTo, timestamp],
+       VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', $6, $7, $7, NULL, $7)`,
+      [fixtureId, departmentId, stageName, nextAttemptNo, stageVersion, assignedTo, timestamp],
     );
     return;
   }
@@ -508,7 +546,9 @@ module.exports = instrumentModuleExports("repository.fixtureWorkflowRepository",
   getActiveWorkflowForDepartment,
   getConfiguredWorkflowForDepartment,
   getLatestStageAttempt,
+  getNextStageReentryVersion,
   getProgressForFixture,
+  getProgressRowForStage,
   initProgressForFixture,
   getFixtureWithDepartment,
   getFixtureWorkflowContext,

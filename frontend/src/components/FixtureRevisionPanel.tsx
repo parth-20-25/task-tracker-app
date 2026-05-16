@@ -225,7 +225,7 @@ export function FixtureRevisionPanel({
             <SelectContent>
               {stages.map((stage) => (
                 <SelectItem key={stage.stage_name} value={stage.stage_name}>
-                  {stage.stage_order}. {stage.stage_name}
+                  {stage.stage_order}. {stage.stage_label || stage.stage_name}
                 </SelectItem>
               ))}
             </SelectContent>

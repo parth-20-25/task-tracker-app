@@ -12,6 +12,7 @@ const { instrumentModuleExports } = require("../lib/observability");
 const { getAdjacentWorkflowStage, getWorkflow, getStageById } = require("./workflowService");
 const { releaseFixtureStageAssignment, advanceWorkflowAfterTaskApproval } = require("./fixtureWorkflowService");
 const { AppError } = require("../lib/AppError");
+const { formatStageVersionLabel } = require("../lib/workflowStageVersioning");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
   addTaskLog,
@@ -548,10 +549,15 @@ async function resolveFixtureContextForTask({
           f.project_id,
           f.fixture_no,
           p.project_no,
-          COALESCE(NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id) AS stage_name
+          COALESCE(NULLIF(fwp.stage_name, ''), NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id) AS stage_base_name,
+          COALESCE(fwp.stage_version, 0) AS stage_version
         FROM design.fixtures f
         JOIN design.projects p ON p.id = f.project_id
         LEFT JOIN workflow_stages ws ON ws.id = $4
+        LEFT JOIN fixture_workflow_progress fwp
+          ON fwp.fixture_id = f.id
+         AND fwp.department_id = p.department_id
+         AND LOWER(fwp.stage_name) = LOWER(COALESCE(NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id))
         WHERE p.department_id = $1
           AND ($2::uuid IS NULL OR p.id = $2::uuid)
           AND ($3::uuid IS NULL OR f.id = $3::uuid)
@@ -571,7 +577,11 @@ async function resolveFixtureContextForTask({
     );
 
     if (canonicalFixtureContext.rows[0]) {
-      return canonicalFixtureContext.rows[0];
+      const row = canonicalFixtureContext.rows[0];
+      return {
+        ...row,
+        stage_name: formatStageVersionLabel(row.stage_base_name, row.stage_version),
+      };
     }
   }
 
@@ -583,10 +593,15 @@ async function resolveFixtureContextForTask({
           f.project_id,
           f.fixture_no,
           p.project_no,
-          COALESCE(NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id) AS stage_name
+          COALESCE(NULLIF(fwp.stage_name, ''), NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id) AS stage_base_name,
+          COALESCE(fwp.stage_version, 0) AS stage_version
         FROM design.fixtures f
         JOIN design.projects p ON p.id = f.project_id
         LEFT JOIN workflow_stages ws ON ws.id = $4
+        LEFT JOIN fixture_workflow_progress fwp
+          ON fwp.fixture_id = f.id
+         AND fwp.department_id = p.department_id
+         AND LOWER(fwp.stage_name) = LOWER(COALESCE(NULLIF(ws.stage_name, ''), NULLIF(ws.name, ''), ws.id))
         WHERE p.department_id = $1
           AND p.project_no = $2
           AND f.fixture_no = $3
@@ -595,7 +610,15 @@ async function resolveFixtureContextForTask({
       [departmentId, normalizedProjectNo, normalizedFixtureNo, currentStageId],
     );
 
-    return legacyFixtureContext.rows[0] || null;
+    if (legacyFixtureContext.rows[0]) {
+      const row = legacyFixtureContext.rows[0];
+      return {
+        ...row,
+        stage_name: formatStageVersionLabel(row.stage_base_name, row.stage_version),
+      };
+    }
+
+    return null;
   }
 
   return null;

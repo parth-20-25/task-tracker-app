@@ -100,6 +100,46 @@ runTest("accepts OP.NO values with letter suffixes and preserves them exactly", 
   assert.equal(result.rejectedRows.length, 0);
 });
 
+runTest("preserves permanent image URLs from workbook extraction", () => {
+  const result = validateParsedData([
+    {
+      excel_row: 18,
+      fixture_no: "PARC26001008",
+      op_no: "OP 18",
+      part_name: "IMAGE PART",
+      fixture_type: "Checking fixture",
+      qty: "1",
+      image_1_url: "https://example.supabase.co/storage/v1/object/public/design-images/a.png",
+      parser_confidence: "HIGH",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 1);
+  assert.equal(
+    result.validRows[0].image_1_url,
+    "https://example.supabase.co/storage/v1/object/public/design-images/a.png",
+  );
+  assert.equal(result.validRows[0].image_2_url, null);
+});
+
+runTest("ignores remarks during validation output", () => {
+  const result = validateParsedData([
+    {
+      excel_row: 19,
+      fixture_no: "PARC26001009",
+      op_no: "OP 19",
+      part_name: "REMARK PART",
+      fixture_type: "Checking fixture",
+      qty: "1",
+      remark: "Customer Scope",
+      parser_confidence: "HIGH",
+    },
+  ]);
+
+  assert.equal(result.validRows.length, 1);
+  assert.equal(Object.hasOwn(result.validRows[0], "remark"), false);
+});
+
 runTest("does not reject rows only because parser confidence is low", () => {
   const result = validateParsedData([
     {

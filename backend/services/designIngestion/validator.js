@@ -263,8 +263,8 @@ function extractRowFields(item) {
     part_name: normalizeTextCell(item?.part_name),
     fixture_type: normalizeTextCell(item?.fixture_type),
     qty: item?.qty,
-    image_1_url: null,
-    image_2_url: null,
+    image_1_url: item?.image_1_url || null,
+    image_2_url: item?.image_2_url || null,
     parser_confidence: normalizeTextCell(item?.parser_confidence || "HIGH").toUpperCase(),
     raw_data: rawData || {
       fixture_no: item?.fixture_no ?? null,

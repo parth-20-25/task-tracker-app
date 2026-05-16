@@ -5,6 +5,7 @@ const { mapTaskRow } = require("./mappers");
 const { buildUserColumns } = require("./sqlFragments");
 
 const OPEN_TASK_STATUSES = ["assigned", "in_progress", "on_hold", "under_review", "rework"];
+const ACTIVE_TASK_STAGE_CONFLICT_CODE = "ACTIVE_TASK_STAGE_CONFLICT";
 
 function mapTaskAttachmentRow(row, { includeFilePath = false } = {}) {
   if (!row) {
@@ -264,6 +265,9 @@ async function insertTask(task, client = pool) {
         $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43,
         $44, $45, $46, $47, NOW()
       )
+      ON CONFLICT (fixture_id, stage)
+      WHERE status NOT IN ('closed','cancelled')
+      DO NOTHING
       RETURNING id
     `;
   const insertParams = [
@@ -317,6 +321,13 @@ async function insertTask(task, client = pool) {
   ];
 
   const result = await executeRepositoryQuery("insertTask", client, insertQuery, insertParams);
+
+  if (result.rows.length === 0) {
+    const conflictError = new Error("An active task already exists for this fixture stage");
+    conflictError.code = ACTIVE_TASK_STAGE_CONFLICT_CODE;
+    conflictError.constraint = "uniq_active_task_per_stage";
+    throw conflictError;
+  }
 
   return requireRow(result, "Task insert did not return an id").id;
 }

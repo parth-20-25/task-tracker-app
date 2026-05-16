@@ -32,6 +32,34 @@ async function safeCreateIndex(client, statement, indexName) {
   }
 }
 
+async function ensureActiveTaskPerStageIndex(client) {
+  const duplicateResult = await client.query(`
+    SELECT fixture_id, stage, COUNT(*)::int AS active_count
+    FROM tasks
+    WHERE fixture_id IS NOT NULL
+      AND stage IS NOT NULL
+      AND status NOT IN ('closed','cancelled')
+    GROUP BY fixture_id, stage
+    HAVING COUNT(*) > 1
+    LIMIT 10
+  `);
+
+  if (duplicateResult.rows.length > 0) {
+    const duplicateSummary = duplicateResult.rows
+      .map((row) => `${row.fixture_id}:${row.stage} (${row.active_count})`)
+      .join(", ");
+    throw new Error(
+      `Cannot enforce uniq_active_task_per_stage while duplicate active tasks exist: ${duplicateSummary}`,
+    );
+  }
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_task_per_stage
+    ON tasks (fixture_id, stage)
+    WHERE status NOT IN ('closed','cancelled')
+  `);
+}
+
 async function ensureUsersTable(client) {
   await client.query(`SET search_path TO public`);
   await client.query(`
@@ -230,12 +258,6 @@ async function ensureTasksTable(client) {
   `, "idx_tasks_status_deadline");
 
   await safeCreateIndex(client, `
-    CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_task_per_stage
-    ON tasks (fixture_id, stage)
-    WHERE status NOT IN ('closed','cancelled')
-  `, "uniq_active_task_per_stage");
-
-  await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_tasks_approved_at
     ON tasks (approved_at)
   `, "idx_tasks_approved_at");
@@ -365,25 +387,18 @@ async function ensureTasksTable(client) {
   await client.query(`UPDATE tasks SET status = 'assigned' WHERE status = 'not_started'`);
   await client.query(`UPDATE tasks SET status = 'under_review' WHERE status = 'completed' AND verification_status = 'pending'`);
   await client.query(`UPDATE tasks SET status = 'closed', closed_at = COALESCE(closed_at, verified_at, completed_at, NOW()) WHERE status = 'completed' AND verification_status = 'approved'`);
-  // Prevent bootstrap failures due to uniq_active_task_per_stage (fixture_id, stage) uniqueness.
-  // If multiple non-closed/cancelled tasks exist for the same (fixture_id, stage), ensure only one remains "active".
-  // Strategy: pick the first task per (fixture_id, stage) to keep as 'rework'; force the rest to 'closed'
-  // so they fall outside the unique index predicate (status NOT IN ('closed','cancelled')).
+
+  // Keep terminal tasks terminal. Bootstrap may normalize legacy open rejected tasks
+  // to rework, but it must never revive closed/cancelled task history.
   await client.query(`
-    WITH ranked AS (
-      SELECT
-        id,
-        fixture_id,
-        stage,
-        ROW_NUMBER() OVER (PARTITION BY fixture_id, stage ORDER BY created_at ASC, id ASC) AS rn
-      FROM tasks
-      WHERE verification_status = 'rejected'
-    )
-    UPDATE tasks t
-    SET status = CASE WHEN r.rn = 1 THEN 'rework' ELSE 'closed' END
-    FROM ranked r
-    WHERE t.id = r.id
+    UPDATE tasks
+    SET status = 'rework'
+    WHERE verification_status = 'rejected'
+      AND status NOT IN ('closed','cancelled','rework')
   `);
+
+  await ensureActiveTaskPerStageIndex(client);
+
   await client.query(`
     UPDATE tasks
     SET lifecycle_status = CASE

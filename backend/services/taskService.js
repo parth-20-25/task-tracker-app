@@ -795,11 +795,13 @@ async function createTaskForUser(user, payload = {}) {
   if (fixtureId && stage) {
     const dupCheck = await pool.query(`
       SELECT 1 FROM tasks
-      WHERE fixture_id = $1 AND LOWER(stage) = LOWER($2) AND status != 'cancelled'
+      WHERE fixture_id = $1
+        AND LOWER(stage) = LOWER($2)
+        AND status NOT IN ('closed','cancelled')
       LIMIT 1
     `, [fixtureId, stage]);
     if (dupCheck.rows.length > 0) {
-      throw new AppError(400, "Stage already assigned");
+      throw new AppError(409, "Stage already assigned");
     }
   }
 
@@ -817,50 +819,58 @@ async function createTaskForUser(user, payload = {}) {
     ? (workflowTemplate?.template_name || String(title || "").trim() || internalIdentifier)
     : String(title || "").trim();
 
-  const taskId = await insertTask({
-    title: resolvedTitle,
-    internal_identifier: internalIdentifier,
-    task_type: taskType,
-    description: String(description || "").trim(),
-    assigned_to: primaryAssignee.employee_id,
-    assignee_ids: assigneeIds,
-    assigned_by: user.employee_id,
-    created_by: user.employee_id,
-    department_id: resolvedDepartmentId,
-    workflow_template_id: workflowTemplate?.id || null,
-    status: resolvedTaskStatus,
-    priority: resolvedPriority,
-    deadline: resolvedDeadline.toISOString(),
-    verification_status: VERIFICATION_STATUSES.PENDING,
-    approval_required: resolvedApprovalRequired,
-    proof_required: resolvedProofRequired,
-    planned_minutes: Number(payload.planned_minutes) || 0,
-    machine_id: machineId,
-    machine_name: machineName,
-    location_tag: locationTag,
-    recurrence_rule: recurrenceRule,
-    dependency_ids: dependencyIds,
-    requires_quality_approval: payload.requires_quality_approval === true && resolvedApprovalRequired === true,
-    source: normalizedSource,
-    tags: normalizedTags,
-    next_escalation_at: escalationSchedule.nextEscalationAt,
-    last_escalated_at: null,
-    approval_stage: "execution",
-    workflow_id: workflow?.id || null,
-    current_stage_id: resolvedCurrentStageId,
-    lifecycle_status: resolvedTaskStatus,
-    project_id: resolvedProjectId,
-    fixture_id: fixtureId,
-    fixture_no: resolvedFixtureNo,
-    project_no: resolvedProjectNo,
-    project_name: projectName,
-    customer_name: customerName,
-    project_description: projectDescription,
-    quantity_index: quantityIndex,
-    instance_count: instanceCount,
-    rework_date: reworkDate,
-    stage: stage,
-  });
+  let taskId;
+  try {
+    taskId = await insertTask({
+      title: resolvedTitle,
+      internal_identifier: internalIdentifier,
+      task_type: taskType,
+      description: String(description || "").trim(),
+      assigned_to: primaryAssignee.employee_id,
+      assignee_ids: assigneeIds,
+      assigned_by: user.employee_id,
+      created_by: user.employee_id,
+      department_id: resolvedDepartmentId,
+      workflow_template_id: workflowTemplate?.id || null,
+      status: resolvedTaskStatus,
+      priority: resolvedPriority,
+      deadline: resolvedDeadline.toISOString(),
+      verification_status: VERIFICATION_STATUSES.PENDING,
+      approval_required: resolvedApprovalRequired,
+      proof_required: resolvedProofRequired,
+      planned_minutes: Number(payload.planned_minutes) || 0,
+      machine_id: machineId,
+      machine_name: machineName,
+      location_tag: locationTag,
+      recurrence_rule: recurrenceRule,
+      dependency_ids: dependencyIds,
+      requires_quality_approval: payload.requires_quality_approval === true && resolvedApprovalRequired === true,
+      source: normalizedSource,
+      tags: normalizedTags,
+      next_escalation_at: escalationSchedule.nextEscalationAt,
+      last_escalated_at: null,
+      approval_stage: "execution",
+      workflow_id: workflow?.id || null,
+      current_stage_id: resolvedCurrentStageId,
+      lifecycle_status: resolvedTaskStatus,
+      project_id: resolvedProjectId,
+      fixture_id: fixtureId,
+      fixture_no: resolvedFixtureNo,
+      project_no: resolvedProjectNo,
+      project_name: projectName,
+      customer_name: customerName,
+      project_description: projectDescription,
+      quantity_index: quantityIndex,
+      instance_count: instanceCount,
+      rework_date: reworkDate,
+      stage: stage,
+    });
+  } catch (error) {
+    if (error?.code === "ACTIVE_TASK_STAGE_CONFLICT" || error?.constraint === "uniq_active_task_per_stage") {
+      throw new AppError(409, "Stage already assigned");
+    }
+    throw error;
+  }
 
   await appendTaskActivity(taskId, {
     userEmployeeId: user.employee_id,

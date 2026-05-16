@@ -194,21 +194,50 @@ function canAccessDepartment(user, departmentId) {
   return user.department_id === departmentId;
 }
 
+function getTaskAssigneeIds(task) {
+  return [
+    task?.assigned_user_id,
+    task?.assigned_to,
+    ...(Array.isArray(task?.assignee_ids) ? task.assignee_ids : []),
+  ].filter(Boolean);
+}
+
+function isTaskDirectAssignee(user, task) {
+  if (!user?.employee_id || !task) {
+    return false;
+  }
+
+  return getTaskAssigneeIds(task).includes(user.employee_id);
+}
+
+function isTaskOwnedByUser(user, task) {
+  if (!user?.employee_id || !task) {
+    return false;
+  }
+
+  return [
+    task.created_by,
+    task.assigned_by,
+    task.project_uploaded_by,
+    task.fixture_uploaded_by,
+  ].filter(Boolean).includes(user.employee_id);
+}
+
+function isTaskVisibleThroughProjectHierarchy(user, task) {
+  if (!task?.project_id) {
+    return true;
+  }
+
+  const uploadOwner = task.fixture_uploaded_by || task.project_uploaded_by;
+  if (!uploadOwner) {
+    return false;
+  }
+
+  return getVisibleUserIds(user).includes(uploadOwner);
+}
+
 function canAccessTask(user, task) {
   if (!task) {
-    return false;
-  }
-
-  const visibleUserIds = getVisibleUserIds(user);
-  if (task.project_id && !task.fixture_uploaded_by && !task.project_uploaded_by) {
-    return false;
-  }
-
-  if (task.project_id && task.fixture_uploaded_by && !visibleUserIds.includes(task.fixture_uploaded_by)) {
-    return false;
-  }
-
-  if (task.project_id && !task.fixture_uploaded_by && task.project_uploaded_by && !visibleUserIds.includes(task.project_uploaded_by)) {
     return false;
   }
 
@@ -216,17 +245,20 @@ function canAccessTask(user, task) {
     return true;
   }
 
-  if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS) && canAccessDepartment(user, task.department_id)) {
-    return true;
+  const selfScoped = isTaskDirectAssignee(user, task) || isTaskOwnedByUser(user, task);
+
+  if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)) {
+    return selfScoped || (
+      canAccessDepartment(user, task.department_id)
+      && isTaskVisibleThroughProjectHierarchy(user, task)
+    );
   }
 
-  const taskAssigneeIds = [
-    task.assigned_user_id,
-    task.assigned_to,
-    ...(Array.isArray(task.assignee_ids) ? task.assignee_ids : []),
-  ].filter(Boolean);
+  if (hasPermission(user, PERMISSIONS.VIEW_SELF_TASKS)) {
+    return selfScoped;
+  }
 
-  return taskAssigneeIds.some((employeeId) => visibleUserIds.includes(employeeId));
+  return false;
 }
 
 function canAssignTo(assigner, assignee) {
@@ -268,68 +300,120 @@ function canVerifyTask(actor, task) {
 }
 
 function isTaskAssignee(user, task) {
-  if (!user || !task) {
-    return false;
+  return isTaskDirectAssignee(user, task);
+}
+
+function buildTaskAssigneePredicate(employeeIdParam, taskAlias = "t") {
+  return `
+    (
+      COALESCE(${taskAlias}.assigned_user_id, ${taskAlias}.assigned_to) = ${employeeIdParam}
+      OR ${taskAlias}.assigned_to = ${employeeIdParam}
+      OR EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(${taskAlias}.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+        WHERE task_assignee.employee_id = ${employeeIdParam}
+      )
+    )
+  `;
+}
+
+function buildTaskSelfScopePredicate(params, user, {
+  taskAlias = "t",
+  projectAlias = "project",
+} = {}) {
+  params.push(user?.employee_id || "");
+  const employeeIdParam = `$${params.length}`;
+  const ownerPredicates = [
+    `${taskAlias}.created_by = ${employeeIdParam}`,
+    `${taskAlias}.assigned_by = ${employeeIdParam}`,
+  ];
+
+  if (projectAlias) {
+    ownerPredicates.push(`COALESCE(${projectAlias}.uploaded_by = ${employeeIdParam}, FALSE)`);
   }
 
-  return task.assigned_to === user.employee_id || (task.assignee_ids || []).includes(user.employee_id);
+  return `
+    (
+      ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
+      OR ${ownerPredicates.join("\n      OR ")}
+    )
+  `;
+}
+
+function buildTaskProjectVisibilityPredicate(params, user, {
+  projectAlias = "project",
+  fixtureAlias = "fixture",
+} = {}) {
+  params.push(user?.employee_id || "");
+  const rootParam = `$${params.length}`;
+
+  return `
+    (
+      ${projectAlias}.id IS NULL
+      OR EXISTS (
+        ${buildVisibleUsersCte(rootParam)}
+        SELECT 1
+        WHERE ${visibleProjectPredicate(projectAlias)}
+          AND (
+            ${fixtureAlias}.id IS NULL
+            OR ${visibleFixturePredicate(fixtureAlias, projectAlias)}
+          )
+      )
+    )
+  `;
+}
+
+function buildTaskAccessPredicate(user, params, options = {}) {
+  const {
+    taskAlias = "t",
+    projectAlias = "project",
+    fixtureAlias = "fixture",
+  } = options;
+
+  if (!user?.employee_id) {
+    return "1 = 0";
+  }
+
+  if (isAdmin(user)) {
+    return "1 = 1";
+  }
+
+  const selfScopePredicate = buildTaskSelfScopePredicate(params, user, { taskAlias, projectAlias });
+
+  if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS) && user?.department_id) {
+    params.push(user.department_id);
+    const departmentParam = `$${params.length}`;
+    const projectVisibilityPredicate = buildTaskProjectVisibilityPredicate(params, user, {
+      projectAlias,
+      fixtureAlias,
+    });
+
+    return `
+      (
+        (
+          ${taskAlias}.department_id = ${departmentParam}
+          AND ${projectVisibilityPredicate}
+        )
+        OR ${selfScopePredicate}
+      )
+    `;
+  }
+
+  if (hasPermission(user, PERMISSIONS.VIEW_SELF_TASKS)) {
+    return selfScopePredicate;
+  }
+
+  return "1 = 0";
 }
 
 function getTaskAccess(user) {
-  const projectVisibilityPredicate = (params) => {
-    params.push(user?.employee_id || "");
-    const rootParam = `$${params.length}`;
-    return `
-      (
-        project.id IS NULL
-        OR EXISTS (
-          ${buildVisibleUsersCte(rootParam)}
-          SELECT 1
-          WHERE ${visibleProjectPredicate("project")}
-            AND (
-              fixture.id IS NULL
-              OR ${visibleFixturePredicate("fixture", "project")}
-            )
-        )
-      )
-    `;
-  };
+  const params = [];
+  const accessPredicate = buildTaskAccessPredicate(user, params);
 
-  if (isAdmin(user)) {
-    const params = [];
-    return {
-      clause: `WHERE t.status <> 'cancelled' AND ${projectVisibilityPredicate(params)}`,
-      params,
-    };
-  }
-
-  if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS) && user?.department_id) {
-    const params = [user.department_id];
-    return {
-      clause: `WHERE t.status <> 'cancelled' AND t.department_id = $1 AND ${projectVisibilityPredicate(params)}`,
-      params,
-    };
-  }
-
-  const visibleUserIds = getVisibleUserIds(user);
-
-  if (visibleUserIds.length === 0) {
-    return { clause: "WHERE 1 = 0", params: [] };
-  }
-
-  const params = [visibleUserIds];
   return {
     clause: `
       WHERE t.status <> 'cancelled'
-        AND (
-          COALESCE(t.assigned_user_id, t.assigned_to) = ANY($1::text[])
-          OR EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
-            WHERE task_assignee.employee_id = ANY($1::text[])
-          )
-        )
-        AND ${projectVisibilityPredicate(params)}
+        AND ${accessPredicate}
     `,
     params,
   };
@@ -350,6 +434,7 @@ function filterUsersForScope(currentUser, users, scope = USER_SCOPES.ACCESSIBLE)
 module.exports = {
   GetAccessibleUserIds,
   HasPermission,
+  buildTaskAccessPredicate,
   canAccessUser,
   canAccessDepartment,
   canAccessTask,
@@ -360,8 +445,11 @@ module.exports = {
   getRoleLevel,
   getTaskAccess,
   getAccessibleUserIds: GetAccessibleUserIds,
+  getTaskAssigneeIds,
   getVisibleUserIds,
   hasPermission,
+  isTaskDirectAssignee,
+  isTaskOwnedByUser,
   isAdmin,
   isProjectAuthorityRole,
   isSupervisor,

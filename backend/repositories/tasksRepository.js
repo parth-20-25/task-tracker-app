@@ -149,8 +149,16 @@ async function listTasksByAccess({ clause = "", params = [] }, client = pool) {
 async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool) {
   const nextParams = [...params, currentUserEmployeeId];
   const verificationClause = clause
-    ? `${clause} AND t.status = 'under_review' AND t.assigned_to <> $${nextParams.length}`
-    : `WHERE t.status = 'under_review' AND t.assigned_to <> $${nextParams.length}`;
+    ? `${clause} AND t.status = 'under_review' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+        WHERE task_assignee.employee_id = $${nextParams.length}
+      )`
+    : `WHERE t.status = 'under_review' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+        WHERE task_assignee.employee_id = $${nextParams.length}
+      )`;
 
   const result = await client.query(
     `${taskSelectQuery(verificationClause)} ORDER BY t.created_at DESC, t.id DESC`,

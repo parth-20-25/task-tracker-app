@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, CheckCircle2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Bell, CheckCircle2, ExternalLink } from 'lucide-react';
 import { fetchNotifications, markNotificationRead } from '@/api/notificationApi';
 import { ListSkeleton } from '@/components/LoadingSkeletons';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,11 @@ export default function Notifications() {
 
   const notifications = notificationsQuery.data ?? [];
   const unread = notifications.filter(notification => !notification.read_at).length;
+  const taskHref = (notification: typeof notifications[number]) => (
+    notification.target_type === "task" && notification.target_id
+      ? `/tasks/${notification.target_id}`
+      : null
+  );
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -43,6 +49,14 @@ export default function Notifications() {
                 <p className="text-sm text-muted-foreground mt-1">{notification.body}</p>
                 <p className="text-xs text-muted-foreground mt-2">{new Date(notification.created_at).toLocaleString()}</p>
               </div>
+              {taskHref(notification) && (
+                <Button asChild size="sm" variant="ghost">
+                  <Link to={taskHref(notification) || "/tasks"}>
+                    <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                    Open
+                  </Link>
+                </Button>
+              )}
               {!notification.read_at && (
                 <Button
                   size="sm"

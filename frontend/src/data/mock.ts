@@ -80,6 +80,7 @@ export const roles: Role[] = [
     name: 'Maintenance Engineer',
     hierarchy_level: 5,
     permissions: {
+      can_view_self_tasks: true,
       can_edit_task: true,
       can_upload_proofs: true,
     },
@@ -91,6 +92,7 @@ export const roles: Role[] = [
     name: 'Operator',
     hierarchy_level: 6,
     permissions: {
+      can_view_self_tasks: true,
       can_edit_task: true,
       can_upload_proofs: true,
     },

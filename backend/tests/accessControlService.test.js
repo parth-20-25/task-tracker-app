@@ -1,0 +1,123 @@
+const assert = require("node:assert/strict");
+const test = require("node:test");
+
+process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
+
+const { PERMISSIONS } = require("../config/constants");
+const {
+  buildTaskAccessPredicate,
+  canAccessTask,
+} = require("../services/accessControlService");
+
+function makeUser(overrides = {}) {
+  return {
+    employee_id: "EMP100",
+    department_id: "d1",
+    permissions: [],
+    role: {
+      id: "r-worker",
+      hierarchy_level: 6,
+      permissions: {},
+    },
+    visible_user_ids: ["EMP100"],
+    ...overrides,
+  };
+}
+
+function makeTask(overrides = {}) {
+  return {
+    id: 10,
+    department_id: "d9",
+    assigned_to: "EMP200",
+    assigned_user_id: "EMP200",
+    assignee_ids: ["EMP200"],
+    assigned_by: "EMP900",
+    created_by: "EMP900",
+    project_id: "2c0df497-c59f-4239-a9d6-3ee2c2f47140",
+    project_uploaded_by: "EMP900",
+    fixture_uploaded_by: null,
+    ...overrides,
+  };
+}
+
+test("View Self Tasks Only allows direct assignee across project hierarchy", () => {
+  const user = makeUser({ permissions: [PERMISSIONS.VIEW_SELF_TASKS] });
+  const task = makeTask({
+    assigned_to: "EMP100",
+    assigned_user_id: "EMP100",
+    assignee_ids: ["EMP100"],
+    department_id: "another-department",
+    project_uploaded_by: "EMP999",
+  });
+
+  assert.equal(canAccessTask(user, task), true);
+});
+
+test("View Self Tasks Only denies unrelated tasks", () => {
+  const user = makeUser({ permissions: [PERMISSIONS.VIEW_SELF_TASKS] });
+
+  assert.equal(canAccessTask(user, makeTask()), false);
+});
+
+test("View Self Tasks Only allows tasks created by self", () => {
+  const user = makeUser({ permissions: [PERMISSIONS.VIEW_SELF_TASKS] });
+  const task = makeTask({
+    created_by: "EMP100",
+    assigned_by: "EMP100",
+    project_uploaded_by: "EMP999",
+  });
+
+  assert.equal(canAccessTask(user, task), true);
+});
+
+test("no task visibility permission denies unrelated and assigned tasks", () => {
+  const user = makeUser();
+  const assignedTask = makeTask({
+    assigned_to: "EMP100",
+    assigned_user_id: "EMP100",
+    assignee_ids: ["EMP100"],
+  });
+
+  assert.equal(canAccessTask(user, assignedTask), false);
+});
+
+test("View All Tasks keeps manager scope but includes directly assigned outside scope", () => {
+  const user = makeUser({
+    permissions: [PERMISSIONS.VIEW_ALL_TASKS],
+    department_id: "d1",
+    visible_user_ids: ["EMP100", "EMP101"],
+  });
+
+  assert.equal(canAccessTask(user, makeTask({ department_id: "d1", project_uploaded_by: "EMP101" })), true);
+  assert.equal(canAccessTask(user, makeTask({ department_id: "d1", project_uploaded_by: "EMP999" })), false);
+  assert.equal(canAccessTask(user, makeTask({
+    department_id: "d9",
+    assigned_to: "EMP100",
+    assigned_user_id: "EMP100",
+    assignee_ids: ["EMP100"],
+    project_uploaded_by: "EMP999",
+  })), true);
+});
+
+test("SQL access predicate separates self and all task scopes", () => {
+  const selfParams = [];
+  const selfPredicate = buildTaskAccessPredicate(
+    makeUser({ permissions: [PERMISSIONS.VIEW_SELF_TASKS] }),
+    selfParams,
+  );
+
+  assert.match(selfPredicate, /assigned_user_id/);
+  assert.match(selfPredicate, /created_by/);
+  assert.doesNotMatch(selfPredicate, /department_id =/);
+  assert.deepEqual(selfParams, ["EMP100"]);
+
+  const allParams = [];
+  const allPredicate = buildTaskAccessPredicate(
+    makeUser({ permissions: [PERMISSIONS.VIEW_ALL_TASKS] }),
+    allParams,
+  );
+
+  assert.match(allPredicate, /department_id = \$2/);
+  assert.match(allPredicate, /visible_users/);
+  assert.deepEqual(allParams, ["EMP100", "d1", "EMP100"]);
+});

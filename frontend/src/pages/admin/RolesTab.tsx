@@ -8,7 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PERMISSION_OPTIONS } from "@/lib/permissions";
+import { getPermissionLabel, PERMISSION_OPTIONS } from "@/lib/permissions";
 
 interface RolesTabProps {
   roles: Role[];
@@ -128,7 +128,12 @@ export default function RolesTab({ roles, onSave, onDelete }: RolesTabProps) {
                       }));
                     }}
                   />
-                  <span>{permission}</span>
+                  <span className="min-w-0">
+                    <span className="block font-medium">{getPermissionLabel(permission)}</span>
+                    {getPermissionLabel(permission) !== permission && (
+                      <span className="block truncate text-xs text-muted-foreground">{permission}</span>
+                    )}
+                  </span>
                 </label>
               ))}
             </div>

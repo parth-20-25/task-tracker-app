@@ -4,12 +4,7 @@ const { logger } = require("../lib/logger");
 const { instrumentModuleExports } = require("../lib/observability");
 const { TASK_STATUSES } = require("../config/constants");
 const { listTasksByAccess } = require("../repositories/tasksRepository");
-const { getTaskAccess, getVisibleUserIds, isAdmin } = require("./accessControlService");
-const {
-  buildVisibleUsersCte,
-  visibleFixturePredicate,
-  visibleProjectPredicate,
-} = require("../repositories/projectVisibility");
+const { buildTaskAccessPredicate, getTaskAccess, isAdmin } = require("./accessControlService");
 
 const REPORTABLE_STATUSES = new Set([
   TASK_STATUSES.ASSIGNED,
@@ -416,47 +411,11 @@ async function buildReworkHistoryMap(reportRows) {
 }
 
 function buildReportAccessClause(user, params) {
-  function projectVisibilityClause() {
-    params.push(user?.employee_id || "");
-    const rootParam = `$${params.length}`;
-    return `
-      (
-        project.id IS NULL
-        OR EXISTS (
-          ${buildVisibleUsersCte(rootParam)}
-          SELECT 1
-          WHERE ${visibleProjectPredicate("project")}
-            AND (
-              fixture.id IS NULL
-              OR ${visibleFixturePredicate("fixture", "project")}
-            )
-        )
-      )
-    `;
-  }
-
-  if (isAdmin(user)) {
-    return projectVisibilityClause();
-  }
-
-  const visibleUserIds = getVisibleUserIds(user);
-
-  if (visibleUserIds.length === 0) {
-    return "1 = 0";
-  }
-
-  params.push(visibleUserIds);
-  return `
-    (
-      COALESCE(t.assigned_user_id, t.assigned_to) = ANY($${params.length}::text[])
-      OR EXISTS (
-        SELECT 1
-        FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
-        WHERE task_assignee.employee_id = ANY($${params.length}::text[])
-      )
-    )
-    AND ${projectVisibilityClause()}
-  `;
+  return buildTaskAccessPredicate(user, params, {
+    taskAlias: "t",
+    projectAlias: "project",
+    fixtureAlias: "fixture",
+  });
 }
 
 async function listTaskReportRows(user, filters = {}) {

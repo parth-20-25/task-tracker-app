@@ -8,6 +8,7 @@ export const PERMISSIONS = {
   DELETE_WBS_BATCH: "delete_wbs_batch",
   REOPEN_FIXTURE_STAGE: "reopen_fixture_stage",
   MANIPULATE_FIXTURE_STAGE: "manipulate_fixture_stage",
+  VIEW_SELF_TASKS: "can_view_self_tasks",
   VIEW_ALL_TASKS: "can_view_all_tasks",
   CREATE_TASK: "can_create_task",
   EDIT_TASK: "can_edit_task",
@@ -51,6 +52,15 @@ export const PERMISSION_ALIASES: Record<string, string> = {
 
 export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);
 
+export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[number], string>> = {
+  [PERMISSIONS.VIEW_SELF_TASKS]: "View Self Tasks Only",
+  [PERMISSIONS.VIEW_ALL_TASKS]: "View All Tasks",
+};
+
+export function getPermissionLabel(permission: string) {
+  return PERMISSION_LABELS[permission as (typeof PERMISSION_OPTIONS)[number]] || permission;
+}
+
 const ANALYTICS_VISIBILITY_PERMISSIONS = [
   PERMISSIONS.VIEW_SELF_ANALYTICS,
   PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
@@ -93,6 +103,7 @@ export interface UiAccess {
   canManageWorkflows: boolean;
   canUploadData: boolean;
   canUploadProofs: boolean;
+  canViewSelfTasks: boolean;
   canViewAllTasks: boolean;
   canViewAnalytics: boolean;
   canViewReports: boolean;
@@ -200,6 +211,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canManageWorkflows = hasUserPermission(user, PERMISSIONS.MANAGE_WORKFLOWS);
   const canUploadData = hasUserPermission(user, PERMISSIONS.UPLOAD_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
+  const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);
   const canViewAllTasks = hasUserPermission(user, PERMISSIONS.VIEW_ALL_TASKS);
   const canViewReports = hasUserPermission(user, PERMISSIONS.VIEW_REPORTS);
   const canExportReports = hasUserPermission(user, PERMISSIONS.EXPORT_REPORTS);
@@ -227,6 +239,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canManageWorkflows,
     canUploadData,
     canUploadProofs,
+    canViewSelfTasks,
     canViewAllTasks,
     canViewAnalytics,
     canViewReports,

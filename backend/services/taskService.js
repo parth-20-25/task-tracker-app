@@ -63,6 +63,26 @@ async function listVerificationTasksForUser(user) {
   return listVerificationTasksByAccess(getTaskAccess(user), user.employee_id);
 }
 
+async function getTaskForUser(user, taskId) {
+  const normalizedTaskId = Number(taskId);
+
+  if (!Number.isInteger(normalizedTaskId)) {
+    throw new AppError(400, "Invalid task id");
+  }
+
+  const task = await findTaskById(normalizedTaskId);
+
+  if (!task) {
+    throw new AppError(404, "Task not found");
+  }
+
+  if (!canAccessTask(user, task)) {
+    throw new AppError(403, "You do not have permission to view this task");
+  }
+
+  return task;
+}
+
 async function refreshTaskPerformanceAnalytics(taskOrDepartmentId) {
   const departmentId = typeof taskOrDepartmentId === "string"
     ? taskOrDepartmentId
@@ -1848,6 +1868,7 @@ module.exports = instrumentModuleExports("service.taskService", {
   cancelTaskForUser,
   createTaskForUser,
   ensureTaskProofUpdateAllowed,
+  getTaskForUser,
   getAssignableUsersForTaskContext,
   listAssignmentReferenceDataForUser,
   listTaskActivityForUser,

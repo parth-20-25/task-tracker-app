@@ -80,6 +80,10 @@ export function fetchTasks() {
   return apiRequest<Task[]>("/tasks");
 }
 
+export function fetchTask(taskId: number | string) {
+  return apiRequest<Task>(`/tasks/${taskId}`);
+}
+
 export function fetchVerificationTasks() {
   return apiRequest<Task[]>("/tasks/verification-queue");
 }

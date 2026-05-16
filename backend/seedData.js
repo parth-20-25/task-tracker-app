@@ -84,6 +84,7 @@ const roles = [
     name: "Maintenance Engineer",
     hierarchy_level: 5,
     permissions: {
+      can_view_self_tasks: true,
       can_edit_task: true,
       can_upload_proofs: true,
     },
@@ -95,6 +96,7 @@ const roles = [
     name: "Operator",
     hierarchy_level: 6,
     permissions: {
+      can_view_self_tasks: true,
       can_edit_task: true,
       can_upload_proofs: true,
     },

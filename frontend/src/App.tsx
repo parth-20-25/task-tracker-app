@@ -14,6 +14,7 @@ import React, { Suspense } from "react";
 
 const Dashboard = React.lazy(() => import("./pages/Dashboard"));
 const MyTasks = React.lazy(() => import("./pages/MyTasks"));
+const TaskDetail = React.lazy(() => import("./pages/TaskDetail"));
 const TeamTasks = React.lazy(() => import("./pages/TeamTasks"));
 const Verifications = React.lazy(() => import("./pages/Verifications"));
 const AdminPanel = React.lazy(() => import("./pages/AdminPanel"));
@@ -42,6 +43,7 @@ function AuthenticatedApp() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/tasks" element={<MyTasks />} />
+            <Route path="/tasks/:taskId" element={<TaskDetail />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/issues" element={<Issues />} />
             <Route path="/batches" element={<Batches />} />

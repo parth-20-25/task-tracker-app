@@ -17,6 +17,7 @@ const {
   createTaskForUser,
   ensureTaskProofUpdateAllowed,
   getAssignableUsersForTaskContext,
+  getTaskForUser,
   listAssignmentReferenceDataForUser,
   resolveDepartmentAssignmentContextForUser,
   listTaskActivityForUser,
@@ -144,6 +145,14 @@ router.post(
     const task = await createTaskForUser(req.user, req.body);
     logger.info("Task created", { taskId: task.id, user: req.user.employee_id });
     return sendSuccess(res, task, 201);
+  }),
+);
+
+router.get(
+  "/tasks/:taskId",
+  asyncHandler(async (req, res) => {
+    const task = await getTaskForUser(req.user, req.params.taskId);
+    return sendSuccess(res, task);
   }),
 );
 

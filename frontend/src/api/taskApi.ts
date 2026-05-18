@@ -37,6 +37,12 @@ interface UpdateTaskPayload {
   dependency_ids?: number[];
 }
 
+interface TransferTaskPayload {
+  transfer_to: string;
+  transfer_reason: string;
+  completion_percent: number;
+}
+
 interface CreateTaskPayload {
   task_type: TaskType;
   title?: string;
@@ -134,6 +140,13 @@ export function fetchDepartmentAssignmentContext(departmentId: string) {
 export function updateTask(taskId: number, data: UpdateTaskPayload) {
   return apiRequest<Task>(`/tasks/${taskId}`, {
     method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function transferTask(taskId: number, data: TransferTaskPayload) {
+  return apiRequest<Task>(`/tasks/${taskId}/transfer`, {
+    method: "POST",
     body: JSON.stringify(data),
   });
 }

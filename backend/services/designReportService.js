@@ -11,12 +11,23 @@ const {
 } = require("../lib/departmentContext");
 const { logger } = require("../lib/logger");
 const { isAdmin } = require("./accessControlService");
-const { normalizeScopeReportData, validateNormalizedRow } = require("./reportService");
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
+const { listContributionsForFixtures } = require("../repositories/designStageContributionRepository");
+const {
+  formatStageRevisionCode,
+  normalizeStageVersion,
+} = require("../lib/workflowStageVersioning");
+
+const DESIGN_REPORT_TEMPLATE_PATH = path.join(
+  __dirname,
+  "..",
+  "templates",
+  "design_project_execution_report_template.xlsx",
+);
 
 const STATUS_LABELS = {
   ASSIGNED: "Assigned",
@@ -1325,8 +1336,17 @@ async function getProjectContext(user, projectId, departmentId) {
         p.project_no,
         p.project_name,
         p.customer_name,
-        p.department_id
+        p.department_id,
+        p.plant,
+        p.project_leader_id,
+        project_leader.name AS project_leader_name,
+        p.team_lead_id,
+        team_lead.name AS team_lead_name
       FROM design.projects p
+      LEFT JOIN users project_leader
+        ON project_leader.employee_id = p.project_leader_id
+      LEFT JOIN users team_lead
+        ON team_lead.employee_id = p.team_lead_id
       WHERE p.id = $2
         AND p.department_id = $3
         AND ${visibleProjectPredicate("p")}
@@ -1364,8 +1384,11 @@ async function getFixturesForProject(projectId, user) {
         f.image_2_url,
         linked_task.id AS task_id,
         linked_task.status AS task_status,
+        linked_task.priority AS task_priority,
         linked_task.deadline AS task_deadline,
         linked_task.proof_url AS task_proof_url,
+        linked_task.planned_minutes AS task_planned_minutes,
+        linked_task.actual_minutes AS task_actual_minutes,
         linked_task.assigned_to AS task_assigned_to,
         assignee.name AS task_assignee_name
       FROM design.fixtures f
@@ -1375,8 +1398,11 @@ async function getFixturesForProject(projectId, user) {
         SELECT
           t.id,
           t.status,
+          t.priority,
           t.deadline,
           t.proof_url,
+          t.planned_minutes,
+          t.actual_minutes,
           t.assigned_to,
           t.updated_at,
           t.created_at
@@ -1420,6 +1446,7 @@ async function getFixtureProgressRows(fixtureIds) {
       SELECT
         progress.fixture_id,
         progress.stage_name,
+        progress.stage_version,
         progress.stage_order,
         progress.status,
         progress.assigned_to,
@@ -1504,6 +1531,394 @@ async function getTaskAttachmentsByTaskIds(taskIds) {
   }, new Map());
 }
 
+async function getTaskActivitiesByTaskIds(taskIds) {
+  const filteredTaskIds = [...new Set(taskIds.map((taskId) => Number(taskId)).filter(Number.isInteger))];
+
+  if (!filteredTaskIds.length) {
+    return new Map();
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        activity.task_id,
+        activity.action_type,
+        activity.notes,
+        activity.metadata,
+        activity.created_at,
+        users.name AS user_name
+      FROM task_activity_logs activity
+      LEFT JOIN users
+        ON users.employee_id = activity.user_employee_id
+      WHERE activity.task_id = ANY($1::int[])
+      ORDER BY activity.task_id ASC, activity.created_at ASC, activity.id ASC
+    `,
+    [filteredTaskIds],
+  );
+
+  return result.rows.reduce((map, row) => {
+    const taskId = Number(row.task_id);
+    const entries = map.get(taskId) || [];
+    entries.push(row);
+    map.set(taskId, entries);
+    return map;
+  }, new Map());
+}
+
+async function getFixtureStageTaskRows(fixtureIds) {
+  if (!fixtureIds.length) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        t.id AS task_id,
+        t.fixture_id,
+        COALESCE(NULLIF(t.stage, ''), NULLIF(stage.stage_name, ''), NULLIF(stage.name, ''), 'Workflow Stage') AS stage_name,
+        t.proof_url,
+        t.status,
+        t.planned_minutes,
+        t.actual_minutes
+      FROM tasks t
+      LEFT JOIN workflow_stages stage
+        ON stage.id = t.current_stage_id
+      WHERE t.fixture_id = ANY($1::uuid[])
+        AND t.status <> 'cancelled'
+      ORDER BY t.fixture_id ASC, t.created_at ASC, t.id ASC
+    `,
+    [fixtureIds],
+  );
+
+  return result.rows;
+}
+
+function cloneStyle(style) {
+  return JSON.parse(JSON.stringify(style || {}));
+}
+
+function stageStatusToProgress(status) {
+  switch (normalizeStatus(status)) {
+    case "APPROVED":
+      return "100%";
+    case "COMPLETED":
+      return "90%";
+    case "IN_PROGRESS":
+      return "50%";
+    case "REJECTED":
+      return "Rejected";
+    default:
+      return "0%";
+  }
+}
+
+function formatDateRange(startValue, endValue) {
+  const start = formatExcelDate(startValue);
+  const end = formatExcelDate(endValue);
+  if (start && end) {
+    return `${start} - ${end}`;
+  }
+
+  return start || end || "";
+}
+
+function formatStageContributors(contributions, fallbackName = "") {
+  if (Array.isArray(contributions) && contributions.length > 0) {
+    return contributions
+      .map((contribution) => `${contribution.employee_name || contribution.employee_id} - ${Number(contribution.contribution_percent || 0)}%`)
+      .join("\n");
+  }
+
+  return fallbackName || "";
+}
+
+function buildContributionLookup(contributions) {
+  return contributions.reduce((map, contribution) => {
+    const key = `${contribution.fixture_id}::${contribution.stage_name}::${contribution.revision_code}`;
+    const entries = map.get(key) || [];
+    entries.push(contribution);
+    map.set(key, entries);
+    return map;
+  }, new Map());
+}
+
+function buildStageTaskLookup(stageTasks, attachmentsByTaskId, activitiesByTaskId = new Map()) {
+  return stageTasks.reduce((map, task) => {
+    const stageKey = getStageBucket(task.stage_name);
+    if (!stageKey) {
+      return map;
+    }
+
+    const fixtureMap = map.get(task.fixture_id) || new Map();
+    const entries = fixtureMap.get(stageKey) || [];
+    const attachmentUrls = (attachmentsByTaskId.get(Number(task.task_id)) || [])
+      .map((attachment) => attachment.file_url)
+      .filter(Boolean);
+    entries.push({
+      ...task,
+      proof_urls: [
+        ...attachmentUrls,
+        ...(
+          Array.isArray(task.proof_url)
+            ? task.proof_url
+            : task.proof_url
+              ? [task.proof_url]
+              : []
+        ),
+      ].filter(Boolean),
+      activities: activitiesByTaskId.get(Number(task.task_id)) || [],
+    });
+    fixtureMap.set(stageKey, entries);
+    map.set(task.fixture_id, fixtureMap);
+    return map;
+  }, new Map());
+}
+
+function buildFixtureAttemptLookup(attemptRows) {
+  return attemptRows.reduce((map, row) => {
+    const fixtureKey = String(row.fixture_id);
+    const fixtureAttempts = map.get(fixtureKey) || new Map();
+    const stageKey = getStageBucket(row.stage_name);
+
+    if (!stageKey) {
+      map.set(fixtureKey, fixtureAttempts);
+      return map;
+    }
+
+    const attempts = fixtureAttempts.get(stageKey) || [];
+    attempts.push(row);
+    fixtureAttempts.set(stageKey, attempts);
+    map.set(fixtureKey, fixtureAttempts);
+    return map;
+  }, new Map());
+}
+
+function resolveStageProof(stageTasks = []) {
+  return stageTasks
+    .flatMap((task) => task.proof_urls || [])
+    .filter(Boolean)
+    .join("\n");
+}
+
+function resolveStageHoldHistory(stageTasks = []) {
+  return stageTasks
+    .flatMap((task) => task.activities || [])
+    .filter((activity) => {
+      const metadata = activity.metadata && typeof activity.metadata === "object" ? activity.metadata : {};
+      return String(metadata.to || "").toLowerCase() === "on_hold"
+        || String(activity.action_type || "").toLowerCase().includes("hold");
+    })
+    .map((activity) => {
+      const timestamp = formatTimelineTimestamp(activity.created_at);
+      const actor = activity.user_name || "Unknown";
+      return [timestamp, actor, activity.notes].filter(Boolean).join(" - ");
+    })
+    .join("\n");
+}
+
+function buildTemplateFixtureRows(fixtures, progressRows, attemptRows, contributions, stageTaskLookup) {
+  const progressLookup = progressRows.reduce((map, row) => {
+    const fixtureMap = map.get(row.fixture_id) || new Map();
+    const stageKey = getStageBucket(row.stage_name);
+    if (stageKey) {
+      fixtureMap.set(stageKey, row);
+    }
+    map.set(row.fixture_id, fixtureMap);
+    return map;
+  }, new Map());
+  const attemptLookup = buildFixtureAttemptLookup(attemptRows);
+  const contributionLookup = buildContributionLookup(contributions);
+
+  return fixtures.map((fixture, index) => {
+    const fixtureProgress = progressLookup.get(fixture.fixture_id) || new Map();
+    const fixtureAttempts = attemptLookup.get(fixture.fixture_id) || new Map();
+    const fixtureStageTasks = stageTaskLookup.get(fixture.fixture_id) || new Map();
+    const stageCells = {};
+    let actualMinutes = 0;
+
+    for (const stage of STAGES) {
+      const progressRow = fixtureProgress.get(stage.key) || null;
+      const presentation = buildStagePresentation({
+        stageAttempts: fixtureAttempts.get(stage.key) || [],
+        progressRow,
+        stage,
+        fixture,
+        isCurrent: progressRow?.status === "IN_PROGRESS",
+        isFuture: !progressRow,
+      });
+      const revisionCode = progressRow
+        ? formatStageRevisionCode(progressRow.stage_name, normalizeStageVersion(progressRow.stage_version))
+        : "";
+      const contributionRows = progressRow
+        ? contributionLookup.get(`${fixture.fixture_id}::${progressRow.stage_name}::${revisionCode}`) || []
+        : [];
+
+      actualMinutes += Number(presentation.minutes || 0);
+      stageCells[stage.key] = {
+        hrs: presentation.minutes ? formatDuration(presentation.minutes) : "",
+        dateRange: formatDateRange(presentation.assignedAt, presentation.completedAt),
+        progress: stageStatusToProgress(progressRow?.status),
+        revision: revisionCode,
+        employees: formatStageContributors(contributionRows, progressRow?.assigned_to_name || progressRow?.assigned_to || ""),
+        approvalStatus: progressRow ? normalizeStatus(progressRow.status) : "",
+        proof: resolveStageProof(fixtureStageTasks.get(stage.key) || []),
+        holdHistory: resolveStageHoldHistory(fixtureStageTasks.get(stage.key) || []),
+      };
+    }
+
+    return {
+      srNo: index + 1,
+      fixtureNo: fixture.fixture_no,
+      opNo: fixture.op_no,
+      partName: fixture.part_name,
+      priority: fixture.task_priority || "",
+      assigned: fixture.task_assignee_name || fixture.task_assigned_to || "",
+      globalStatus: resolveFixtureStatus(Array.from(fixtureProgress.values()), fixture.task_status, fixture.task_deadline),
+      concept: stageCells.concept,
+      dap: stageCells.dap,
+      finish3d: stageCells.three_d_finish,
+      finish2d: stageCells.two_d_finish,
+      plannedHrs: formatDuration(Number(fixture.task_planned_minutes || 0)),
+      actualHrs: formatDuration(Number(fixture.task_actual_minutes || 0) || actualMinutes),
+    };
+  });
+}
+
+function writeMergedValue(worksheet, address, value) {
+  worksheet.getCell(address).value = value ?? "";
+}
+
+function writeDesignTemplateRow(worksheet, rowNumber, row) {
+  const values = {
+    A: row.srNo,
+    B: row.fixtureNo,
+    C: row.opNo,
+    D: row.partName,
+    E: row.priority,
+    F: row.assigned,
+    G: row.globalStatus,
+    H: row.concept.hrs,
+    I: row.concept.dateRange,
+    J: row.concept.progress,
+    K: row.concept.revision,
+    L: row.concept.employees,
+    M: row.concept.approvalStatus,
+    N: row.dap.hrs,
+    O: row.dap.dateRange,
+    P: row.dap.progress,
+    Q: row.dap.revision,
+    R: row.dap.employees,
+    S: row.dap.approvalStatus,
+    T: row.finish3d.hrs,
+    U: row.finish3d.dateRange,
+    V: row.finish3d.progress,
+    W: row.finish3d.employees,
+    X: row.finish3d.approvalStatus,
+    Y: row.finish2d.hrs,
+    Z: row.finish2d.dateRange,
+    AA: row.finish2d.progress,
+    AB: row.finish2d.revision,
+    AC: row.finish2d.approvalStatus,
+    AD: row.concept.holdHistory,
+    AE: row.dap.holdHistory,
+    AF: row.finish3d.holdHistory,
+    AG: row.finish2d.holdHistory,
+    AH: row.concept.proof,
+    AI: row.dap.proof,
+    AJ: row.finish3d.proof,
+    AK: row.finish2d.proof,
+    AL: row.plannedHrs,
+    AM: row.actualHrs,
+  };
+
+  for (const [column, value] of Object.entries(values)) {
+    worksheet.getCell(`${column}${rowNumber}`).value = value;
+  }
+}
+
+function calculateTemplateKpis(rows) {
+  const totalFixtures = rows.length;
+  const completed = rows.filter((row) => row.globalStatus === STATUS_LABELS.CLOSED).length;
+  const pending = rows.filter((row) => [STATUS_LABELS.ASSIGNED, STATUS_LABELS.IN_PROGRESS, STATUS_LABELS.REVIEW].includes(row.globalStatus)).length;
+  const overdue = rows.filter((row) => row.globalStatus === STATUS_LABELS.OVERDUE).length;
+  const onHold = rows.filter((row) => row.globalStatus === STATUS_LABELS.ON_HOLD).length;
+  const rejected = rows.filter((row) => row.globalStatus === STATUS_LABELS.REWORK).length;
+
+  return {
+    overallProgress: totalFixtures ? `${Math.round((completed / totalFixtures) * 100)}%` : "0%",
+    totalFixtures,
+    completed,
+    pending,
+    overdue,
+    onHold,
+    rejected,
+  };
+}
+
+async function generateDesignProjectExecutionTemplateExcel({
+  context,
+  fixtures,
+  progressRows,
+  attemptRows,
+  contributions,
+  stageTasks,
+  attachmentsByTaskId,
+  activitiesByTaskId,
+  filePath,
+}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(DESIGN_REPORT_TEMPLATE_PATH);
+  const worksheet = workbook.worksheets[0];
+  const templateRow = worksheet.getRow(14);
+  const templateStyles = Array.from({ length: 39 }, (_, index) => cloneStyle(templateRow.getCell(index + 1).style));
+  const templateHeight = templateRow.height;
+  const existingDataRows = Math.max(0, worksheet.rowCount - 13);
+
+  if (existingDataRows > 0) {
+    worksheet.spliceRows(14, existingDataRows);
+  }
+
+  const stageTaskLookup = buildStageTaskLookup(stageTasks, attachmentsByTaskId, activitiesByTaskId);
+  const rows = buildTemplateFixtureRows(fixtures, progressRows, attemptRows, contributions, stageTaskLookup);
+
+  rows.forEach((row, index) => {
+    const rowNumber = 14 + index;
+    worksheet.spliceRows(rowNumber, 0, []);
+    const excelRow = worksheet.getRow(rowNumber);
+    excelRow.height = templateHeight;
+    for (let columnIndex = 1; columnIndex <= 39; columnIndex += 1) {
+      excelRow.getCell(columnIndex).style = cloneStyle(templateStyles[columnIndex - 1]);
+      excelRow.getCell(columnIndex).alignment = {
+        ...(excelRow.getCell(columnIndex).alignment || {}),
+        wrapText: true,
+        vertical: "middle",
+        horizontal: columnIndex >= 8 ? "center" : excelRow.getCell(columnIndex).alignment?.horizontal || "left",
+      };
+    }
+    writeDesignTemplateRow(worksheet, rowNumber, row);
+    excelRow.commit();
+  });
+
+  const kpis = calculateTemplateKpis(rows);
+  writeMergedValue(worksheet, "A2", `Report Date: ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`);
+  writeMergedValue(worksheet, "A5", context.project_no || "");
+  writeMergedValue(worksheet, "E5", context.project_name || "");
+  writeMergedValue(worksheet, "I5", context.customer_name || "");
+  writeMergedValue(worksheet, "M5", context.plant || "");
+  writeMergedValue(worksheet, "Q5", context.project_leader_name || context.project_leader_id || "");
+  writeMergedValue(worksheet, "U5", context.team_lead_name || context.team_lead_id || "");
+  writeMergedValue(worksheet, "A8", kpis.overallProgress);
+  writeMergedValue(worksheet, "E8", kpis.totalFixtures);
+  writeMergedValue(worksheet, "I8", kpis.completed);
+  writeMergedValue(worksheet, "M8", kpis.pending);
+  writeMergedValue(worksheet, "Q8", kpis.overdue);
+  writeMergedValue(worksheet, "U8", kpis.onHold);
+  writeMergedValue(worksheet, "Y8", kpis.rejected);
+
+  await workbook.xlsx.writeFile(filePath);
+  return rows;
+}
+
 async function exportDesignReport(user, query = {}, options = {}) {
   const reportType = REPORT_TYPES.PROJECT;
   const departmentId = resolveReportDepartmentId(user, query.department_id);
@@ -1525,78 +1940,39 @@ async function exportDesignReport(user, query = {}, options = {}) {
   }
 
   const fixtureIds = fixtures.map((fixture) => fixture.fixture_id);
-  const [progressRows, attemptRows, attachmentsByTaskId] = await Promise.all([
+  const [progressRows, attemptRows, stageTasks, contributions] = await Promise.all([
     getFixtureProgressRows(fixtureIds),
     getFixtureAttemptRows(fixtureIds),
-    getTaskAttachmentsByTaskIds(fixtures.map((fixture) => fixture.task_id)),
+    getFixtureStageTaskRows(fixtureIds),
+    listContributionsForFixtures(fixtureIds),
   ]);
-  const sourceRows = buildScopeReportSourceRows(fixtures, progressRows, attemptRows, attachmentsByTaskId, {
-    publicOrigin: options.publicOrigin,
-  });
-  const normalizedRows = await normalizeScopeReportData(sourceRows);
-  const fixtureLookup = sourceRows.reduce((map, row) => {
-    try {
-      const fixtureKey = `${String(row.project_no || "").trim()}::${String(row.fixture_no || "").trim()}`;
-      map.set(fixtureKey, {
-        image1Url: row.image1Url || null,
-        image2Url: row.image2Url || null,
-      });
-    } catch (_error) {
-      // Normalization will handle invalid identities separately.
-    }
-
-    return map;
-  }, new Map());
-  const validatedRows = await Promise.all(normalizedRows.map(async (row) => {
-    const validation = await validateNormalizedRow(row);
-
-    if (!validation.isValid) {
-      logger.warn("Design report normalized row rejected", {
-        fixture_key: row?.fixture_key || null,
-        errors: validation.errors,
-      });
-    }
-
-    return {
-      row,
-      isValid: validation.isValid,
-    };
-  }));
-  const validRows = validatedRows.filter((entry) => entry.isValid).map((entry) => entry.row);
-
-  if (!validRows.length) {
-    throw new AppError(422, "No valid normalized rows were found for this report");
-  }
+  const stageTaskIds = stageTasks.map((task) => task.task_id);
+  const reportTaskIds = [
+    ...fixtures.map((fixture) => fixture.task_id),
+    ...stageTaskIds,
+  ];
+  const [attachmentsByTaskId, activitiesByTaskId] = await Promise.all([
+    getTaskAttachmentsByTaskIds(reportTaskIds),
+    getTaskActivitiesByTaskIds(reportTaskIds),
+  ]);
 
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "design-report-"));
-  const rawPath = path.join(tempDirectory, `raw-${buildReportFileName(context)}`);
   const finalPath = path.join(tempDirectory, buildReportFileName(context));
-  let readPath = rawPath;
 
   try {
-    await generateRawScopeExcel(validRows, rawPath, context, fixtureLookup);
+    await generateDesignProjectExecutionTemplateExcel({
+      context,
+      fixtures,
+      progressRows,
+      attemptRows,
+      contributions,
+      stageTasks,
+      attachmentsByTaskId,
+      activitiesByTaskId,
+      filePath: finalPath,
+    });
 
-    try {
-      await runPythonFormatter(rawPath, finalPath);
-      try {
-        await fs.access(finalPath);
-        readPath = finalPath;
-      } catch (_error) {
-        logger.warn("Design report python formatter completed without output file; returning raw workbook", {
-          raw_path: rawPath,
-          final_path: finalPath,
-        });
-      }
-    } catch (error) {
-      logger.warn("Design report python formatter failed; returning raw workbook", {
-        error: error?.error?.message || error?.message || "Unknown formatter failure",
-        raw_path: rawPath,
-        final_path: finalPath,
-        stderr: error?.stderr || null,
-      });
-    }
-
-    const buffer = await fs.readFile(readPath);
+    const buffer = await fs.readFile(finalPath);
 
     return {
       filename: buildReportFileName(context),
@@ -1610,6 +1986,7 @@ async function exportDesignReport(user, query = {}, options = {}) {
 
 module.exports = {
   exportDesignReport,
+  generateDesignProjectExecutionTemplateExcel,
   generateRawScopeExcel,
   normalizeStoredImageUrl,
   runPythonFormatter,

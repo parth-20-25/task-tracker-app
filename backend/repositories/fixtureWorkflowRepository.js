@@ -181,7 +181,8 @@ async function listStageAttemptsForFixtures(fixtureIds, client = pool) {
   }
 
   const result = await client.query(
-    `SELECT
+     `SELECT
+       id,
        fixture_id,
        department_id,
        stage_name,
@@ -206,7 +207,8 @@ async function listStageAttemptsForFixtures(fixtureIds, client = pool) {
 
 async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
   const result = await client.query(
-    `SELECT
+     `SELECT
+       id,
        fixture_id,
        department_id,
        stage_name,
@@ -301,6 +303,26 @@ async function startStageAttempt(fixtureId, departmentId, stageName, assignedTo,
        AND attempt_no = $5`,
     [fixtureId, stageName, assignedTo, timestamp, latestAttempt.attempt_no],
   );
+}
+
+async function updateLatestStageAttemptAssignment(fixtureId, stageName, assignedTo, timestamp = new Date(), client = pool) {
+  const latestAttempt = await getLatestStageAttempt(fixtureId, stageName, client);
+  if (!latestAttempt) {
+    return null;
+  }
+
+  const result = await client.query(
+    `UPDATE fixture_workflow_stage_attempts
+     SET assigned_to = $3,
+         updated_at = $4
+     WHERE fixture_id = $1
+       AND stage_name = $2
+       AND attempt_no = $5
+     RETURNING *`,
+    [fixtureId, stageName, assignedTo, timestamp, latestAttempt.attempt_no],
+  );
+
+  return result.rows[0] || null;
 }
 
 async function completeStageAttempt(fixtureId, stageName, durationMinutes = null, timestamp = new Date(), client = pool) {
@@ -401,6 +423,10 @@ async function recordFixtureRevision(revision, client = pool) {
         fixture_id,
         department_id,
         revision_no,
+        stage_name,
+        stage_version,
+        revision_code,
+        reason_type,
         revision_type,
         revision_reason,
         revision_remarks,
@@ -412,15 +438,19 @@ async function recordFixtureRevision(revision, client = pool) {
         changed_at,
         metadata
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, NOW()), $13::jsonb)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16::timestamptz, NOW()), $17::jsonb)
       RETURNING *
     `,
     [
       revision.fixture_id,
       revision.department_id,
       revision.revision_no,
+      revision.stage_name || null,
+      Number(revision.stage_version || 0),
+      revision.revision_code || null,
+      revision.reason_type || revision.revision_type || null,
       revision.revision_type,
-      revision.revision_reason,
+      revision.revision_reason || null,
       revision.revision_remarks || null,
       revision.reverted_from_stage,
       revision.reverted_to_stage,
@@ -563,4 +593,5 @@ module.exports = instrumentModuleExports("repository.fixtureWorkflowRepository",
   rejectStageAttempt,
   startStageAttempt,
   updateProgressRow,
+  updateLatestStageAttemptAssignment,
 });

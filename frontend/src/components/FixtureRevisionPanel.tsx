@@ -83,7 +83,6 @@ export function FixtureRevisionPanel({
   const [targetStage, setTargetStage] = useState(() => getDefaultTargetStage(stages));
   const [revisionType, setRevisionType] = useState<FixtureRevisionType>("OTHER");
   const [manualStatus, setManualStatus] = useState<FixtureStageStatus>("PENDING");
-  const [reason, setReason] = useState("");
   const [remarks, setRemarks] = useState("");
 
   const effectiveTargetStage = useMemo(() => {
@@ -121,11 +120,9 @@ export function FixtureRevisionPanel({
       department_id: departmentId,
       target_stage_name: effectiveTargetStage,
       revision_type: revisionType,
-      revision_reason: reason.trim(),
       remarks: remarks.trim() || undefined,
     }),
     onSuccess: () => {
-      setReason("");
       setRemarks("");
       toast({ title: "Fixture stage updated", description: "The controlled stage change was saved." });
       onChanged();
@@ -145,11 +142,9 @@ export function FixtureRevisionPanel({
       department_id: departmentId,
       target_stage_name: effectiveTargetStage,
       target_status: manualStatus,
-      revision_reason: reason.trim(),
       remarks: remarks.trim() || undefined,
     }),
     onSuccess: () => {
-      setReason("");
       setRemarks("");
       toast({ title: "Fixture stage updated", description: "The legacy stage change was saved." });
       onChanged();
@@ -171,7 +166,7 @@ export function FixtureRevisionPanel({
     return null;
   }
 
-  const actionDisabled = !effectiveTargetStage || !reason.trim() || reopenMutation.isPending || manualMutation.isPending;
+  const actionDisabled = !effectiveTargetStage || reopenMutation.isPending || manualMutation.isPending;
 
   return (
     <div className="space-y-3 rounded-xl border bg-background p-3">
@@ -194,14 +189,19 @@ export function FixtureRevisionPanel({
             <div key={revision.id} className="rounded-lg border bg-muted/20 p-2 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-semibold text-foreground">
-                  R{revision.revision_no} · {formatRevisionLabel(revision.revision_type)}
+                  {revision.revision_code || `R${revision.revision_no}`} · {formatRevisionLabel(String(revision.reason_type || revision.revision_type))}
                 </span>
                 <span className="text-muted-foreground">{formatRevisionDate(revision.changed_at)}</span>
               </div>
               <p className="mt-1 text-muted-foreground">
                 {revision.reverted_from_stage} {"→"}  {revision.reverted_to_stage}
               </p>
-              <p className="mt-1 font-medium text-foreground">{revision.revision_reason}</p>
+              {revision.stage_name ? (
+                <p className="mt-1 font-medium text-foreground">
+                  Stage: {revision.stage_name}
+                </p>
+              ) : null}
+              {revision.revision_reason ? <p className="mt-1 text-muted-foreground">{revision.revision_reason}</p> : null}
               {revision.revision_remarks ? <p className="mt-1 text-muted-foreground">{revision.revision_remarks}</p> : null}
               <p className="mt-1 text-[10px] text-muted-foreground">
                 Changed by {revision.changed_by_name || revision.changed_by}
@@ -233,7 +233,7 @@ export function FixtureRevisionPanel({
         </div>
 
         <div className="space-y-2">
-          <Label className="text-xs font-semibold">Revision type</Label>
+          <Label className="text-xs font-semibold">Reason Type</Label>
           <Select value={revisionType} onValueChange={(value) => setRevisionType(value as FixtureRevisionType)}>
             <SelectTrigger className="h-9 text-sm">
               <SelectValue />
@@ -265,16 +265,6 @@ export function FixtureRevisionPanel({
             </Select>
           </div>
         ) : null}
-
-        <div className="space-y-2 md:col-span-2">
-          <Label className="text-xs font-semibold">Reason *</Label>
-          <Textarea
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Explain why this stage needs revision or controlled correction."
-            rows={2}
-          />
-        </div>
 
         <div className="space-y-2 md:col-span-2">
           <Label className="text-xs font-semibold">Remarks</Label>

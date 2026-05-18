@@ -635,6 +635,21 @@ async function updateTaskCompletionPercent(taskId, completionPercent, client = p
   );
 }
 
+async function updateTaskAssignmentForTransfer(taskId, { assignedTo, completionPercent }, client = pool) {
+  await client.query(
+    `
+      UPDATE tasks
+      SET assigned_to = $2::text,
+          assignee_ids = to_jsonb(ARRAY[$2::text]),
+          assigned_user_id = $2::text,
+          completion_percent = $3::int,
+          updated_at = NOW()
+      WHERE id = $1::int
+    `,
+    [taskId, assignedTo, completionPercent],
+  );
+}
+
 async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
   const result = await client.query(
     `
@@ -966,6 +981,7 @@ module.exports = instrumentModuleExports("repository.tasksRepository", {
   listTasksForWorkflowInstance,
   listVerificationTasksByAccess,
   updateTaskChecklist,
+  updateTaskAssignmentForTransfer,
   updateTaskCompletionPercent,
   updateTaskDetails,
   updateTaskProof,

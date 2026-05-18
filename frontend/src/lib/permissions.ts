@@ -2,6 +2,7 @@ import type { Role, User } from "@/types";
 
 export const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
+  TRANSFER_TASK: "transfer_task",
   APPROVE_COMPLETED_TASK: "approve_completed_task",
   APPROVE_QUALITY: "can_approve_quality",
   CHANGE_FIXTURE_STAGE: "change_fixture_stage",
@@ -86,6 +87,7 @@ const ADMIN_PANEL_PERMISSIONS = [
 
 export interface UiAccess {
   canAssignTasks: boolean;
+  canTransferTasks: boolean;
   canApproveCompletedTasks: boolean;
   canApproveQuality: boolean;
   canChangeFixtureStage: boolean;
@@ -194,6 +196,7 @@ export function isProjectAuthorityUser(user: User | null | undefined) {
 
 export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canAssignTasks = hasUserPermission(user, PERMISSIONS.ASSIGN_TASK);
+  const canTransferTasks = hasUserPermission(user, PERMISSIONS.TRANSFER_TASK);
   const canApproveCompletedTasks = hasUserPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK);
   const canApproveQuality = hasUserPermission(user, PERMISSIONS.APPROVE_QUALITY);
   const canChangeFixtureStage = hasUserPermission(user, PERMISSIONS.CHANGE_FIXTURE_STAGE);
@@ -222,6 +225,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
 
   return {
     canAssignTasks,
+    canTransferTasks,
     canApproveCompletedTasks,
     canApproveQuality,
     canChangeFixtureStage,

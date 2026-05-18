@@ -277,6 +277,7 @@ function buildScope(filters = {}, user) {
 
 async function loadTaskRows(scope, client = pool) {
   const params = [];
+  const contributionUserExpr = "COALESCE(contribution.employee_id, NULLIF(t.assigned_user_id, ''), t.assigned_to)";
   const whereClauses = [
     "t.status <> 'cancelled'",
     "COALESCE(t.task_type, 'department_workflow') = 'department_workflow'",
@@ -289,10 +290,10 @@ async function loadTaskRows(scope, client = pool) {
 
   if (scope.userId) {
     params.push(scope.userId);
-    whereClauses.push(`COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to) = $${params.length}`);
+    whereClauses.push(`${contributionUserExpr} = $${params.length}`);
   } else if (scope.visibleUserIds) {
     params.push(scope.visibleUserIds);
-    whereClauses.push(`COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to) = ANY($${params.length}::text[])`);
+    whereClauses.push(`${contributionUserExpr} = ANY($${params.length}::text[])`);
   }
 
   if (scope.projectId) {
@@ -306,8 +307,10 @@ async function loadTaskRows(scope, client = pool) {
         t.id,
         t.department_id,
         COALESCE(department.name, t.department_id, 'Unknown Department') AS department_name,
-        COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to) AS user_id,
-        COALESCE(user_account.name, NULLIF(t.assigned_user_id, ''), t.assigned_to, 'Unassigned') AS user_name,
+        ${contributionUserExpr} AS user_id,
+        COALESCE(user_account.name, contribution.employee_id, NULLIF(t.assigned_user_id, ''), t.assigned_to, 'Unassigned') AS user_name,
+        COALESCE(contribution.contribution_percent, 100)::numeric AS contribution_percent,
+        COALESCE(contribution.contribution_kind, 'ACTUAL') AS contribution_kind,
         t.status,
         t.verification_status,
         t.workflow_id,
@@ -339,8 +342,13 @@ async function loadTaskRows(scope, client = pool) {
       FROM tasks t
       LEFT JOIN departments department
         ON department.id = t.department_id
+      LEFT JOIN design.fixture_stage_contributions contribution
+        ON contribution.fixture_id = t.fixture_id
+       AND contribution.department_id = t.department_id
+       AND contribution.superseded_by IS NULL
+       AND contribution.metadata->>'task_id' = t.id::text
       LEFT JOIN users user_account
-        ON user_account.employee_id = COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)
+        ON user_account.employee_id = ${contributionUserExpr}
       LEFT JOIN workflow_stages current_stage
         ON current_stage.id = t.current_stage_id
       WHERE ${whereClauses.join(" AND ")}
@@ -625,6 +633,8 @@ function buildAnalyticsDataset(taskRows, activityRows, workflowStageRows) {
       department_name: task.department_name,
       user_id: task.user_id,
       user_name: task.user_name,
+      contribution_percent: Number(task.contribution_percent || 100),
+      contribution_kind: task.contribution_kind || "ACTUAL",
       workflow_id: task.workflow_id || null,
       project_id: task.project_id || null,
       explicit_stage_name: normalizeId(task.explicit_stage_name),
@@ -946,17 +956,22 @@ function computeUserPerformancePayload(completedEntries) {
     }
 
     const userStats = userMap.get(entry.user_id);
-    userStats.completed_items += 1;
-    userStats.total_duration += Number(entry.total_duration || 0);
-    userStats.rework_events += Number(entry.total_reworks || 0);
+    const contributionCredit = clamp(Number(entry.contribution_percent || 100) / 100, 0, 1);
+    if (contributionCredit <= 0) {
+      continue;
+    }
+
+    userStats.completed_items += contributionCredit;
+    userStats.total_duration += Number(entry.total_duration || 0) * contributionCredit;
+    userStats.rework_events += Number(entry.total_reworks || 0) * contributionCredit;
     if (Number(entry.total_reworks || 0) > 0) {
-      userStats.reworked_items += 1;
+      userStats.reworked_items += contributionCredit;
     }
 
     if (entry.deadline && entry.final_completed_at) {
-      userStats.measurable_items += 1;
-      userStats.on_time_items += entry.is_delayed ? 0 : 1;
-      userStats.planning_error_sum += Number(entry.planning_error_minutes || 0);
+      userStats.measurable_items += contributionCredit;
+      userStats.on_time_items += entry.is_delayed ? 0 : contributionCredit;
+      userStats.planning_error_sum += Number(entry.planning_error_minutes || 0) * contributionCredit;
     }
 
     for (const stage of entry.stages) {
@@ -964,12 +979,14 @@ function computeUserPerformancePayload(completedEntries) {
         continue;
       }
 
-      userStats.stage_sums[stage.stage_name] = (userStats.stage_sums[stage.stage_name] || 0) + Number(stage.duration);
-      userStats.stage_counts[stage.stage_name] = (userStats.stage_counts[stage.stage_name] || 0) + 1;
+      userStats.stage_sums[stage.stage_name] = (userStats.stage_sums[stage.stage_name] || 0) + (Number(stage.duration) * contributionCredit);
+      userStats.stage_counts[stage.stage_name] = (userStats.stage_counts[stage.stage_name] || 0) + contributionCredit;
     }
   }
 
-  const rawUsers = Array.from(userMap.values()).map((userStats) => {
+  const rawUsers = Array.from(userMap.values())
+    .filter((userStats) => userStats.completed_items > 0)
+    .map((userStats) => {
     const avg_stage_duration = {};
     for (const stageName of Object.keys(userStats.stage_sums)) {
       avg_stage_duration[stageName] = roundNumber(
@@ -981,7 +998,7 @@ function computeUserPerformancePayload(completedEntries) {
     return {
       user_id: userStats.user_id,
       name: userStats.name,
-      fixtures_completed: userStats.completed_items,
+      fixtures_completed: roundNumber(userStats.completed_items, 2) || 0,
       avg_duration_minutes: roundNumber(userStats.total_duration / userStats.completed_items, 2) || 0,
       avg_stage_duration,
       rework_rate: ratio(userStats.reworked_items, userStats.completed_items, 4),

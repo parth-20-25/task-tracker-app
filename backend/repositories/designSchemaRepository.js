@@ -264,6 +264,9 @@ async function ensureDesignDepartmentSchema(client) {
       status TEXT NOT NULL DEFAULT 'active',
       status_changed_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
+      plant TEXT,
+      project_leader_id VARCHAR(50),
+      team_lead_id VARCHAR(50),
       uploaded_by VARCHAR(50),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -275,6 +278,9 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     ALTER TABLE design.projects
     ADD COLUMN IF NOT EXISTS uploaded_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS plant TEXT,
+    ADD COLUMN IF NOT EXISTS project_leader_id VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50),
     ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
     ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
@@ -417,8 +423,12 @@ async function ensureDesignDepartmentSchema(client) {
       fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
       department_id TEXT NOT NULL REFERENCES departments(id),
       revision_no INTEGER NOT NULL,
+      stage_name TEXT,
+      stage_version INTEGER NOT NULL DEFAULT 0,
+      revision_code TEXT,
+      reason_type TEXT,
       revision_type TEXT NOT NULL,
-      revision_reason TEXT NOT NULL,
+      revision_reason TEXT,
       revision_remarks TEXT,
       reverted_from_stage TEXT NOT NULL,
       reverted_to_stage TEXT NOT NULL,
@@ -442,6 +452,105 @@ async function ensureDesignDepartmentSchema(client) {
       ),
       CONSTRAINT fixture_workflow_revisions_fixture_revision_key UNIQUE (fixture_id, revision_no)
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_revisions
+    ADD COLUMN IF NOT EXISTS stage_name TEXT,
+    ADD COLUMN IF NOT EXISTS stage_version INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS revision_code TEXT,
+    ADD COLUMN IF NOT EXISTS reason_type TEXT
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_revisions
+    ALTER COLUMN revision_reason DROP NOT NULL
+  `);
+
+  await client.query(`
+    UPDATE fixture_workflow_revisions
+    SET reason_type = COALESCE(reason_type, revision_type),
+        revision_code = COALESCE(revision_code, CONCAT('R ', LPAD(COALESCE(revision_no, 0)::text, 2, '0'))),
+        stage_version = COALESCE(stage_version, 0)
+    WHERE reason_type IS NULL
+       OR revision_code IS NULL
+       OR stage_version IS NULL
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.fixture_stage_contributions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      department_id TEXT NOT NULL REFERENCES departments(id),
+      stage_name TEXT NOT NULL,
+      revision_code TEXT NOT NULL,
+      stage_revision_no INTEGER NOT NULL DEFAULT 0,
+      employee_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      contribution_percent NUMERIC(5, 2) NOT NULL,
+      contribution_kind TEXT NOT NULL DEFAULT 'ACTUAL',
+      transfer_reason TEXT,
+      transferred_by VARCHAR(50) REFERENCES users(employee_id),
+      transferred_at TIMESTAMPTZ,
+      changed_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      previous_stage TEXT,
+      stage_instance_id UUID,
+      stage_attempt_no INTEGER,
+      workflow_revision_id UUID REFERENCES fixture_workflow_revisions(id) ON DELETE SET NULL,
+      superseded_by UUID,
+      superseded_at TIMESTAMPTZ,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      CONSTRAINT fixture_stage_contributions_percent_check CHECK (
+        contribution_percent >= 0 AND contribution_percent <= 100
+      ),
+      CONSTRAINT fixture_stage_contributions_kind_check CHECK (
+        contribution_kind IN ('ACTUAL', 'REMAINING')
+      )
+    )
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixture_stage_contributions
+    ADD COLUMN IF NOT EXISTS revision_code TEXT,
+    ADD COLUMN IF NOT EXISTS stage_revision_no INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS contribution_kind TEXT NOT NULL DEFAULT 'ACTUAL',
+    ADD COLUMN IF NOT EXISTS transfer_reason TEXT,
+    ADD COLUMN IF NOT EXISTS transferred_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS transferred_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS changed_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS previous_stage TEXT,
+    ADD COLUMN IF NOT EXISTS stage_instance_id UUID,
+    ADD COLUMN IF NOT EXISTS stage_attempt_no INTEGER,
+    ADD COLUMN IF NOT EXISTS workflow_revision_id UUID,
+    ADD COLUMN IF NOT EXISTS superseded_by UUID,
+    ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fixture_stage_contributions_stage_instance_fkey'
+      ) THEN
+        ALTER TABLE design.fixture_stage_contributions
+        ADD CONSTRAINT fixture_stage_contributions_stage_instance_fkey
+        FOREIGN KEY (stage_instance_id) REFERENCES fixture_workflow_stage_attempts(id) ON DELETE SET NULL;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fixture_stage_contributions_superseded_by_fkey'
+      ) THEN
+        ALTER TABLE design.fixture_stage_contributions
+        ADD CONSTRAINT fixture_stage_contributions_superseded_by_fkey
+        FOREIGN KEY (superseded_by) REFERENCES design.fixture_stage_contributions(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
   `);
 
   await client.query(`
@@ -529,6 +638,17 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_fixture_workflow_revisions_fixture_changed
     ON fixture_workflow_revisions (fixture_id, changed_at DESC)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixture_stage_contrib_fixture_stage_revision
+    ON design.fixture_stage_contributions (fixture_id, stage_name, revision_code)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixture_stage_contrib_employee
+    ON design.fixture_stage_contributions (employee_id, changed_at DESC)
+    WHERE superseded_by IS NULL
   `);
 
   await client.query(`

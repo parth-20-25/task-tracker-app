@@ -15,6 +15,7 @@ const USER_SCOPES = {
 
 const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
+  TRANSFER_TASK: "transfer_task",
   APPROVE_COMPLETED_TASK: "approve_completed_task",
   APPROVE_QUALITY: "can_approve_quality",
   CHANGE_FIXTURE_STAGE: "change_fixture_stage",
@@ -62,6 +63,7 @@ const PERMISSION_ID_ALIASES = {
 
 const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.ASSIGN_TASK, "Assign Task", "Allows assigning tasks to other users."],
+  [PERMISSIONS.TRANSFER_TASK, "Transfer Task", "Allows transferring Design stage work while preserving contribution history."],
   [PERMISSIONS.APPROVE_COMPLETED_TASK, "Approve Completed Task", "Allows approving completed non-quality task submissions."],
   [PERMISSIONS.APPROVE_QUALITY, "Approve Quality", "Allows performing quality-stage approval."],
   [PERMISSIONS.CHANGE_FIXTURE_STAGE, "Change Fixture Stage", "Allows controlled fixture stage transitions."],
@@ -103,6 +105,7 @@ const ROLE_DEFAULT_PERMISSIONS = {
   r1: Object.values(PERMISSIONS),
   r2: [
     PERMISSIONS.ASSIGN_TASK,
+    PERMISSIONS.TRANSFER_TASK,
     PERMISSIONS.APPROVE_COMPLETED_TASK,
     PERMISSIONS.APPROVE_QUALITY,
     PERMISSIONS.CHANGE_FIXTURE_STAGE,
@@ -136,6 +139,7 @@ const ROLE_DEFAULT_PERMISSIONS = {
   ],
   r3: [
     PERMISSIONS.ASSIGN_TASK,
+    PERMISSIONS.TRANSFER_TASK,
     PERMISSIONS.APPROVE_COMPLETED_TASK,
     PERMISSIONS.CHANGE_FIXTURE_STAGE,
     PERMISSIONS.REOPEN_FIXTURE_STAGE,
@@ -152,6 +156,7 @@ const ROLE_DEFAULT_PERMISSIONS = {
   ],
   r4: [
     PERMISSIONS.ASSIGN_TASK,
+    PERMISSIONS.TRANSFER_TASK,
     PERMISSIONS.APPROVE_COMPLETED_TASK,
     PERMISSIONS.CHANGE_FIXTURE_STAGE,
     PERMISSIONS.REOPEN_FIXTURE_STAGE,

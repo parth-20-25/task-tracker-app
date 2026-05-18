@@ -20,15 +20,29 @@ export interface FixtureCurrentStage {
   stage: string | null;
   stage_label?: string | null;
   stage_version?: number;
+  revision_code?: string | null;
   status: FixtureStageStatus | "APPROVED";
   stage_order: number | null;
   is_complete: boolean;
+}
+
+export interface FixtureStageContribution {
+  id: string;
+  employee_id: string;
+  employee_name?: string | null;
+  contribution_percent: number;
+  contribution_kind?: "ACTUAL" | "REMAINING";
+  transfer_reason?: string | null;
+  transferred_by?: string | null;
+  transferred_by_name?: string | null;
+  transferred_at?: string | null;
 }
 
 export interface FixtureProgressStage {
   stage_name: string;
   stage_label?: string | null;
   stage_version?: number;
+  revision_code?: string | null;
   stage_order: number;
   status: FixtureStageStatus;
   assigned_to: string | null;
@@ -37,6 +51,7 @@ export interface FixtureProgressStage {
   completed_at: string | null;
   duration_minutes: number | null;
   updated_at: string;
+  contributions?: FixtureStageContribution[];
 }
 
 export type FixtureRevisionType =
@@ -55,8 +70,12 @@ export interface FixtureRevisionTimelineEntry {
   fixture_id: string;
   department_id: string;
   revision_no: number;
+  stage_name?: string | null;
+  stage_version?: number;
+  revision_code?: string | null;
+  reason_type?: FixtureRevisionType | string | null;
   revision_type: FixtureRevisionType;
-  revision_reason: string;
+  revision_reason?: string | null;
   revision_remarks?: string | null;
   reverted_from_stage: string;
   reverted_to_stage: string;
@@ -360,7 +379,7 @@ export function reopenFixtureStage(payload: {
   target_stage_name?: string;
   target_stage_order?: number;
   revision_type: FixtureRevisionType;
-  revision_reason: string;
+  revision_reason?: string;
   remarks?: string;
 }) {
   return apiRequest<FixtureFullProgress>("/workflows/reopen-stage", {
@@ -375,7 +394,7 @@ export function manipulateFixtureStage(payload: {
   target_stage_name?: string;
   target_stage_order?: number;
   target_status?: FixtureStageStatus;
-  revision_reason: string;
+  revision_reason?: string;
   remarks?: string;
 }) {
   return apiRequest<FixtureFullProgress>("/workflows/manual-stage", {

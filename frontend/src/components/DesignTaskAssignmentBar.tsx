@@ -140,6 +140,17 @@ function StageStatusBadge({ status }: { status: FixtureStageStatus }) {
   );
 }
 
+function formatStageContributors(stage: FixtureFullProgress["stages"][number]) {
+  const contributions = stage.contributions ?? [];
+  if (contributions.length === 0) {
+    return null;
+  }
+
+  return contributions
+    .map((contribution) => `${contribution.employee_name || contribution.employee_id} - ${Number(contribution.contribution_percent || 0)}%`)
+    .join(", ");
+}
+
 // ─── Workflow Timeline ─────────────────────────────────────────────────────────
 
 function WorkflowTimeline({ progress }: { progress?: FixtureFullProgress }) {
@@ -155,6 +166,9 @@ function WorkflowTimeline({ progress }: { progress?: FixtureFullProgress }) {
           <div key={`${stage.stage_name}-${stage.stage_version ?? 0}`} className="flex items-center gap-1">
             <div className="flex flex-col items-center gap-0.5">
               <span className="text-[10px] font-medium text-foreground">{stage.stage_label || stage.stage_name}</span>
+              {stage.revision_code ? (
+                <span className="text-[9px] font-semibold text-muted-foreground">{stage.revision_code}</span>
+              ) : null}
               <StageStatusBadge status={stage.status} />
               <span className="max-w-[128px] text-center text-[9px] leading-tight text-muted-foreground">
                 {stage.assigned_at || stage.completed_at
@@ -164,6 +178,11 @@ function WorkflowTimeline({ progress }: { progress?: FixtureFullProgress }) {
               {stage.duration_minutes ? (
                 <span className="text-[9px] font-medium text-muted-foreground">
                   {formatStageDuration(stage.duration_minutes)}
+                </span>
+              ) : null}
+              {formatStageContributors(stage) ? (
+                <span className="max-w-[160px] text-center text-[9px] leading-tight text-muted-foreground">
+                  {formatStageContributors(stage)}
                 </span>
               ) : null}
             </div>

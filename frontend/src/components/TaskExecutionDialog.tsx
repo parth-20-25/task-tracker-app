@@ -1,14 +1,16 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, FileImage, History, Loader2, NotebookText, Trash2, Upload } from "lucide-react";
-import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, updateTask, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
+import { ArrowRightLeft, CheckSquare, FileImage, History, Loader2, NotebookText, Trash2 } from "lucide-react";
+import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAssignmentUsers, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, transferTask, updateTask, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
 import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
@@ -74,6 +76,11 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const [uploading, setUploading] = useState(false);
   const [completionInput, setCompletionInput] = useState(String(task.completion_percent ?? 0));
   const [savingCompletion, setSavingCompletion] = useState(false);
+  const [transferUsers, setTransferUsers] = useState<Array<{ employee_id: string; name: string }>>([]);
+  const [loadingTransferUsers, setLoadingTransferUsers] = useState(false);
+  const [transferTo, setTransferTo] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const [transferring, setTransferring] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const isAssignee = user
@@ -87,6 +94,15 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     || (access.canEditTasks && actorLevel < assigneeLevel)
   );
   const proofUrls = task.proof_url ?? [];
+  const isDesignWorkflowTask = task.task_type === "department_workflow"
+    && task.department_id?.toLowerCase() === "design"
+    && Boolean(task.fixture_id);
+  const canTransferTask = access.canTransferTasks
+    && isDesignWorkflowTask
+    && !["closed", "cancelled", "under_review"].includes(task.status);
+  const transferCompletion = Number(completionInput);
+  const transferRemaining = Number.isInteger(transferCompletion) ? Math.max(0, 100 - transferCompletion) : 0;
+  const transferCandidates = transferUsers.filter((candidate) => candidate.employee_id !== task.assigned_to);
 
   const latestProof = useMemo(() => {
     if (attachments.length > 0) {
@@ -193,9 +209,48 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   useEffect(() => {
     if (open) {
       setCompletionInput(String(task.completion_percent ?? 0));
+      setTransferTo("");
+      setTransferReason("");
       loadExecutionData().catch(() => undefined);
     }
   }, [open, loadExecutionData, task.completion_percent]);
+
+  useEffect(() => {
+    if (!open || !canTransferTask) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingTransferUsers(true);
+    fetchTaskAssignmentUsers({
+      task_type: task.task_type,
+      department_id: task.department_id,
+      workflow_template_id: task.workflow_template_id,
+    })
+      .then((users) => {
+        if (!cancelled) {
+          setTransferUsers(users);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast({
+            title: "Could not load transfer users",
+            description: error instanceof Error ? error.message : "Unknown error",
+            variant: "destructive",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingTransferUsers(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canTransferTask, open, task.department_id, task.task_type, task.workflow_template_id]);
 
   const handleCompletionSave = useCallback(async () => {
     const nextCompletion = Number(completionInput);
@@ -229,6 +284,57 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
       setSavingCompletion(false);
     }
   }, [completionInput, queryClient, refreshTasks, task.id]);
+
+  const handleTransferTask = useCallback(async () => {
+    const nextCompletion = Number(completionInput);
+
+    if (!Number.isInteger(nextCompletion) || nextCompletion < 0 || nextCompletion > 99) {
+      toast({
+        title: "Invalid transfer completion",
+        description: "Transfer completion must leave remaining work from 1% to 100%.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!transferTo) {
+      toast({ title: "Select transfer employee", variant: "destructive" });
+      return;
+    }
+
+    if (!transferReason.trim()) {
+      toast({ title: "Transfer reason is required", variant: "destructive" });
+      return;
+    }
+
+    setTransferring(true);
+
+    try {
+      await transferTask(task.id, {
+        transfer_to: transferTo,
+        transfer_reason: transferReason.trim(),
+        completion_percent: nextCompletion,
+      });
+      setTransferTo("");
+      setTransferReason("");
+      await Promise.all([
+        refreshTasks(),
+        loadExecutionData(),
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["analytics"] }),
+      ]);
+      toast({ title: "Task transferred", description: `Remaining ${100 - nextCompletion}% moved to the selected employee.` });
+    } catch (error) {
+      toast({
+        title: "Could not transfer task",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setTransferring(false);
+    }
+  }, [completionInput, loadExecutionData, queryClient, refreshTasks, task.id, transferReason, transferTo]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -293,6 +399,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
               <TabsTrigger value="activity"><History className="h-3.5 w-3.5 mr-1.5" />Activity</TabsTrigger>
               <TabsTrigger value="logs"><NotebookText className="h-3.5 w-3.5 mr-1.5" />Logs</TabsTrigger>
               <TabsTrigger value="checklist"><CheckSquare className="h-3.5 w-3.5 mr-1.5" />Checklist</TabsTrigger>
+              {canTransferTask ? <TabsTrigger value="transfer"><ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />Transfer</TabsTrigger> : null}
               <TabsTrigger value="proof"><FileImage className="h-3.5 w-3.5 mr-1.5" />Proof</TabsTrigger>
             </TabsList>
 
@@ -416,6 +523,68 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 ))
               )}
             </TabsContent>
+
+            {canTransferTask ? (
+              <TabsContent value="transfer" className="space-y-4 mt-4">
+                <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 md:grid-cols-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Current Assignee</p>
+                    <p className="text-sm font-medium">{task.assignee?.name || task.assigned_to}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Preserved</p>
+                    <p className="text-sm font-medium">{Number.isInteger(transferCompletion) ? transferCompletion : 0}%</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Remaining</p>
+                    <p className="text-sm font-medium">{transferRemaining}%</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-xs font-semibold">Transfer To</Label>
+                    <Select
+                      value={transferTo || "__none__"}
+                      onValueChange={(value) => setTransferTo(value === "__none__" ? "" : value)}
+                      disabled={loadingTransferUsers || transferring}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={loadingTransferUsers ? "Loading employees..." : "Select employee"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Select employee</SelectItem>
+                        {transferCandidates.map((candidate) => (
+                          <SelectItem key={candidate.employee_id} value={candidate.employee_id}>
+                            {candidate.name || candidate.employee_id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-semibold">Transfer Reason</Label>
+                    <Textarea
+                      value={transferReason}
+                      onChange={(event) => setTransferReason(event.target.value)}
+                      rows={2}
+                      disabled={transferring}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    onClick={() => { handleTransferTask().catch(() => undefined); }}
+                    disabled={transferring || !transferTo || !transferReason.trim() || transferRemaining <= 0}
+                  >
+                    {transferring ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ArrowRightLeft className="h-4 w-4 mr-2" />}
+                    Transfer Task
+                  </Button>
+                </div>
+              </TabsContent>
+            ) : null}
 
             <TabsContent value="proof" className="space-y-4 mt-4">
               {task.status === 'closed' && (

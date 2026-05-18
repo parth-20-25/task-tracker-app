@@ -12,7 +12,13 @@ const { instrumentModuleExports } = require("../lib/observability");
 const { getAdjacentWorkflowStage, getWorkflow, getStageById } = require("./workflowService");
 const { releaseFixtureStageAssignment, advanceWorkflowAfterTaskApproval } = require("./fixtureWorkflowService");
 const { AppError } = require("../lib/AppError");
-const { formatStageVersionLabel } = require("../lib/workflowStageVersioning");
+const { isDesignDepartment } = require("../lib/designDepartment");
+const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
+const {
+  formatStageRevisionCode,
+  formatStageVersionLabel,
+  normalizeStageVersion,
+} = require("../lib/workflowStageVersioning");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
   addTaskLog,
@@ -23,6 +29,7 @@ const {
   listTaskActivity,
   listTasksByAccess,
   listVerificationTasksByAccess,
+  updateTaskAssignmentForTransfer,
   updateTaskCompletionPercent,
   updateTaskDetails,
   updateTaskProof,
@@ -36,11 +43,23 @@ const {
 const { listDepartments } = require("../repositories/departmentsRepository");
 const { countProjectsByDepartment, getProjectStatusById } = require("../repositories/designProjectCatalogRepository");
 const {
+  getLatestStageAttempt,
+  getProgressForFixture,
+  updateLatestStageAttemptAssignment,
+  updateProgressRow,
+} = require("../repositories/fixtureWorkflowRepository");
+const {
+  insertStageContribution,
+  listStageContributions,
+  supersedeContribution,
+} = require("../repositories/designStageContributionRepository");
+const {
   findWorkflowTemplateById,
   listWorkflowTemplates,
 } = require("../repositories/workflowTemplatesRepository");
 const {
   canAccessTask,
+  canAccessUser,
   canAssignTo,
   canVerifyTask,
   getRoleLevel,
@@ -48,6 +67,7 @@ const {
   hasPermission,
   isAdmin,
   isProjectAuthorityRole,
+  isSupervisor,
   isTaskAssignee,
 } = require("./accessControlService");
 const { getEscalationSchedule } = require("./escalationService");
@@ -274,6 +294,95 @@ function normalizeCompletionPercent(value) {
   }
 
   return numericValue;
+}
+
+function roundContributionPercent(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function sumContributionPercent(contributions) {
+  return roundContributionPercent(
+    contributions.reduce((sum, contribution) => sum + Number(contribution.contribution_percent || 0), 0),
+  );
+}
+
+async function requireDesignTask(task) {
+  const departments = await listDepartments();
+  const department = departments.find((item) => item.id === task.department_id) || null;
+
+  if (!isDesignDepartment({ id: task.department_id, name: department?.name })) {
+    throw new AppError(403, "Transfer task is available only for Design Department workflow tasks");
+  }
+}
+
+function canTransferDesignTask(actor, task) {
+  if (!actor || !task) {
+    return false;
+  }
+
+  if (!canAccessTask(actor, task)) {
+    return false;
+  }
+
+  return hasPermission(actor, PERMISSIONS.TRANSFER_TASK)
+    || isSupervisor(actor)
+    || isProjectAuthorityRole(actor)
+    || isAdmin(actor);
+}
+
+function resolveProgressRowForTask(task, progressRows) {
+  const taskStageKey = normalizeDesignStageName(task.workflow_stage || task.stage || task.current_stage_name);
+
+  if (taskStageKey) {
+    const matchingByStage = progressRows.find(
+      (row) => normalizeDesignStageName(row.stage_name) === taskStageKey && row.status !== "APPROVED",
+    );
+    if (matchingByStage) {
+      return matchingByStage;
+    }
+  }
+
+  const matchingAssignee = progressRows.find(
+    (row) => row.status === "IN_PROGRESS" && row.assigned_to === task.assigned_to,
+  );
+  if (matchingAssignee) {
+    return matchingAssignee;
+  }
+
+  return progressRows.find((row) => row.status !== "APPROVED") || null;
+}
+
+function normalizeTransferTarget(payload) {
+  const transferTo = String(
+    payload?.transfer_to
+    || payload?.assigned_to
+    || payload?.employee_id
+    || "",
+  ).trim();
+
+  if (!transferTo) {
+    throw new AppError(400, "transfer_to is required");
+  }
+
+  return transferTo;
+}
+
+function normalizeTransferReason(payload) {
+  const transferReason = String(payload?.transfer_reason || payload?.reason || "").trim();
+
+  if (!transferReason) {
+    throw new AppError(400, "transfer_reason is required");
+  }
+
+  return transferReason;
+}
+
+function normalizeTransferCompletion(payload, task) {
+  const completionCandidate = hasOwn(payload, "completion_percent")
+    ? payload.completion_percent
+    : task.completion_percent ?? 0;
+
+  return normalizeCompletionPercent(completionCandidate);
 }
 
 function hasExecutionUpdate(payload) {
@@ -958,7 +1067,18 @@ async function getAssignableUsersForTaskContext(user, {
   workflowTemplateId = null,
 } = {}) {
   const allUsers = await listUsers();
-  let candidates = allUsers.filter((candidate) => canAssignTo(user, candidate));
+  const canUseAssignmentRules = hasPermission(user, PERMISSIONS.ASSIGN_TASK);
+  const canUseTransferRules = hasPermission(user, PERMISSIONS.TRANSFER_TASK);
+  let candidates = allUsers.filter((candidate) => {
+    if (canUseAssignmentRules && canAssignTo(user, candidate)) {
+      return true;
+    }
+
+    return canUseTransferRules
+      && candidate.is_active !== false
+      && (isAdmin(user) || user.department_id === candidate.department_id)
+      && canAccessUser(user, candidate);
+  });
 
   if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
     if (!departmentId) {
@@ -1136,6 +1256,258 @@ async function updateTaskForUser(user, taskId, payload = {}) {
   }
 
   const updatedTask = await findTaskById(Number(taskId));
+  await refreshTaskPerformanceAnalytics(updatedTask);
+  return updatedTask;
+}
+
+async function transferTaskForUser(user, taskId, payload = {}) {
+  const normalizedTaskId = Number(taskId);
+
+  if (Number.isNaN(normalizedTaskId)) {
+    throw new AppError(400, "Invalid task ID");
+  }
+
+  const task = await findTaskById(normalizedTaskId);
+
+  if (!task) {
+    throw new AppError(404, "Task not found");
+  }
+
+  if (task.task_type !== TASK_TYPES.DEPARTMENT_WORKFLOW || !task.fixture_id) {
+    throw new AppError(400, "Transfer task is available only for fixture workflow tasks");
+  }
+
+  await requireDesignTask(task);
+  assertTaskProjectIsActive(task);
+
+  if ([TASK_STATUSES.CLOSED, TASK_STATUSES.CANCELLED, TASK_STATUSES.UNDER_REVIEW].includes(task.status)) {
+    throw new AppError(409, "Task cannot be transferred in its current state");
+  }
+
+  if (!canTransferDesignTask(user, task)) {
+    throw new AppError(403, "You do not have permission to transfer this Design task");
+  }
+
+  const transferTo = normalizeTransferTarget(payload);
+  const transferReason = normalizeTransferReason(payload);
+  const completionPercent = normalizeTransferCompletion(payload, task);
+  const remainingPercent = roundContributionPercent(100 - completionPercent);
+
+  if (remainingPercent <= 0) {
+    throw new AppError(409, "No remaining contribution is available to transfer");
+  }
+
+  const transferAssignee = await findUserByEmployeeId(transferTo);
+  if (!transferAssignee || transferAssignee.is_active === false) {
+    throw new AppError(404, "Transfer target user not found or inactive");
+  }
+
+  if (transferAssignee.department_id !== task.department_id) {
+    throw new AppError(400, "Design workflow tasks can only be transferred within the Design Department");
+  }
+
+  if (transferTo === task.assigned_to) {
+    throw new AppError(400, "Task is already assigned to this employee");
+  }
+
+  if (
+    !canAssignTo(user, transferAssignee)
+    && !(hasPermission(user, PERMISSIONS.TRANSFER_TASK) && canAccessUser(user, transferAssignee))
+  ) {
+    throw new AppError(403, "Cannot transfer to this user");
+  }
+
+  const client = await pool.connect();
+  let updatedTask = null;
+
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [normalizedTaskId]);
+
+    const lockedTask = await findTaskById(normalizedTaskId, client);
+    if (!lockedTask) {
+      throw new AppError(404, "Task not found");
+    }
+
+    if ([TASK_STATUSES.CLOSED, TASK_STATUSES.CANCELLED, TASK_STATUSES.UNDER_REVIEW].includes(lockedTask.status)) {
+      throw new AppError(409, "Task cannot be transferred in its current state");
+    }
+
+    const progressRows = await getProgressForFixture(lockedTask.fixture_id, lockedTask.department_id, client);
+    const progressRow = resolveProgressRowForTask(lockedTask, progressRows);
+
+    if (!progressRow) {
+      throw new AppError(409, "No active Design stage is available for transfer");
+    }
+
+    if (progressRow.status === "APPROVED") {
+      throw new AppError(409, "Approved stages cannot be transferred");
+    }
+
+    const currentEmployeeId = progressRow.assigned_to || lockedTask.assigned_to;
+    if (!currentEmployeeId) {
+      throw new AppError(409, "Current stage has no assignee to transfer from");
+    }
+
+    const stageName = progressRow.stage_name;
+    const stageRevisionNo = normalizeStageVersion(progressRow.stage_version);
+    const revisionCode = formatStageRevisionCode(stageName, stageRevisionNo);
+    const previousContributions = await listStageContributions(
+      lockedTask.fixture_id,
+      stageName,
+      revisionCode,
+      client,
+    );
+    const previousActualContributions = previousContributions.filter(
+      (contribution) => contribution.contribution_kind === "ACTUAL",
+    );
+    const previousActualTotal = sumContributionPercent(previousActualContributions);
+    const outgoingContribution = roundContributionPercent(completionPercent - previousActualTotal);
+
+    if (outgoingContribution < 0) {
+      throw new AppError(
+        409,
+        "Current completion percent is below already preserved contribution history",
+      );
+    }
+
+    const latestAttempt = await getLatestStageAttempt(lockedTask.fixture_id, stageName, client);
+    const transferTimestamp = new Date();
+    let preservedContribution = null;
+
+    if (outgoingContribution > 0) {
+      preservedContribution = await insertStageContribution({
+        fixture_id: lockedTask.fixture_id,
+        department_id: lockedTask.department_id,
+        stage_name: stageName,
+        revision_code: revisionCode,
+        stage_revision_no: stageRevisionNo,
+        employee_id: currentEmployeeId,
+        contribution_percent: outgoingContribution,
+        contribution_kind: "ACTUAL",
+        transfer_reason: transferReason,
+        transferred_by: user.employee_id,
+        transferred_at: transferTimestamp,
+        changed_by: user.employee_id,
+        changed_at: transferTimestamp,
+        previous_stage: stageName,
+        stage_instance_id: latestAttempt?.id || null,
+        stage_attempt_no: latestAttempt?.attempt_no ?? null,
+        metadata: {
+          task_id: lockedTask.id,
+          from_employee_id: currentEmployeeId,
+          to_employee_id: transferTo,
+          completion_percent: completionPercent,
+          revision_code: revisionCode,
+        },
+      }, client);
+    }
+
+    const openRemainingContributions = previousContributions.filter(
+      (contribution) => contribution.contribution_kind === "REMAINING",
+    );
+    for (const contribution of openRemainingContributions) {
+      await supersedeContribution(contribution.id, preservedContribution?.id || null, client);
+    }
+
+    await insertStageContribution({
+      fixture_id: lockedTask.fixture_id,
+      department_id: lockedTask.department_id,
+      stage_name: stageName,
+      revision_code: revisionCode,
+      stage_revision_no: stageRevisionNo,
+      employee_id: transferTo,
+      contribution_percent: remainingPercent,
+      contribution_kind: "REMAINING",
+      transfer_reason: transferReason,
+      transferred_by: user.employee_id,
+      transferred_at: transferTimestamp,
+      changed_by: user.employee_id,
+      changed_at: transferTimestamp,
+      previous_stage: stageName,
+      stage_instance_id: latestAttempt?.id || null,
+      stage_attempt_no: latestAttempt?.attempt_no ?? null,
+      metadata: {
+        task_id: lockedTask.id,
+        from_employee_id: currentEmployeeId,
+        to_employee_id: transferTo,
+        completion_percent: completionPercent,
+        revision_code: revisionCode,
+      },
+    }, client);
+
+    const nextContributions = await listStageContributions(
+      lockedTask.fixture_id,
+      stageName,
+      revisionCode,
+      client,
+    );
+    const nextTotal = sumContributionPercent(nextContributions);
+    if (Math.abs(nextTotal - 100) > 0.01) {
+      throw new AppError(409, "Stage contribution total must remain exactly 100%");
+    }
+
+    await updateTaskAssignmentForTransfer(lockedTask.id, {
+      assignedTo: transferTo,
+      completionPercent,
+    }, client);
+    await updateProgressRow(lockedTask.fixture_id, stageName, { assigned_to: transferTo }, client);
+    await updateLatestStageAttemptAssignment(
+      lockedTask.fixture_id,
+      stageName,
+      transferTo,
+      transferTimestamp,
+      client,
+    );
+
+    await appendTaskActivity(lockedTask.id, {
+      userEmployeeId: user.employee_id,
+      actionType: "task_transferred",
+      notes: transferReason,
+      metadata: {
+        from_employee_id: currentEmployeeId,
+        to_employee_id: transferTo,
+        stage_name: stageName,
+        revision_code: revisionCode,
+        completion_percent: completionPercent,
+        preserved_percent: outgoingContribution,
+        remaining_percent: remainingPercent,
+      },
+    }, client);
+
+    await addTaskLog(lockedTask.id, {
+      updatedBy: user.employee_id,
+      stepName: "task_transferred",
+      status: "recorded",
+      notes: transferReason,
+    }, client);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "design_task_transferred",
+      targetType: "task",
+      targetId: lockedTask.id,
+      metadata: {
+        from_employee_id: currentEmployeeId,
+        to_employee_id: transferTo,
+        stage_name: stageName,
+        revision_code: revisionCode,
+        completion_percent: completionPercent,
+        preserved_percent: outgoingContribution,
+        remaining_percent: remainingPercent,
+      },
+    }, client);
+
+    updatedTask = await findTaskById(lockedTask.id, client);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  await notifyTaskAssignees(updatedTask, "Task transferred", updatedTask.internal_identifier || updatedTask.title, "task");
   await refreshTaskPerformanceAnalytics(updatedTask);
   return updatedTask;
 }
@@ -1459,6 +1831,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
         fixture_no: task.fixture_no,
         department_id: task.department_id,
         fixture_id: task.fixture_id,
+        task_id: task.id,
       });
 
       console.log("[task-approval] Workflow advancement completed", {
@@ -1877,6 +2250,7 @@ module.exports = instrumentModuleExports("service.taskService", {
   listWorkflowTemplatesForUser,
   resolveDepartmentAssignmentContextForUser,
   resolveWorkflowForDepartment,
+  transferTaskForUser,
   transitionTaskForUser,
   updateTaskForUser,
 });

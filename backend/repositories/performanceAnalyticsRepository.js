@@ -25,6 +25,14 @@ async function ensurePerformanceAnalyticsTables(client = pool) {
   `);
 
   await client.query(`
+    ALTER TABLE user_performance
+      ALTER COLUMN approved_tasks TYPE NUMERIC(12, 2) USING approved_tasks::numeric,
+      ALTER COLUMN on_time_count TYPE NUMERIC(12, 2) USING on_time_count::numeric,
+      ALTER COLUMN overdue_count TYPE NUMERIC(12, 2) USING overdue_count::numeric,
+      ALTER COLUMN rework_count TYPE NUMERIC(12, 2) USING rework_count::numeric
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS department_performance (
       department_id TEXT PRIMARY KEY REFERENCES departments(id) ON DELETE CASCADE,
       total_tasks INTEGER NOT NULL DEFAULT 0,
@@ -110,25 +118,31 @@ async function refreshPerformanceAnalytics(
         SELECT
           au.user_id,
           au.department_id,
+          COALESCE(contribution.contribution_percent, 100)::numeric / 100.0 AS credit,
           CASE
             WHEN t.due_date IS NOT NULL
               AND COALESCE(t.approved_at, t.closed_at, t.verified_at) <= t.due_date
-            THEN 1
+            THEN COALESCE(contribution.contribution_percent, 100)::numeric / 100.0
             ELSE 0
           END AS is_on_time,
           CASE
             WHEN t.due_date IS NOT NULL
               AND COALESCE(t.approved_at, t.closed_at, t.verified_at) > t.due_date
-            THEN 1
+            THEN COALESCE(contribution.contribution_percent, 100)::numeric / 100.0
             ELSE 0
           END AS is_overdue,
           CASE
-            WHEN COALESCE(t.rejection_count, 0) > 0 THEN 1
+            WHEN COALESCE(t.rejection_count, 0) > 0 THEN COALESCE(contribution.contribution_percent, 100)::numeric / 100.0
             ELSE 0
           END AS has_rework
         FROM tasks t
+        LEFT JOIN design.fixture_stage_contributions contribution
+          ON contribution.fixture_id = t.fixture_id
+         AND contribution.department_id = t.department_id
+         AND contribution.superseded_by IS NULL
+         AND contribution.metadata->>'task_id' = t.id::text
         JOIN active_users au
-          ON au.user_id = COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)
+          ON au.user_id = COALESCE(contribution.employee_id, NULLIF(t.assigned_user_id, ''), t.assigned_to)
          AND au.department_id = t.department_id
         WHERE t.status <> 'cancelled'
           AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'
@@ -143,15 +157,15 @@ async function refreshPerformanceAnalytics(
         SELECT
           au.user_id,
           au.department_id,
-          COUNT(at.user_id)::int AS approved_tasks,
-          COALESCE(SUM(at.is_on_time), 0)::int AS on_time_count,
-          COALESCE(SUM(at.is_overdue), 0)::int AS overdue_count,
-          COALESCE(SUM(at.has_rework), 0)::int AS rework_count
+          ROUND(COALESCE(SUM(at.credit), 0)::numeric, 2) AS approved_tasks,
+          ROUND(COALESCE(SUM(at.is_on_time), 0)::numeric, 2) AS on_time_count,
+          ROUND(COALESCE(SUM(at.is_overdue), 0)::numeric, 2) AS overdue_count,
+          ROUND(COALESCE(SUM(at.has_rework), 0)::numeric, 2) AS rework_count
         FROM active_users au
         LEFT JOIN approved_tasks at
           ON at.user_id = au.user_id
         GROUP BY au.user_id, au.department_id
-        HAVING COUNT(at.user_id) >= $2::int
+        HAVING COALESCE(SUM(at.credit), 0) >= $2::int
       ),
       scored AS (
         SELECT

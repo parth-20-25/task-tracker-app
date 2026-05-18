@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 
 const {
+  formatStageRevisionCode,
   formatStageVersionLabel,
   getStageVersionFromCompletedCount,
   normalizeStageVersion,
@@ -21,11 +22,13 @@ runTest("keeps first stage entry unversioned", () => {
   assert.equal(formatStageVersionLabel("Concept", 0), "Concept");
 });
 
-runTest("formats repeated stage entries with two digit versions", () => {
+runTest("keeps stage labels fixed and formats separate revision codes", () => {
   assert.equal(getStageVersionFromCompletedCount(1), 1);
-  assert.equal(formatStageVersionLabel("Concept", 1), "Concept01");
-  assert.equal(formatStageVersionLabel("3D", 2), "3D02");
-  assert.equal(formatStageVersionLabel("DAP", 12), "DAP12");
+  assert.equal(formatStageVersionLabel("Concept", 1), "Concept");
+  assert.equal(formatStageRevisionCode("Concept", 1), "CON 01");
+  assert.equal(formatStageRevisionCode("3D Finish", 2), "3D 02");
+  assert.equal(formatStageRevisionCode("DAP", 12), "DAP 12");
+  assert.equal(formatStageRevisionCode("2D Finish", 2), "DET 02");
 });
 
 console.log("workflow stage versioning checks passed");

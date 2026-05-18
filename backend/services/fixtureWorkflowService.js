@@ -7,6 +7,7 @@ const {
 } = require("../lib/designWorkflowStages");
 const {
   formatStageVersionLabel,
+  formatStageRevisionCode,
   normalizeStageVersion,
 } = require("../lib/workflowStageVersioning");
 const { instrumentModuleExports } = require("../lib/observability");
@@ -29,6 +30,12 @@ const {
   resolveFixtureByCanonicalIdentity,
   listAssignableFixtures,
 } = require("../repositories/fixtureWorkflowRepository");
+const {
+  insertStageContribution,
+  listContributionsForFixtures,
+  listStageContributions,
+  markRemainingContributionActual,
+} = require("../repositories/designStageContributionRepository");
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
 const { canAssignTo } = require("./accessControlService");
 const { getDepartmentWorkflowStagesResponse } = require("./workflowRecoveryService");
@@ -165,6 +172,14 @@ function getProgressStageLabel(stage) {
   return formatStageVersionLabel(getBaseStageDisplayName(stage.stage_name), stage.stage_version);
 }
 
+function getProgressRevisionCode(stage) {
+  if (!stage) {
+    return null;
+  }
+
+  return formatStageRevisionCode(stage.stage_name, stage.stage_version);
+}
+
 function normalizeRevisionType(value, fallback = "OTHER") {
   const normalized = String(value || fallback).trim().toUpperCase();
   if (!FIXTURE_REVISION_TYPES.has(normalized)) {
@@ -174,16 +189,11 @@ function normalizeRevisionType(value, fallback = "OTHER") {
   return normalized;
 }
 
-function normalizeRequiredReason(value) {
-  const normalized = String(value || "").trim();
-  if (!normalized) {
-    throw new AppError(400, "revision_reason is required");
-  }
-
-  return normalized;
+function normalizeOptionalReason(value) {
+  return String(value || "").trim() || null;
 }
 
-async function applyProgressReopenState({ fixtureId, progress, targetStage, client }) {
+async function applyProgressReopenState({ fixtureId, progress, targetStage, shouldIncrementTargetRevision, client }) {
   for (const stage of progress) {
     if (Number(stage.stage_order) < Number(targetStage.stage_order)) {
       await updateProgressRow(
@@ -195,7 +205,10 @@ async function applyProgressReopenState({ fixtureId, progress, targetStage, clie
       continue;
     }
 
-    const stageVersion = await getNextStageReentryVersion(fixtureId, stage.stage_name, client);
+    const isTargetStage = Number(stage.stage_order) === Number(targetStage.stage_order);
+    const stageVersion = isTargetStage && shouldIncrementTargetRevision
+      ? normalizeStageVersion(stage.stage_version) + 1
+      : normalizeStageVersion(stage.stage_version);
     await updateProgressRow(
       fixtureId,
       stage.stage_name,
@@ -271,6 +284,7 @@ function buildCurrentStageResponse(progressRows, workflow) {
     stage: getBaseStageDisplayName(current.stage_name),
     stage_label: getProgressStageLabel(current),
     stage_version: normalizeStageVersion(current.stage_version),
+    revision_code: getProgressRevisionCode(current),
     status: current.status || "PENDING",
     stage_order: current.stage_order ?? null,
     is_complete: false,
@@ -291,6 +305,78 @@ function calculateStageDurationMinutes(startValue, endValue) {
 
   const diffMinutes = Math.round((end.getTime() - start.getTime()) / 60000);
   return diffMinutes > 0 ? diffMinutes : null;
+}
+
+function roundContributionPercent(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function sumContributionPercent(contributions) {
+  return roundContributionPercent(
+    contributions.reduce((sum, contribution) => sum + Number(contribution.contribution_percent || 0), 0),
+  );
+}
+
+async function finalizeStageContributions({
+  fixtureId,
+  departmentId,
+  stage,
+  assignedTo,
+  changedBy,
+  taskId = null,
+  client,
+}) {
+  if (!assignedTo) {
+    throw new AppError(409, "Cannot finalize stage contribution without an assigned employee");
+  }
+
+  const stageName = stage.stage_name;
+  const stageRevisionNo = normalizeStageVersion(stage.stage_version);
+  const revisionCode = formatStageRevisionCode(stageName, stageRevisionNo);
+  let contributions = await listStageContributions(fixtureId, stageName, revisionCode, client);
+
+  for (const contribution of contributions) {
+    if (contribution.contribution_kind === "REMAINING") {
+      await markRemainingContributionActual(contribution.id, client);
+    }
+  }
+
+  contributions = await listStageContributions(fixtureId, stageName, revisionCode, client);
+  const currentTotal = sumContributionPercent(contributions);
+
+  if (currentTotal > 100.001) {
+    throw new AppError(409, "Stage contribution total exceeds 100%");
+  }
+
+  if (currentTotal < 99.999) {
+    const latestAttempt = await getLatestStageAttempt(fixtureId, stageName, client);
+    await insertStageContribution({
+      fixture_id: fixtureId,
+      department_id: departmentId,
+      stage_name: stageName,
+      revision_code: revisionCode,
+      stage_revision_no: stageRevisionNo,
+      employee_id: assignedTo,
+      contribution_percent: roundContributionPercent(100 - currentTotal),
+      contribution_kind: "ACTUAL",
+      changed_by: changedBy || assignedTo,
+      previous_stage: stageName,
+      stage_instance_id: latestAttempt?.id || null,
+      stage_attempt_no: latestAttempt?.attempt_no ?? null,
+      metadata: {
+        source: currentTotal === 0 ? "stage_approval_full_credit" : "stage_approval_remaining_credit",
+        task_id: taskId,
+      },
+    }, client);
+  }
+
+  const finalContributions = await listStageContributions(fixtureId, stageName, revisionCode, client);
+  const finalTotal = sumContributionPercent(finalContributions);
+  if (Math.abs(finalTotal - 100) > 0.001) {
+    throw new AppError(409, "Stage contribution total must equal 100% before approval");
+  }
+
+  return finalContributions;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -625,6 +711,16 @@ async function advanceFixtureWorkflowStage(identity) {
       );
     }
 
+    await finalizeStageContributions({
+      fixtureId,
+      departmentId,
+      stage: current,
+      assignedTo: current.assigned_to,
+      changedBy: current.assigned_to,
+      taskId: identity?.task_id || null,
+      client,
+    });
+
     // STEP 3 — MARK CURRENT APPROVED
     await updateProgressRow(
       fixtureId,
@@ -703,7 +799,7 @@ async function advanceFixtureWorkflowStage(identity) {
  * ❌ Never advance workflow from taskService directly.
  * ❌ Never use task.current_stage_id to drive workflow logic.
  */
-async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, department_id, fixture_id }) {
+async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, department_id, fixture_id, task_id = null }) {
   if ((!project_id || !fixture_no) && !fixture_id) {
     console.warn("[WORKFLOW] advanceWorkflowAfterTaskApproval — canonical fixture identity missing, skipping", {
       project_id,
@@ -743,7 +839,10 @@ async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, depart
     status: current?.status ?? "N/A",
   });
 
-  await advanceFixtureWorkflowStage(resolvedIdentity);
+  await advanceFixtureWorkflowStage({
+    ...resolvedIdentity,
+    task_id,
+  });
 }
 
 async function releaseFixtureStageAssignment(fixtureId, departmentId) {
@@ -788,7 +887,17 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
   if (progress.length === 0) {
     progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
   }
-  const revisions = await listFixtureRevisions(fixtureId, departmentId);
+  const [revisions, contributionRows] = await Promise.all([
+    listFixtureRevisions(fixtureId, departmentId),
+    listContributionsForFixtures([fixtureId]),
+  ]);
+  const contributionsByStageRevision = contributionRows.reduce((map, contribution) => {
+    const key = `${contribution.stage_name}::${contribution.revision_code}`;
+    const entries = map.get(key) || [];
+    entries.push(contribution);
+    map.set(key, entries);
+    return map;
+  }, new Map());
 
   return {
     workflow_name: workflow.name,
@@ -798,6 +907,7 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
       stage_name: row.stage_name,
       stage_label: getProgressStageLabel(row),
       stage_version: normalizeStageVersion(row.stage_version),
+      revision_code: getProgressRevisionCode(row),
       stage_order: row.stage_order,
       status: row.status,
       assigned_to: row.assigned_to,
@@ -806,12 +916,17 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
       completed_at: row.completed_at,
       duration_minutes: row.duration_minutes,
       updated_at: row.updated_at,
+      contributions: contributionsByStageRevision.get(`${row.stage_name}::${getProgressRevisionCode(row)}`) || [],
     })),
     revisions: revisions.map((row) => ({
       id: row.id,
       fixture_id: row.fixture_id,
       department_id: row.department_id,
       revision_no: Number(row.revision_no),
+      stage_name: row.stage_name,
+      stage_version: normalizeStageVersion(row.stage_version),
+      revision_code: row.revision_code || null,
+      reason_type: row.reason_type || row.revision_type,
       revision_type: row.revision_type,
       revision_reason: row.revision_reason,
       revision_remarks: row.revision_remarks,
@@ -852,7 +967,7 @@ async function reopenFixtureStage({
   await assertFixtureProjectIsActive(fixtureId, departmentId);
 
   const normalizedRevisionType = normalizeRevisionType(revisionType);
-  const normalizedRevisionReason = normalizeRequiredReason(revisionReason);
+  const normalizedRevisionReason = normalizeOptionalReason(revisionReason);
   const workflow = await requireWorkflow(departmentId);
   let progress = await getProgressForFixture(fixtureId, departmentId);
   if (progress.length === 0) {
@@ -889,10 +1004,12 @@ async function reopenFixtureStage({
     }
 
     const nextRevisionNo = await incrementFixtureRevision(fixtureId, client);
+    const shouldIncrementTargetRevision = normalizeStatus(lockedTargetStage.status) === "APPROVED";
     await applyProgressReopenState({
       fixtureId,
       progress: lockedProgress,
       targetStage: lockedTargetStage,
+      shouldIncrementTargetRevision,
       client,
     });
     const reopenedProgress = await getProgressForFixture(fixtureId, departmentId, client);
@@ -900,11 +1017,16 @@ async function reopenFixtureStage({
       || lockedTargetStage;
     const fromStageLabel = getProgressStageLabel(lockedFromStage);
     const toStageLabel = getProgressStageLabel(versionedTargetStage);
+    const revisionCode = getProgressRevisionCode(versionedTargetStage);
 
     await recordFixtureRevision({
       fixture_id: fixtureId,
       department_id: departmentId,
       revision_no: nextRevisionNo,
+      stage_name: lockedTargetStage.stage_name,
+      stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
+      revision_code: revisionCode,
+      reason_type: normalizedRevisionType,
       revision_type: normalizedRevisionType,
       revision_reason: normalizedRevisionReason,
       revision_remarks: String(remarks || "").trim() || null,
@@ -921,6 +1043,8 @@ async function reopenFixtureStage({
         to_stage_name: lockedTargetStage.stage_name,
         to_stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
         to_stage_label: toStageLabel,
+        revision_code: revisionCode,
+        revision_incremented: shouldIncrementTargetRevision,
         from_status: lockedFromStage.status,
         to_status: "PENDING",
       },
@@ -960,7 +1084,7 @@ async function manipulateFixtureStage({
     throw new AppError(400, `Unsupported target_status "${targetStatus}"`);
   }
 
-  const normalizedRevisionReason = normalizeRequiredReason(revisionReason);
+  const normalizedRevisionReason = normalizeOptionalReason(revisionReason);
   const workflow = await requireWorkflow(departmentId);
   let progress = await getProgressForFixture(fixtureId, departmentId);
   if (progress.length === 0) {
@@ -1001,6 +1125,7 @@ async function manipulateFixtureStage({
       || lockedTargetStage;
     const fromStageLabel = getProgressStageLabel(lockedFromStage);
     const toStageLabel = getProgressStageLabel(versionedTargetStage);
+    const revisionCode = getProgressRevisionCode(versionedTargetStage);
 
     if (
       normalizedTargetStatus === "APPROVED"
@@ -1015,6 +1140,10 @@ async function manipulateFixtureStage({
       fixture_id: fixtureId,
       department_id: departmentId,
       revision_no: nextRevisionNo,
+      stage_name: lockedTargetStage.stage_name,
+      stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
+      revision_code: revisionCode,
+      reason_type: "MANUAL_OVERRIDE",
       revision_type: "MANUAL_OVERRIDE",
       revision_reason: normalizedRevisionReason,
       revision_remarks: String(remarks || "").trim() || null,
@@ -1031,6 +1160,7 @@ async function manipulateFixtureStage({
         to_stage_name: lockedTargetStage.stage_name,
         to_stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
         to_stage_label: toStageLabel,
+        revision_code: revisionCode,
         from_status: lockedFromStage.status,
         target_status: normalizedTargetStatus,
         legacy_only: true,

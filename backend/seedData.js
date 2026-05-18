@@ -12,6 +12,7 @@ const roles = [
     hierarchy_level: 2,
     permissions: {
       can_assign_tasks: true,
+      transfer_task: true,
       can_verify_task: true,
       can_approve_quality: true,
       can_view_all_tasks: true,
@@ -41,6 +42,7 @@ const roles = [
     hierarchy_level: 3,
     permissions: {
       can_assign_tasks: true,
+      transfer_task: true,
       can_verify_task: true,
       can_view_all_tasks: true,
       can_create_task: true,
@@ -57,6 +59,7 @@ const roles = [
     hierarchy_level: 4,
     permissions: {
       can_assign_tasks: true,
+      transfer_task: true,
       can_verify_task: true,
       can_view_all_tasks: true,
       can_create_task: true,

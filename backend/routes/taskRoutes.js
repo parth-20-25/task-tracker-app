@@ -25,6 +25,7 @@ const {
   listVerificationTasksForUser,
   listWorkflowTemplatesForUser,
   transitionTaskForUser,
+  transferTaskForUser,
   updateTaskForUser,
 } = require("../services/taskService");
 const {
@@ -124,7 +125,7 @@ router.get(
 
 router.get(
   "/task-assignment/assignable-users",
-  authorize(PERMISSIONS.ASSIGN_TASK),
+  requireAnyPermission([PERMISSIONS.ASSIGN_TASK, PERMISSIONS.TRANSFER_TASK]),
   asyncHandler(async (req, res) => {
     const taskType = String(req.query.task_type || "").trim() || "custom";
     const departmentId = String(req.query.department_id || "").trim() || null;
@@ -161,6 +162,15 @@ router.patch(
   requireAnyPermission([PERMISSIONS.EDIT_TASK, PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
   asyncHandler(async (req, res) => {
     const task = await updateTaskForUser(req.user, req.params.taskId, req.body);
+    return sendSuccess(res, task);
+  }),
+);
+
+router.post(
+  "/tasks/:taskId/transfer",
+  requireAnyPermission([PERMISSIONS.TRANSFER_TASK, PERMISSIONS.ASSIGN_TASK]),
+  asyncHandler(async (req, res) => {
+    const task = await transferTaskForUser(req.user, req.params.taskId, req.body);
     return sendSuccess(res, task);
   }),
 );

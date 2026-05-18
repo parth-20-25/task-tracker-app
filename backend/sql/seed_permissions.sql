@@ -1,6 +1,7 @@
 INSERT INTO permissions (id, name, description)
 VALUES
   ('can_assign_tasks', 'Assign Task', 'Allows assigning tasks to other users.'),
+  ('transfer_task', 'Transfer Task', 'Allows transferring Design stage work while preserving contribution history.'),
   ('can_verify_task', 'Verify Task', 'Allows reviewing and approving submitted tasks.'),
   ('can_approve_quality', 'Approve Quality', 'Allows performing quality-stage approval.'),
   ('can_view_self_tasks', 'View Self Tasks Only', 'Allows viewing only tasks assigned to self or created by self.'),

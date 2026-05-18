@@ -29,6 +29,9 @@ const DESIGN_REPORT_TEMPLATE_PATH = path.join(
   "design_project_execution_report_template.xlsx",
 );
 
+const DESIGN_REPORT_TRUTH_LAYER_ERROR =
+  "Design Project Execution report export is disabled until the Design truth layer is complete.";
+
 const STATUS_LABELS = {
   ASSIGNED: "Assigned",
   IN_PROGRESS: "In Progress",
@@ -1920,6 +1923,16 @@ async function generateDesignProjectExecutionTemplateExcel({
 }
 
 async function exportDesignReport(user, query = {}, options = {}) {
+  throw new AppError(
+    409,
+    DESIGN_REPORT_TRUTH_LAYER_ERROR,
+    {
+      report: "Design Project Execution / Fixture Stage Tracking Report",
+      reason: "Unsafe fallback, lifecycle, hold, proof, contribution, KPI, and revision mappings must be normalized before export.",
+    },
+    "DESIGN_REPORT_TRUTH_LAYER_REQUIRED",
+  );
+
   const reportType = REPORT_TYPES.PROJECT;
   const departmentId = resolveReportDepartmentId(user, query.department_id);
   let context = null;

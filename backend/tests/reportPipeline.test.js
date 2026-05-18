@@ -5,7 +5,7 @@ const path = require("path");
 const ExcelJS = require("exceljs");
 
 const { normalizeScopeReportData, validateNormalizedRow } = require("../services/reportService");
-const { generateRawScopeExcel } = require("../services/designReportService");
+const { exportDesignReport, generateRawScopeExcel } = require("../services/designReportService");
 
 async function run() {
   {
@@ -124,6 +124,21 @@ async function run() {
 
     assert.equal(rows[0].status, "COMPLETE");
     assert.equal(rows[1].status, "REWORK");
+  }
+
+  {
+    await assert.rejects(
+      () => exportDesignReport(
+        { employee_id: "EMP001", department_id: "design", role: { name: "Manager" }, permissions: ["can_export_reports"] },
+        { department_id: "design", project_id: "00000000-0000-0000-0000-000000000000" },
+      ),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, "DESIGN_REPORT_TRUTH_LAYER_REQUIRED");
+        assert.match(error.message, /truth layer is complete/);
+        return true;
+      },
+    );
   }
 
   {

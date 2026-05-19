@@ -1,3 +1,8 @@
+const {
+  formatStageRevisionCode,
+  normalizeStageVersion,
+} = require("../lib/workflowStageVersioning");
+
 function parsePermissions(value) {
   if (!value) {
     return {};
@@ -192,6 +197,13 @@ function mapTaskRow(row) {
     current_stage_id: row.current_stage_id,
     workflow_stage: row.workflow_stage || null,
     workflow_status: row.workflow_status || null,
+    workflow_stage_version: normalizeStageVersion(row.workflow_stage_version),
+    workflow_stage_order: row.workflow_stage_order === null || row.workflow_stage_order === undefined
+      ? null
+      : Number(row.workflow_stage_order),
+    workflow_revision_code: row.workflow_stage
+      ? formatStageRevisionCode(row.workflow_stage, normalizeStageVersion(row.workflow_stage_version))
+      : null,
     lifecycle_status: row.lifecycle_status || null,
     activity_count: Number(row.activity_count || 0),
     approval_required: row.approval_required !== false,

@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  downloadDesignReport,
-  fetchWorkflowSummary,
-  WorkflowProjectSummary,
-} from "@/api/reportApi";
+import { downloadDesignReport } from "@/api/reportApi";
 import { fetchAllDepartments } from "@/api/adminApi";
 import { fetchDesignProjects } from "@/api/designApi";
-import { ActiveScopeProgress, ActiveFixtureProgressItem } from "@/components/reports/ActiveScopeProgress";
 import { ReportFilters } from "@/components/reports/ReportFilters";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
@@ -27,7 +22,6 @@ export default function Reports() {
   const { user, access } = useAuth();
   const canSelectDepartments = access.canManageDepartments || isProjectAuthorityUser(user);
   const canExportReports = access.canExportReports;
-  const [workflowSummary, setWorkflowSummary] = useState<WorkflowProjectSummary[]>([]);
   const [reportDepartmentOptions, setReportDepartmentOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedReportDepartmentId, setSelectedReportDepartmentId] = useState("");
   const [reportProjects, setReportProjects] = useState<DesignProjectOption[]>([]);
@@ -128,32 +122,6 @@ export default function Reports() {
     };
   }, [canExportReports, selectedReportDepartmentId]);
 
-  useEffect(() => {
-    let active = true;
-
-    fetchWorkflowSummary()
-      .then((projects) => {
-        if (active) {
-          setWorkflowSummary(projects);
-        }
-      })
-      .catch((error) => {
-        if (!active) {
-          return;
-        }
-
-        toast({
-          title: "Workflow summary unavailable",
-          description: error instanceof Error ? error.message : "Could not load workflow completion summary",
-          variant: "destructive",
-        });
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
   const selectedProject = useMemo(
     () => reportProjects.find((project) => project.project_id === selectedProjectId) || null,
     [reportProjects, selectedProjectId],
@@ -164,22 +132,6 @@ export default function Reports() {
       || user?.department?.name
       || selectedReportDepartmentId,
     [reportDepartmentOptions, selectedReportDepartmentId, user?.department?.name],
-  );
-
-  const activeScopeProgressItems = useMemo<ActiveFixtureProgressItem[]>(
-    () => workflowSummary.flatMap((project) => project.fixtures
-      .filter((fixture) => !fixture.is_complete)
-      .map((fixture) => ({
-        project_key: project.project_key,
-        project_no: project.project_no || "",
-        project_name: project.project_name || "",
-        customer_name: project.customer_name || "",
-        department_name: project.department_name || project.department_id || "",
-        fixture_no: fixture.fixture_no || null,
-        instances_complete: fixture.completed_instances ?? 0,
-        total_instances: fixture.total_instances ?? 0,
-      }))),
-    [workflowSummary],
   );
 
   const canDownloadReport = Boolean(
@@ -219,7 +171,7 @@ export default function Reports() {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">Reports</h1>
-        <p className="text-sm text-muted-foreground">Generate department-driven project reports and review active project progress.</p>
+        <p className="text-sm text-muted-foreground">Generate and export department-driven project reports.</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
@@ -239,8 +191,6 @@ export default function Reports() {
           canDownloadReport={canDownloadReport}
           onDownload={handleReportDownload}
         />
-
-        <ActiveScopeProgress items={activeScopeProgressItems} />
       </div>
     </div>
   );

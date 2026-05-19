@@ -1,17 +1,20 @@
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
-import { ListSkeleton } from '@/components/LoadingSkeletons';
+import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { TaskCard } from '@/components/TaskCard';
 import { TaskStatus } from '@/types';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-const columns: { status: TaskStatus; label: string; color: string }[] = [
-  { status: 'assigned', label: 'Assigned', color: 'bg-muted-foreground' },
-  { status: 'in_progress', label: 'In Progress', color: 'bg-info' },
-  { status: 'on_hold', label: 'On Hold', color: 'bg-warning' },
-  { status: 'under_review', label: 'Review', color: 'bg-warning' },
-  { status: 'rework', label: 'Rework', color: 'bg-destructive' },
-  { status: 'closed', label: 'Closed', color: 'bg-success' },
+const statusTabs: Array<{
+  value: string;
+  label: string;
+  statuses: TaskStatus[];
+}> = [
+  { value: 'active', label: 'Active', statuses: ['created', 'assigned', 'in_progress'] },
+  { value: 'on_hold', label: 'On Hold', statuses: ['on_hold'] },
+  { value: 'review', label: 'Review', statuses: ['under_review'] },
+  { value: 'rework', label: 'Rework', statuses: ['rework'] },
+  { value: 'closed', label: 'Closed', statuses: ['closed'] },
 ];
 
 export default function TeamTasks() {
@@ -19,40 +22,47 @@ export default function TeamTasks() {
   const { tasks, isLoading } = useTasks();
 
   const teamTasks = access.canViewAllTasks ? tasks : [];
-  const groupedTasks = columns.reduce((acc, col) => {
-    acc[col.status] = teamTasks.filter(t => t.status === col.status);
+  const groupedTasks = statusTabs.reduce((acc, tab) => {
+    acc[tab.value] = teamTasks.filter(t => tab.statuses.includes(t.status));
     return acc;
   }, {} as Record<string, typeof tasks>);
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <h1 className="text-2xl font-bold">Team Tasks — Kanban</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
-        {columns.map(col => {
-          const colTasks = groupedTasks[col.status] || [];
+      <div>
+        <h1 className="text-2xl font-bold">Team Tasks</h1>
+        <p className="text-sm text-muted-foreground">Review one operational state at a time.</p>
+      </div>
+
+      <Tabs defaultValue="active" className="space-y-4">
+        <TabsList className="h-auto flex w-full flex-wrap justify-start gap-1 bg-muted/60 p-1">
+          {statusTabs.map((tab) => (
+            <TabsTrigger key={tab.value} value={tab.value} className="flex-1 basis-[calc(50%-0.25rem)] sm:flex-none sm:basis-auto">
+              {tab.label} ({groupedTasks[tab.value]?.length || 0})
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        {statusTabs.map((tab) => {
+          const list = groupedTasks[tab.value] || [];
+
           return (
-            <div key={col.status} className="space-y-3">
-              <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${col.color}`} />
-                <h3 className="text-sm font-medium">{col.label}</h3>
-                <span className="text-xs text-muted-foreground ml-auto">{colTasks.length}</span>
-              </div>
-              <ScrollArea className="h-[calc(100vh-220px)]">
-                <div className="space-y-2 pr-2">
-                  {isLoading ? (
-                    <ListSkeleton count={3} />
-                  ) : colTasks.map(t => <TaskCard key={t.id} task={t} compact showActions={false} />)}
-                  {!isLoading && colTasks.length === 0 && (
-                    <div className="text-xs text-muted-foreground text-center py-8 border border-dashed rounded-lg">
-                      No tasks
-                    </div>
-                  )}
+            <TabsContent key={tab.value} value={tab.value} className="mt-0">
+              {isLoading ? (
+                <TaskGridSkeleton count={6} />
+              ) : list.length === 0 ? (
+                <div className="rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
+                  No {tab.label.toLowerCase()} team tasks.
                 </div>
-              </ScrollArea>
-            </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {list.map(t => <TaskCard key={t.id} task={t} compact showActions={false} />)}
+                </div>
+              )}
+            </TabsContent>
           );
         })}
-      </div>
+      </Tabs>
     </div>
   );
 }

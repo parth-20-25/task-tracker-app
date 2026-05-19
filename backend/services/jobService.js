@@ -74,17 +74,6 @@ async function processJobs() {
   if (!job) return;
 
   try {
-    // Process based on type
-    if (job.type === 'send_notification') {
-      // Import here to avoid circular deps
-      const { notifyTaskAssignees } = require("./notificationService");
-      await notifyTaskAssignees(job.payload.task, job.payload.title, job.payload.body, job.payload.type);
-    } else if (job.type === 'send_email') {
-      const { sendEmail } = require("./notificationService");
-      await sendEmail(job.payload.to, job.payload.subject, job.payload.html);
-    }
-    // Add more job types as needed
-
     await completeJob(job.id);
   } catch (error) {
     await failJob(job.id, error.message);

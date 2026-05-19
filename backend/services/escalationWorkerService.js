@@ -1,6 +1,5 @@
 const { pool } = require("../db");
 const { createAuditLog } = require("../repositories/auditRepository");
-const { createNotification } = require("../repositories/notificationsRepository");
 const { advanceTaskEscalation, listTasksDueForEscalation } = require("../repositories/tasksRepository");
 const { listUsersByRoleAndDepartment } = require("../repositories/usersRepository");
 const { getNextEscalationAt } = require("./escalationService");
@@ -38,28 +37,6 @@ async function runEscalationCycle() {
       const recipients = currentRule.notify_role
         ? await listUsersByRoleAndDepartment(currentRule.notify_role, targetDepartmentId, client)
         : [];
-
-      if (recipients.length > 0) {
-        for (const recipient of recipients) {
-          await createNotification({
-            userEmployeeId: recipient.employee_id,
-            title: `Escalated task: ${task.title}`,
-            body: `Task #${task.id} is overdue and matched escalation rule ${currentRule.name}.`,
-            type: "warning",
-            targetType: "task",
-            targetId: task.id,
-          }, client);
-        }
-      } else {
-        await createNotification({
-          departmentId: targetDepartmentId,
-          title: `Escalated task: ${task.title}`,
-          body: `Task #${task.id} is overdue and matched escalation rule ${currentRule.name}.`,
-          type: "warning",
-          targetType: "task",
-          targetId: task.id,
-        }, client);
-      }
 
       await createAuditLog({
         userEmployeeId: null,

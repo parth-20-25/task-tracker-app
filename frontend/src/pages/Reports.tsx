@@ -11,6 +11,7 @@ import { ReportFilters } from "@/components/reports/ReportFilters";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { DesignProjectOption } from "@/types";
+import { isProjectAuthorityUser } from "@/lib/permissions";
 import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 function sanitizeFileNamePart(value: string) {
@@ -24,7 +25,7 @@ function sanitizeFileNamePart(value: string) {
 
 export default function Reports() {
   const { user, access } = useAuth();
-  const canSelectDepartments = access.canManageDepartments;
+  const canSelectDepartments = access.canManageDepartments || isProjectAuthorityUser(user);
   const canExportReports = access.canExportReports;
   const [workflowSummary, setWorkflowSummary] = useState<WorkflowProjectSummary[]>([]);
   const [reportDepartmentOptions, setReportDepartmentOptions] = useState<Array<{ id: string; name: string }>>([]);

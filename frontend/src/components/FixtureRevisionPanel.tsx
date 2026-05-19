@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { History, RotateCcw, ShieldAlert } from "lucide-react";
+import { ChevronDown, History, RotateCcw, ShieldAlert } from "lucide-react";
 import {
   manipulateFixtureStage,
   reopenFixtureStage,
@@ -10,6 +10,7 @@ import {
   type FixtureStageStatus,
 } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -84,6 +85,7 @@ export function FixtureRevisionPanel({
   const [revisionType, setRevisionType] = useState<FixtureRevisionType>("OTHER");
   const [manualStatus, setManualStatus] = useState<FixtureStageStatus>("PENDING");
   const [remarks, setRemarks] = useState("");
+  const [expanded, setExpanded] = useState(false);
 
   const effectiveTargetStage = useMemo(() => {
     if (stages.some((stage) => stage.stage_name === targetStage)) {
@@ -167,140 +169,150 @@ export function FixtureRevisionPanel({
   }
 
   const actionDisabled = !effectiveTargetStage || reopenMutation.isPending || manualMutation.isPending;
+  const currentRevisionStage = stages.find((stage) => stage.status !== "APPROVED") || stages[stages.length - 1] || null;
+  const currentRevision = currentRevisionStage?.revision_code || `R${progress.revision_no || 0}`;
 
   return (
-    <div className="space-y-3 rounded-xl border bg-background p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            <History className="h-3.5 w-3.5" />
-            Change Fixture Stage
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Current revision: R{progress.revision_no || 0}
-            {progress.is_legacy_workflow ? " · Legacy fixture" : " · Strict workflow fixture"}
-          </p>
-        </div>
-      </div>
+    <Collapsible open={expanded} onOpenChange={setExpanded} className="rounded-xl border bg-background">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-muted/40"
+        >
+          <div>
+            <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              <History className="h-3.5 w-3.5" />
+              Change Fixture Stage
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Current Revision: {currentRevision}
+              {progress.is_legacy_workflow ? " · Legacy fixture" : " · Strict workflow fixture"}
+            </p>
+          </div>
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </button>
+      </CollapsibleTrigger>
 
-      {revisions.length > 0 ? (
-        <div className="space-y-2">
-          {revisions.map((revision) => (
-            <div key={revision.id} className="rounded-lg border bg-muted/20 p-2 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-foreground">
-                  {revision.revision_code || `R${revision.revision_no}`} · {formatRevisionLabel(String(revision.reason_type || revision.revision_type))}
-                </span>
-                <span className="text-muted-foreground">{formatRevisionDate(revision.changed_at)}</span>
-              </div>
-              <p className="mt-1 text-muted-foreground">
-                {revision.reverted_from_stage} {"→"}  {revision.reverted_to_stage}
-              </p>
-              {revision.stage_name ? (
-                <p className="mt-1 font-medium text-foreground">
-                  Stage: {revision.stage_name}
+      <CollapsibleContent className="space-y-3 px-3 pb-3">
+        {revisions.length > 0 ? (
+          <div className="space-y-2 border-t pt-3">
+            {revisions.map((revision) => (
+              <div key={revision.id} className="rounded-lg border bg-muted/20 p-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-foreground">
+                    {revision.revision_code || `R${revision.revision_no}`} · {formatRevisionLabel(String(revision.reason_type || revision.revision_type))}
+                  </span>
+                  <span className="text-muted-foreground">{formatRevisionDate(revision.changed_at)}</span>
+                </div>
+                <p className="mt-1 text-muted-foreground">
+                  {revision.reverted_from_stage} {"→"}  {revision.reverted_to_stage}
                 </p>
-              ) : null}
-              {revision.revision_reason ? <p className="mt-1 text-muted-foreground">{revision.revision_reason}</p> : null}
-              {revision.revision_remarks ? <p className="mt-1 text-muted-foreground">{revision.revision_remarks}</p> : null}
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                Changed by {revision.changed_by_name || revision.changed_by}
-              </p>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-          No revisions recorded yet.
-        </p>
-      )}
+                {revision.stage_name ? (
+                  <p className="mt-1 font-medium text-foreground">
+                    Stage: {revision.stage_name}
+                  </p>
+                ) : null}
+                {revision.revision_reason ? <p className="mt-1 text-muted-foreground">{revision.revision_reason}</p> : null}
+                {revision.revision_remarks ? <p className="mt-1 text-muted-foreground">{revision.revision_remarks}</p> : null}
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  Changed by {revision.changed_by_name || revision.changed_by}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+            No revisions recorded yet.
+          </p>
+        )}
 
-      <div className="grid gap-3 border-t pt-3 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label className="text-xs font-semibold">Target stage</Label>
-          <Select value={effectiveTargetStage} onValueChange={setTargetStage}>
-            <SelectTrigger className="h-9 text-sm">
-              <SelectValue placeholder="Choose stage" />
-            </SelectTrigger>
-            <SelectContent>
-              {stages.map((stage) => (
-                <SelectItem key={stage.stage_name} value={stage.stage_name}>
-                  {stage.stage_order}. {stage.stage_label || stage.stage_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-xs font-semibold">Reason Type</Label>
-          <Select value={revisionType} onValueChange={(value) => setRevisionType(value as FixtureRevisionType)}>
-            <SelectTrigger className="h-9 text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {REVISION_TYPES.map((type) => (
-                <SelectItem key={type.value} value={type.value}>
-                  {type.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {progress.is_legacy_workflow ? (
+        <div className="grid gap-3 border-t pt-3 md:grid-cols-2">
           <div className="space-y-2">
-            <Label className="text-xs font-semibold">Manual target status</Label>
-            <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as FixtureStageStatus)}>
+            <Label className="text-xs font-semibold">Target stage</Label>
+            <Select value={effectiveTargetStage} onValueChange={setTargetStage}>
               <SelectTrigger className="h-9 text-sm">
-                <SelectValue />
+                <SelectValue placeholder="Choose stage" />
               </SelectTrigger>
               <SelectContent>
-                {MANUAL_STATUSES.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {status}
+                {stages.map((stage) => (
+                  <SelectItem key={stage.stage_name} value={stage.stage_name}>
+                    {stage.stage_order}. {stage.stage_label || stage.stage_name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-        ) : null}
 
-        <div className="space-y-2 md:col-span-2">
-          <Label className="text-xs font-semibold">Remarks</Label>
-          <Textarea
-            value={remarks}
-            onChange={(event) => setRemarks(event.target.value)}
-            placeholder="Optional supporting context."
-            rows={2}
-          />
-        </div>
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold">Reason Type</Label>
+            <Select value={revisionType} onValueChange={(value) => setRevisionType(value as FixtureRevisionType)}>
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {REVISION_TYPES.map((type) => (
+                  <SelectItem key={type.value} value={type.value}>
+                    {type.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-        <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={actionDisabled}
-            onClick={() => reopenMutation.mutate()}
-          >
-            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-            Update Stage
-          </Button>
           {progress.is_legacy_workflow ? (
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Manual target status</Label>
+              <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as FixtureStageStatus)}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MANUAL_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+
+          <div className="space-y-2 md:col-span-2">
+            <Label className="text-xs font-semibold">Remarks</Label>
+            <Textarea
+              value={remarks}
+              onChange={(event) => setRemarks(event.target.value)}
+              placeholder="Optional supporting context."
+              rows={2}
+            />
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
             <Button
               type="button"
-              variant="destructive"
+              variant="outline"
               size="sm"
               disabled={actionDisabled}
-              onClick={() => manualMutation.mutate()}
+              onClick={() => reopenMutation.mutate()}
             >
-              <ShieldAlert className="mr-1.5 h-3.5 w-3.5" />
-              Legacy Override
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+              Update Stage
             </Button>
-          ) : null}
+            {progress.is_legacy_workflow ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={actionDisabled}
+                onClick={() => manualMutation.mutate()}
+              >
+                <ShieldAlert className="mr-1.5 h-3.5 w-3.5" />
+                Legacy Override
+              </Button>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

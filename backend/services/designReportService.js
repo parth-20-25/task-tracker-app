@@ -10,7 +10,7 @@ const {
   requireDepartmentContext,
 } = require("../lib/departmentContext");
 const { logger } = require("../lib/logger");
-const { isAdmin } = require("./accessControlService");
+const { isAdmin, isProjectAuthorityRole } = require("./accessControlService");
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
@@ -72,6 +72,7 @@ const STAGES = [
 ];
 
 const STAGE_KEYS = new Set(STAGES.map((stage) => stage.key));
+const VALID_WORKFLOW_STATUSES = new Set(["PENDING", "IN_PROGRESS", "COMPLETED", "APPROVED", "REJECTED"]);
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
 const MAX_STAGE_DURATION_MINUTES = 1000 * 60;
 const TABLE_COLUMNS = [
@@ -617,6 +618,133 @@ function validateFixtureWorkflow(fixture, fixtureProgressRows, progressByStage) 
   }
 
   return true;
+}
+
+function buildProgressLookup(progressRows) {
+  return progressRows.reduce((map, row) => {
+    const key = String(row.fixture_id);
+    const rows = map.get(key) || [];
+    rows.push(row);
+    map.set(key, rows);
+    return map;
+  }, new Map());
+}
+
+function buildAttemptLookup(attemptRows) {
+  return attemptRows.reduce((map, row) => {
+    const fixtureKey = String(row.fixture_id);
+    const fixtureAttempts = map.get(fixtureKey) || new Map();
+    const stageKey = getStageBucket(row.stage_name);
+
+    if (!stageKey) {
+      map.set(fixtureKey, fixtureAttempts);
+      return map;
+    }
+
+    const attempts = fixtureAttempts.get(stageKey) || [];
+    attempts.push(row);
+    fixtureAttempts.set(stageKey, attempts);
+    map.set(fixtureKey, fixtureAttempts);
+    return map;
+  }, new Map());
+}
+
+function collectDesignReportTruthLayerErrors(fixtures = [], progressRows = [], attemptRows = []) {
+  const progressLookup = buildProgressLookup(progressRows);
+  const attemptLookup = buildAttemptLookup(attemptRows);
+  const errors = [];
+
+  fixtures.forEach((fixture) => {
+    const fixtureProgressRows = (progressLookup.get(String(fixture.fixture_id)) || [])
+      .sort((left, right) => Number(left.stage_order || 0) - Number(right.stage_order || 0));
+    const progressByStage = getProgressByStage(fixtureProgressRows);
+    const fixtureAttempts = attemptLookup.get(String(fixture.fixture_id)) || new Map();
+    const fixtureLabel = fixture.fixture_no || fixture.fixture_id;
+
+    if (!validateFixtureWorkflow(fixture, fixtureProgressRows, progressByStage)) {
+      errors.push(`${fixtureLabel}: workflow progress rows are incomplete or inconsistent`);
+      return;
+    }
+
+    const actualTimestampsByStage = new Map();
+
+    STAGES.forEach((stage) => {
+      const progressRow = progressByStage.get(stage.key)?.[0] || null;
+
+      if (!progressRow) {
+        errors.push(`${fixtureLabel}: missing ${stage.label} progress row`);
+        return;
+      }
+
+      const status = normalizeStatus(progressRow.status);
+
+      if (!VALID_WORKFLOW_STATUSES.has(status)) {
+        errors.push(`${fixtureLabel}: invalid ${stage.label} workflow status "${progressRow.status || ""}"`);
+        return;
+      }
+
+      if (status === "IN_PROGRESS" && !(progressRow.assigned_at || progressRow.started_at)) {
+        errors.push(`${fixtureLabel}: ${stage.label} is in progress without a start or assignment timestamp`);
+      }
+
+      const stageAttempts = fixtureAttempts.get(stage.key) || [];
+      const attempts = (stageAttempts.length > 0 ? stageAttempts : buildStageAttemptFallback(progressRow))
+        .map((attempt) => ({
+          ...attempt,
+          actual_end: getAttemptActualEnd(attempt, status),
+        }));
+
+      if (["COMPLETED", "APPROVED", "REJECTED"].includes(status)) {
+        const hasActualEnd = attempts.some((attempt) => (
+          attempt.actual_end
+          || attempt.completed_at
+          || attempt.approved_at
+        ));
+
+        if (!hasActualEnd) {
+          errors.push(`${fixtureLabel}: ${stage.label} is ${status.toLowerCase()} without a truthful completion timestamp`);
+        }
+      }
+
+      attempts.forEach((attempt) => {
+        const actualTimestamp = formatTimelineTimestamp(attempt.actual_end);
+
+        if (!actualTimestamp) {
+          return;
+        }
+
+        const duplicateStage = actualTimestampsByStage.get(actualTimestamp);
+        if (duplicateStage && duplicateStage !== stage.label) {
+          errors.push(`${fixtureLabel}: duplicate actual timestamp ${actualTimestamp} across ${duplicateStage} and ${stage.label}`);
+          return;
+        }
+
+        actualTimestampsByStage.set(actualTimestamp, stage.label);
+      });
+    });
+  });
+
+  return errors;
+}
+
+function assertDesignReportTruthLayerComplete(fixtures, progressRows, attemptRows) {
+  const errors = collectDesignReportTruthLayerErrors(fixtures, progressRows, attemptRows);
+
+  if (errors.length === 0) {
+    return;
+  }
+
+  throw new AppError(
+    409,
+    DESIGN_REPORT_TRUTH_LAYER_ERROR,
+    {
+      report: "Design Project Execution / Fixture Stage Tracking Report",
+      reason: "Required workflow truth data is missing or inconsistent; export would require unsafe fallback values.",
+      details: errors.slice(0, 25),
+      total_errors: errors.length,
+    },
+    "DESIGN_REPORT_TRUTH_LAYER_REQUIRED",
+  );
 }
 
 function columnNumberToLetter(columnNumber) {
@@ -1323,7 +1451,7 @@ function resolveReportDepartmentId(user, requestedDepartmentId) {
     "Invalid department context",
   );
 
-  if (!isAdmin(user) && effectiveDepartmentId !== user.department_id) {
+  if (!isAdmin(user) && !isProjectAuthorityRole(user) && effectiveDepartmentId !== user.department_id) {
     throw new AppError(403, "You do not have permission to access another department");
   }
 
@@ -1923,16 +2051,6 @@ async function generateDesignProjectExecutionTemplateExcel({
 }
 
 async function exportDesignReport(user, query = {}, options = {}) {
-  throw new AppError(
-    409,
-    DESIGN_REPORT_TRUTH_LAYER_ERROR,
-    {
-      report: "Design Project Execution / Fixture Stage Tracking Report",
-      reason: "Unsafe fallback, lifecycle, hold, proof, contribution, KPI, and revision mappings must be normalized before export.",
-    },
-    "DESIGN_REPORT_TRUTH_LAYER_REQUIRED",
-  );
-
   const reportType = REPORT_TYPES.PROJECT;
   const departmentId = resolveReportDepartmentId(user, query.department_id);
   let context = null;
@@ -1959,6 +2077,8 @@ async function exportDesignReport(user, query = {}, options = {}) {
     getFixtureStageTaskRows(fixtureIds),
     listContributionsForFixtures(fixtureIds),
   ]);
+  assertDesignReportTruthLayerComplete(fixtures, progressRows, attemptRows);
+
   const stageTaskIds = stageTasks.map((task) => task.task_id);
   const reportTaskIds = [
     ...fixtures.map((fixture) => fixture.task_id),
@@ -1998,6 +2118,8 @@ async function exportDesignReport(user, query = {}, options = {}) {
 }
 
 module.exports = {
+  assertDesignReportTruthLayerComplete,
+  collectDesignReportTruthLayerErrors,
   exportDesignReport,
   generateDesignProjectExecutionTemplateExcel,
   generateRawScopeExcel,

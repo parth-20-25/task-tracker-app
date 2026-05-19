@@ -4,7 +4,12 @@ const { logger } = require("../lib/logger");
 const { instrumentModuleExports } = require("../lib/observability");
 const { TASK_STATUSES } = require("../config/constants");
 const { listTasksByAccess } = require("../repositories/tasksRepository");
-const { buildTaskAccessPredicate, getTaskAccess, isAdmin } = require("./accessControlService");
+const {
+  buildTaskAccessPredicate,
+  getTaskAccess,
+  isAdmin,
+  isProjectAuthorityRole,
+} = require("./accessControlService");
 
 const REPORTABLE_STATUSES = new Set([
   TASK_STATUSES.ASSIGNED,
@@ -445,11 +450,11 @@ async function listTaskReportRows(user, filters = {}) {
   whereClauses.push("t.status <> 'cancelled'");
 
   if (filters.department_id && filters.department_id !== "all") {
-    if (!isAdmin(user) && filters.department_id !== user.department_id) {
+    if (!isAdmin(user) && !isProjectAuthorityRole(user) && filters.department_id !== user.department_id) {
       throw new AppError(403, "You do not have permission to access another department's reports");
     }
 
-    if (isAdmin(user)) {
+    if (isAdmin(user) || isProjectAuthorityRole(user)) {
       params.push(filters.department_id);
       whereClauses.push(`t.department_id = $${params.length}`);
     }

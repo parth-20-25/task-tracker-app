@@ -44,6 +44,7 @@ const { listDepartments, listAllDepartments } = require("../repositories/departm
 const { listAuditLogs } = require("../repositories/auditRepository");
 const { listShifts } = require("../repositories/shiftsRepository");
 const { listMachines } = require("../repositories/machinesRepository");
+const { HasPermission, isProjectAuthorityRole } = require("../services/accessControlService");
 const {
   listEscalationRules,
   listKpiDefinitions,
@@ -54,6 +55,14 @@ const { listWorkflowTemplates } = require("../repositories/workflowTemplatesRepo
 const router = express.Router();
 
 router.use(authenticate);
+
+async function authorizeDepartmentDirectory(req, _res, next) {
+  if (isProjectAuthorityRole(req.user) || await HasPermission(req.user, PERMISSIONS.MANAGE_DEPARTMENTS)) {
+    return next();
+  }
+
+  return next(new AppError(403, "Department directory access required"));
+}
 
 router.get(
   "/users",
@@ -113,7 +122,7 @@ router.get(
 
 router.get(
   "/all-departments",
-  authorize(PERMISSIONS.MANAGE_DEPARTMENTS),
+  authorizeDepartmentDirectory,
   asyncHandler(async (_req, res) => sendSuccess(res, await listAllDepartments())),
 );
 

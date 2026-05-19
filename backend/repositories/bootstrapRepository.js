@@ -586,21 +586,6 @@ async function ensureReferenceTables(client) {
   `, "idx_issue_comments_issue_created_at");
 
   await client.query(`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_employee_id VARCHAR(50),
-      department_id TEXT,
-      title TEXT NOT NULL,
-      body TEXT NOT NULL,
-      type TEXT NOT NULL DEFAULT 'info',
-      target_type TEXT,
-      target_id TEXT,
-      read_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await client.query(`
     CREATE TABLE IF NOT EXISTS permissions (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

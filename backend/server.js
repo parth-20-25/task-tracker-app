@@ -13,7 +13,6 @@ const { registerProcessErrorHandlers } = require("./lib/observability");
 const { adminRoutes } = require("./routes/adminRoutes");
 const { authRoutes } = require("./routes/authRoutes");
 const { taskRoutes } = require("./routes/taskRoutes");
-const { notificationRoutes } = require("./routes/notificationRoutes");
 const { analyticsRoutes } = require("./routes/analyticsRoutes");
 const overviewRoute = require("./routes/analytics/overviewRoute");
 const deadlineHonestyRoute = require("./routes/analytics/deadlineHonestyRoute");
@@ -35,7 +34,6 @@ const { errorHandler } = require("./middleware/errorHandler");
 const { initDatabase } = require("./services/bootstrapService");
 const { startEscalationWorker } = require("./services/escalationWorkerService");
 const { startPerformanceAnalyticsWorker } = require("./services/performanceAnalyticsWorkerService");
-const { processJobs } = require("./services/jobService");
 
 console.log("SERVER STARTING...");
 console.log("PORT:", process.env.PORT);
@@ -64,7 +62,6 @@ app.use("/api", designRoutes);
 app.use("/api", workflowRoutes);
 app.use("/api", batchRoutes);
 app.use("/api", issueRoutes);
-app.use("/api", notificationRoutes);
 app.use("/api", analyticsRoutes);
 app.use("/api/analytics", overviewRoute);
 app.use("/api/analytics", deadlineHonestyRoute);
@@ -77,14 +74,6 @@ app.use("/api", adminRoutes);
 
 app.use(errorHandler);
 
-async function safeProcessJobs() {
-  try {
-    await processJobs();
-  } catch (err) {
-    console.error("Job worker error:", err.message);
-  }
-}
-
 async function startServer() {
   validateBackendEnv();
   await initDatabase();
@@ -95,10 +84,6 @@ async function startServer() {
       startEscalationWorker();
       startPerformanceAnalyticsWorker();
       console.log(`Server running on port ${PORT}`);
-      
-      setTimeout(() => {
-        setInterval(safeProcessJobs, 5000);
-      }, 5000);
 
       resolve(server);
     });

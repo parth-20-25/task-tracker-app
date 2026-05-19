@@ -186,15 +186,26 @@ export function isAdminUser(user: User | null | undefined) {
 }
 
 export function isProjectAuthorityUser(user: User | null | undefined) {
-  const roleName = String(user?.role?.name || "").trim().toLowerCase();
-  const roleId = String(user?.role?.id || user?.role_id || "").trim().toLowerCase();
+  const roleName = normalizeRoleKey(user?.role?.name);
+  const roleId = normalizeRoleKey(user?.role?.id || user?.role_id);
+  const hierarchyLevel = Number(user?.role?.hierarchy_level);
 
-  return ["admin", "ceo", "director"].includes(roleName)
-    || ["admin", "ceo", "director"].includes(roleId)
+  return (Number.isFinite(hierarchyLevel) && hierarchyLevel <= 2)
+    || ["admin", "ceo", "director", "director_ceo", "ceo_director", "plant_head", "r1", "r2"].includes(roleName)
+    || ["admin", "ceo", "director", "director_ceo", "ceo_director", "plant_head", "r1", "r2"].includes(roleId)
     || isAdminUser(user);
 }
 
+function normalizeRoleKey(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 export function buildUiAccess(user: User | null | undefined): UiAccess {
+  const projectAuthority = isProjectAuthorityUser(user);
   const canAssignTasks = hasUserPermission(user, PERMISSIONS.ASSIGN_TASK);
   const canTransferTasks = hasUserPermission(user, PERMISSIONS.TRANSFER_TASK);
   const canApproveCompletedTasks = hasUserPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK);
@@ -215,9 +226,9 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canUploadData = hasUserPermission(user, PERMISSIONS.UPLOAD_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
   const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);
-  const canViewAllTasks = hasUserPermission(user, PERMISSIONS.VIEW_ALL_TASKS);
-  const canViewReports = hasUserPermission(user, PERMISSIONS.VIEW_REPORTS);
-  const canExportReports = hasUserPermission(user, PERMISSIONS.EXPORT_REPORTS);
+  const canViewAllTasks = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_ALL_TASKS);
+  const canViewReports = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_REPORTS);
+  const canExportReports = projectAuthority || hasUserPermission(user, PERMISSIONS.EXPORT_REPORTS);
   const canViewDepartmentAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS);
   const canViewAllDepartmentsAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const canViewAllUsersAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);

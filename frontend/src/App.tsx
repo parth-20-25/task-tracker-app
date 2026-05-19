@@ -18,7 +18,6 @@ const TaskDetail = React.lazy(() => import("./pages/TaskDetail"));
 const TeamTasks = React.lazy(() => import("./pages/TeamTasks"));
 const Verifications = React.lazy(() => import("./pages/Verifications"));
 const AdminPanel = React.lazy(() => import("./pages/AdminPanel"));
-const Notifications = React.lazy(() => import("./pages/Notifications"));
 const Analytics = React.lazy(() => import("./pages/Analytics/AnalyticsDashboard"));
 const Reports = React.lazy(() => import("./pages/Reports"));
 const Batches = React.lazy(() => import("./pages/Batches"));
@@ -44,7 +43,6 @@ function AuthenticatedApp() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/tasks" element={<MyTasks />} />
             <Route path="/tasks/:taskId" element={<TaskDetail />} />
-            <Route path="/notifications" element={<Notifications />} />
             <Route path="/issues" element={<Issues />} />
             <Route path="/batches" element={<Batches />} />
             {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}

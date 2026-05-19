@@ -124,7 +124,14 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
 
 function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") {
   return `
-    COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+    (
+      EXISTS (
+        SELECT 1
+        FROM root_user root
+        WHERE ${projectAuthoritySqlPredicate("root")}
+      )
+      OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+    )
   `;
 }
 

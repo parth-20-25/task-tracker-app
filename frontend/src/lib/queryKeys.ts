@@ -17,10 +17,6 @@ export const adminQueryKeys = {
   escalationRules: ["admin", "escalation-rules"] as const,
 };
 
-export const notificationQueryKeys = {
-  all: ["notifications"] as const,
-};
-
 export const analyticsQueryKeys = {
   all: ["analytics"] as const,
   root: ["analytics"] as const,

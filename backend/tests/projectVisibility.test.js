@@ -8,6 +8,7 @@ const {
   isProjectAuthorityRoleIdentity,
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,
+  visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
 
 test("role keys normalize Director/CEO variants for project authority checks", () => {
@@ -33,4 +34,12 @@ test("visible users CTE gives project authority roles all active uploaders", () 
   assert.match(sql, /director_ceo/);
   assert.match(sql, /JOIN users child\s+ON COALESCE\(child\.is_active, TRUE\) = TRUE/);
   assert.doesNotMatch(sql, /child_role\.hierarchy_level[\s\S]*>\s*root\.hierarchy_level/);
+});
+
+test("project visibility predicate gives project authority roles full project visibility", () => {
+  const sql = visibleProjectPredicate("p");
+
+  assert.match(sql, /FROM root_user root/);
+  assert.match(sql, /hierarchy_level <= 2/);
+  assert.match(sql, /uploaded_by IN \(SELECT employee_id FROM visible_users\)/);
 });

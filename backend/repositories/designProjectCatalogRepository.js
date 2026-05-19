@@ -3,6 +3,10 @@ const { PROJECT_STATUSES } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
 const { AppError } = require("../lib/AppError");
 const {
+  formatStageRevisionCode,
+  normalizeStageVersion,
+} = require("../lib/workflowStageVersioning");
+const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
   getAccessibleProjectIds,
@@ -140,6 +144,11 @@ function mapFixtureOptionRow(row) {
     return null;
   }
 
+  const stageVersion = normalizeStageVersion(row.workflow_stage_version);
+  const workflowRevisionCode = row.workflow_revision_code
+    || (row.workflow_stage ? formatStageRevisionCode(row.workflow_stage, stageVersion) : null);
+  const workflowStatus = row.workflow_status || null;
+
   return {
     fixture_id: row.fixture_id || row.id,
     project_id: row.project_id || null,
@@ -155,6 +164,20 @@ function mapFixtureOptionRow(row) {
     ingestion_source: row.ingestion_source || null,
     revision_no: Number(row.revision_no || 0),
     is_legacy_workflow: row.is_legacy_workflow === true,
+    is_workflow_complete: row.is_workflow_complete === true,
+    workflow_stage: row.workflow_stage || null,
+    workflow_stage_label: row.workflow_stage_label || null,
+    workflow_stage_order: row.workflow_stage_order === null || row.workflow_stage_order === undefined
+      ? null
+      : Number(row.workflow_stage_order),
+    workflow_stage_version: stageVersion,
+    workflow_revision_code: workflowRevisionCode,
+    workflow_status: workflowStatus,
+    workflow_assigned_to: row.workflow_assigned_to || null,
+    workflow_assigned_to_name: row.workflow_assigned_to_name || null,
+    workflow_stage_active: workflowStatus === "IN_PROGRESS",
+    review_pending: workflowStatus === "COMPLETED",
+    blocked: workflowStatus === "REJECTED",
   };
 }
 
@@ -604,13 +627,40 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         di.qty,
         di.image_1_url,
         di.image_2_url,
-        di.ingestion_source
+        di.ingestion_source,
+        di.revision_no,
+        di.is_legacy_workflow,
+        di.is_workflow_complete,
+        current_progress.stage_name AS workflow_stage,
+        current_progress.stage_name AS workflow_stage_label,
+        current_progress.stage_order AS workflow_stage_order,
+        current_progress.stage_version AS workflow_stage_version,
+        current_progress.status AS workflow_status,
+        current_progress.assigned_to AS workflow_assigned_to,
+        workflow_assignee.name AS workflow_assigned_to_name
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      LEFT JOIN LATERAL (
+        SELECT
+          fwp.stage_name,
+          fwp.stage_order,
+          fwp.stage_version,
+          fwp.status,
+          fwp.assigned_to
+        FROM fixture_workflow_progress fwp
+        WHERE fwp.fixture_id = di.id
+          AND fwp.department_id = dp.department_id
+        ORDER BY
+          CASE WHEN fwp.status <> 'APPROVED' THEN 0 ELSE 1 END ASC,
+          CASE WHEN fwp.status <> 'APPROVED' THEN fwp.stage_order END ASC NULLS LAST,
+          CASE WHEN fwp.status = 'APPROVED' THEN fwp.stage_order END DESC NULLS LAST
+        LIMIT 1
+      ) current_progress ON TRUE
+      LEFT JOIN users workflow_assignee
+        ON workflow_assignee.employee_id = current_progress.assigned_to
      WHERE dp.id = $1
        AND dp.department_id = $2
-       AND di.is_workflow_complete = FALSE
        AND ($3::boolean = FALSE OR COALESCE(dp.status, $4) = $4)
      ORDER BY di.fixture_no ASC, di.id ASC
     `,
@@ -636,13 +686,40 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         di.qty,
         di.image_1_url,
         di.image_2_url,
-        di.ingestion_source
+        di.ingestion_source,
+        di.revision_no,
+        di.is_legacy_workflow,
+        di.is_workflow_complete,
+        current_progress.stage_name AS workflow_stage,
+        current_progress.stage_name AS workflow_stage_label,
+        current_progress.stage_order AS workflow_stage_order,
+        current_progress.stage_version AS workflow_stage_version,
+        current_progress.status AS workflow_status,
+        current_progress.assigned_to AS workflow_assigned_to,
+        workflow_assignee.name AS workflow_assigned_to_name
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      LEFT JOIN LATERAL (
+        SELECT
+          fwp.stage_name,
+          fwp.stage_order,
+          fwp.stage_version,
+          fwp.status,
+          fwp.assigned_to
+        FROM fixture_workflow_progress fwp
+        WHERE fwp.fixture_id = di.id
+          AND fwp.department_id = dp.department_id
+        ORDER BY
+          CASE WHEN fwp.status <> 'APPROVED' THEN 0 ELSE 1 END ASC,
+          CASE WHEN fwp.status <> 'APPROVED' THEN fwp.stage_order END ASC NULLS LAST,
+          CASE WHEN fwp.status = 'APPROVED' THEN fwp.stage_order END DESC NULLS LAST
+        LIMIT 1
+      ) current_progress ON TRUE
+      LEFT JOIN users workflow_assignee
+        ON workflow_assignee.employee_id = current_progress.assigned_to
       WHERE dp.id = $2
         AND dp.department_id = $3
-        AND di.is_workflow_complete = FALSE
         AND ${visibleFixturePredicate("di", "dp")}
         AND ($4::boolean = FALSE OR COALESCE(dp.status, $5) = $5)
       ORDER BY di.fixture_no ASC, di.id ASC

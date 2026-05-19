@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, ClipboardList, Users, Settings, Shield, Building2, FileText, LogOut, ChevronDown, Bell, BarChart3,
+  LayoutDashboard, ClipboardList, Users, Settings, Shield, Building2, FileText, LogOut, ChevronDown, BarChart3,
   MessageSquareWarning, PackageCheck,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
@@ -23,7 +23,6 @@ export function AppSidebar() {
   const mainItems = [
     { title: 'Dashboard', url: '/', icon: LayoutDashboard },
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
-    { title: 'Notifications', url: '/notifications', icon: Bell },
     { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
     { title: 'Batches', url: '/batches', icon: PackageCheck },
   ];

@@ -34,7 +34,6 @@ import { toast } from "@/hooks/use-toast";
 import {
   adminQueryKeys,
   analyticsQueryKeys,
-  notificationQueryKeys,
   projectQueryKeys,
   taskQueryKeys,
 } from "@/lib/queryKeys";
@@ -42,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { FixtureRevisionPanel } from "@/components/FixtureRevisionPanel";
 import { FixtureReferenceImageSupport } from "@/components/FixtureReferenceImageSupport";
+import { WorkflowAwareFixtureSelect } from "@/components/WorkflowAwareFixtureSelect";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -484,7 +484,6 @@ export function DesignTaskAssignmentBar({
         queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs }),
         queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: notificationQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] }),
         queryClient.invalidateQueries({ queryKey: ["workflow", "validate"] }),
         queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] }),
@@ -588,7 +587,7 @@ export function DesignTaskAssignmentBar({
       ? "Loading fixtures..."
       : fixtures.length > 0
         ? "Select fixture"
-        : "No fixtures (all completed)";
+        : "No fixtures available";
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -642,21 +641,13 @@ export function DesignTaskAssignmentBar({
 
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Fixture *</Label>
-              <Select value={fixtureId} onValueChange={handleFixtureChange}>
-                <SelectTrigger
-                  className="h-9 text-sm border-primary/40 focus:border-primary"
-                  disabled={!projectId || fixturesQuery.isLoading || fixtures.length === 0}
-                >
-                  <SelectValue placeholder={fixturePlaceholder} />
-                </SelectTrigger>
-                <SelectContent>
-                  {fixtures.map((fixture) => (
-                    <SelectItem key={fixture.fixture_id} value={fixture.fixture_id}>
-                      {fixture.fixture_no} — {fixture.part_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <WorkflowAwareFixtureSelect
+                fixtures={fixtures}
+                value={fixtureId}
+                onValueChange={handleFixtureChange}
+                disabled={!projectId || fixturesQuery.isLoading || fixtures.length === 0}
+                placeholder={fixturePlaceholder}
+              />
             </div>
 
             <div className="space-y-1.5">

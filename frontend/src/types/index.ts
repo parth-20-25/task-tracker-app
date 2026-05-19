@@ -227,19 +227,6 @@ export interface Issue {
   comments?: IssueComment[];
 }
 
-export interface Notification {
-  id: string;
-  user_employee_id?: string | null;
-  department_id?: string | null;
-  title: string;
-  body: string;
-  type: string;
-  target_type?: string;
-  target_id?: string;
-  read_at?: string | null;
-  created_at: string;
-}
-
 export interface PerformanceAnalyticsContext {
   scope: "department_only" | "all_departments";
   default_department_id: string | null;
@@ -544,6 +531,18 @@ export interface DesignFixtureOption {
   ingestion_source?: string | null;
   revision_no?: number;
   is_legacy_workflow?: boolean;
+  is_workflow_complete?: boolean;
+  workflow_stage?: string | null;
+  workflow_stage_label?: string | null;
+  workflow_stage_order?: number | null;
+  workflow_stage_version?: number | null;
+  workflow_revision_code?: string | null;
+  workflow_status?: string | null;
+  workflow_assigned_to?: string | null;
+  workflow_assigned_to_name?: string | null;
+  workflow_stage_active?: boolean;
+  review_pending?: boolean;
+  blocked?: boolean;
 }
 
 export interface DesignExcelPreviewRow {

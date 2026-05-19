@@ -71,7 +71,6 @@ const {
   isTaskAssignee,
 } = require("./accessControlService");
 const { getEscalationSchedule } = require("./escalationService");
-const { notifyDepartment, notifyTaskAssignees } = require("./notificationService");
 const { refreshPerformanceAnalyticsForDepartment } = require("./performanceAnalyticsService");
 const { ensureDepartmentWorkflow } = require("./workflowRecoveryService");
 
@@ -648,12 +647,6 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
     },
   });
 
-  if (action === "submit") {
-    await notifyDepartment(task.department_id, "Task ready for review", task.title, "approval", {
-      targetType: "task",
-      targetId: task.id,
-    });
-  }
 }
 
 async function resolveFixtureContextForTask({
@@ -1026,7 +1019,6 @@ async function createTaskForUser(user, payload = {}) {
   });
 
   const task = await findTaskById(taskId);
-  await notifyTaskAssignees(task, "New task assigned", task.internal_identifier, "task");
   await refreshTaskPerformanceAnalytics(task);
   return task;
 }
@@ -1507,7 +1499,6 @@ async function transferTaskForUser(user, taskId, payload = {}) {
     client.release();
   }
 
-  await notifyTaskAssignees(updatedTask, "Task transferred", updatedTask.internal_identifier || updatedTask.title, "task");
   await refreshTaskPerformanceAnalytics(updatedTask);
   return updatedTask;
 }
@@ -1761,12 +1752,6 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
     },
   });
 
-  if (nextStatus === TASK_STATUSES.UNDER_REVIEW) {
-    await notifyDepartment(task.department_id, "Task ready for review", task.title, "approval", {
-      targetType: "task",
-      targetId: task.id,
-    });
-  }
 }
 
 async function applyTaskVerificationUpdate(user, task, verificationStatus, remarks) {
@@ -1870,12 +1855,6 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
     },
   });
 
-  await notifyTaskAssignees(
-    task,
-    next.status === TASK_STATUSES.CLOSED ? "Task approved" : next.status === TASK_STATUSES.REWORK ? "Task returned for rework" : "Task moved to quality review",
-    remarks || task.title,
-    next.status === TASK_STATUSES.REWORK ? "warning" : "approval",
-  );
 }
 
 function getVerificationOutcome(user, task, requestedStatus) {
@@ -2233,7 +2212,7 @@ async function applyTaskDetailUpdate(user, task, payload) {
 
   if (hasReassignment) {
     const refreshedTask = await findTaskById(task.id);
-    await notifyTaskAssignees(refreshedTask, "Task reassigned", refreshedTask.internal_identifier || refreshedTask.title, "task");
+    await refreshTaskPerformanceAnalytics(refreshedTask);
   }
 }
 

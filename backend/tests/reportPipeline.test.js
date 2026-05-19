@@ -4,8 +4,13 @@ const os = require("os");
 const path = require("path");
 const ExcelJS = require("exceljs");
 
+process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
+
 const { normalizeScopeReportData, validateNormalizedRow } = require("../services/reportService");
-const { exportDesignReport, generateRawScopeExcel } = require("../services/designReportService");
+const {
+  assertDesignReportTruthLayerComplete,
+  generateRawScopeExcel,
+} = require("../services/designReportService");
 
 async function run() {
   {
@@ -127,15 +132,47 @@ async function run() {
   }
 
   {
-    await assert.rejects(
-      () => exportDesignReport(
-        { employee_id: "EMP001", department_id: "design", role: { name: "Manager" }, permissions: ["can_export_reports"] },
-        { department_id: "design", project_id: "00000000-0000-0000-0000-000000000000" },
+    const fixtures = [{ fixture_id: "fixture-1", fixture_no: "FX-01" }];
+    const activeIncompleteProgress = [
+      {
+        fixture_id: "fixture-1",
+        stage_name: "concept",
+        stage_order: 1,
+        status: "APPROVED",
+        assigned_at: "2026-04-01T08:00:00Z",
+        started_at: "2026-04-01T08:00:00Z",
+        completed_at: "2026-04-01T10:00:00Z",
+      },
+      {
+        fixture_id: "fixture-1",
+        stage_name: "dap",
+        stage_order: 2,
+        status: "IN_PROGRESS",
+        assigned_at: "2026-04-01T10:30:00Z",
+        started_at: "2026-04-01T10:30:00Z",
+        completed_at: null,
+      },
+      { fixture_id: "fixture-1", stage_name: "3d_finish", stage_order: 3, status: "PENDING" },
+      { fixture_id: "fixture-1", stage_name: "2d_finish", stage_order: 4, status: "PENDING" },
+    ];
+
+    assert.doesNotThrow(() => assertDesignReportTruthLayerComplete(
+      fixtures,
+      activeIncompleteProgress,
+      [],
+    ));
+
+    assert.throws(
+      () => assertDesignReportTruthLayerComplete(
+        fixtures,
+        activeIncompleteProgress.slice(0, 3),
+        [],
       ),
       (error) => {
         assert.equal(error.statusCode, 409);
         assert.equal(error.errorCode, "DESIGN_REPORT_TRUTH_LAYER_REQUIRED");
         assert.match(error.message, /truth layer is complete/);
+        assert.match(error.details.details.join(" | "), /incomplete or inconsistent|missing 2D FINISH/);
         return true;
       },
     );

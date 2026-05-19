@@ -1,7 +1,13 @@
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
-const { HasPermission, isAdmin } = require("../services/accessControlService");
+const { HasPermission, isAdmin, isProjectAuthorityRole } = require("../services/accessControlService");
+const { PERMISSIONS } = require("../config/constants");
 const { normalizePermissionIds } = require("../repositories/permissionRepository");
+
+const PROJECT_AUTHORITY_PERMISSIONS = new Set([
+  PERMISSIONS.VIEW_REPORTS,
+  PERMISSIONS.EXPORT_REPORTS,
+]);
 
 function normalizeRoleId(role) {
   if (!role) {
@@ -88,6 +94,10 @@ function authorize(requiredPermission) {
       });
 
       if (permissionGranted) {
+        return next();
+      }
+
+      if (PROJECT_AUTHORITY_PERMISSIONS.has(requiredPermission) && isProjectAuthorityRole(req.user)) {
         return next();
       }
 

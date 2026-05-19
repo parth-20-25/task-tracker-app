@@ -1,5 +1,5 @@
 const { AppError } = require("./AppError");
-const { isAdmin } = require("../services/accessControlService");
+const { isAdmin, isProjectAuthorityRole } = require("../services/accessControlService");
 
 function normalizeDepartmentId(value) {
   return String(value || "").trim();
@@ -32,7 +32,7 @@ function requireUserDepartment(user, message = "User missing department_id") {
 function resolveAccessibleDepartmentId(user, overrideDepartmentId, message = "Invalid department context") {
   const effectiveDepartmentId = getEffectiveDepartment(user, overrideDepartmentId);
 
-  if (isAdmin(user)) {
+  if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return requireDepartmentContext(effectiveDepartmentId, message);
   }
 

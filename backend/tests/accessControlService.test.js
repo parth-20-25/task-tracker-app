@@ -7,6 +7,8 @@ const { PERMISSIONS } = require("../config/constants");
 const {
   buildTaskAccessPredicate,
   canAccessTask,
+  canAccessDepartment,
+  isProjectAuthorityRole,
 } = require("../services/accessControlService");
 
 function makeUser(overrides = {}) {
@@ -97,6 +99,52 @@ test("View All Tasks keeps manager scope but includes directly assigned outside 
     assignee_ids: ["EMP100"],
     project_uploaded_by: "EMP999",
   })), true);
+});
+
+test("Director/CEO-style project authority roles inherit org-wide task and department visibility", () => {
+  const directorCeo = makeUser({
+    employee_id: "CEO001",
+    department_id: null,
+    permissions: [PERMISSIONS.VIEW_ALL_TASKS],
+    role: {
+      id: "director_ceo",
+      name: "Director/CEO",
+      hierarchy_level: 2,
+      permissions: {},
+    },
+    visible_user_ids: ["CEO001"],
+  });
+
+  assert.equal(isProjectAuthorityRole(directorCeo), true);
+  assert.equal(canAccessDepartment(directorCeo, "design"), true);
+  assert.equal(canAccessTask(directorCeo, makeTask({
+    department_id: "design",
+    project_uploaded_by: "EMP999",
+  })), true);
+
+  const params = [];
+  assert.equal(buildTaskAccessPredicate(directorCeo, params).trim(), "1 = 1");
+  assert.deepEqual(params, []);
+});
+
+test("lower hierarchy roles do not receive org-wide project authority", () => {
+  const lineManager = makeUser({
+    permissions: [PERMISSIONS.VIEW_ALL_TASKS],
+    role: {
+      id: "r3",
+      name: "Line Manager",
+      hierarchy_level: 3,
+      permissions: {},
+    },
+    visible_user_ids: ["EMP100", "EMP101"],
+  });
+
+  assert.equal(isProjectAuthorityRole(lineManager), false);
+  assert.equal(canAccessDepartment(lineManager, "d2"), false);
+  assert.equal(canAccessTask(lineManager, makeTask({
+    department_id: "d1",
+    project_uploaded_by: "EMP999",
+  })), false);
 });
 
 test("SQL access predicate separates self and all task scopes", () => {

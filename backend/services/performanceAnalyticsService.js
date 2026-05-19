@@ -13,7 +13,13 @@ const {
   listUserPerformance,
   refreshPerformanceAnalytics,
 } = require("../repositories/performanceAnalyticsRepository");
-const { canAccessUser, getVisibleUserIds, hasPermission, isAdmin } = require("./accessControlService");
+const {
+  canAccessUser,
+  getVisibleUserIds,
+  hasPermission,
+  isAdmin,
+  isProjectAuthorityRole,
+} = require("./accessControlService");
 
 const DEFAULT_MINIMUM_APPROVED_TASKS = Number(process.env.PERFORMANCE_MIN_APPROVED_TASKS || 5);
 const DEFAULT_OVERDUE_PENALTY_FACTOR = Number(process.env.DEPARTMENT_OVERDUE_PENALTY_FACTOR || 1);
@@ -28,8 +34,12 @@ function roundNumber(value, decimals = 2) {
   return Math.round(Number(value) * factor) / factor;
 }
 
+function hasOrgWideVisibility(user) {
+  return isAdmin(user) || isProjectAuthorityRole(user);
+}
+
 function ensureAnyAnalyticsAccess(user) {
-  const allowed = isAdmin(user) || [
+  const allowed = hasOrgWideVisibility(user) || [
     PERMISSIONS.VIEW_SELF_ANALYTICS,
     PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
     PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
@@ -44,7 +54,7 @@ function ensureAnyAnalyticsAccess(user) {
 function getScopeContext(user) {
   ensureAnyAnalyticsAccess(user);
 
-  const hasAllDepartmentsScope = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
+  const hasAllDepartmentsScope = hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const hasDepartmentScope = hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS) || Boolean(user?.department_id);
 
   if (!hasAllDepartmentsScope && !hasDepartmentScope) {
@@ -142,8 +152,8 @@ async function resolveUserForDrilldown(scopeContext, viewer, requestedUserId) {
   }
 
   const isSelf = targetUser.employee_id === viewer.employee_id;
-  const canViewOtherUsers = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
-  const canViewSelf = isAdmin(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_SELF_ANALYTICS) || canViewOtherUsers;
+  const canViewOtherUsers = hasOrgWideVisibility(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
+  const canViewSelf = hasOrgWideVisibility(viewer) || hasPermission(viewer, PERMISSIONS.VIEW_SELF_ANALYTICS) || canViewOtherUsers;
 
   if ((isSelf && !canViewSelf) || (!isSelf && !canViewOtherUsers)) {
     throw new AppError(403, "You do not have access to this user performance");
@@ -255,10 +265,10 @@ async function getPerformanceAnalyticsContext(user) {
       department_name: user.department?.name || null,
     },
     permissions: {
-      view_self_user: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_SELF_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS),
-      view_self_department: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS),
-      view_department_comparison: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS),
-      view_user_comparison: isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS),
+      view_self_user: hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_SELF_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS),
+      view_self_department: hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS),
+      view_department_comparison: hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS),
+      view_user_comparison: hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS),
     },
     departments: departments.map((department) => ({
       id: department.id,
@@ -277,7 +287,7 @@ async function getPerformanceOverview(user, query = {}) {
   const selectedDepartment = selectedDepartmentId
     ? departments.find((department) => department.id === selectedDepartmentId) || null
     : null;
-  const overview = isAdmin(user)
+  const overview = hasOrgWideVisibility(user)
     ? await getPerformanceOverviewSnapshot(selectedDepartmentId)
     : await getPerformanceOverviewForUsers(
       selectedDepartmentId || scopeContext.department_id,
@@ -293,7 +303,7 @@ async function getPerformanceOverview(user, query = {}) {
 
 async function getUserPerformanceRankings(user, query = {}) {
   const scopeContext = getScopeContext(user);
-  const canViewRankings = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
+  const canViewRankings = hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
 
   if (!canViewRankings) {
     throw new AppError(403, "User performance rankings require comparison access");
@@ -313,7 +323,7 @@ async function getUserPerformanceRankings(user, query = {}) {
   const department = visibleDepartments.find((item) => item.id === selectedDepartmentId) || null;
   const items = await listUserPerformance(
     selectedDepartmentId,
-    isAdmin(user) ? null : getVisibleUserIds(user),
+    hasOrgWideVisibility(user) ? null : getVisibleUserIds(user),
   );
 
   return {
@@ -328,8 +338,8 @@ async function getUserPerformanceRankings(user, query = {}) {
 async function getDepartmentPerformanceRankings(user, query = {}) {
   const scopeContext = getScopeContext(user);
   const visibleDepartments = await getVisibleDepartments(scopeContext);
-  const canCompareDepartments = isAdmin(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
-  const canViewOwnDepartment = isAdmin(user)
+  const canCompareDepartments = hasOrgWideVisibility(user) || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
+  const canViewOwnDepartment = hasOrgWideVisibility(user)
     || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS)
     || canCompareDepartments;
 
@@ -346,7 +356,7 @@ async function getDepartmentPerformanceRankings(user, query = {}) {
 
   let items;
 
-  if (isAdmin(user)) {
+  if (hasOrgWideVisibility(user)) {
     items = await listDepartmentPerformance(selectedDepartmentId || null);
   } else {
     const overview = await getPerformanceOverviewForUsers(

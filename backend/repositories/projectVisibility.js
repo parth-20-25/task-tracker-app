@@ -1,6 +1,58 @@
 const { pool } = require("../db");
 
-const DEFAULT_PARENT_ROLE_NAMES = ["admin", "ceo", "director"];
+const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = 2;
+const PROJECT_AUTHORITY_ROLE_KEYS = [
+  "admin",
+  "ceo",
+  "director",
+  "director_ceo",
+  "ceo_director",
+  "plant_head",
+  "r1",
+  "r2",
+];
+const DEFAULT_PARENT_ROLE_NAMES = PROJECT_AUTHORITY_ROLE_KEYS;
+
+function normalizeRoleKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isProjectAuthorityRoleIdentity(value) {
+  return PROJECT_AUTHORITY_ROLE_KEYS.includes(normalizeRoleKey(value));
+}
+
+function isProjectAuthorityRoleLevel(level) {
+  if (level === null || level === undefined || String(level).trim() === "") {
+    return false;
+  }
+
+  const numericLevel = Number(level);
+  return Number.isFinite(numericLevel) && numericLevel <= PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL;
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function sqlTextArray(values) {
+  return `ARRAY[${values.map(sqlLiteral).join(", ")}]::text[]`;
+}
+
+function roleKeySql(expression) {
+  return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
+}
+
+function projectAuthoritySqlPredicate(rootAlias = "root") {
+  return `(
+          ${rootAlias}.hierarchy_level <= ${PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL}
+          OR ${rootAlias}.role_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
+          OR ${rootAlias}.role_id_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
+        )`;
+}
 
 function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
   return `
@@ -11,7 +63,9 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         u.department_id,
         COALESCE(r.hierarchy_level, 2147483647)::integer AS hierarchy_level,
         LOWER(BTRIM(COALESCE(r.name, u.role, ''))) AS role_name,
-        LOWER(BTRIM(COALESCE(u.role, ''))) AS role_id
+        LOWER(BTRIM(COALESCE(u.role, ''))) AS role_id,
+        ${roleKeySql("COALESCE(r.name, u.role)")} AS role_key,
+        ${roleKeySql("u.role")} AS role_id_key
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       WHERE (u.id::text = ${rootUserParam} OR u.employee_id = ${rootUserParam})
@@ -63,16 +117,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
       FROM root_user root
       JOIN users child
         ON COALESCE(child.is_active, TRUE) = TRUE
-      LEFT JOIN roles child_role
-        ON child_role.id = child.role
-      WHERE (
-          root.role_name = ANY(ARRAY[${DEFAULT_PARENT_ROLE_NAMES.map((roleName) => `'${roleName}'`).join(", ")}]::text[])
-          OR root.role_id = ANY(ARRAY[${DEFAULT_PARENT_ROLE_NAMES.map((roleName) => `'${roleName}'`).join(", ")}]::text[])
-        )
-        AND (
-          child.employee_id = root.employee_id
-          OR COALESCE(child_role.hierarchy_level, 2147483647) > root.hierarchy_level
-        )
+      WHERE ${projectAuthoritySqlPredicate("root")}
     )
   `;
 }
@@ -135,9 +180,15 @@ async function getAccessibleProjectIds(currentUserId, departmentId = null, clien
 module.exports = {
   DEFAULT_PARENT_ROLE_NAMES,
   GetAccessibleUserIds,
+  PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL,
+  PROJECT_AUTHORITY_ROLE_KEYS,
   buildVisibleUsersCte,
   getAccessibleProjectIds,
   getAccessibleUserIds: GetAccessibleUserIds,
+  isProjectAuthorityRoleIdentity,
+  isProjectAuthorityRoleLevel,
+  normalizeRoleKey,
+  projectAuthoritySqlPredicate,
   visibleFixturePredicate,
   visibleProjectPredicate,
 };

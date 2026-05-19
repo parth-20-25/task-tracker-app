@@ -1,7 +1,12 @@
 const { PERMISSIONS } = require("../config/constants");
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
-const { getVisibleUserIds, hasPermission, isAdmin } = require("./accessControlService");
+const {
+  getVisibleUserIds,
+  hasPermission,
+  isAdmin,
+  isProjectAuthorityRole,
+} = require("./accessControlService");
 
 const CREDIBILITY_TOLERANCE_MINUTES = 120;
 const LATE_BOUNDARY_MINUTES = 120;
@@ -206,13 +211,17 @@ function classifyErrorBucket(errorMinutes) {
   return "severe";
 }
 
+function hasOrgWideVisibility(user) {
+  return isAdmin(user) || isProjectAuthorityRole(user);
+}
+
 function buildScope(filters = {}, user) {
-  const canViewAllDepartments = isAdmin(user)
+  const canViewAllDepartments = hasOrgWideVisibility(user)
     || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const canViewDepartment = canViewAllDepartments
     || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS)
     || Boolean(user?.department_id);
-  const canViewSelf = isAdmin(user)
+  const canViewSelf = hasOrgWideVisibility(user)
     || hasPermission(user, PERMISSIONS.VIEW_SELF_ANALYTICS)
     || canViewDepartment
     || hasPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
@@ -222,7 +231,7 @@ function buildScope(filters = {}, user) {
   }
 
   const requestedDepartmentId = normalizeId(filters.departmentId);
-  const visibleUserIds = isAdmin(user)
+  const visibleUserIds = hasOrgWideVisibility(user)
     ? null
     : [...new Set((getVisibleUserIds(user) || []).filter(Boolean))];
 
@@ -249,7 +258,7 @@ function buildScope(filters = {}, user) {
   }
 
   if (userId) {
-    if (!isAdmin(user) && visibleUserIds && !visibleUserIds.includes(userId)) {
+    if (!hasOrgWideVisibility(user) && visibleUserIds && !visibleUserIds.includes(userId)) {
       throw new AppError(403, "You do not have access to this user's analytics");
     }
 

@@ -3,6 +3,8 @@ const { pool } = require("../db");
 const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
+  isProjectAuthorityRoleIdentity,
+  isProjectAuthorityRoleLevel,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
@@ -14,8 +16,6 @@ const PERMISSION_ALIASES = {
   can_verify_task: [PERMISSIONS.APPROVE_COMPLETED_TASK],
   [PERMISSIONS.APPROVE_COMPLETED_TASK]: ["can_verify_task"],
 };
-
-const PROJECT_AUTHORITY_ROLE_NAMES = new Set(["admin", "ceo", "director"]);
 
 function getEquivalentPermissions(permission) {
   return [...new Set([permission, ...(PERMISSION_ALIASES[permission] || [])])];
@@ -51,16 +51,13 @@ function getRoleLevel(user) {
   return roleDetails?.hierarchy_level ?? ROLE_LEVELS[roleId] ?? null;
 }
 
-function normalizeRoleName(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
 function isProjectAuthorityRole(user) {
   const roleDetails = getRoleDetails(user);
-  const roleName = normalizeRoleName(roleDetails?.name);
-  const roleId = normalizeRoleName(getRoleId(user));
+  const roleLevel = getRoleLevel(user);
 
-  return PROJECT_AUTHORITY_ROLE_NAMES.has(roleName) || PROJECT_AUTHORITY_ROLE_NAMES.has(roleId);
+  return isProjectAuthorityRoleLevel(roleLevel)
+    || isProjectAuthorityRoleIdentity(roleDetails?.name)
+    || isProjectAuthorityRoleIdentity(getRoleId(user));
 }
 
 function getRolePermissionFlags(user) {
@@ -175,7 +172,7 @@ function canAccessUser(user, target) {
     return false;
   }
 
-  if (isAdmin(user)) {
+  if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return true;
   }
 
@@ -183,7 +180,7 @@ function canAccessUser(user, target) {
 }
 
 function canAccessDepartment(user, departmentId) {
-  if (isAdmin(user)) {
+  if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return true;
   }
 
@@ -241,7 +238,7 @@ function canAccessTask(user, task) {
     return false;
   }
 
-  if (isAdmin(user)) {
+  if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return true;
   }
 
@@ -274,7 +271,7 @@ function canAssignTo(assigner, assignee) {
     return false;
   }
 
-  if (!isAdmin(assigner) && assigner.department_id !== assignee.department_id) {
+  if (!isProjectAuthorityRole(assigner) && assigner.department_id !== assignee.department_id) {
     return false;
   }
 
@@ -292,7 +289,7 @@ function canVerifyTask(actor, task) {
 
   // Approval should be scoped by department (or admin), not by "visible/assignee" access.
   // This prevents approvers (e.g., team leaders) from being blocked when they are not task assignees.
-  if (isAdmin(actor)) {
+  if (isAdmin(actor) || isProjectAuthorityRole(actor)) {
     return true;
   }
 
@@ -374,7 +371,7 @@ function buildTaskAccessPredicate(user, params, options = {}) {
     return "1 = 0";
   }
 
-  if (isAdmin(user)) {
+  if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return "1 = 1";
   }
 

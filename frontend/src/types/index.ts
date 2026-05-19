@@ -112,6 +112,9 @@ export interface Task {
   current_stage_id?: string;
   workflow_stage?: string | null;
   workflow_status?: string | null;
+  workflow_stage_version?: number | null;
+  workflow_stage_order?: number | null;
+  workflow_revision_code?: string | null;
   activity_count?: number;
   assignee?: User;
   assigner?: User;

@@ -50,6 +50,8 @@ function taskSelectQuery(whereClause = "") {
       t.lifecycle_status,
       COALESCE(stage.stage_name, stage.name) AS workflow_stage,
       workflow_progress.status AS workflow_status,
+      COALESCE(workflow_progress.stage_version, 0) AS workflow_stage_version,
+      workflow_progress.stage_order AS workflow_stage_order,
       template.template_name AS workflow_template_name,
       (
         SELECT COUNT(*)::int

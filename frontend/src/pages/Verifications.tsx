@@ -4,14 +4,20 @@ import { fetchVerificationTasks } from '@/api/taskApi';
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { StatusChip } from '@/components/StatusChip';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
-import { CheckCircle2, XCircle, Calendar, User, FileText } from 'lucide-react';
+import { CheckCircle2, XCircle, Calendar, User, FileText, Layers } from 'lucide-react';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { taskQueryKeys } from '@/lib/queryKeys';
 import { API_ROOT_URL } from '@/api/config';
+import {
+  formatStageRevisionCode,
+  getWorkflowStageDisplayLabel,
+  getWorkflowStatusLabel,
+} from '@/lib/workflowStageDisplay';
 
 function toProofUrl(path: string) {
   return path.startsWith("http://") || path.startsWith("https://")
@@ -51,6 +57,11 @@ export default function Verifications() {
         <div className="space-y-4">
           {pending.map(task => {
             const taskDisplay = getTaskCardDisplay(task);
+            const stageLabel = getWorkflowStageDisplayLabel(task.workflow_stage);
+            const revisionCode = task.workflow_revision_code
+              || formatStageRevisionCode(task.workflow_stage, task.workflow_stage_version ?? 0);
+            const statusLabel = getWorkflowStatusLabel(task.workflow_status);
+            const hasWorkflowContext = Boolean(stageLabel || revisionCode || statusLabel);
 
             const handleVerify = async (action: 'approve' | 'reject') => {
               try {
@@ -68,7 +79,43 @@ export default function Verifications() {
               <Card key={task.id} className="animate-fade-in">
                 <CardHeader className="p-4 pb-2">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
+                    <div className="min-w-0 flex-1">
+                      {hasWorkflowContext ? (
+                        <div
+                          data-testid="verification-stage-banner"
+                          className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm"
+                        >
+                          <Layers className="h-4 w-4 text-primary" />
+                          {stageLabel && (
+                            <span
+                              data-testid="verification-stage-label"
+                              className="text-sm font-semibold uppercase tracking-wide text-primary"
+                            >
+                              {stageLabel}
+                            </span>
+                          )}
+                          {revisionCode && (
+                            <>
+                              <span aria-hidden="true" className="text-primary/40">—</span>
+                              <span
+                                data-testid="verification-revision-code"
+                                className="text-sm font-semibold uppercase tracking-wide text-primary"
+                              >
+                                {revisionCode}
+                              </span>
+                            </>
+                          )}
+                          {statusLabel && (
+                            <Badge
+                              data-testid="verification-workflow-status"
+                              variant="outline"
+                              className="border-primary/40 bg-background text-xs font-medium uppercase tracking-wide text-primary"
+                            >
+                              {statusLabel}
+                            </Badge>
+                          )}
+                        </div>
+                      ) : null}
                       <h3 className="font-medium">{taskDisplay.title}</h3>
                       {taskDisplay.subtitle && (
                         <p className="text-sm text-muted-foreground mt-1">{taskDisplay.subtitle}</p>

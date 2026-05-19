@@ -6,7 +6,7 @@ import { AdminDashboardDepartmentExperience } from '@/components/AdminDashboardD
 import { DesignDepartmentTaskAssignmentBar } from '@/components/DesignDepartmentTaskAssignmentBar';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
-import { TaskCard } from '@/components/TaskCard';
+import { ProjectOperationalView } from '@/components/dashboard/ProjectOperationalView';
 import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
 import { ClipboardList, PlayCircle, CheckCircle2, AlertTriangle, Clock, Layers3, PauseCircle, PackageCheck } from 'lucide-react';
 import { isDesignDepartment } from '@/lib/departments';
@@ -83,7 +83,7 @@ function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
 
 export default function Dashboard() {
   const { user, role, access } = useAuth();
-  const { tasks, isLoading } = useTasks();
+  const { tasks } = useTasks();
   const safeTasks = tasks ?? [];
 
   const isDesignUser = isDesignDepartment(user);
@@ -108,10 +108,6 @@ export default function Dashboard() {
     overdue: viewTasks.filter(t => new Date(t.deadline) < new Date() && t.status !== 'closed').length,
     pendingVerification: viewTasks.filter(t => t.status === 'under_review').length,
   };
-
-  const recentTasks = [...viewTasks]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 6);
 
   const projectSummaries = projectSummaryQuery.data ?? [];
   const projectMetrics = {
@@ -177,18 +173,7 @@ export default function Dashboard() {
         access.canAssignTasks && <TaskAssignmentBar />
       )}
 
-      {!isProjectFirstRole && <div>
-        <h2 className="text-lg font-semibold mb-3">Recent Tasks</h2>
-        {isLoading ? (
-          <TaskGridSkeleton count={6} />
-        ) : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {recentTasks.map(task => (
-              <TaskCard key={task.id} task={task} />
-            ))}
-          </div>
-        )}
-      </div>}
+      {!isProjectFirstRole && <ProjectOperationalView user={user ?? null} />}
     </div>
   );
 }

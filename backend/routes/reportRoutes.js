@@ -4,7 +4,7 @@ const { asyncHandler } = require("../lib/asyncHandler");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
 const { exportDesignReport } = require("../services/designReportService");
-const { buildReport, exportTaskReport, listTaskReportRows, listWorkflowCompletionSummary } = require("../services/reportService");
+const { buildReport, exportTaskReport, listTaskReportRows } = require("../services/reportService");
 
 const router = express.Router();
 
@@ -46,15 +46,6 @@ router.get(
     res.setHeader("Content-Type", report.contentType);
     res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
     return res.status(200).send(report.buffer);
-  }),
-);
-
-router.get(
-  "/reports/workflow-summary",
-  authorize(PERMISSIONS.VIEW_REPORTS),
-  asyncHandler(async (req, res) => {
-    const summary = await listWorkflowCompletionSummary(req.user);
-    return res.status(200).json(summary);
   }),
 );
 

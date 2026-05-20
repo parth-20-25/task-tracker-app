@@ -23,6 +23,10 @@ const {
   listFixturesByUploadBatchForUser,
   updateFixtureReferenceImageForDepartment,
 } = require("../repositories/designProjectCatalogRepository");
+const {
+  getFixtureCompletionTruth,
+  getProjectCompletionTruthById,
+} = require("../services/designCompletion/designCompletionEngine");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
   createDesignTaskFromProject,
@@ -83,6 +87,56 @@ router.get(
 );
 
 router.get(
+  "/visibility/explain/:projectId",
+  asyncHandler(async (req, res) => {
+    const { explainProjectVisibility } = require("../services/visibilityResolutionService");
+    const explanation = await explainProjectVisibility(req.user, req.params.projectId);
+    return sendSuccess(res, explanation);
+  }),
+);
+
+router.get(
+  "/design/completion/projects/:projectId",
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
+      "A department is required for completion truth",
+    );
+    const project = await findProjectByIdForUser(req.params.projectId, req.user, departmentId);
+
+    if (!project) {
+      throw new AppError(404, "Project not found for the selected department");
+    }
+
+    const truth = await getProjectCompletionTruthById(project.project_id, departmentId);
+    if (!truth) {
+      throw new AppError(404, "Project completion truth unavailable");
+    }
+
+    return sendSuccess(res, truth);
+  }),
+);
+
+router.get(
+  "/design/completion/fixtures/:fixtureId",
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.query.department_id,
+      "A department is required for completion truth",
+    );
+    const truth = await getFixtureCompletionTruth(req.params.fixtureId, departmentId);
+
+    if (!truth) {
+      throw new AppError(404, "Fixture not found for the selected department");
+    }
+
+    return sendSuccess(res, truth);
+  }),
+);
+
+router.get(
   "/design/workflow-preview",
   asyncHandler(async (req, res) => {
     let departmentId = resolveAccessibleDepartmentId(
@@ -115,17 +169,19 @@ router.get(
 
 router.post(
   "/upload/design-excel",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   handleDesignExcelUpload,
   asyncHandler(async (req, res) => {
-    const result = await parseAndPreviewUploadedWorkbook(req.user, req.file);
+    const result = await parseAndPreviewUploadedWorkbook(req.user, req.file, {
+      catalogMembershipMode: req.body?.catalog_membership_mode,
+    });
     return sendSuccess(res, result, 200);
   }),
 );
 
 router.post(
   "/upload/design-excel/confirm",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await confirmUpload(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -134,7 +190,7 @@ router.post(
 
 router.post(
   "/design/upload",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await parseAndPreviewUpload(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -143,7 +199,7 @@ router.post(
 
 router.post(
   "/design/upload/confirm",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await confirmUpload(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -152,7 +208,7 @@ router.post(
 
 router.post(
   "/design/upload/rejected-row/validate",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await validateRejectedUploadRow(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -170,7 +226,7 @@ router.post(
 
 router.get(
   "/design/upload-batches/:batchId/fixtures",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,

@@ -41,6 +41,7 @@ function taskSelectQuery(whereClause = "") {
       COALESCE(project.project_name, NULLIF(t.project_name, ''), NULLIF(t.project_description, '')) AS resolved_project_name,
       COALESCE(project.customer_name, NULLIF(t.customer_name, '')) AS resolved_customer_name,
       COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
+      fixture.part_name AS resolved_part_name,
       project.uploaded_by AS project_uploaded_by,
       COALESCE(project.status, 'active') AS project_status,
       fixture_batch.uploaded_by AS fixture_batch_uploaded_by,
@@ -50,7 +51,23 @@ function taskSelectQuery(whereClause = "") {
       t.lifecycle_status,
       COALESCE(stage.stage_name, stage.name) AS workflow_stage,
       workflow_progress.status AS workflow_status,
+      COALESCE(workflow_progress.stage_version, 0) AS workflow_stage_version,
+      COALESCE(fixture.revision_no, 0) AS fixture_revision_no,
       template.template_name AS workflow_template_name,
+      (
+        SELECT STRING_AGG(
+          DISTINCT COALESCE(contributor.name, contribution.employee_id),
+          ', '
+          ORDER BY COALESCE(contributor.name, contribution.employee_id)
+        )
+        FROM design.fixture_stage_contributions contribution
+        LEFT JOIN users contributor
+          ON contributor.employee_id = contribution.employee_id
+        WHERE contribution.fixture_id = t.fixture_id
+          AND contribution.department_id = t.department_id
+          AND COALESCE(contribution.stage_name, '') = COALESCE(stage.stage_name, stage.name, '')
+          AND contribution.superseded_by IS NULL
+      ) AS workflow_contributor_names,
       (
         SELECT COUNT(*)::int
         FROM task_activity_logs activity

@@ -70,13 +70,20 @@ export interface FixtureRevisionTimelineEntry {
   fixture_id: string;
   department_id: string;
   revision_no: number;
+  /** Display stage name (e.g. Concept) — not merged with revision */
+  stage?: string | null;
   stage_name?: string | null;
   stage_version?: number;
+  /** Canonical revision code (e.g. CON 02) */
+  revision?: string | null;
   revision_code?: string | null;
   reason_type?: FixtureRevisionType | string | null;
+  reason_type_label?: string | null;
   revision_type: FixtureRevisionType;
   revision_reason?: string | null;
   revision_remarks?: string | null;
+  previous_revision?: string | null;
+  approval_state?: string | null;
   reverted_from_stage: string;
   reverted_to_stage: string;
   requested_by: string;
@@ -379,7 +386,6 @@ export function reopenFixtureStage(payload: {
   target_stage_name?: string;
   target_stage_order?: number;
   revision_type: FixtureRevisionType;
-  revision_reason?: string;
   remarks?: string;
 }) {
   return apiRequest<FixtureFullProgress>("/workflows/reopen-stage", {

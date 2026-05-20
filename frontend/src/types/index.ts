@@ -112,6 +112,10 @@ export interface Task {
   current_stage_id?: string;
   workflow_stage?: string | null;
   workflow_status?: string | null;
+  workflow_stage_version?: number;
+  fixture_revision_no?: number;
+  workflow_contributor_names?: string | null;
+  part_name?: string | null;
   activity_count?: number;
   assignee?: User;
   assigner?: User;
@@ -198,6 +202,9 @@ export interface ProjectDashboardSummary {
   active_tasks: number;
   completed_tasks: number;
   uploaded_by?: string | null;
+  team_lead_id?: string | null;
+  team_lead_name?: string | null;
+  uploaded_by_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -521,7 +528,6 @@ export interface DesignFixtureOption {
   project_id: string | null;
   batch_id?: string | null;
   fixture_no: string;
-  op_no: string;
   part_name: string;
   fixture_type: string;
   remark?: string | null;
@@ -552,7 +558,6 @@ export interface DesignExcelPreviewRow {
   row_reference_source?: "business_serial" | "excel_row";
   business_row_reference?: string | null;
   fixture_no: string;
-  op_no: string;
   part_name: string;
   fixture_type: string;
   remark?: string | null;
@@ -579,24 +584,43 @@ export interface DesignExcelSkippedRow extends DesignExcelPreviewRow {
 export interface DesignExcelUploadResponse {
   file_info: {
     project_code: string;
-    project_name: string;
+    project_name?: string;
+    project_name_display?: string;
     company_name: string;
     metadata_source?: string;
   };
   preview: {
     accepted: Array<{
       type: "NEW" | "UPDATE_QTY";
+      classification?: "NEW" | "UPDATED";
       incoming: DesignExcelPreviewRow;
       existing?: DesignExcelPreviewRow;
     }>;
     conflicts: Array<{
       type: "CONFLICT_PART_NAME" | "CONFLICT_OTHER" | "CONFLICT_IMAGES";
+      classification?: "CONFLICT";
+      conflict_kind?: "PART_NAME" | "IMAGES" | "OTHER" | null;
+      incoming: DesignExcelPreviewRow;
+      existing: DesignExcelPreviewRow;
+    }>;
+    unchanged?: Array<{
+      type: "UNCHANGED";
+      classification?: "EXISTING";
       incoming: DesignExcelPreviewRow;
       existing: DesignExcelPreviewRow;
     }>;
     rejected: DesignExcelRejectedRow[];
     skipped: DesignExcelSkippedRow[];
+    ingestion_grid?: Array<Record<string, unknown>>;
+    validation_summary?: {
+      total_rows: number;
+      by_classification: Record<string, number>;
+      invalid_rows: number;
+      duplicate_rows: number;
+    };
   };
+  ingestion_session_id: string;
+  ingestion_session_expires_at?: string | null;
 }
 
 export interface DesignRejectedRowCorrectionAudit {
@@ -628,6 +652,7 @@ export interface ValidateRejectedDesignRowResponse {
 }
 
 export interface ConfirmDesignUploadPayload {
+  ingestion_session_id: string;
   file_info: DesignExcelUploadResponse["file_info"];
   resolved_items: Array<{
     data: DesignExcelPreviewRow;

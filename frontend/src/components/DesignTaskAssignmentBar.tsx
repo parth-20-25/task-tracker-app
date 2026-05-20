@@ -687,10 +687,6 @@ export function DesignTaskAssignmentBar({
                       <div className="font-semibold">{selectedFixture?.part_name || "—"}</div>
                     </div>
                     <div>
-                      <div className="text-[10px] text-muted-foreground">OP.NO</div>
-                      <div className="font-semibold">{selectedFixture?.op_no || "—"}</div>
-                    </div>
-                    <div>
                       <div className="text-[10px] text-muted-foreground">TYPE</div>
                       <div className="font-semibold">{selectedFixture?.fixture_type || "—"}</div>
                     </div>

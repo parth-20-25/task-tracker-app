@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
+import { formatDesignRevisionReasonLabel } from "@/lib/designRevisionDisplay";
 
 const REVISION_TYPES: Array<{ value: FixtureRevisionType; label: string }> = [
   { value: "CUSTOMER_CHANGE", label: "Customer change" },
@@ -45,16 +46,13 @@ function formatRevisionDate(value: string) {
   });
 }
 
-function formatRevisionLabel(value: string) {
-  return value
-    .split("_")
-    .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
-    .join(" ");
+function getApprovedStages(stages: FixtureProgressStage[]) {
+  return stages.filter((stage) => stage.status === "APPROVED");
 }
 
 function getDefaultTargetStage(stages: FixtureProgressStage[]) {
-  const active = stages.find((stage) => stage.status !== "APPROVED");
-  return active?.stage_name || stages[0]?.stage_name || "";
+  const approved = getApprovedStages(stages);
+  return approved[approved.length - 1]?.stage_name || "";
 }
 
 interface FixtureRevisionPanelProps {
@@ -82,7 +80,7 @@ export function FixtureRevisionPanel({
   const stages = progress?.stages ?? [];
   const revisions = progress?.revisions ?? [];
   const [targetStage, setTargetStage] = useState(() => getDefaultTargetStage(stages));
-  const [revisionType, setRevisionType] = useState<FixtureRevisionType>("OTHER");
+  const [revisionType, setRevisionType] = useState<FixtureRevisionType | "">("");
   const [manualStatus, setManualStatus] = useState<FixtureStageStatus>("PENDING");
   const [remarks, setRemarks] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -117,13 +115,18 @@ export function FixtureRevisionPanel({
   ]);
 
   const reopenMutation = useMutation({
-    mutationFn: () => reopenFixtureStage({
-      fixture_id: fixtureId,
-      department_id: departmentId,
-      target_stage_name: effectiveTargetStage,
-      revision_type: revisionType,
-      remarks: remarks.trim() || undefined,
-    }),
+    mutationFn: () => {
+      if (!revisionType) {
+        throw new Error("Reason type is required");
+      }
+      return reopenFixtureStage({
+        fixture_id: fixtureId,
+        department_id: departmentId,
+        target_stage_name: effectiveTargetStage,
+        revision_type: revisionType,
+        remarks: remarks.trim() || undefined,
+      });
+    },
     onSuccess: () => {
       setRemarks("");
       toast({ title: "Fixture stage updated", description: "The controlled stage change was saved." });
@@ -168,7 +171,15 @@ export function FixtureRevisionPanel({
     return null;
   }
 
-  const actionDisabled = !effectiveTargetStage || reopenMutation.isPending || manualMutation.isPending;
+  const approvedStages = useMemo(() => getApprovedStages(stages), [stages]);
+  const targetStageRow = stages.find((stage) => stage.stage_name === effectiveTargetStage) || null;
+  const canReworkTarget = targetStageRow?.status === "APPROVED";
+  const actionDisabled =
+    !effectiveTargetStage
+    || !revisionType
+    || !canReworkTarget
+    || reopenMutation.isPending
+    || manualMutation.isPending;
   const currentRevisionStage = stages.find((stage) => stage.status !== "APPROVED") || stages[stages.length - 1] || null;
   const currentRevision = currentRevisionStage?.revision_code || `R${progress.revision_no || 0}`;
 
@@ -200,19 +211,20 @@ export function FixtureRevisionPanel({
               <div key={revision.id} className="rounded-lg border bg-muted/20 p-2 text-xs">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-semibold text-foreground">
-                    {revision.revision_code || `R${revision.revision_no}`} · {formatRevisionLabel(String(revision.reason_type || revision.revision_type))}
+                    {revision.revision || revision.revision_code || `R${revision.revision_no}`}
+                    {" · "}
+                    {revision.reason_type_label || formatDesignRevisionReasonLabel(String(revision.reason_type || revision.revision_type))}
                   </span>
                   <span className="text-muted-foreground">{formatRevisionDate(revision.changed_at)}</span>
                 </div>
                 <p className="mt-1 text-muted-foreground">
                   {revision.reverted_from_stage} {"→"}  {revision.reverted_to_stage}
                 </p>
-                {revision.stage_name ? (
-                  <p className="mt-1 font-medium text-foreground">
-                    Stage: {revision.stage_name}
-                  </p>
-                ) : null}
-                {revision.revision_reason ? <p className="mt-1 text-muted-foreground">{revision.revision_reason}</p> : null}
+                <p className="mt-1 font-medium text-foreground">
+                  Stage: {revision.stage || revision.stage_name}
+                  {revision.previous_revision ? ` · Previous: ${revision.previous_revision}` : ""}
+                  {revision.approval_state ? ` · Was: ${revision.approval_state}` : ""}
+                </p>
                 {revision.revision_remarks ? <p className="mt-1 text-muted-foreground">{revision.revision_remarks}</p> : null}
                 <p className="mt-1 text-[10px] text-muted-foreground">
                   Changed by {revision.changed_by_name || revision.changed_by}
@@ -234,9 +246,9 @@ export function FixtureRevisionPanel({
                 <SelectValue placeholder="Choose stage" />
               </SelectTrigger>
               <SelectContent>
-                {stages.map((stage) => (
+                {approvedStages.map((stage) => (
                   <SelectItem key={stage.stage_name} value={stage.stage_name}>
-                    {stage.stage_order}. {stage.stage_label || stage.stage_name}
+                    {stage.stage_order}. {stage.stage_label || stage.stage_name} ({stage.revision_code})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -247,7 +259,7 @@ export function FixtureRevisionPanel({
             <Label className="text-xs font-semibold">Reason Type</Label>
             <Select value={revisionType} onValueChange={(value) => setRevisionType(value as FixtureRevisionType)}>
               <SelectTrigger className="h-9 text-sm">
-                <SelectValue />
+                <SelectValue placeholder="Select reason type" />
               </SelectTrigger>
               <SelectContent>
                 {REVISION_TYPES.map((type) => (
@@ -286,6 +298,12 @@ export function FixtureRevisionPanel({
               rows={2}
             />
           </div>
+
+          {!canReworkTarget && effectiveTargetStage ? (
+            <p className="text-xs text-amber-700 md:col-span-2">
+              Rework requires a completed (approved) target stage. Choose an approved stage to create the next revision.
+            </p>
+          ) : null}
 
           <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
             <Button

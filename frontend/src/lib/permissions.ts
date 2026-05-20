@@ -16,6 +16,8 @@ export const PERMISSIONS = {
   DELETE_TASK: "can_delete_task",
   UPLOAD_PROOFS: "can_upload_proofs",
   UPLOAD_DATA: "can_upload_data",
+  UPLOAD_LEGACY_DESIGN_DATA: "upload_legacy_design_data",
+  UPLOAD_NATIVE_DESIGN_DATA: "upload_native_design_data",
   MANAGE_USERS: "can_manage_users",
   CREATE_USER: "can_create_user",
   EDIT_USER: "can_edit_user",
@@ -43,6 +45,12 @@ export const PERMISSIONS = {
 export const PERMISSION_ALIASES: Record<string, string> = {
   can_assign_task: PERMISSIONS.ASSIGN_TASK,
   can_verify_task: PERMISSIONS.APPROVE_COMPLETED_TASK,
+  view_self_user: PERMISSIONS.VIEW_SELF_ANALYTICS,
+  view_self_department: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
+  view_department_comparison: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
+  view_user_comparison: PERMISSIONS.VIEW_ALL_USERS_ANALYTICS,
+  scope_department_only: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
+  scope_all_departments: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
 };
 
 export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);
@@ -98,6 +106,8 @@ export interface UiAccess {
   canManageMachines: boolean;
   canManageWorkflows: boolean;
   canUploadData: boolean;
+  canUploadLegacyDesignData: boolean;
+  canUploadNativeDesignData: boolean;
   canUploadProofs: boolean;
   canViewSelfTasks: boolean;
   canViewAllTasks: boolean;
@@ -218,6 +228,8 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canManageMachines = hasUserPermission(user, PERMISSIONS.MANAGE_MACHINES);
   const canManageWorkflows = hasUserPermission(user, PERMISSIONS.MANAGE_WORKFLOWS);
   const canUploadData = hasUserPermission(user, PERMISSIONS.UPLOAD_DATA);
+  const canUploadLegacyDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA) || canUploadData;
+  const canUploadNativeDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
   const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);
   const canViewAllTasks = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_ALL_TASKS);
@@ -247,6 +259,8 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canManageMachines,
     canManageWorkflows,
     canUploadData,
+    canUploadLegacyDesignData,
+    canUploadNativeDesignData,
     canUploadProofs,
     canViewSelfTasks,
     canViewAllTasks,

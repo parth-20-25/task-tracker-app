@@ -173,6 +173,123 @@ function bufferFromBase64Payload(contentBase64) {
   return Buffer.from(normalized, "base64");
 }
 
+async function downloadStorageObjectBuffer(bucketName, objectPath) {
+  const config = assertSupabaseStorageConfigured();
+  const bucket = bucketName || config.bucket;
+  const url = `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodeStoragePath(objectPath)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${config.serviceKey}`,
+      apikey: config.serviceKey,
+    },
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new AppError(
+      502,
+      "Failed to download object from Supabase Storage",
+      details || `Supabase Storage returned HTTP ${response.status}`,
+      "SUPABASE_STORAGE_DOWNLOAD_FAILED",
+    );
+  }
+
+  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, contentType };
+}
+
+async function deleteStorageObjects(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return;
+  }
+
+  const config = assertSupabaseStorageConfigured();
+
+  for (const entry of entries) {
+    if (!entry?.path) {
+      continue;
+    }
+
+    const bucket = entry.bucket || config.bucket;
+    const response = await fetch(
+      `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodeStoragePath(entry.path)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${config.serviceKey}`,
+          apikey: config.serviceKey,
+        },
+      },
+    );
+
+    if (!response.ok && response.status !== 404) {
+      const details = await response.text().catch(() => "");
+      throw new AppError(
+        502,
+        "Failed to delete object from Supabase Storage",
+        details || `Supabase Storage returned HTTP ${response.status}`,
+        "SUPABASE_STORAGE_DELETE_FAILED",
+      );
+    }
+  }
+}
+
+async function uploadExtractedDesignImageStaging({
+  image,
+  sessionId,
+  fileInfo = {},
+  row = {},
+  slotName = "image_1_url",
+  stagingPathsOut,
+}) {
+  const buffer = bufferFromBase64Payload(image?.content_base64);
+  const sessionSeg = sanitizeStorageSegment(sessionId, "session");
+  const projectCode = sanitizeStorageSegment(fileInfo.project_code, "unknown-project");
+  const fixtureNo = sanitizeStorageSegment(row.fixture_no, `row-${row.excel_row || row.row_number || "unknown"}`);
+  const slot = sanitizeStorageSegment(slotName.replace(/_url$/i, ""), "image");
+
+  const uploaded = await uploadBufferToSupabaseStorage({
+    buffer,
+    mimeType: image?.mime_type,
+    extension: image?.extension,
+    folder: `design-ingestion-staging/${sessionSeg}/${projectCode}/${fixtureNo}`,
+    fileStem: `${slot}-r${row.excel_row || row.row_number || "unknown"}`,
+  });
+
+  if (Array.isArray(stagingPathsOut)) {
+    stagingPathsOut.push({ bucket: uploaded.bucket, path: uploaded.path });
+  }
+
+  return uploaded;
+}
+
+async function promoteStagedExtractedDesignImage({
+  sourceBucket,
+  sourcePath,
+  fileInfo,
+  row,
+  slotName = "image_1_url",
+}) {
+  const { buffer, contentType } = await downloadStorageObjectBuffer(sourceBucket, sourcePath);
+  const extensionFromPath = String(sourcePath || "").split(".").pop() || null;
+  const projectCode = sanitizeStorageSegment(fileInfo.project_code, "unknown-project");
+  const fixtureNo = sanitizeStorageSegment(row.fixture_no, `row-${row.excel_row || row.row_number || "unknown"}`);
+  const slot = sanitizeStorageSegment(String(slotName).replace(/_url$/i, ""), "image");
+
+  const uploaded = await uploadBufferToSupabaseStorage({
+    buffer,
+    mimeType: contentType,
+    extension: extensionFromPath,
+    folder: `design-excel/${projectCode}/${fixtureNo}`,
+    fileStem: `${slot}-r${row.excel_row || row.row_number || "unknown"}`,
+  });
+
+  await deleteStorageObjects([{ bucket: sourceBucket, path: sourcePath }]);
+
+  return uploaded;
+}
+
 async function uploadExtractedDesignImage({
   image,
   fileInfo = {},
@@ -213,5 +330,9 @@ module.exports = {
   normalizeMimeType,
   uploadBufferToSupabaseStorage,
   uploadExtractedDesignImage,
+  uploadExtractedDesignImageStaging,
+  promoteStagedExtractedDesignImage,
+  deleteStorageObjects,
+  downloadStorageObjectBuffer,
   uploadFixtureReferenceImageFile,
 };

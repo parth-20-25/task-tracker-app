@@ -21,6 +21,15 @@ const {
   formatStageRevisionCode,
   normalizeStageVersion,
 } = require("../lib/workflowStageVersioning");
+const { loadDesignReportExportData } = require("./designReport/designReportDataContract");
+const {
+  generateDesignProjectExecutionTemplateExcel: generateTemplateExport,
+} = require("./designReport/designReportTemplateExport");
+const {
+  assertDesignReportExportIntegrity,
+  assertDesignReportTruthLayerComplete: assertWorkflowTruthLayerComplete,
+  collectDesignReportTruthLayerErrors: collectWorkflowTruthLayerErrors,
+} = require("./designReport/designReportValidation");
 
 const DESIGN_REPORT_TEMPLATE_PATH = path.join(
   __dirname,
@@ -2070,38 +2079,20 @@ async function exportDesignReport(user, query = {}, options = {}) {
     throw new AppError(404, "No fixtures found for this report");
   }
 
-  const fixtureIds = fixtures.map((fixture) => fixture.fixture_id);
-  const [progressRows, attemptRows, stageTasks, contributions] = await Promise.all([
-    getFixtureProgressRows(fixtureIds),
-    getFixtureAttemptRows(fixtureIds),
-    getFixtureStageTaskRows(fixtureIds),
-    listContributionsForFixtures(fixtureIds),
-  ]);
-  assertDesignReportTruthLayerComplete(fixtures, progressRows, attemptRows);
-
-  const stageTaskIds = stageTasks.map((task) => task.task_id);
-  const reportTaskIds = [
-    ...fixtures.map((fixture) => fixture.task_id),
-    ...stageTaskIds,
-  ];
-  const [attachmentsByTaskId, activitiesByTaskId] = await Promise.all([
-    getTaskAttachmentsByTaskIds(reportTaskIds),
-    getTaskActivitiesByTaskIds(reportTaskIds),
-  ]);
+  const reportData = await loadDesignReportExportData({
+    fixtures,
+    projectId: context.project_id,
+    departmentId,
+  });
 
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "design-report-"));
   const finalPath = path.join(tempDirectory, buildReportFileName(context));
 
   try {
-    await generateDesignProjectExecutionTemplateExcel({
+    await generateTemplateExport({
       context,
       fixtures,
-      progressRows,
-      attemptRows,
-      contributions,
-      stageTasks,
-      attachmentsByTaskId,
-      activitiesByTaskId,
+      reportData,
       filePath: finalPath,
     });
 
@@ -2118,10 +2109,11 @@ async function exportDesignReport(user, query = {}, options = {}) {
 }
 
 module.exports = {
-  assertDesignReportTruthLayerComplete,
-  collectDesignReportTruthLayerErrors,
+  assertDesignReportExportIntegrity,
+  assertDesignReportTruthLayerComplete: assertWorkflowTruthLayerComplete,
+  collectDesignReportTruthLayerErrors: collectWorkflowTruthLayerErrors,
   exportDesignReport,
-  generateDesignProjectExecutionTemplateExcel,
+  generateDesignProjectExecutionTemplateExcel: generateTemplateExport,
   generateRawScopeExcel,
   normalizeStoredImageUrl,
   runPythonFormatter,

@@ -1,7 +1,6 @@
 const { AppError } = require("../../lib/AppError");
 
 const FIXTURE_NO_REGEX = /^PARC\d{8,}$/i;
-const OP_NO_REGEX = /^OP\.?\s*\d+[A-Z]*$/i;
 
 const FIXTURE_TYPE_KEYWORDS = [
   "fixture",
@@ -122,8 +121,6 @@ function isHeaderLikeCell(value) {
     || key === "serialno"
     || key === "fixtureno"
     || key === "fixtureid"
-    || key === "opno"
-    || key === "operationno"
     || key === "partname"
     || key === "fixturetype"
     || key === "qty"
@@ -154,16 +151,6 @@ function isImageOnlyCell(value) {
     || /^https?:\/\//i.test(String(value || "").trim())
     || /\.(png|jpe?g|webp|gif|bmp|heic|heif)$/i.test(String(value || "").trim());
 }
-
-function isOpCell(value) {
-  const text = normalizePastedCell(value);
-  if (!text) {
-    return false;
-  }
-
-  return OP_NO_REGEX.test(text) || /\bOP\.?\s*NO\b/i.test(text);
-}
-
 
 function isFixtureTypeCell(value) {
   const normalized = normalizePastedCell(value).toLowerCase();
@@ -219,7 +206,6 @@ function isDataLikeRow(cells) {
 
   return cells.some((cell) => (
     isFixtureNumber(cell)
-    || isOpCell(cell)
     || isFixtureTypeCell(cell)
     || isPositiveIntegerCell(cell)
   ));
@@ -234,15 +220,9 @@ function buildParsedRow(cells, rowNumber) {
     .filter(({ cell, index }) => isPositiveIntegerCell(cell) && !isSerialNumberCell(cell, index, fixtureIndex >= 0 ? fixtureIndex : Number.MAX_SAFE_INTEGER));
   const qtyCell = qtyCandidates.length > 0 ? qtyCandidates[qtyCandidates.length - 1] : null;
 
-  const opCell = cells
-    .map((cell, index) => ({ cell, index }))
-    .find(({ cell, index }) => index !== fixtureIndex && isOpCell(cell));
-
-
   const ignoredIndexes = new Set();
   if (fixtureIndex >= 0) ignoredIndexes.add(fixtureIndex);
   if (qtyCell) ignoredIndexes.add(qtyCell.index);
-  if (opCell) ignoredIndexes.add(opCell.index);
 
   const residualCells = cells
     .map((cell, index) => ({ cell, index }))
@@ -281,7 +261,6 @@ function buildParsedRow(cells, rowNumber) {
 
   const hasRequiredStructure = Boolean(
     fixture_no
-    && opCell?.cell
     && qtyCell?.cell
     && partNameCandidate?.cell
     && fixtureTypeCandidate?.cell
@@ -289,7 +268,6 @@ function buildParsedRow(cells, rowNumber) {
 
   const hasPartialStructure = Boolean(
     fixture_no
-    || opCell?.cell
     || qtyCell?.cell
     || partNameCandidate?.cell
     || fixtureTypeCandidate?.cell
@@ -298,7 +276,6 @@ function buildParsedRow(cells, rowNumber) {
   return {
     row_number: rowNumber,
     fixture_no,
-    op_no: opCell ? normalizePastedCell(opCell.cell) : "",
     part_name: partNameCandidate ? normalizePastedCell(partNameCandidate.cell) : "",
     fixture_type: fixtureTypeCandidate ? normalizePastedCell(fixtureTypeCandidate.cell) : "",
     designer: designerCandidate ? normalizePastedCell(designerCandidate.cell) : "",
@@ -354,7 +331,6 @@ function parsePasteData(text) {
 
 module.exports = {
   FIXTURE_NO_REGEX,
-  OP_NO_REGEX,
   normalize,
   normalizePastedCell,
   parsePasteData,

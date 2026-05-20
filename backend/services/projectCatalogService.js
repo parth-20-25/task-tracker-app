@@ -66,7 +66,27 @@ async function listDepartmentProjectsForUser(user) {
 }
 
 async function listDesignProjectsForUser(user, requestedDepartmentId, options = {}) {
-  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
+  const departmentId = resolveAccessibleDepartmentId(
+    user,
+    requestedDepartmentId,
+    "A department is required for project data access",
+  );
+
+  if (!departmentId) {
+    const { listProjectSummariesForUser } = require("../repositories/designProjectCatalogRepository");
+    const summaries = await listProjectSummariesForUser(user, { departmentId: null });
+    return summaries.map((project) => ({
+      project_id: project.project_id,
+      project_code: project.project_no,
+      project_name: project.project_name,
+      company_name: project.customer_name,
+      department_id: project.department_id,
+      project_status: project.project_status,
+    })).filter((project) => (
+      options.activeOnly !== true || project.project_status === "active"
+    ));
+  }
+
   return listProjectOptionsForUser(user, departmentId, { activeOnly: options.activeOnly === true });
 }
 
@@ -79,7 +99,17 @@ async function listDesignFixturesForUser(user, projectId, requestedDepartmentId,
     throw new AppError(400, "project_id is required");
   }
 
-  const departmentId = resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access");
+  const { resolveProjectDepartmentForUser } = require("./visibilityResolutionService");
+  const departmentId = await resolveProjectDepartmentForUser(
+    user,
+    normalizedProjectId,
+    resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access"),
+  );
+
+  if (!departmentId) {
+    throw new AppError(400, "A department is required for project data access");
+  }
+
   const project = await findProjectByIdForUser(
     normalizedProjectId,
     user,

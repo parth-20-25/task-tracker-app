@@ -181,8 +181,8 @@ export default function Batches() {
   const handleDelete = (batch: UploadBatch, force: boolean) => {
     const confirmed = window.confirm(
       force
-        ? `Force delete batch ${batch.batch_id}? This bypasses workflow safety validation.`
-        : `Delete batch ${batch.batch_id}?`,
+        ? `Force delete project ${batch.project_no}? This bypasses workflow safety validation.`
+        : `Delete project ${batch.project_no}?`,
     );
 
     if (!confirmed) {
@@ -234,9 +234,8 @@ export default function Batches() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Batch ID</TableHead>
-                <TableHead>Created</TableHead>
                 <TableHead>Project</TableHead>
+                <TableHead>Created</TableHead>
                 <TableHead>Total Fixtures</TableHead>
                 <TableHead>Project Status</TableHead>
                 <TableHead>Completion</TableHead>
@@ -247,7 +246,7 @@ export default function Batches() {
             <TableBody>
               {batchesQuery.isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     Loading batches...
                   </TableCell>
                 </TableRow>
@@ -265,13 +264,12 @@ export default function Batches() {
                 const lifecyclePending = holdMutation.isPending || releaseMutation.isPending;
 
                 return (
-                  <TableRow key={batch.id}>
-                    <TableCell className="font-mono text-xs">{batch.batch_id}</TableCell>
-                    <TableCell>{formatDateTime(batch.created_at)}</TableCell>
+                  <TableRow key={batch.project_id}>
                     <TableCell>
                       <div className="font-medium">{batch.project_no}</div>
                       <div className="text-xs text-muted-foreground">{batch.project_name}</div>
                     </TableCell>
+                    <TableCell>{formatDateTime(batch.uploaded_at)}</TableCell>
                     <TableCell>{batch.total_fixtures}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className={cn(projectStatusClass(batch.project_status))}>
@@ -338,7 +336,7 @@ export default function Batches() {
 
               {!batchesQuery.isLoading && batchesQuery.data?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     No upload batches found.
                   </TableCell>
                 </TableRow>
@@ -352,7 +350,6 @@ export default function Batches() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Batch Details</DialogTitle>
-            <DialogDescription>{selectedBatch?.batch_id}</DialogDescription>
           </DialogHeader>
           {selectedBatch ? (
             <div className="grid gap-3 text-sm">

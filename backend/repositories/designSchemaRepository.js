@@ -410,6 +410,54 @@ async function ensureDesignDepartmentSchema(client) {
     )
   `);
 
+  // Ensure a lifecycle/status column for operational batch continuity
+  await client.query(`
+    ALTER TABLE design.upload_batches
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'design_upload_batches_status_check'
+      ) THEN
+        ALTER TABLE design.upload_batches
+        ADD CONSTRAINT design_upload_batches_status_check
+        CHECK (status IN ('active', 'archived', 'closed'));
+      END IF;
+    END $$;
+  `);
+
+  // Collapse any accidental multiple active batches per project: keep the most recent active and archive the rest
+  await client.query(`
+    WITH active_batches AS (
+      SELECT id, project_id,
+             ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY uploaded_at DESC, id DESC) AS rn
+      FROM design.upload_batches
+      WHERE COALESCE(status, 'active') = 'active'
+    )
+    UPDATE design.upload_batches ub
+    SET status = 'archived'
+    FROM active_batches ab
+    WHERE ub.id = ab.id
+      AND ab.rn > 1
+  `);
+
+  // Guarantee at most one active upload_batch per project (partial unique index)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_design_upload_batches_unique_active_project
+    ON design.upload_batches (project_id)
+    WHERE status = 'active'
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_upload_batches_status
+    ON design.upload_batches (status)
+  `);
+
   await client.query(`
     ALTER TABLE design.upload_batches
     ADD COLUMN IF NOT EXISTS uploaded_by_user_id VARCHAR(50)

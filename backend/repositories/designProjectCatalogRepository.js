@@ -819,15 +819,17 @@ async function touchProject(projectId, client = pool) {
 }
 
 async function createUploadBatch(batchData, client = pool) {
-  // Batch continuity: a project must keep a single operational batch identity.
-  // Subsequent uploads merge into that same batch while preserving workflow/revision truth.
+  // Batch continuity: reuse a single active operational batch per project.
+  // Find the active batch (most recent) and lock it for update to avoid races.
   const existing = await client.query(
     `
       SELECT id
       FROM design.upload_batches
       WHERE project_id = $1
-      ORDER BY uploaded_at ASC, id ASC
+        AND COALESCE(status, 'active') = 'active'
+      ORDER BY uploaded_at DESC, id DESC
       LIMIT 1
+      FOR UPDATE
     `,
     [batchData.project_id],
   );
@@ -856,9 +858,22 @@ async function createUploadBatch(batchData, client = pool) {
       ],
     );
 
+    // Defensive cleanup: archive any other active batches for this project (shouldn't normally exist)
+    await client.query(
+      `
+        UPDATE design.upload_batches
+        SET status = 'archived'
+        WHERE project_id = $1
+          AND id <> $2
+          AND COALESCE(status, 'active') = 'active'
+      `,
+      [batchData.project_id, existingId],
+    );
+
     return requireRow(update, "Upload batch update did not return an id").id;
   }
 
+  // No active operational batch exists -> create a new active batch
   const insert = await client.query(
     `
       INSERT INTO design.upload_batches (
@@ -867,9 +882,10 @@ async function createUploadBatch(batchData, client = pool) {
         uploaded_by_user_id,
         total_rows,
         accepted_rows,
-        rejected_rows
+        rejected_rows,
+        status
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, 'active')
       RETURNING id
     `,
     [

@@ -128,6 +128,7 @@ async function listBatchesWithSummary(departmentId, client = pool) {
     params.push(departmentId);
   }
 
+  // Select a single active operational batch per project (latest active), and compute project-level fixture/task aggregates.
   const result = await client.query(
     `
       SELECT
@@ -151,15 +152,27 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
-        COUNT(DISTINCT f.id)::integer AS total_fixtures,
-        COUNT(DISTINCT f.id) FILTER (
+        COUNT(DISTINCT pf.id)::integer AS total_fixtures,
+        COUNT(DISTINCT pf.id) FILTER (
           WHERE fwp.status IS NOT NULL
             AND NOT (fwp.status = ANY($${params.length + 1}::text[]))
         )::integer AS active_count
-      FROM design.upload_batches ub
+      FROM (
+        SELECT DISTINCT ON (project_id)
+          id,
+          project_id,
+          uploaded_by,
+          uploaded_by_user_id,
+          uploaded_at,
+          accepted_rows,
+          rejected_rows
+        FROM design.upload_batches
+        WHERE COALESCE(status, 'active') = 'active'
+        ORDER BY project_id, uploaded_at DESC, id DESC
+      ) ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN design.fixtures f ON f.batch_id = ub.id
-      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
+      LEFT JOIN design.fixtures pf ON pf.project_id = dp.id
+      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = pf.id
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::integer AS total_tasks,
@@ -221,15 +234,27 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
-        COUNT(DISTINCT f.id)::integer AS total_fixtures,
-        COUNT(DISTINCT f.id) FILTER (
+        COUNT(DISTINCT pf.id)::integer AS total_fixtures,
+        COUNT(DISTINCT pf.id) FILTER (
           WHERE fwp.status IS NOT NULL
             AND NOT (fwp.status = ANY($3::text[]))
         )::integer AS active_count
-      FROM design.upload_batches ub
+      FROM (
+        SELECT DISTINCT ON (project_id)
+          id,
+          project_id,
+          uploaded_by,
+          uploaded_by_user_id,
+          uploaded_at,
+          accepted_rows,
+          rejected_rows
+        FROM design.upload_batches
+        WHERE COALESCE(status, 'active') = 'active'
+        ORDER BY project_id, uploaded_at DESC, id DESC
+      ) ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN design.fixtures f ON f.batch_id = ub.id
-      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
+      LEFT JOIN design.fixtures pf ON pf.project_id = dp.id
+      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = pf.id
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::integer AS total_tasks,

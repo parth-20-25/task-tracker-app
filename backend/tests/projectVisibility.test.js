@@ -41,5 +41,6 @@ test("project visibility predicate gives project authority roles full project vi
 
   assert.match(sql, /FROM root_user root/);
   assert.match(sql, /hierarchy_level <= 2/);
+  assert.match(sql, /team_lead_id IN \(SELECT employee_id FROM visible_users\)/);
   assert.match(sql, /uploaded_by IN \(SELECT employee_id FROM visible_users\)/);
 });

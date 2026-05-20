@@ -46,4 +46,61 @@ runTest("preserves existing image URLs when an update row has no new image", () 
   );
 });
 
+runTest("matches existing fixtures when incoming fixture_no has trailing hyphen noise", () => {
+  const result = diffWithDatabase(
+    [
+      {
+        fixture_no: "PARC26001001-",
+        part_name: "Part A",
+        fixture_type: "Checking fixture",
+        qty: 1,
+        image_1_url: null,
+        image_2_url: null,
+      },
+    ],
+    [
+      {
+        fixture_no: "PARC26001001",
+        part_name: "Part A",
+        fixture_type: "Checking fixture",
+        qty: 1,
+        image_1_url: null,
+        image_2_url: null,
+      },
+    ],
+  );
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].type, "UNCHANGED");
+});
+
+runTest("matches existing fixtures using canonical fixture_no casing", () => {
+  const result = diffWithDatabase(
+    [
+      {
+        fixture_no: "parc26001001",
+        part_name: "Part A",
+        fixture_type: "Checking fixture",
+        qty: 1,
+        image_1_url: null,
+        image_2_url: null,
+      },
+    ],
+    [
+      {
+        fixture_no: "PARC26001001",
+        part_name: "Part A",
+        fixture_type: "Checking fixture",
+        qty: 1,
+        image_1_url: null,
+        image_2_url: null,
+      },
+    ],
+  );
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].type, "UNCHANGED");
+  assert.equal(result[0].classification, "EXISTING");
+});
+
 console.log("designIngestion differ checks passed");

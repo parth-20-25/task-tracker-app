@@ -156,10 +156,31 @@ async function run() {
       { fixture_id: "fixture-1", stage_name: "2d_finish", stage_order: 4, status: "PENDING" },
     ];
 
+    const activeIncompleteAttempts = [
+      {
+        fixture_id: "fixture-1",
+        stage_name: "concept",
+        attempt_no: 1,
+        status: "APPROVED",
+        assigned_at: "2026-04-01T08:00:00Z",
+        started_at: "2026-04-01T08:00:00Z",
+        completed_at: "2026-04-01T10:00:00Z",
+        approved_at: "2026-04-01T10:00:00Z",
+      },
+      {
+        fixture_id: "fixture-1",
+        stage_name: "dap",
+        attempt_no: 1,
+        status: "IN_PROGRESS",
+        assigned_at: "2026-04-01T10:30:00Z",
+        started_at: "2026-04-01T10:30:00Z",
+      },
+    ];
+
     assert.doesNotThrow(() => assertDesignReportTruthLayerComplete(
       fixtures,
       activeIncompleteProgress,
-      [],
+      activeIncompleteAttempts,
     ));
 
     assert.throws(
@@ -172,7 +193,7 @@ async function run() {
         assert.equal(error.statusCode, 409);
         assert.equal(error.errorCode, "DESIGN_REPORT_TRUTH_LAYER_REQUIRED");
         assert.match(error.message, /truth layer is complete/);
-        assert.match(error.details.details.join(" | "), /incomplete or inconsistent|missing 2D FINISH/);
+        assert.match(error.details.details.join(" | "), /incomplete or inconsistent|missing workflow progress rows \(2D FINISH\)/);
         return true;
       },
     );

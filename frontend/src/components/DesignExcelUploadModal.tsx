@@ -27,6 +27,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { IngestionSpreadsheetWorkspace } from "@/components/ingestionSpreadsheet/IngestionSpreadsheetWorkspace";
 import { adminQueryKeys, analyticsQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import {
   DesignExcelPreviewRow,
@@ -50,6 +51,38 @@ function formatConflictType(type: DesignExcelUploadResponse["preview"]["conflict
     default:
       return "Fixture data mismatch";
   }
+}
+
+function formatAcceptedBadge(item: DesignExcelUploadResponse["preview"]["accepted"][number]) {
+  if (item.classification === "UPDATED" || item.type === "UPDATE_QTY") {
+    return `UPDATED • QTY ${item.existing?.qty ?? "?"} → ${item.incoming.qty}`;
+  }
+  return "NEW";
+}
+
+function IngestionValidationSummary({ preview }: { preview: DesignExcelUploadResponse["preview"] }) {
+  const s = preview.validation_summary;
+  if (!s?.by_classification) {
+    return null;
+  }
+  const parts = Object.entries(s.by_classification)
+    .filter(([, n]) => (n as number) > 0)
+    .map(([k, n]) => `${k}: ${n}`);
+  if (parts.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+      {parts.map((p) => (
+        <span
+          key={p}
+          className="rounded-full border border-border/80 bg-muted/40 px-2 py-0.5 font-medium text-muted-foreground"
+        >
+          {p}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function ImagePreviewStrip({ row }: { row: DesignExcelPreviewRow }) {
@@ -89,11 +122,10 @@ function getRowDecisionKey(row: DesignExcelPreviewRow) {
   return `${row.fixture_no}::${row.row_number}`;
 }
 
-type CorrectionFieldName = "fixture_no" | "op_no" | "part_name" | "fixture_type" | "qty";
+type CorrectionFieldName = "fixture_no" | "part_name" | "fixture_type" | "qty";
 
 interface RejectedRowCorrectionDraft {
   fixture_no: string;
-  op_no: string;
   part_name: string;
   fixture_type: string;
   qty: string;
@@ -107,12 +139,10 @@ const CORRECTION_FIELDS: Array<{
   { name: "fixture_no", label: "Fixture No", placeholder: "PARC25119001" },
   { name: "fixture_type", label: "Fixture Type", placeholder: "Checking fixture" },
   { name: "qty", label: "QTY", placeholder: "1" },
-  { name: "op_no", label: "OP.NO", placeholder: "OP 10" },
   { name: "part_name", label: "Part Name", placeholder: "Sub assembly or part name" },
 ];
 
 const FIXTURE_NUMBER_PATTERN = /^PARC\d{8,}$/i;
-const OP_NUMBER_PATTERN = /^OP\.?\s*\d+[A-Z]*$/i;
 
 function normalizeCorrectionValue(value: unknown) {
   return String(value ?? "").trim();
@@ -188,7 +218,6 @@ function buildRejectedRowDraft(rejected: DesignExcelRejectedRow): RejectedRowCor
   const validation = getRejectedValidation(rejected);
   return {
     fixture_no: pickDraftValue(validation, "fixture_no"),
-    op_no: pickDraftValue(validation, "op_no"),
     part_name: pickDraftValue(validation, "part_name"),
     fixture_type: pickDraftValue(validation, "fixture_type"),
     qty: pickDraftValue(validation, "qty"),
@@ -206,7 +235,6 @@ function buildCorrectedPreviewRow(
     row_reference_source: rejected.row_reference_source,
     business_row_reference: rejected.business_row_reference ?? null,
     fixture_no: draft.fixture_no,
-    op_no: draft.op_no,
     part_name: draft.part_name,
     fixture_type: draft.fixture_type,
     qty: draft.qty,
@@ -238,10 +266,6 @@ function buildClientFieldErrors(
     } else if (!FIXTURE_NUMBER_PATTERN.test(normalizeCorrectionValue(draft.fixture_no))) {
       errors.fixture_no = "Use the PARC fixture format.";
     }
-  }
-
-  if (normalizeCorrectionValue(draft.op_no) && !OP_NUMBER_PATTERN.test(normalizeCorrectionValue(draft.op_no)) && !/^\d+(?:\.0+)?$/.test(normalizeCorrectionValue(draft.op_no))) {
-    errors.op_no = "Use OP format like OP 10, OP 10A, or OP 10AB.";
   }
 
   if (problemFields.includes("part_name") && !normalizeCorrectionValue(draft.part_name)) {
@@ -533,7 +557,7 @@ function PostConfirmReviewStage({
       <div className="shrink-0 border-b bg-card p-4">
         <h4 className="text-lg font-semibold">Upload Complete — Review & Upload Reference Images</h4>
         <p className="text-sm text-muted-foreground">
-          Batch {batchId.slice(0, 8)}... — Fixtures loaded. Optional: Upload missing part/fixture reference images.
+          Fixtures loaded. Optional: Upload missing part/fixture reference images.
         </p>
       </div>
 
@@ -749,7 +773,12 @@ function PostConfirmReviewStage({
   );
 }
 
-export function DesignExcelUploadModal() {
+interface DesignExcelUploadModalProps {
+  /** Native operational spreadsheet (virtualized grid, clipboard, bulk ops). */
+  useOperationalSpreadsheet?: boolean;
+}
+
+export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: DesignExcelUploadModalProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fileUploadRef = useRef<HTMLInputElement | null>(null);
@@ -1260,6 +1289,15 @@ export function DesignExcelUploadModal() {
   };
 
   const handleConfirm = () => {
+    if (!preview?.ingestion_session_id) {
+      toast({
+        title: "Session missing",
+        description: "Reload preview (upload again) to create an ingestion session before committing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!preview) return;
 
     const resolved_items: Array<{
@@ -1284,6 +1322,7 @@ export function DesignExcelUploadModal() {
     });
 
     confirmMutation.mutate({
+      ingestion_session_id: preview.ingestion_session_id,
       file_info: preview.file_info,
       resolved_items,
       rejected_items: preview.preview.rejected,
@@ -1312,7 +1351,10 @@ export function DesignExcelUploadModal() {
               Fixture Upload
             </Button>
           </DialogTrigger>
-          <DialogContent className="glass flex max-h-[90vh] min-h-0 w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-5xl">
+          <DialogContent className={cn(
+            "glass flex max-h-[90vh] min-h-0 w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0",
+            useOperationalSpreadsheet ? "sm:max-w-[min(96vw,1400px)]" : "sm:max-w-5xl",
+          )}>
             <input
               ref={previewImageInputRef}
               type="file"
@@ -1530,13 +1572,41 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                   </Button>
                 </DialogFooter>
               </div>
+            ) : useOperationalSpreadsheet ? (
+              <IngestionSpreadsheetWorkspace
+                preview={preview}
+                uploadMode={uploadMode}
+                decisions={decisions}
+                onDecisionsChange={setDecisions}
+                onSyncRejectedDraft={(rejected, draft) => {
+                  const rowKey = getRejectedRowKey(rejected);
+                  setCorrectionDrafts((current) => ({
+                    ...current,
+                    [rowKey]: draft,
+                  }));
+                }}
+                onValidateRejectedRow={handleRejectedRowValidation}
+                validatingRejectedKey={validatingRejectedKey}
+                queuedPreviewImages={queuedPreviewImages}
+                onQueuePartImage={(rowKey, file) => queuePreviewReferenceImage(rowKey, "part", file)}
+                onConfirm={handleConfirm}
+                onCancelPreview={() => {
+                  setPreview(null);
+                  setSelectedFile(null);
+                  setPasteText("");
+                  setDecisions({});
+                }}
+                isConfirming={confirmMutation.isPending}
+                hasUnresolvedConflicts={!!hasUnresolvedConflicts}
+              />
             ) : (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background/50">
                 <div className="shrink-0 border-b bg-card p-4">
                   <h4 className="text-lg font-semibold">
-                    {preview.file_info.project_code} - {preview.file_info.project_name}
+                    {preview.file_info.project_code} - {preview.file_info.project_name_display ?? preview.file_info.project_name}
                   </h4>
                   <p className="text-sm text-muted-foreground">{preview.file_info.company_name}</p>
+                  <IngestionValidationSummary preview={preview.preview} />
                 </div>
 
                 <div className="fixture-modal-scroll min-h-0 flex-1 overflow-y-auto p-4">
@@ -1558,11 +1628,11 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                   </div>
                                 </div>
                                 <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800 dark:bg-green-900 dark:text-green-300">
-                                  {item.type === "NEW" ? "NEW" : `QTY ${item.existing?.qty} -> ${item.incoming.qty}`}
+                                  {formatAcceptedBadge(item)}
                                 </span>
                               </div>
                               <div className="mt-2 text-xs text-muted-foreground">
-                                Type: <span className="font-medium text-foreground">{item.incoming.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.incoming.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.incoming.qty}</span>
+                                Type: <span className="font-medium text-foreground">{item.incoming.fixture_type}</span> • Qty: <span className="font-medium text-foreground">{item.incoming.qty}</span>
                               </div>
                               {uploadMode === "paste" ? (
                                 <PreviewReferenceImageControls
@@ -1576,6 +1646,27 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                 />
                               ) : null}
                               <ImagePreviewStrip row={item.incoming} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {(preview.preview.unchanged?.length ?? 0) > 0 && (
+                      <div className="space-y-3">
+                        <h5 className="flex items-center gap-2 border-b pb-2 font-semibold text-muted-foreground">
+                          <CheckCircle2 className="h-5 w-5 opacity-70" />
+                          No changes — already in production ({preview.preview.unchanged!.length})
+                        </h5>
+                        <div className="grid gap-2 grid-cols-1 md:grid-cols-2">
+                          {preview.preview.unchanged!.map((row, index) => (
+                            <div
+                              key={`${row.incoming.fixture_no}-unchanged-${index}`}
+                              className="rounded-md border border-dashed bg-muted/20 p-2 text-xs text-muted-foreground"
+                            >
+                              <span className="font-medium text-foreground">{row.incoming.fixture_no}</span>
+                              {" "}
+                              • {getRowReferenceSummary(row.incoming)}
                             </div>
                           ))}
                         </div>
@@ -1618,7 +1709,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                     <div className="space-y-1 text-xs">
                                       <div>Part: <span className="font-medium text-foreground">{conflict.existing.part_name}</span></div>
                                       <div>Type: <span className="font-medium text-foreground">{conflict.existing.fixture_type}</span></div>
-                                      <div>OP: <span className="font-medium text-foreground">{conflict.existing.op_no}</span></div>
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.existing.qty}</span></div>
                                     </div>
                                     <ImagePreviewStrip row={conflict.existing} />
@@ -1631,7 +1721,6 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                     <div className="space-y-1 text-xs">
                                       <div>Part: <span className="font-medium text-foreground">{conflict.incoming.part_name}</span></div>
                                       <div>Type: <span className="font-medium text-foreground">{conflict.incoming.fixture_type}</span></div>
-                                      <div>OP: <span className="font-medium text-foreground">{conflict.incoming.op_no}</span></div>
                                       <div>Qty: <span className="font-medium text-foreground">{conflict.incoming.qty}</span></div>
                                     </div>
                                     {uploadMode === "paste" ? (
@@ -1669,7 +1758,7 @@ s. no	fixture no	op.no	part name	fixture type	qty	designer
                                 {getRowReferenceSummary(item)} • {item.part_name}
                               </div>
                               <div className="mt-2 text-xs text-muted-foreground">
-                                Type: <span className="font-medium text-foreground">{item.fixture_type}</span> • OP: <span className="font-medium text-foreground">{item.op_no}</span> • Qty: <span className="font-medium text-foreground">{item.qty}</span>
+                                Type: <span className="font-medium text-foreground">{item.fixture_type}</span> • Qty: <span className="font-medium text-foreground">{item.qty}</span>
                               </div>
                               <div className="mt-2 rounded-md border border-slate-200 bg-background/70 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:text-slate-300">
                                 {item.skip_reason}

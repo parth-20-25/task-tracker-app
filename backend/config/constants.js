@@ -29,6 +29,9 @@ const PERMISSIONS = {
   DELETE_TASK: "can_delete_task",
   UPLOAD_PROOFS: "can_upload_proofs",
   UPLOAD_DATA: "can_upload_data",
+  // Design ingestion rollout (Design department only; legacy remains during migration)
+  UPLOAD_LEGACY_DESIGN_DATA: "upload_legacy_design_data",
+  UPLOAD_NATIVE_DESIGN_DATA: "upload_native_design_data",
   MANAGE_USERS: "can_manage_users",
   CREATE_USER: "can_create_user",
   EDIT_USER: "can_edit_user",
@@ -77,6 +80,8 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.DELETE_TASK, "Delete Task", "Allows deleting tasks."],
   [PERMISSIONS.UPLOAD_PROOFS, "Upload Proofs", "Allows uploading task proof attachments."],
   [PERMISSIONS.UPLOAD_DATA, "Upload Data", "Allows uploading department-owned master data."],
+  [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA, "Upload Legacy Design Data", "Allows Design fixture ingestion via legacy Excel/paste pipeline (temporary during native rollout)."],
+  [PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA, "Upload Native Design Data", "Allows Design fixture ingestion via native spreadsheet session pipeline."],
   [PERMISSIONS.MANAGE_USERS, "Manage Users", "Allows managing user accounts."],
   [PERMISSIONS.CREATE_USER, "Create User", "Allows creating user accounts."],
   [PERMISSIONS.EDIT_USER, "Edit User", "Allows editing user account details."],

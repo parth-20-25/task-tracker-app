@@ -122,6 +122,14 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
   `;
 }
 
+function projectOwnershipInVisibleUsersSql(projectAlias = "p", cteName = "visible_users") {
+  return `
+    COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+    OR COALESCE(${projectAlias}.team_lead_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+    OR COALESCE(${projectAlias}.project_leader_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+  `;
+}
+
 function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") {
   return `
     (
@@ -130,7 +138,7 @@ function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") 
         FROM root_user root
         WHERE ${projectAuthoritySqlPredicate("root")}
       )
-      OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+      OR (${projectOwnershipInVisibleUsersSql(projectAlias, cteName)})
     )
   `;
 }
@@ -196,6 +204,7 @@ module.exports = {
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,
   projectAuthoritySqlPredicate,
+  projectOwnershipInVisibleUsersSql,
   visibleFixturePredicate,
   visibleProjectPredicate,
 };

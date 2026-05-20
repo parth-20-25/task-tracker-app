@@ -1,45 +1,12 @@
+const { getDesignStageRevisionPrefix } = require("./designRevisionPrefixes");
+
 function normalizeStageVersion(value) {
   const version = Number(value);
-  return Number.isInteger(version) && version > 0 ? version : 0;
-}
-
-function normalizeStageName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function getStageRevisionPrefix(stageName) {
-  const normalized = normalizeStageName(stageName);
-
-  if (["concept", "concept_stage"].includes(normalized)) {
-    return "CON";
-  }
-
-  if (["dap", "d_a_p"].includes(normalized)) {
-    return "DAP";
-  }
-
-  if (["3d", "3d_finish", "three_d", "three_d_finish"].includes(normalized)) {
-    return "3D";
-  }
-
-  if (["2d", "2d_finish", "two_d", "two_d_finish", "detailing", "detail"].includes(normalized)) {
-    return "DET";
-  }
-
-  const fallback = String(stageName || "")
-    .replace(/[^a-z0-9]/gi, "")
-    .slice(0, 3)
-    .toUpperCase();
-
-  return fallback || "REV";
+  return Number.isInteger(version) && version >= 0 ? version : 0;
 }
 
 function formatStageRevisionCode(stageName, stageVersion = 0) {
-  const prefix = getStageRevisionPrefix(stageName);
+  const prefix = getDesignStageRevisionPrefix(stageName);
   const version = String(normalizeStageVersion(stageVersion)).padStart(2, "0");
   return `${prefix} ${version}`;
 }
@@ -53,10 +20,36 @@ function getStageVersionFromCompletedCount(completedCount) {
   return Number.isInteger(count) && count > 0 ? count : 0;
 }
 
+/**
+ * Parses common revision inputs (CON2, con-02, CON 02) into canonical "CON 02".
+ */
+function normalizeRevisionCodeInput(value, stageName = null) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const match = raw.match(/^([A-Za-z0-9]{2,4})\s*[-_]?\s*(\d{1,2})$/);
+  if (match) {
+    const prefix = match[1].toUpperCase();
+    const version = String(Number(match[2])).padStart(2, "0");
+    return `${prefix} ${version}`;
+  }
+
+  if (stageName) {
+    const versionMatch = raw.match(/(\d{1,2})\s*$/);
+    if (versionMatch) {
+      return formatStageRevisionCode(stageName, Number(versionMatch[1]));
+    }
+  }
+
+  return raw.replace(/\s+/g, " ").toUpperCase();
+}
+
 module.exports = {
   formatStageVersionLabel,
   formatStageRevisionCode,
-  getStageRevisionPrefix,
   getStageVersionFromCompletedCount,
   normalizeStageVersion,
+  normalizeRevisionCodeInput,
 };

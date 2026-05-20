@@ -5,6 +5,7 @@ const DESIGN_STAGE_DISPLAY_NAMES = {
   dap: "DAP",
   "3d_finish": "3D Finish",
   "2d_finish": "2D Finish",
+  detailing: "Detailing",
   release: "Release",
 };
 
@@ -37,6 +38,10 @@ function normalizeDesignStageName(stageName) {
 
   if (["2d", "2d_finish", "two_d", "two_d_finish"].includes(sanitized)) {
     return "2d_finish";
+  }
+
+  if (["detailing", "detail", "det"].includes(sanitized)) {
+    return "detailing";
   }
 
   if (["release", "released"].includes(sanitized)) {

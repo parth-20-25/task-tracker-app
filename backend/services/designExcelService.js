@@ -3,7 +3,7 @@ const { requireUserDepartment } = require("../lib/departmentContext");
 const { instrumentModuleExports } = require("../lib/observability");
 const { logger } = require("../lib/logger");
 const { createAuditLog } = require("../repositories/auditRepository");
-const { getActiveWorkflowForDepartment, initProgressForFixture } = require("../repositories/fixtureWorkflowRepository");
+const { getActiveWorkflowForDepartment } = require("../repositories/fixtureWorkflowRepository");
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
@@ -17,22 +17,33 @@ const {
   createUploadRowCorrections,
   findFixtureByIdForUser,
   updateFixtureReferenceImageForDepartment,
-  upsertFixture
 } = require("../repositories/designProjectCatalogRepository");
+const {
+  createIngestionSession,
+  getDraftIngestionSessionForUser,
+  getIngestionSessionById,
+  finalizeIngestionSessionPreview,
+  markIngestionSessionCommitted,
+} = require("../repositories/ingestionSessionRepository");
 
 const { parsePasteData, normalize } = require("./designIngestion/parser");
 const { validateParsedData } = require("./designIngestion/validator");
 const { diffWithDatabase } = require("./designIngestion/differ");
 const { formatPreview } = require("./designIngestion/formatter");
+const { canonicalFixtureNo } = require("./designIngestion/normalize");
+const { CATALOG_MEMBERSHIP_MODES } = require("./designWorkflowSync/mergeContract");
+const { synchronizeDesignWorkflowTruthFromIngestion } = require("./designWorkflowSync/workflowTruthSynchronizationService");
 const { extractDesignWorkbook } = require("./pythonExtractionClient");
-const { uploadExtractedDesignImage } = require("../lib/supabaseStorage");
+const {
+  uploadExtractedDesignImageStaging,
+  promoteStagedExtractedDesignImage,
+  deleteStorageObjects,
+} = require("../lib/supabaseStorage");
 
-const CORRECTIONABLE_FIELDS = ["fixture_no", "op_no", "part_name", "fixture_type", "qty"];
+const CORRECTIONABLE_FIELDS = ["fixture_no", "part_name", "fixture_type", "qty"];
 const FIELD_LABEL_TO_KEY = {
   "fixture no": "fixture_no",
   "fixture number": "fixture_no",
-  "op.no": "op_no",
-  "op no": "op_no",
   "part name": "part_name",
   "fixture type": "fixture_type",
   qty: "qty",
@@ -99,8 +110,6 @@ function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
       switch (fieldName) {
         case "fixture_no":
           return "Fixture No";
-        case "op_no":
-          return "OP.NO";
         case "part_name":
           return "Part Name";
         case "fixture_type":
@@ -134,14 +143,12 @@ function buildCorrectionDiagnosticsFromExtractionError(error = {}) {
     business_row_reference: rawData.business_row_reference || null,
     raw: {
       fixture_no: parsed.fixture_no || null,
-      op_no: parsed.op_no || null,
       part_name: parsed.part_name || null,
       fixture_type: parsed.fixture_type || null,
       qty: parsed.qty || null,
     },
     normalized: {
       fixture_no: normalizedFields.fixture_no || parsed.fixture_no || null,
-      op_no: normalizedFields.op_no || parsed.op_no || null,
       part_name: normalizedFields.part_name || parsed.part_name || null,
       fixture_type: normalizedFields.fixture_type || parsed.fixture_type || null,
       qty: normalizedFields.qty || parsed.qty || null,
@@ -193,10 +200,8 @@ function normalizeResolution(value) {
 }
 
 function normalizeFixtureIdentity(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, "")
-    .toLowerCase();
+  const canon = canonicalFixtureNo(value);
+  return canon ? canon.toLowerCase() : "";
 }
 
 function buildDecisionErrorMessage(prefix, fixtureData) {
@@ -216,7 +221,7 @@ function hasExtractedImageUpload(row = {}) {
   return Boolean(row.image_1_upload || row.image_2_upload);
 }
 
-async function materializeExtractedWorkbookImages(fileInfo, rows = []) {
+async function materializeExtractedWorkbookImages(sessionId, fileInfo, rows = [], stagingPathsOut) {
   let uploadedCount = 0;
   const materializedRows = [];
 
@@ -224,11 +229,13 @@ async function materializeExtractedWorkbookImages(fileInfo, rows = []) {
     let nextRow = stripExtractedImageUploads(row);
 
     if (row.image_1_upload) {
-      const uploaded = await uploadExtractedDesignImage({
+      const uploaded = await uploadExtractedDesignImageStaging({
         image: row.image_1_upload,
+        sessionId,
         fileInfo,
         row,
         slotName: "image_1_url",
+        stagingPathsOut,
       });
       nextRow = {
         ...nextRow,
@@ -240,6 +247,7 @@ async function materializeExtractedWorkbookImages(fileInfo, rows = []) {
             image_1_url: {
               bucket: uploaded.bucket,
               path: uploaded.path,
+              staging: true,
               anchor: row.image_1_upload.anchor || {},
             },
           },
@@ -249,11 +257,13 @@ async function materializeExtractedWorkbookImages(fileInfo, rows = []) {
     }
 
     if (row.image_2_upload) {
-      const uploaded = await uploadExtractedDesignImage({
+      const uploaded = await uploadExtractedDesignImageStaging({
         image: row.image_2_upload,
+        sessionId,
         fileInfo,
         row,
         slotName: "image_2_url",
+        stagingPathsOut,
       });
       nextRow = {
         ...nextRow,
@@ -265,6 +275,7 @@ async function materializeExtractedWorkbookImages(fileInfo, rows = []) {
             image_2_url: {
               bucket: uploaded.bucket,
               path: uploaded.path,
+              staging: true,
               anchor: row.image_2_upload.anchor || {},
             },
           },
@@ -288,12 +299,11 @@ function assertImportableFixtureShape(fixtureData) {
   }
 
   const fixtureNo = String(fixtureData.fixture_no || "").trim();
-  const opNo = String(fixtureData.op_no || "").trim();
   const partName = String(fixtureData.part_name || "").trim();
   const fixtureType = String(fixtureData.fixture_type || "").trim();
   const qty = Number(fixtureData.qty);
 
-  if (!fixtureNo || !opNo || !partName || !fixtureType || !Number.isInteger(qty) || qty <= 0) {
+  if (!fixtureNo || !partName || !fixtureType || !Number.isInteger(qty) || qty <= 0) {
     throw new AppError(400, buildDecisionErrorMessage("Fixture confirmation payload failed strict validation", fixtureData));
   }
 }
@@ -330,7 +340,6 @@ async function resolveExistingFixturesForProject(user, fileInfo) {
           f.project_id,
           f.batch_id,
           f.fixture_no,
-          f.op_no,
           f.part_name,
           f.fixture_type,
           f.remark,
@@ -354,7 +363,6 @@ async function resolveExistingFixturesForProject(user, fileInfo) {
       project_id: row.project_id,
       batch_id: row.batch_id,
       fixture_no: row.fixture_no,
-      op_no: row.op_no,
       part_name: row.part_name,
       fixture_type: row.fixture_type,
       remark: row.remark || null,
@@ -458,7 +466,6 @@ function buildCorrectionAudit(originalRow, correctedRow, classification) {
   const originalNormalized = originalValidation.normalized || {};
   const correctedComparable = {
     fixture_no: correctedRow?.fixture_no ?? "",
-    op_no: correctedRow?.op_no ?? "",
     part_name: correctedRow?.part_name ?? "",
     fixture_type: correctedRow?.fixture_type ?? "",
     qty: correctedRow?.qty ?? "",
@@ -480,20 +487,149 @@ function buildCorrectionAudit(originalRow, correctedRow, classification) {
   };
 }
 
-async function buildPreviewPayload(user, {
+async function promoteFixtureStagingImages(fixtureData, fileInfo, productionPathsAccumulator) {
+  let next = { ...fixtureData };
+  for (const slotName of ["image_1_url", "image_2_url"]) {
+    const meta = next.raw_data?.image_storage?.[slotName];
+    if (!meta?.staging || !meta.bucket || !meta.path) {
+      continue;
+    }
+
+    const promoted = await promoteStagedExtractedDesignImage({
+      sourceBucket: meta.bucket,
+      sourcePath: meta.path,
+      fileInfo,
+      row: next,
+      slotName,
+    });
+
+    productionPathsAccumulator.push({ bucket: promoted.bucket, path: promoted.path });
+    next = {
+      ...next,
+      [slotName]: promoted.publicUrl,
+      raw_data: {
+        ...(next.raw_data || {}),
+        image_storage: {
+          ...(next.raw_data?.image_storage || {}),
+          [slotName]: {
+            bucket: promoted.bucket,
+            path: promoted.path,
+            staging: false,
+            anchor: meta.anchor || {},
+          },
+        },
+      },
+    };
+  }
+
+  return next;
+}
+
+function shapeSessionFileInfoCompare(fileInfo = {}) {
+  return {
+    project_code: String(fileInfo.project_code || "").trim(),
+    project_name_display: String(fileInfo.project_name_display || fileInfo.project_name || "").trim(),
+    company_name: String(fileInfo.company_name || "").trim(),
+    metadata_source: String(fileInfo.metadata_source || "").trim(),
+  };
+}
+
+function assertSessionMatchesConfirmFileInfo(sessionRow, file_info) {
+  const expected = shapeSessionFileInfoCompare(sessionRow.file_info || {});
+  const actual = shapeSessionFileInfoCompare(file_info || {});
+
+  if (
+    expected.project_code !== actual.project_code
+    || expected.project_name_display !== actual.project_name_display
+    || expected.company_name !== actual.company_name
+    || expected.metadata_source !== actual.metadata_source
+  ) {
+    throw new AppError(400, "Confirm payload file_info does not match ingestion session");
+  }
+}
+
+function assertCommitResolutionsMatchFreshPreview(resolvedItems, freshPreview) {
+  const expectedCount = freshPreview.accepted.length + freshPreview.conflicts.length;
+  if (resolvedItems.length !== expectedCount) {
+    throw new AppError(
+      409,
+      "Import review is out of date. Re-run preview before committing.",
+      { expected_decisions: expectedCount, received: resolvedItems.length },
+    );
+  }
+
+  const conflictKeys = new Set(
+    freshPreview.conflicts.map((c) => canonicalFixtureNo(c.incoming.fixture_no).toLowerCase()),
+  );
+  const autoKeys = new Set(
+    freshPreview.accepted.map((a) => canonicalFixtureNo(a.incoming.fixture_no).toLowerCase()),
+  );
+
+  for (const item of resolvedItems) {
+    const key = canonicalFixtureNo(item.data.fixture_no).toLowerCase();
+    const resolution = normalizeResolution(item.resolution);
+
+    if (resolution === "existing") {
+      if (!conflictKeys.has(key)) {
+        throw new AppError(400, `Cannot keep existing production data for non-conflict row (${key}).`, {
+          fixture_no: key,
+        });
+      }
+      continue;
+    }
+
+    if (!autoKeys.has(key) && !conflictKeys.has(key)) {
+      throw new AppError(400, `Fixture ${key} is not part of the current preview import set.`, {
+        fixture_no: key,
+      });
+    }
+  }
+}
+
+async function completeDesignIngestionPreview(user, {
+  sessionId,
   fileInfo,
   validRows,
   rejectedRows,
   skippedRows,
   metadataSource,
+  stagingPaths,
+  catalogMembershipMode,
 }) {
-  const project_code_clean = fileInfo.project_code.trim();
-  const project_name_display = fileInfo.project_name_display || fileInfo.project_name || "";
-  const company_name_clean = fileInfo.company_name.trim();
-  const existingFixtures = await resolveExistingFixturesForProject(user, fileInfo);
+  const project_code_clean = String(fileInfo.project_code || "").trim();
+  const project_name_display = String(
+    fileInfo.project_name_display || fileInfo.project_name || "",
+  ).trim();
+  const company_name_clean = String(fileInfo.company_name || "").trim();
+
+  const existingFixtures = await resolveExistingFixturesForProject(user, {
+    project_code: project_code_clean,
+    project_name_display,
+    company_name: company_name_clean,
+  });
 
   const diffResults = diffWithDatabase(validRows, existingFixtures);
   const preview = formatPreview(diffResults, rejectedRows, skippedRows);
+
+  await finalizeIngestionSessionPreview(sessionId, {
+    snapshot: {
+      version: 1,
+      metadata_source: metadataSource,
+      staging_object_paths: stagingPaths || [],
+      catalog_membership_mode:
+        catalogMembershipMode === CATALOG_MEMBERSHIP_MODES.FULL_REPLACE
+          ? CATALOG_MEMBERSHIP_MODES.FULL_REPLACE
+          : CATALOG_MEMBERSHIP_MODES.DELTA,
+    },
+    file_info: {
+      project_code: project_code_clean,
+      project_name_display,
+      company_name: company_name_clean,
+      metadata_source: metadataSource,
+    },
+  }, pool);
+
+  const sessionMeta = await getIngestionSessionById(sessionId, pool);
 
   return {
     file_info: {
@@ -503,11 +639,13 @@ async function buildPreviewPayload(user, {
       metadata_source: metadataSource,
     },
     preview,
+    ingestion_session_id: sessionId,
+    ingestion_session_expires_at: sessionMeta?.expires_at || null,
   };
 }
 
 async function parseAndPreviewUpload(user, payload = {}) {
-  const { text } = payload;
+  const { text, catalog_membership_mode: catalogMembershipMode } = payload;
 
   logImportDecision("paste_upload_start", {
     user_id: user.id,
@@ -538,16 +676,28 @@ async function parseAndPreviewUpload(user, payload = {}) {
       skipped_rows: skippedRows.length,
     });
 
-    return buildPreviewPayload(user, {
-      fileInfo: {
-        project_code: file_info.project_code,
-        project_name: file_info.project_name,
-        company_name: file_info.company_name,
+    const departmentId = requireUserDepartment(user);
+    const sessionRow = await createIngestionSession({
+      department_id: departmentId,
+      created_by_employee_id: user.employee_id,
+      file_info: {
+        project_code: file_info.project_code.trim(),
+        project_name_display: file_info.project_name || "",
+        company_name: file_info.company_name.trim(),
+        metadata_source: "manual_paste",
       },
+      snapshot: {},
+    }, pool);
+
+    return completeDesignIngestionPreview(user, {
+      sessionId: sessionRow.id,
+      fileInfo: file_info,
       validRows,
       rejectedRows,
       skippedRows,
       metadataSource: "manual_paste",
+      stagingPaths: [],
+      catalogMembershipMode,
     });
   } catch (err) {
     logImportDecision("paste_upload_parse_error", {
@@ -558,7 +708,7 @@ async function parseAndPreviewUpload(user, payload = {}) {
   }
 }
 
-async function parseAndPreviewUploadedWorkbook(user, file) {
+async function parseAndPreviewUploadedWorkbook(user, file, options = {}) {
   if (!file) {
     logImportDecision("excel_upload_validation_failed", {
       error: "No Excel file uploaded",
@@ -577,10 +727,28 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
 
   try {
     const extractionResult = await extractDesignWorkbook(file);
-    const extractedImageCount = extractionResult.rows.filter(hasExtractedImageUpload).length;
+    const departmentId = requireUserDepartment(user);
+    const fi = extractionResult.file_info;
+    const initialFi = {
+      project_code: String(fi.project_code || "").trim(),
+      project_name_display: String(fi.project_name_display || fi.project_name || "").trim(),
+      company_name: String(fi.company_name || "").trim(),
+      metadata_source: "python_excel_upload",
+    };
+
+    const sessionRow = await createIngestionSession({
+      department_id: departmentId,
+      created_by_employee_id: user.employee_id,
+      file_info: initialFi,
+      snapshot: {},
+    }, pool);
+
+    const stagingPaths = [];
     const materializedImages = await materializeExtractedWorkbookImages(
+      sessionRow.id,
       extractionResult.file_info,
       extractionResult.rows,
+      stagingPaths,
     );
     const {
       validRows,
@@ -606,16 +774,19 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
       rejected_rows: rejectedRows.length,
       skipped_rows: skippedRows.length,
       extraction_errors_count: extractionResult.errors.length,
-      extracted_image_rows: extractedImageCount,
+      extracted_image_rows: extractionResult.rows.filter(hasExtractedImageUpload).length,
       supabase_images_uploaded: materializedImages.uploadedCount,
     });
 
-    return buildPreviewPayload(user, {
+    return completeDesignIngestionPreview(user, {
+      sessionId: sessionRow.id,
       fileInfo: extractionResult.file_info,
       validRows,
       rejectedRows,
       skippedRows,
       metadataSource: "python_excel_upload",
+      stagingPaths,
+      catalogMembershipMode: options.catalogMembershipMode,
     });
   } catch (err) {
     logImportDecision("excel_upload_parse_error", {
@@ -666,7 +837,6 @@ async function validateRejectedUploadRow(user, payload = {}) {
       || original_row.raw_data?.validation?.business_row_reference
       || null,
     fixture_no: corrected_row.fixture_no,
-    op_no: corrected_row.op_no,
     part_name: corrected_row.part_name,
     fixture_type: corrected_row.fixture_type,
     remark: null,
@@ -739,8 +909,27 @@ async function validateRejectedUploadRow(user, payload = {}) {
     company_name: file_info.company_name,
   });
   const diffResults = diffWithDatabase([validatedRow], existingFixtures);
+  const diffResult = diffResults[0];
 
-  if (diffResults.length === 0) {
+  if (!diffResult) {
+    const rejected = buildCorrectionRejectedRow(
+      original_row,
+      validatedRow,
+      "Unable to classify this row against production data.",
+      {
+        reason: "classification_failed",
+        missing_fields: [],
+      },
+    );
+
+    return {
+      classification: "rejected",
+      rejected,
+      correction_audit: buildCorrectionAudit(original_row, validatedRow, "rejected"),
+    };
+  }
+
+  if (diffResult.type === "UNCHANGED") {
     const rejected = buildCorrectionRejectedRow(
       original_row,
       validatedRow,
@@ -758,7 +947,6 @@ async function validateRejectedUploadRow(user, payload = {}) {
     };
   }
 
-  const diffResult = diffResults[0];
   const correctionAudit = buildCorrectionAudit(
     original_row,
     diffResult.incoming,
@@ -781,13 +969,37 @@ async function validateRejectedUploadRow(user, payload = {}) {
 }
 
 async function confirmUpload(user, payload = {}) {
-  const { file_info, resolved_items, rejected_items, skipped_items, correction_items } = payload;
+  const {
+    file_info,
+    resolved_items,
+    rejected_items,
+    skipped_items,
+    correction_items,
+    ingestion_session_id,
+  } = payload;
 
   const departmentId = requireUserDepartment(user);
+
+  if (!ingestion_session_id) {
+    throw new AppError(400, "ingestion_session_id is required for transactional import");
+  }
+
+  const sessionRow = await getDraftIngestionSessionForUser(
+    ingestion_session_id,
+    departmentId,
+    user.employee_id,
+    pool,
+  );
+
+  if (!sessionRow) {
+    throw new AppError(400, "Invalid, expired, or already committed ingestion session");
+  }
 
   if (!file_info || !file_info.project_code || !file_info.project_name_display || !file_info.company_name) {
     throw new AppError(400, "Missing file info in confirm payload");
   }
+
+  assertSessionMatchesConfirmFileInfo(sessionRow, file_info);
 
   const ingestionSource = file_info.metadata_source === "manual_paste" ? "manual_paste" : "excel_upload";
 
@@ -795,10 +1007,47 @@ async function confirmUpload(user, payload = {}) {
   const rejectedItems = Array.isArray(rejected_items) ? rejected_items : [];
   const skippedItems = Array.isArray(skipped_items) ? skipped_items : [];
   const correctionItems = Array.isArray(correction_items) ? correction_items : [];
-  const actionableItems = [];
-  const uploadDecisionLogs = [];
-  const seenFixtureNumbers = new Set();
 
+  const incomingRows = resolvedItems
+    .filter((item) => normalizeResolution(item.resolution) !== "existing")
+    .map((item) => item.data);
+
+  const { validRows: bulkValid, rejectedRows: bulkRejected } = validateParsedData(incomingRows);
+
+  if (bulkRejected.length > 0) {
+    throw new AppError(
+      400,
+      "One or more import rows failed validation. Fix grid errors before committing.",
+      { rejected_rows: bulkRejected },
+    );
+  }
+
+  const existingFixtures = await resolveExistingFixturesForProject(user, file_info);
+  const freshDiff = diffWithDatabase(bulkValid, existingFixtures);
+  const freshPreview = formatPreview(freshDiff, [], []);
+
+  assertCommitResolutionsMatchFreshPreview(resolvedItems, freshPreview);
+
+  const incomingKeyOrder = [];
+  const incomingKeySeen = new Set();
+  for (const item of resolvedItems) {
+    if (normalizeResolution(item.resolution) === "existing") {
+      continue;
+    }
+    const fiKey = canonicalFixtureNo(item.data.fixture_no).toLowerCase();
+    if (incomingKeySeen.has(fiKey)) {
+      throw new AppError(400, buildDecisionErrorMessage("Duplicate fixture identity detected in confirm payload", item.data));
+    }
+    incomingKeySeen.add(fiKey);
+    incomingKeyOrder.push(fiKey);
+  }
+
+  const incomingKeySet = new Set(incomingKeyOrder);
+  const actionableSourceRows = bulkValid.filter((row) => (
+    incomingKeySet.has(canonicalFixtureNo(row.fixture_no).toLowerCase())
+  ));
+
+  const uploadDecisionLogs = [];
   for (const item of resolvedItems) {
     if (!item || typeof item !== "object" || !item.data) {
       throw new AppError(400, "Malformed resolved_items payload");
@@ -821,35 +1070,31 @@ async function confirmUpload(user, payload = {}) {
         fixture_no: fixtureData.fixture_no,
         row_number: fixtureData.row_number,
       });
-      continue;
     }
+  }
 
+  const actionableItems = [];
+  for (const fixtureData of actionableSourceRows) {
     assertImportableFixtureShape(fixtureData);
-
-    const normalizedFixtureNo = String(fixtureData.fixture_no).trim().toLowerCase();
-    if (seenFixtureNumbers.has(normalizedFixtureNo)) {
-      await createAuditLog({
-        userEmployeeId: user.employee_id,
-        actionType: "DESIGN_FIXTURE_DUPLICATE_IN_CONFIRM_PAYLOAD",
-        targetType: "design_fixture",
-        targetId: fixtureData.fixture_no || "unknown",
-        metadata: {
-          project_code: file_info.project_code,
-          project_name: file_info.project_name_display,
-          row_number: fixtureData.row_number,
-          ingestion_source: file_info.metadata_source,
-        },
-      });
-
-      throw new AppError(400, buildDecisionErrorMessage("Duplicate fixture identity detected in confirm payload", fixtureData));
-    }
-
-    seenFixtureNumbers.add(normalizedFixtureNo);
     actionableItems.push(fixtureData);
   }
 
   if (actionableItems.length === 0) {
     throw new AppError(400, "No fixtures were approved for import");
+  }
+
+  const productionPathsForCleanup = [];
+  let promotedActionableItems = [];
+  try {
+    for (const fixtureData of actionableItems) {
+      promotedActionableItems.push(await promoteFixtureStagingImages(fixtureData, file_info, productionPathsForCleanup));
+    }
+  } catch (promoteErr) {
+    await deleteStorageObjects(productionPathsForCleanup).catch(() => {});
+    logger.error("Design ingestion image promotion failed", {
+      errorMessage: promoteErr?.message || String(promoteErr),
+    });
+    throw promoteErr;
   }
 
   const client = await pool.connect();
@@ -905,7 +1150,7 @@ async function confirmUpload(user, payload = {}) {
     await assertNoHiddenFixtureConflicts(
       user,
       project.project_id,
-      actionableItems.map((fixtureData) => fixtureData.fixture_no),
+      promotedActionableItems.map((fixtureData) => canonicalFixtureNo(fixtureData.fixture_no)),
       client,
     );
 
@@ -913,55 +1158,88 @@ async function confirmUpload(user, payload = {}) {
       project_id: project.project_id,
       uploaded_by: user.employee_id,
       uploaded_by_user_id: user.employee_id,
-      total_rows: actionableItems.length + strictRejectedItems.length,
-      accepted_rows: actionableItems.length,
+      total_rows: promotedActionableItems.length + strictRejectedItems.length,
+      accepted_rows: promotedActionableItems.length,
       rejected_rows: strictRejectedItems.length,
     }, client);
 
-    for (const fixtureData of actionableItems) {
-      const fixtureObj = {
-        project_id: project.project_id,
-        batch_id: batchId,
-        fixture_no: fixtureData.fixture_no,
-        op_no: fixtureData.op_no,
-        part_name: fixtureData.part_name,
-        fixture_type: fixtureData.fixture_type,
-        remark: null,
-        qty: fixtureData.qty,
-        image_1_url: fixtureData.image_1_url || null,
-        image_2_url: fixtureData.image_2_url || null,
-        ingestion_source: ingestionSource,
-      };
+    const sessionSnapshot = typeof sessionRow.snapshot === "string"
+      ? JSON.parse(sessionRow.snapshot)
+      : (sessionRow.snapshot || {});
+    const catalogModeRaw = sessionSnapshot.catalog_membership_mode;
+    const catalogMembershipMode = catalogModeRaw === CATALOG_MEMBERSHIP_MODES.FULL_REPLACE
+      ? CATALOG_MEMBERSHIP_MODES.FULL_REPLACE
+      : CATALOG_MEMBERSHIP_MODES.DELTA;
 
-      const fixture = await upsertFixture(fixtureObj, client);
-      await initProgressForFixture(fixture.fixture_id, departmentId, workflow.stages, client);
+    const syncAudit = await synchronizeDesignWorkflowTruthFromIngestion(client, {
+      projectId: project.project_id,
+      batchId,
+      departmentId,
+      employeeId: user.employee_id,
+      ingestionSource,
+      promotedFixtureRows: promotedActionableItems,
+      workflowStages: workflow.stages,
+      catalogMembershipMode,
+    });
 
+    acceptedCount = syncAudit.created_fixture_nos.length + syncAudit.updated_fixture_nos.length;
+
+    for (let idx = 0; idx < syncAudit.created_fixture_nos.length; idx++) {
+      const fixtureNo = syncAudit.created_fixture_nos[idx];
+      const fixtureId = syncAudit.created_fixture_ids[idx];
       logImportDecision("imported_fixture", {
         batch_id: batchId,
         project_id: project.project_id,
-        fixture_id: fixture.fixture_id,
-        fixture_no: fixtureData.fixture_no,
-        row_number: fixtureData.row_number,
+        fixture_id: fixtureId,
+        fixture_no: fixtureNo,
         ingestion_source: ingestionSource,
+        sync: "created",
       });
 
       await createAuditLog({
         userEmployeeId: user.employee_id,
         actionType: "DESIGN_FIXTURE_IMPORTED",
         targetType: "design_fixture",
-        targetId: fixture.fixture_id || fixtureData.fixture_no || "unknown",
+        targetId: fixtureId || fixtureNo || "unknown",
         metadata: {
           batch_id: batchId,
-          fixture_id: fixture.fixture_id,
+          fixture_id: fixtureId,
           project_id: project.project_id,
           project_code: file_info.project_code,
-          row_number: fixtureData.row_number,
           ingestion_source: ingestionSource,
+          workflow_sync: "created",
         },
       }, client);
-
-      acceptedCount++;
     }
+
+    for (const fixtureNo of syncAudit.updated_fixture_nos) {
+      logImportDecision("imported_fixture", {
+        batch_id: batchId,
+        project_id: project.project_id,
+        fixture_no: fixtureNo,
+        ingestion_source: ingestionSource,
+        sync: "metadata_merge",
+      });
+    }
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "DESIGN_WORKFLOW_INGESTION_SYNC",
+      targetType: "design_upload_batch",
+      targetId: batchId,
+      metadata: {
+        batch_id: batchId,
+        project_id: project.project_id,
+        project_code: file_info.project_code,
+        catalog_membership_mode: catalogMembershipMode,
+        created_fixture_ids: syncAudit.created_fixture_ids,
+        created_fixture_nos: syncAudit.created_fixture_nos,
+        updated_fixture_nos: syncAudit.updated_fixture_nos,
+        archived_fixture_nos: syncAudit.archived_fixture_nos,
+        revived_fixture_count: syncAudit.revived_fixture_count,
+        outsourcing_rows_touched: syncAudit.outsourcing_rows_touched,
+      },
+    }, client);
 
     if (strictRejectedItems.length > 0) {
       const errorsPayload = strictRejectedItems.map((r) => ({
@@ -1035,16 +1313,18 @@ async function confirmUpload(user, payload = {}) {
     }
 
     await client.query("COMMIT");
+    await markIngestionSessionCommitted(ingestion_session_id, batchId, pool);
     return { success: true, batch_id: batchId, accepted_count: acceptedCount };
   } catch (err) {
     await client.query("ROLLBACK");
+    await deleteStorageObjects(productionPathsForCleanup).catch(() => {});
     logger.error("Design upload confirmation failed", {
       operation: "confirmUpload",
       department_id: departmentId,
       user_employee_id: user?.employee_id || null,
       project_code: file_info?.project_code || null,
       project_name: file_info?.project_name_display || null,
-      accepted_item_count: actionableItems.length,
+      accepted_item_count: promotedActionableItems.length,
       rejected_item_count: rejectedItems.length,
       skipped_item_count: skippedItems.length,
       errorMessage: err?.message || "Unknown upload confirmation error",

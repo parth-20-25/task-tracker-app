@@ -1,8 +1,8 @@
-const { FIXTURE_NO_REGEX, OP_NO_REGEX, normalizePastedCell } = require("./parser");
+const { FIXTURE_NO_REGEX, normalizePastedCell } = require("./parser");
+const { canonicalFixtureNo, normalizeComparableText } = require("./normalize");
 
 const FIELD_LABELS = {
   fixture_no: "Fixture No",
-  op_no: "OP.NO",
   part_name: "Part Name",
   fixture_type: "Fixture Type",
   qty: "QTY",
@@ -27,32 +27,16 @@ function normalizeNormalizedText(value) {
 }
 
 function normalizeFixtureNo(value) {
-  return normalizeNormalizedText(value)
-    .replace(/\s+/g, "")
-    .toUpperCase();
+  return canonicalFixtureNo(value);
 }
 
-function normalizeOpNo(value) {
-  const text = normalizeNormalizedText(value);
-  if (!text) {
-    return "";
+function isStandaloneVendorFixtureTypeLabel(normalizedHumanReadableType) {
+  const t = normalizeComparableText(normalizedHumanReadableType);
+  if (!t) {
+    return false;
   }
-
-  if (OP_NO_REGEX.test(text)) {
-    const match = text.match(/^OP\.?\s*(\d+)([A-Z]*)$/i);
-    if (!match) {
-      return text;
-    }
-
-    const [, digits, suffix] = match;
-    return `OP ${digits}${suffix.toUpperCase()}`;
-  }
-
-  if (/^\d+(?:\.0+)?$/.test(text)) {
-    return `OP ${text.split(".", 1)[0]}`;
-  }
-
-  return text;
+  // Reject vague vendor labels without a concrete process/fixture description
+  return /^(vendor|outsourced|outsourcing|o\/s|sub[- ]?con(?:trac(?:tor|ting)?)?|subcon|scm vendor)$/.test(t);
 }
 
 function normalizeQty(value) {
@@ -130,7 +114,6 @@ function toFieldKey(label) {
     .replace(/^_+|_+$/g, "");
 
   if (normalized === "fixture_no") return "fixture_no";
-  if (normalized === "op_no" || normalized === "op_no_") return "op_no";
   if (normalized === "part_name") return "part_name";
   if (normalized === "fixture_type") return "fixture_type";
   if (normalized === "qty") return "qty";
@@ -160,8 +143,8 @@ function buildProblemFields(reason, missingFields = [], candidateField) {
     derived.add("qty");
   }
 
-  if (reason === "op_no_missing" || reason === "op_no_invalid") {
-    derived.add("op_no");
+  if (reason === "vendor_fixture_type_vague") {
+    derived.add("fixture_type");
   }
 
   return Array.from(derived);
@@ -176,14 +159,12 @@ function buildFieldDiagnostics(fields) {
     business_row_reference: fields?.business_row_reference || null,
     raw: {
       fixture_no: fields.fixture_no_raw ?? null,
-      op_no: fields.op_no_raw ?? null,
       part_name: fields.part_name_raw ?? null,
       fixture_type: fields.fixture_type_raw ?? null,
       qty: fields.qty_raw ?? null,
     },
     normalized: {
       fixture_no: fields.fixture_no ?? null,
-      op_no: fields.op_no ?? null,
       part_name: fields.part_name ?? null,
       fixture_type: fields.fixture_type ?? null,
       qty: fields.qty || null,
@@ -235,7 +216,6 @@ function extractRowFields(item) {
       row_reference_source: getRowReferenceSource(item),
       business_row_reference: getBusinessRowReference(item),
       fixture_no: cols[1],
-      op_no: cols[2],
       part_name: cols[3],
       fixture_type: cols[4],
       qty: cols[5],
@@ -259,7 +239,6 @@ function extractRowFields(item) {
     row_reference_source: getRowReferenceSource(item),
     business_row_reference: getBusinessRowReference(item),
     fixture_no: normalizeTextCell(item?.fixture_no),
-    op_no: normalizeTextCell(item?.op_no),
     part_name: normalizeTextCell(item?.part_name),
     fixture_type: normalizeTextCell(item?.fixture_type),
     qty: item?.qty,
@@ -268,7 +247,6 @@ function extractRowFields(item) {
     parser_confidence: normalizeTextCell(item?.parser_confidence || "HIGH").toUpperCase(),
     raw_data: rawData || {
       fixture_no: item?.fixture_no ?? null,
-      op_no: item?.op_no ?? null,
       part_name: item?.part_name ?? null,
       fixture_type: item?.fixture_type ?? null,
       qty: item?.qty ?? null,
@@ -294,7 +272,6 @@ function validateParsedData(parsedRows) {
       row_reference_source,
       business_row_reference,
       fixture_no,
-      op_no,
       part_name,
       fixture_type,
       qty: qtyRaw,
@@ -312,7 +289,6 @@ function validateParsedData(parsedRows) {
     };
 
     const normalizedFixtureNo = normalizeFixtureNo(fixture_no);
-    const normalizedOpNo = normalizeOpNo(op_no);
     const normalizedPartName = normalizeNormalizedText(part_name);
     const normalizedFixtureType = normalizeNormalizedText(fixture_type);
     const qtyInfo = normalizeQty(qtyRaw);
@@ -323,12 +299,10 @@ function validateParsedData(parsedRows) {
       row_reference_source,
       business_row_reference,
       fixture_no_raw: fixture_no,
-      op_no_raw: op_no,
       part_name_raw: part_name,
       fixture_type_raw: fixture_type,
       qty_raw: qtyInfo.raw,
       fixture_no: normalizedFixtureNo,
-      op_no: normalizedOpNo || null,
       part_name: normalizedPartName || null,
       fixture_type: normalizedFixtureType || null,
       qty: qtyInfo.normalized,
@@ -356,27 +330,6 @@ function validateParsedData(parsedRows) {
       continue;
     }
 
-    if (!normalizedOpNo) {
-      rejectedRows.push(buildRejectedRow(rowMeta, "OP.NO is mandatory for import.", raw_data, diagnostics, {
-        reason: "op_no_missing",
-        expected: "OP format such as OP 10",
-        rejected_field: "OP.NO",
-        detected_value: op_no || "",
-        missing_fields: [toFieldLabel("op_no")],
-      }));
-      continue;
-    }
-
-    if (!OP_NO_REGEX.test(normalizedOpNo)) {
-      rejectedRows.push(buildRejectedRow(rowMeta, "OP.NO must match the expected OP format.", raw_data, diagnostics, {
-        reason: "op_no_invalid",
-        expected: "OP format such as OP 10, OP 10A, or OP 10AB",
-        rejected_field: "OP.NO",
-        detected_value: op_no || "",
-      }));
-      continue;
-    }
-
     if (!normalizedPartName || !normalizedFixtureType || qtyInfo.normalized === null) {
       const missing = [];
       if (!normalizedPartName) missing.push("Part Name");
@@ -393,7 +346,23 @@ function validateParsedData(parsedRows) {
           missing_fields: missing,
           rejected_field: missing[0] || "Required Field",
           detected_value: "",
-          expected: "All required fields must be present: Fixture No, OP.NO, Part Name, Fixture Type, QTY",
+          expected: "All required fields must be present: Fixture No, Part Name, Fixture Type, QTY",
+        },
+      ));
+      continue;
+    }
+
+    if (isStandaloneVendorFixtureTypeLabel(normalizedFixtureType)) {
+      rejectedRows.push(buildRejectedRow(
+        rowMeta,
+        "Fixture Type cannot be a bare vendor/outsourced label. Add the concrete fixture or process description.",
+        raw_data,
+        diagnostics,
+        {
+          reason: "vendor_fixture_type_vague",
+          rejected_field: "Fixture Type",
+          missing_fields: [],
+          problem_fields: buildProblemFields("vendor_fixture_type_vague", [], "Fixture Type"),
         },
       ));
       continue;
@@ -410,7 +379,7 @@ function validateParsedData(parsedRows) {
     }
 
     const qty = qtyInfo.normalized;
-    const fixtureNoKey = normalizedFixtureNo.toLowerCase();
+    const fixtureNoKey = canonicalFixtureNo(normalizedFixtureNo).toLowerCase();
     if (seenFixtureNumbers.has(fixtureNoKey)) {
       rejectedRows.push(buildRejectedRow(rowMeta, "Duplicate fixture number found in uploaded file.", raw_data, diagnostics, {
         reason: "duplicate_fixture_no",
@@ -430,7 +399,6 @@ function validateParsedData(parsedRows) {
       row_reference_source,
       business_row_reference,
       fixture_no: normalizedFixtureNo,
-      op_no: normalizedOpNo,
       part_name: normalizedPartName,
       fixture_type: normalizedFixtureType,
       qty,

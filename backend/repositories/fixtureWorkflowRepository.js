@@ -126,6 +126,26 @@ async function initProgressForFixture(fixtureId, departmentId, stages, client = 
 }
 
 /**
+ * Inserts PENDING progress rows for many fixtures in one round-trip per stage (no per-fixture lookups).
+ * ON CONFLICT DO NOTHING preserves existing workflow truth (assignments, approvals, history).
+ */
+async function bulkInitProgressForFixtures(fixtureIds, departmentId, stages, client = pool) {
+  if (!Array.isArray(fixtureIds) || fixtureIds.length === 0 || !Array.isArray(stages) || stages.length === 0) {
+    return;
+  }
+
+  for (const stage of stages) {
+    await client.query(
+      `INSERT INTO fixture_workflow_progress
+         (fixture_id, department_id, stage_name, stage_order, stage_version, status)
+       SELECT unnest($1::uuid[]), $2, $3, $4, 0, 'PENDING'
+       ON CONFLICT (fixture_id, stage_name) DO NOTHING`,
+      [fixtureIds, departmentId, stage.name, stage.order],
+    );
+  }
+}
+
+/**
  * Updates specific fields on a progress row.
  */
 async function updateProgressRow(fixtureId, stageName, fields, client = pool) {
@@ -465,6 +485,22 @@ async function recordFixtureRevision(revision, client = pool) {
   return result.rows[0] || null;
 }
 
+async function getLatestStageRevisionForStage(fixtureId, stageName, client = pool) {
+  const result = await client.query(
+    `
+      SELECT revision_code, stage_version, reason_type, changed_at
+      FROM fixture_workflow_revisions
+      WHERE fixture_id = $1
+        AND stage_name = $2
+      ORDER BY stage_version DESC, changed_at DESC
+      LIMIT 1
+    `,
+    [fixtureId, stageName],
+  );
+
+  return result.rows[0] || null;
+}
+
 async function listFixtureRevisions(fixtureId, departmentId, client = pool) {
   const result = await client.query(
     `
@@ -576,10 +612,12 @@ module.exports = instrumentModuleExports("repository.fixtureWorkflowRepository",
   getActiveWorkflowForDepartment,
   getConfiguredWorkflowForDepartment,
   getLatestStageAttempt,
+  getLatestStageRevisionForStage,
   getNextStageReentryVersion,
   getProgressForFixture,
   getProgressRowForStage,
   initProgressForFixture,
+  bulkInitProgressForFixtures,
   getFixtureWithDepartment,
   getFixtureWorkflowContext,
   incrementFixtureRevision,

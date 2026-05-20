@@ -39,6 +39,11 @@ const {
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
 const { canAssignTo } = require("./accessControlService");
 const { getDepartmentWorkflowStagesResponse } = require("./workflowRecoveryService");
+const {
+  assertDesignDepartmentForRevision,
+  buildRevisionTimelineEntry,
+  executeDesignStageRework,
+} = require("./designRevisionService");
 
 const FIXTURE_REVISION_TYPES = new Set([
   "CUSTOMER_CHANGE",
@@ -918,29 +923,10 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
       updated_at: row.updated_at,
       contributions: contributionsByStageRevision.get(`${row.stage_name}::${getProgressRevisionCode(row)}`) || [],
     })),
-    revisions: revisions.map((row) => ({
-      id: row.id,
-      fixture_id: row.fixture_id,
-      department_id: row.department_id,
-      revision_no: Number(row.revision_no),
-      stage_name: row.stage_name,
-      stage_version: normalizeStageVersion(row.stage_version),
-      revision_code: row.revision_code || null,
-      reason_type: row.reason_type || row.revision_type,
-      revision_type: row.revision_type,
-      revision_reason: row.revision_reason,
-      revision_remarks: row.revision_remarks,
-      reverted_from_stage: row.reverted_from_stage,
-      reverted_to_stage: row.reverted_to_stage,
-      requested_by: row.requested_by,
-      requested_by_name: row.requested_by_name || null,
-      approved_by: row.approved_by,
-      approved_by_name: row.approved_by_name || null,
-      changed_by: row.changed_by,
-      changed_by_name: row.changed_by_name || null,
-      changed_at: row.changed_at,
-      metadata: row.metadata || {},
-    })),
+    revisions: revisions.map((row, index) => {
+      const previousRevision = revisions[index + 1]?.revision_code || null;
+      return buildRevisionTimelineEntry(row, previousRevision);
+    }),
   };
 }
 
@@ -957,7 +943,7 @@ async function reopenFixtureStage({
   departmentId,
   targetStageName = null,
   targetStageOrder = null,
-  revisionType = "OTHER",
+  revisionType,
   revisionReason,
   remarks = null,
   requestedBy = null,
@@ -965,9 +951,8 @@ async function reopenFixtureStage({
 }) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
   await assertFixtureProjectIsActive(fixtureId, departmentId);
+  assertDesignDepartmentForRevision(departmentId);
 
-  const normalizedRevisionType = normalizeRevisionType(revisionType);
-  const normalizedRevisionReason = normalizeOptionalReason(revisionReason);
   const workflow = await requireWorkflow(departmentId);
   let progress = await getProgressForFixture(fixtureId, departmentId);
   if (progress.length === 0) {
@@ -979,84 +964,18 @@ async function reopenFixtureStage({
     throw new AppError(400, "Target stage was not found in the fixture workflow");
   }
 
-  const fromStage = deriveCurrentStageByStatus(progress) || getLastStage(progress);
-  if (!fromStage) {
-    throw new AppError(409, "Fixture workflow has no stages to reopen");
-  }
-
-  if (Number(targetStage.stage_order) > Number(fromStage.stage_order)) {
-    throw new AppError(400, "Revision can only reopen the current or a previous stage");
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const lockedProgress = await getProgressForFixture(fixtureId, departmentId, client);
-    const lockedTargetStage = resolveStageFromProgress(lockedProgress, { targetStageName, targetStageOrder });
-    const lockedFromStage = deriveCurrentStageByStatus(lockedProgress) || getLastStage(lockedProgress);
-
-    if (!lockedTargetStage || !lockedFromStage) {
-      throw new AppError(409, "Fixture workflow changed while processing revision");
-    }
-
-    if (Number(lockedTargetStage.stage_order) > Number(lockedFromStage.stage_order)) {
-      throw new AppError(400, "Revision can only reopen the current or a previous stage");
-    }
-
-    const nextRevisionNo = await incrementFixtureRevision(fixtureId, client);
-    const shouldIncrementTargetRevision = normalizeStatus(lockedTargetStage.status) === "APPROVED";
-    await applyProgressReopenState({
-      fixtureId,
-      progress: lockedProgress,
-      targetStage: lockedTargetStage,
-      shouldIncrementTargetRevision,
-      client,
-    });
-    const reopenedProgress = await getProgressForFixture(fixtureId, departmentId, client);
-    const versionedTargetStage = resolveStageFromProgress(reopenedProgress, { targetStageName, targetStageOrder })
-      || lockedTargetStage;
-    const fromStageLabel = getProgressStageLabel(lockedFromStage);
-    const toStageLabel = getProgressStageLabel(versionedTargetStage);
-    const revisionCode = getProgressRevisionCode(versionedTargetStage);
-
-    await recordFixtureRevision({
-      fixture_id: fixtureId,
-      department_id: departmentId,
-      revision_no: nextRevisionNo,
-      stage_name: lockedTargetStage.stage_name,
-      stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
-      revision_code: revisionCode,
-      reason_type: normalizedRevisionType,
-      revision_type: normalizedRevisionType,
-      revision_reason: normalizedRevisionReason,
-      revision_remarks: String(remarks || "").trim() || null,
-      reverted_from_stage: fromStageLabel || lockedFromStage.stage_name,
-      reverted_to_stage: toStageLabel || lockedTargetStage.stage_name,
-      requested_by: String(requestedBy || actor?.employee_id || "").trim(),
-      approved_by: String(approvedBy || "").trim() || null,
-      changed_by: actor.employee_id,
-      metadata: {
-        operation: "reopen_fixture_stage",
-        from_stage_name: lockedFromStage.stage_name,
-        from_stage_version: normalizeStageVersion(lockedFromStage.stage_version),
-        from_stage_label: fromStageLabel,
-        to_stage_name: lockedTargetStage.stage_name,
-        to_stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
-        to_stage_label: toStageLabel,
-        revision_code: revisionCode,
-        revision_incremented: shouldIncrementTargetRevision,
-        from_status: lockedFromStage.status,
-        to_status: "PENDING",
-      },
-    }, client);
-
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  await executeDesignStageRework({
+    actor,
+    fixtureId,
+    departmentId,
+    targetStageName,
+    targetStageOrder,
+    reasonType: revisionType,
+    revisionReason,
+    remarks,
+    requestedBy,
+    approvedBy,
+  });
 
   return getFullProgressForFixture(fixtureId, departmentId);
 }
@@ -1073,6 +992,7 @@ async function manipulateFixtureStage({
 }) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
   await assertFixtureProjectIsActive(fixtureId, departmentId);
+  assertDesignDepartmentForRevision(departmentId);
 
   const fixture = await getFixtureWorkflowContext(fixtureId);
   if (!fixture?.is_legacy_workflow) {

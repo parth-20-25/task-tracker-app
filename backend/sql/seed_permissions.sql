@@ -11,6 +11,8 @@ VALUES
   ('can_delete_task', 'Delete Task', 'Allows deleting tasks.'),
   ('can_upload_proofs', 'Upload Proofs', 'Allows uploading task proof attachments.'),
   ('can_upload_data', 'Upload Data', 'Allows uploading department-owned master data.'),
+  ('upload_legacy_design_data', 'Upload Legacy Design Data', 'Allows Design fixture ingestion via legacy Excel/paste pipeline (temporary during native rollout).'),
+  ('upload_native_design_data', 'Upload Native Design Data', 'Allows Design fixture ingestion via native spreadsheet session pipeline.'),
   ('can_manage_users', 'Manage Users', 'Allows managing user accounts.'),
   ('can_create_user', 'Create User', 'Allows creating user accounts.'),
   ('can_edit_user', 'Edit User', 'Allows editing user account details.'),

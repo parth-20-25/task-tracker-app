@@ -28,7 +28,8 @@ runTest("keeps stage labels fixed and formats separate revision codes", () => {
   assert.equal(formatStageRevisionCode("Concept", 1), "CON 01");
   assert.equal(formatStageRevisionCode("3D Finish", 2), "3D 02");
   assert.equal(formatStageRevisionCode("DAP", 12), "DAP 12");
-  assert.equal(formatStageRevisionCode("2D Finish", 2), "DET 02");
+  assert.equal(formatStageRevisionCode("2D Finish", 2), "2D 02");
+  assert.equal(formatStageRevisionCode("Detailing", 3), "DET 03");
 });
 
 console.log("workflow stage versioning checks passed");

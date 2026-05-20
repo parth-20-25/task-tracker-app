@@ -323,7 +323,7 @@ async function ensureDesignDepartmentSchema(client) {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       project_id UUID NOT NULL,
       fixture_no TEXT NOT NULL,
-      op_no TEXT NOT NULL,
+      op_no TEXT,
       part_name TEXT NOT NULL,
       fixture_type TEXT NOT NULL,
       remark TEXT,
@@ -352,6 +352,11 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS is_legacy_workflow BOOLEAN,
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixtures
+    ALTER COLUMN op_no DROP NOT NULL
   `);
 
   await client.query(`
@@ -478,6 +483,11 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixture_workflow_revisions_fixture_stage_version
+    ON fixture_workflow_revisions(fixture_id, stage_name, stage_version DESC, changed_at DESC)
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS design.fixture_stage_contributions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       fixture_id UUID NOT NULL REFERENCES design.fixtures(id) ON DELETE CASCADE,
@@ -556,6 +566,40 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     ALTER TABLE design.fixtures
     ADD COLUMN IF NOT EXISTS batch_id UUID
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixtures
+    ADD COLUMN IF NOT EXISTS removed_from_latest_ingestion BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS ingestion_archived_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS is_outsourced BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS vendor_name TEXT,
+    ADD COLUMN IF NOT EXISTS outsourced_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS outsourced_by VARCHAR(50)
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'design_fixtures_outsource_vendor_check'
+      ) THEN
+        ALTER TABLE design.fixtures
+        ADD CONSTRAINT design_fixtures_outsource_vendor_check
+        CHECK (
+          is_outsourced = FALSE
+          OR (vendor_name IS NOT NULL AND BTRIM(vendor_name) <> '')
+        );
+      END IF;
+    END $$;
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_fixtures_removed_from_ingestion
+    ON design.fixtures (project_id, removed_from_latest_ingestion)
+    WHERE removed_from_latest_ingestion = TRUE
   `);
 
   await client.query(`
@@ -654,6 +698,77 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_design_upload_batches_id_project_id
     ON design.upload_batches (id, project_id)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.ingestion_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      department_id TEXT NOT NULL REFERENCES departments(id),
+      created_by_employee_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      file_info JSONB NOT NULL DEFAULT '{}'::jsonb,
+      snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'draft',
+      committed_batch_id UUID REFERENCES design.upload_batches(id) ON DELETE SET NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT design_ingestion_sessions_status_check CHECK (
+        status IN ('draft', 'committed', 'abandoned')
+      )
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_ingestion_sessions_expires
+    ON design.ingestion_sessions (expires_at)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_ingestion_sessions_creator_status
+    ON design.ingestion_sessions (created_by_employee_id, department_id, status)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.stage_completion_weights (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+      stage_key TEXT NOT NULL,
+      weight_percent NUMERIC(6,3) NOT NULL CHECK (weight_percent > 0),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT design_stage_completion_weights_unique UNIQUE (department_id, stage_key)
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_stage_completion_weights_department
+    ON design.stage_completion_weights (department_id)
+    WHERE is_active = TRUE
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.workflow_completion_snapshots (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      fixture_id UUID REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      project_id UUID REFERENCES design.projects(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      trigger TEXT NOT NULL DEFAULT 'manual',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT design_workflow_completion_snapshots_scope_check
+        CHECK (scope IN ('fixture', 'project'))
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_workflow_completion_snapshots_fixture
+    ON design.workflow_completion_snapshots (fixture_id, captured_at DESC)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_workflow_completion_snapshots_project
+    ON design.workflow_completion_snapshots (project_id, captured_at DESC)
   `);
 
   await backfillDesignIntegrity(client);

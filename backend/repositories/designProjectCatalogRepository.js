@@ -99,16 +99,12 @@ function mapProjectOptionRow(row) {
 
 function normalizeProjectCompletionPercent(row) {
   if (!row) {
-    return 0;
+    return null;
   }
 
-  if ((row.project_status || row.status) === PROJECT_STATUSES.COMPLETED) {
-    return 100;
-  }
-
-  const value = row.project_completion_percent;
+  const value = row.completion_percent ?? row.project_completion_percent;
   if (value === null || value === undefined) {
-    return 0;
+    return null;
   }
 
   return Number(value);
@@ -128,12 +124,18 @@ function mapProjectSummaryRow(row) {
     department_name: row.department_name || null,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
     completion_percent: normalizeProjectCompletionPercent(row),
+    completion_truth_status: row.completion_truth_status || null,
+    completion_strict_complete: row.completion_strict_complete === true,
+    completion_truth_errors: Array.isArray(row.completion_truth_errors) ? row.completion_truth_errors : [],
     total_fixtures: Number(row.total_fixtures || 0),
     total_tasks: Number(row.total_tasks || 0),
     pending_tasks: Number(row.pending_tasks || 0),
     active_tasks: Number(row.active_tasks || 0),
     completed_tasks: Number(row.completed_tasks || 0),
     uploaded_by: row.uploaded_by || null,
+    team_lead_id: row.team_lead_id || null,
+    team_lead_name: row.team_lead_name || null,
+    uploaded_by_name: row.uploaded_by_name || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -154,7 +156,6 @@ function mapFixtureOptionRow(row) {
     project_id: row.project_id || null,
     batch_id: row.batch_id || null,
     fixture_no: row.fixture_no,
-    op_no: row.op_no,
     part_name: row.part_name,
     fixture_type: row.fixture_type,
     remark: row.remark || null,
@@ -175,6 +176,9 @@ function mapFixtureOptionRow(row) {
     workflow_status: workflowStatus,
     workflow_assigned_to: row.workflow_assigned_to || null,
     workflow_assigned_to_name: row.workflow_assigned_to_name || null,
+    workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
+      ? 0
+      : Number(row.workflow_progress_percent),
     workflow_stage_active: workflowStatus === "IN_PROGRESS",
     review_pending: workflowStatus === "COMPLETED",
     blocked: workflowStatus === "REJECTED",
@@ -362,21 +366,23 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         d.name AS department_name,
         COALESCE(p.status, $3) AS project_status,
         p.uploaded_by,
+        p.team_lead_id,
+        COALESCE(team_lead.name, uploader.name) AS team_lead_name,
+        uploader.name AS uploaded_by_name,
         p.created_at,
         p.updated_at,
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
         COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
         COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
         COALESCE(task_stats.active_tasks, 0)::integer AS active_tasks,
-        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks,
-        CASE
-          WHEN COALESCE(p.status, $3) = $4 THEN 100::numeric
-          WHEN COALESCE(task_stats.total_tasks, 0) = 0 THEN 0::numeric
-          ELSE ROUND(task_stats.avg_completion_percent::numeric, 2)
-        END AS project_completion_percent
+        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks
       FROM design.projects p
       LEFT JOIN departments d
         ON d.id = p.department_id
+      LEFT JOIN users team_lead
+        ON team_lead.employee_id = p.team_lead_id
+      LEFT JOIN users uploader
+        ON uploader.employee_id = p.uploaded_by
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::integer AS total_fixtures
         FROM design.fixtures f
@@ -393,13 +399,7 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
           )::integer AS active_tasks,
           COUNT(*) FILTER (
             WHERE COALESCE(t.status, '') = 'closed'
-          )::integer AS completed_tasks,
-          AVG(
-            COALESCE(
-              t.completion_percent,
-              CASE WHEN t.status = 'closed' OR t.verification_status = 'approved' THEN 100 ELSE 0 END
-            )
-          ) AS avg_completion_percent
+          )::integer AS completed_tasks
         FROM tasks t
         WHERE t.project_id = p.id
           AND COALESCE(t.status, '') <> 'cancelled'
@@ -426,7 +426,13 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
     ],
   );
 
-  return result.rows.map(mapProjectSummaryRow);
+  const { enrichProjectSummariesWithCompletionTruth } = require("../services/designCompletion/designCompletionEngine");
+  const enrichedRows = await enrichProjectSummariesWithCompletionTruth(
+    result.rows.map(mapProjectSummaryRow).filter(Boolean),
+    client,
+  );
+
+  return enrichedRows;
 }
 
 async function findProjectByIdForDepartment(projectId, departmentId, { activeOnly = false } = {}, client = pool) {
@@ -620,7 +626,6 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         di.project_id,
         di.batch_id,
         di.fixture_no,
-        di.op_no,
         di.part_name,
         di.fixture_type,
         di.remark,
@@ -634,6 +639,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         current_progress.stage_name AS workflow_stage,
         current_progress.stage_name AS workflow_stage_label,
         current_progress.stage_order AS workflow_stage_order,
+        current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
         current_progress.status AS workflow_status,
         current_progress.assigned_to AS workflow_assigned_to,
@@ -647,7 +653,8 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
           fwp.stage_order,
           fwp.stage_version,
           fwp.status,
-          fwp.assigned_to
+          fwp.assigned_to,
+          COUNT(*) OVER()::integer AS total_stages
         FROM fixture_workflow_progress fwp
         WHERE fwp.fixture_id = di.id
           AND fwp.department_id = dp.department_id
@@ -679,7 +686,6 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         di.project_id,
         di.batch_id,
         di.fixture_no,
-        di.op_no,
         di.part_name,
         di.fixture_type,
         di.remark,
@@ -693,6 +699,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         current_progress.stage_name AS workflow_stage,
         current_progress.stage_name AS workflow_stage_label,
         current_progress.stage_order AS workflow_stage_order,
+        current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
         current_progress.status AS workflow_status,
         current_progress.assigned_to AS workflow_assigned_to,
@@ -706,7 +713,8 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
           fwp.stage_order,
           fwp.stage_version,
           fwp.status,
-          fwp.assigned_to
+          fwp.assigned_to,
+          COUNT(*) OVER()::integer AS total_stages
         FROM fixture_workflow_progress fwp
         WHERE fwp.fixture_id = di.id
           AND fwp.department_id = dp.department_id
@@ -738,7 +746,6 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
         di.project_id,
         di.batch_id,
         di.fixture_no,
-        di.op_no,
         di.part_name,
         di.fixture_type,
         di.remark,
@@ -768,7 +775,6 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
         di.project_id,
         di.batch_id,
         di.fixture_no,
-        di.op_no,
         di.part_name,
         di.fixture_type,
         di.remark,
@@ -813,7 +819,47 @@ async function touchProject(projectId, client = pool) {
 }
 
 async function createUploadBatch(batchData, client = pool) {
-  const result = await client.query(
+  // Batch continuity: a project must keep a single operational batch identity.
+  // Subsequent uploads merge into that same batch while preserving workflow/revision truth.
+  const existing = await client.query(
+    `
+      SELECT id
+      FROM design.upload_batches
+      WHERE project_id = $1
+      ORDER BY uploaded_at ASC, id ASC
+      LIMIT 1
+    `,
+    [batchData.project_id],
+  );
+
+  const existingId = existing.rows[0]?.id || null;
+  if (existingId) {
+    const update = await client.query(
+      `
+        UPDATE design.upload_batches
+        SET uploaded_by = $2,
+            uploaded_by_user_id = $3,
+            uploaded_at = NOW(),
+            total_rows = COALESCE(total_rows, 0) + $4,
+            accepted_rows = COALESCE(accepted_rows, 0) + $5,
+            rejected_rows = COALESCE(rejected_rows, 0) + $6
+        WHERE id = $1
+        RETURNING id
+      `,
+      [
+        existingId,
+        batchData.uploaded_by,
+        batchData.uploaded_by_user_id || batchData.uploaded_by || null,
+        Number(batchData.total_rows || 0),
+        Number(batchData.accepted_rows || 0),
+        Number(batchData.rejected_rows || 0),
+      ],
+    );
+
+    return requireRow(update, "Upload batch update did not return an id").id;
+  }
+
+  const insert = await client.query(
     `
       INSERT INTO design.upload_batches (
         project_id,
@@ -830,13 +876,13 @@ async function createUploadBatch(batchData, client = pool) {
       batchData.project_id,
       batchData.uploaded_by,
       batchData.uploaded_by_user_id || batchData.uploaded_by || null,
-      batchData.total_rows,
-      batchData.accepted_rows,
-      batchData.rejected_rows,
+      Number(batchData.total_rows || 0),
+      Number(batchData.accepted_rows || 0),
+      Number(batchData.rejected_rows || 0),
     ],
   );
 
-  return requireRow(result, "Upload batch insert did not return an id").id;
+  return requireRow(insert, "Upload batch insert did not return an id").id;
 }
 
 async function createUploadErrors(batchId, errors, client = pool) {
@@ -1051,7 +1097,6 @@ async function upsertFixture(fixtureData, client = pool) {
       INSERT INTO design.fixtures (
         project_id,
         fixture_no,
-        op_no,
         part_name,
         fixture_type,
         remark,
@@ -1061,11 +1106,10 @@ async function upsertFixture(fixtureData, client = pool) {
         ingestion_source,
         batch_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (project_id, fixture_no) DO UPDATE
       SET
         project_id = EXCLUDED.project_id,
-        op_no = EXCLUDED.op_no,
         part_name = EXCLUDED.part_name,
         fixture_type = EXCLUDED.fixture_type,
         remark = EXCLUDED.remark,
@@ -1080,7 +1124,6 @@ async function upsertFixture(fixtureData, client = pool) {
         project_id,
         batch_id,
         fixture_no,
-        op_no,
         part_name,
         fixture_type,
         remark,
@@ -1094,7 +1137,6 @@ async function upsertFixture(fixtureData, client = pool) {
     [
       fixtureData.project_id,
       fixtureData.fixture_no,
-      fixtureData.op_no,
       fixtureData.part_name,
       fixtureData.fixture_type,
       fixtureData.remark || null,

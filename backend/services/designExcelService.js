@@ -24,7 +24,58 @@ const { parsePasteData, normalize } = require("./designIngestion/parser");
 const { validateParsedData } = require("./designIngestion/validator");
 const { diffWithDatabase } = require("./designIngestion/differ");
 const { formatPreview } = require("./designIngestion/formatter");
-const { extractDesignWorkbook } = require("./pythonExtractionClient");
+const ExcelJS = require("exceljs");
+
+/*
+ * Native Excel extraction using ExcelJS.
+ * Produces { file_info, rows, errors } compatible with previous python extractor.
+ */
+async function extractDesignWorkbook(file) {
+  if (!file?.buffer?.length) {
+    throw new AppError(400, "No Excel file uploaded");
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(file.buffer);
+  } catch (err) {
+    throw new AppError(400, "Failed to parse Excel file", err?.message || null);
+  }
+
+  const worksheet = workbook.worksheets.find((ws) => ws && ws.actualRowCount > 0) || workbook.worksheets[0];
+  if (!worksheet) {
+    throw new AppError(400, "No worksheet found in Excel file");
+  }
+
+  const lines = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    const cells = [];
+    for (let i = 1; i <= row.cellCount; i += 1) {
+      const cell = row.getCell(i).value;
+      if (cell === null || cell === undefined) {
+        cells.push("");
+      } else if (typeof cell === "object" && cell.text) {
+        cells.push(String(cell.text).trim());
+      } else {
+        cells.push(String(cell).trim());
+      }
+    }
+    lines.push(cells.join("\t"));
+  });
+
+  if (lines.length === 0) {
+    throw new AppError(400, "Excel file contains no rows");
+  }
+
+  const pasteText = lines.join("\n");
+  const { file_info, parsedRows } = parsePasteData(pasteText);
+
+  return {
+    file_info,
+    rows: parsedRows,
+    errors: [],
+  };
+}
 const { uploadExtractedDesignImage } = require("../lib/supabaseStorage");
 
 const CORRECTIONABLE_FIELDS = ["fixture_no", "op_no", "part_name", "fixture_type", "qty"];
@@ -615,7 +666,7 @@ async function parseAndPreviewUploadedWorkbook(user, file) {
       validRows,
       rejectedRows,
       skippedRows,
-      metadataSource: "python_excel_upload",
+      metadataSource: "native_excel_upload",
     });
   } catch (err) {
     logImportDecision("excel_upload_parse_error", {

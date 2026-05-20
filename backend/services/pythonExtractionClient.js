@@ -1,6 +1,16 @@
+// DEPRECATED: External Python extraction client removed.
+// Native Node-based Excel ingestion is authoritative. This file is retained as a deprecated stub
+// to make accidental references fail fast and to provide rollback safety.
+
 const { AppError } = require("../lib/AppError");
-const { sanitizeOriginalFileName } = require("../lib/designExcelUpload");
-const { env } = require("../config/env");
+
+async function extractDesignWorkbook() {
+  throw new AppError(500, "DEPRECATED: pythonExtractionClient is removed. Use native Excel ingestion.");
+}
+
+module.exports = {
+  extractDesignWorkbook,
+};
 const RETRYABLE_EXTRACTION_STATUS_CODES = new Set([502, 503, 504]);
 const EXTRACTION_MAX_ATTEMPTS = 2;
 

@@ -43,12 +43,6 @@ export const PERMISSIONS = {
 export const PERMISSION_ALIASES: Record<string, string> = {
   can_assign_task: PERMISSIONS.ASSIGN_TASK,
   can_verify_task: PERMISSIONS.APPROVE_COMPLETED_TASK,
-  view_self_user: PERMISSIONS.VIEW_SELF_ANALYTICS,
-  view_self_department: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
-  view_department_comparison: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
-  view_user_comparison: PERMISSIONS.VIEW_ALL_USERS_ANALYTICS,
-  scope_department_only: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
-  scope_all_departments: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
 };
 
 export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);

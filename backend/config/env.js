@@ -32,11 +32,6 @@ const env = {
   corsOrigin: process.env.CORS_ORIGIN || "",
   enableTaskSeed: parseBoolean(process.env.ENABLE_TASK_SEED, false),
   uploadsDir: process.env.UPLOADS_DIR || "uploads",
-  designExtraction: {
-    serviceUrl: process.env.DESIGN_EXTRACTION_SERVICE_URL || "",
-    token: process.env.DESIGN_EXTRACTION_SERVICE_TOKEN || "",
-    timeoutMs: parseNumber(process.env.DESIGN_EXTRACTION_TIMEOUT_MS, 120000),
-  },
   supabase: {
     url: process.env.SUPABASE_URL || "",
     serviceKey: process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "",

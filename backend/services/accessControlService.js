@@ -8,14 +8,8 @@ const {
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
-const { normalizePermissionIds } = require("../repositories/permissionRepository");
+const { normalizePermissionIds, normalizePermissionId } = require("../repositories/permissionRepository");
 
-const PERMISSION_ALIASES = {
-  can_assign_task: [PERMISSIONS.ASSIGN_TASK],
-  [PERMISSIONS.ASSIGN_TASK]: ["can_assign_task"],
-  can_verify_task: [PERMISSIONS.APPROVE_COMPLETED_TASK],
-  [PERMISSIONS.APPROVE_COMPLETED_TASK]: ["can_verify_task"],
-};
 
 function getEquivalentPermissions(permission) {
   return [...new Set([permission, ...(PERMISSION_ALIASES[permission] || [])])];
@@ -67,9 +61,11 @@ function getRolePermissionFlags(user) {
     return [];
   }
 
-  return Object.entries(roleDetails.permissions)
+  const permissionIds = Object.entries(roleDetails.permissions)
     .filter(([, enabled]) => enabled === true)
-    .flatMap(([permission]) => getEquivalentPermissions(permission));
+    .map(([permission]) => permission);
+
+  return normalizePermissionIds(permissionIds);
 }
 
 function hasPermission(user, permission) {
@@ -81,12 +77,14 @@ function hasPermission(user, permission) {
     return true;
   }
 
+  const normalizedPermission = normalizePermissionId(permission);
+
   const grantedPermissions = new Set([
-    ...(Array.isArray(user.permissions) ? user.permissions : []),
+    ...(Array.isArray(user.permissions) ? normalizePermissionIds(user.permissions) : []),
     ...getRolePermissionFlags(user),
   ]);
 
-  return getEquivalentPermissions(permission).some((candidatePermission) => grantedPermissions.has(candidatePermission));
+  return grantedPermissions.has(normalizedPermission);
 }
 
 async function HasPermission(userOrId, permission, client = pool) {

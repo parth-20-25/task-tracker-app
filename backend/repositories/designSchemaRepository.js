@@ -426,18 +426,21 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     DO $$
     BEGIN
-      IF NOT EXISTS (
+      IF EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'design_fixtures_ingestion_source_check'
       ) THEN
         ALTER TABLE design.fixtures
-        ADD CONSTRAINT design_fixtures_ingestion_source_check
-        CHECK (
-          ingestion_source IS NULL
-          OR ingestion_source IN ('excel_upload', 'manual_paste')
-        );
+        DROP CONSTRAINT design_fixtures_ingestion_source_check;
       END IF;
+
+      ALTER TABLE design.fixtures
+      ADD CONSTRAINT design_fixtures_ingestion_source_check
+      CHECK (
+        ingestion_source IS NULL
+        OR ingestion_source IN ('excel_upload', 'manual_paste', 'native_workspace')
+      );
     END $$;
   `);
 

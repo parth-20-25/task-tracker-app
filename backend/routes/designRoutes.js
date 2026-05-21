@@ -114,6 +114,17 @@ async function handleReferenceImageUploadRequest(req, res) {
   return sendSuccess(res, result, 200);
 }
 
+function rejectRetiredNativePreviewFlow() {
+  throw new AppError(
+    410,
+    "Native Fixture Upload now uses the native ingestion workspace API. Legacy preview/upload handlers are not available for native ingestion.",
+    {
+      replacement: "/api/design/native-ingestion/sessions",
+    },
+    "NATIVE_INGESTION_WORKSPACE_REQUIRED",
+  );
+}
+
 router.get(
   "/department-projects",
   asyncHandler(async (req, res) => {
@@ -262,12 +273,8 @@ router.post(
 router.post(
   "/upload/design-native-excel",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  handleDesignExcelUpload,
   asyncHandler(async (req, res) => {
-    const result = await parseAndPreviewUploadedWorkbook(req.user, req.file, {
-      catalogMembershipMode: req.body?.catalog_membership_mode,
-    });
-    return sendSuccess(res, result, 200);
+    rejectRetiredNativePreviewFlow();
   }),
 );
 
@@ -284,8 +291,7 @@ router.post(
   "/upload/design-native-excel/confirm",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
-    const result = await confirmUpload(req.user, req.body);
-    return sendSuccess(res, result, 200);
+    rejectRetiredNativePreviewFlow();
   }),
 );
 
@@ -302,8 +308,7 @@ router.post(
   "/design/native-upload",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
-    const result = await parseAndPreviewUpload(req.user, req.body);
-    return sendSuccess(res, result, 200);
+    rejectRetiredNativePreviewFlow();
   }),
 );
 
@@ -320,8 +325,7 @@ router.post(
   "/design/native-upload/confirm",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
-    const result = await confirmUpload(req.user, req.body);
-    return sendSuccess(res, result, 200);
+    rejectRetiredNativePreviewFlow();
   }),
 );
 
@@ -338,8 +342,7 @@ router.post(
   "/design/native-upload/rejected-row/validate",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
-    const result = await validateRejectedUploadRow(req.user, req.body);
-    return sendSuccess(res, result, 200);
+    rejectRetiredNativePreviewFlow();
   }),
 );
 
@@ -361,7 +364,9 @@ router.get(
 router.get(
   "/design/native-upload-batches/:batchId/fixtures",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(handleListUploadBatchFixtures),
+  asyncHandler(async (req, res) => {
+    rejectRetiredNativePreviewFlow();
+  }),
 );
 
 router.post(
@@ -374,8 +379,9 @@ router.post(
 router.post(
   "/design/native/fixtures/:fixtureId/reference-image",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  handleReferenceImageUpload,
-  asyncHandler(handleReferenceImageUploadRequest),
+  asyncHandler(async (req, res) => {
+    rejectRetiredNativePreviewFlow();
+  }),
 );
 
 module.exports = {

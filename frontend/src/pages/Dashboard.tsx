@@ -8,6 +8,7 @@ import { DesignDepartmentTaskAssignmentBar } from '@/components/DesignDepartment
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
+import { NativeFixtureIngestionLauncher } from '@/components/native-ingestion/NativeIngestionWorkspace';
 import { ClipboardList, PlayCircle, CheckCircle2, AlertTriangle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, User, UserCheck, UserX } from 'lucide-react';
 import { isDesignDepartment } from '@/lib/departments';
 import { isProjectAuthorityUser } from '@/lib/permissions';
@@ -318,11 +319,7 @@ export default function Dashboard() {
       {(canUploadDesignLegacy || canUploadDesignNative) && (
         <div className="grid gap-3 md:grid-cols-2">
           {canUploadDesignNative ? (
-            <DesignExcelUploadModal
-              useOperationalSpreadsheet
-              permissionMode="native"
-              triggerLabel="Native Fixture Upload"
-            />
+            <NativeFixtureIngestionLauncher />
           ) : null}
           {canUploadDesignLegacy ? (
             <DesignExcelUploadModal

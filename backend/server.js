@@ -22,6 +22,7 @@ const predictiveInsightsRoute = require("./routes/analytics/predictiveInsightsRo
 const workflowAnalyticsRoutes = require("./routes/workflowAnalyticsRoutes");
 const { reportRoutes } = require("./routes/reportRoutes");
 const { designRoutes } = require("./routes/designRoutes");
+const { nativeIngestionRoutes } = require("./routes/nativeIngestionRoutes");
 const { workflowRoutes } = require("./routes/workflowRoutes");
 const { batchRoutes } = require("./routes/batchRoutes");
 const { issueRoutes } = require("./routes/issueRoutes");
@@ -58,6 +59,7 @@ app.get("/", (_req, res) => {
 // Mount routes
 app.use("/api", authRoutes);
 app.use("/api", taskRoutes);
+app.use("/api", nativeIngestionRoutes);
 app.use("/api", designRoutes);
 app.use("/api", workflowRoutes);
 app.use("/api", batchRoutes);

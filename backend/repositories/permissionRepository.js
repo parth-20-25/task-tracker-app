@@ -13,6 +13,12 @@ const LEGACY_PERMISSION_MIGRATIONS = {
   can_upload_data: "upload_legacy_design_data",
 };
 const STALE_PERMISSION_IDS = ["tasks_assign", ...Object.keys(LEGACY_PERMISSION_MIGRATIONS)];
+const UPLOAD_PERMISSION_ROLE_ROUTING = {
+  both: ["r1"],
+  nativeOnly: ["r9"],
+  legacyOnly: ["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r10"],
+  neither: ["r01", "r11", "R11"],
+};
 
 function normalizePermissionId(permissionId) {
   if (typeof permissionId !== "string") {
@@ -147,6 +153,83 @@ async function assignPermissionsToRole(roleId, permissionIds, client, options = 
   return validPermissionIds;
 }
 
+async function replaceUploadPermissionsForRoles(roleIds, permissionIds, client) {
+  if (!Array.isArray(roleIds) || roleIds.length === 0) {
+    return;
+  }
+
+  await client.query(
+    `
+      DELETE FROM role_permissions
+      WHERE role_id = ANY($1::text[])
+        AND permission_id = ANY($2::text[])
+    `,
+    [
+      roleIds,
+      [
+        "upload_legacy_design_data",
+        "upload_native_design_data",
+      ],
+    ],
+  );
+
+  const validPermissionIds = normalizePermissionIds(permissionIds);
+  for (const permissionId of validPermissionIds) {
+    await client.query(
+      `
+        INSERT INTO role_permissions (role_id, permission_id)
+        SELECT role_id, $2
+        FROM unnest($1::text[]) AS role_id
+        ON CONFLICT (role_id, permission_id) DO NOTHING
+      `,
+      [roleIds, permissionId],
+    );
+  }
+}
+
+async function applyUploadPermissionRouting(client) {
+  await replaceUploadPermissionsForRoles(
+    UPLOAD_PERMISSION_ROLE_ROUTING.both,
+    ["upload_legacy_design_data", "upload_native_design_data"],
+    client,
+  );
+  await replaceUploadPermissionsForRoles(
+    UPLOAD_PERMISSION_ROLE_ROUTING.nativeOnly,
+    ["upload_native_design_data"],
+    client,
+  );
+  await replaceUploadPermissionsForRoles(
+    UPLOAD_PERMISSION_ROLE_ROUTING.legacyOnly,
+    ["upload_legacy_design_data"],
+    client,
+  );
+  await replaceUploadPermissionsForRoles(
+    UPLOAD_PERMISSION_ROLE_ROUTING.neither,
+    [],
+    client,
+  );
+}
+
+async function syncRolePermissionJson(client) {
+  await client.query(
+    `
+      UPDATE roles r
+      SET permissions = COALESCE(permission_map.permissions, '{}'::jsonb)
+      FROM (
+        SELECT
+          roles.id AS role_id,
+          jsonb_object_agg(rp.permission_id, true ORDER BY rp.permission_id)
+            FILTER (WHERE rp.permission_id IS NOT NULL) AS permissions
+        FROM roles
+        LEFT JOIN role_permissions rp
+          ON rp.role_id = roles.id
+        GROUP BY roles.id
+      ) permission_map
+      WHERE permission_map.role_id = r.id
+    `,
+  );
+}
+
 async function alignPermissionData(client) {
   await seedPermissions(client);
   const canonicalPermissionMap = normalizePermissionIds(
@@ -270,6 +353,9 @@ async function alignPermissionData(client) {
     `,
     [STALE_PERMISSION_IDS],
   );
+
+  await applyUploadPermissionRouting(client);
+  await syncRolePermissionJson(client);
 }
 
 module.exports = {

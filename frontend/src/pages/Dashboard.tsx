@@ -214,8 +214,8 @@ export default function Dashboard() {
   const [selectedProjectId, setSelectedProjectId] = useState("");
 
   const isDesignUser = isDesignDepartment(user);
-  const canUploadDesignLegacy = access.canUploadLegacyDesignData && !!user?.department_id && isDesignUser;
-  const canUploadDesignNative = access.canUploadNativeDesignData && !!user?.department_id && isDesignUser;
+  const canUploadDesignLegacy = access.canUploadLegacyDesignData;
+  const canUploadDesignNative = access.canUploadNativeDesignData;
   const isProjectFirstRole = isProjectAuthorityUser(user);
   const canUseDesignWorkflowBar = isDesignUser && (access.canAssignTasks || access.canChangeFixtureStage);
 

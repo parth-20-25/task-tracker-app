@@ -40,10 +40,11 @@ test("hasOrgWideVisibility treats CEO/Director and Admin as org-wide authorities
   assert.equal(hasOrgWideVisibility(manager), false);
 });
 
-test("project visibility predicate includes team lead and project leader ownership", () => {
+test("project visibility predicate uses canonical project creator ownership only", () => {
   const sql = visibleProjectPredicate("p");
 
   assert.match(sql, /created_by_user_id IN \(SELECT employee_id FROM visible_users\)/);
+  assert.doesNotMatch(sql, /team_lead_id|project_leader_id|department_id/);
 });
 
 test("groupProjectsByTeamLeader clusters projects under operational owner", () => {

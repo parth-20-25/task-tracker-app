@@ -68,18 +68,9 @@ function formatFixtureRevisionCode(fixture: DesignFixtureOption) {
   return `${stageAbbrev} ${String(rev).padStart(2, '0')}${ver > 0 ? `.${ver}` : ''}`;
 }
 
-function computeFixtureProgress(fixture: DesignFixtureOption): number {
-  if (fixture.is_workflow_complete) return 100;
-  const stageOrder = fixture.workflow_stage_order;
-  if (stageOrder == null || stageOrder <= 0) return 0;
-  // Rough heuristic: each completed stage adds progress. Stage order 1 = early, higher = later.
-  // Typically workflows have 3–6 stages; use stage_order as multiplier
-  const statusBonus = fixture.workflow_status?.toUpperCase() === 'APPROVED' ? 1 : fixture.workflow_status?.toUpperCase() === 'IN_PROGRESS' ? 0.5 : 0;
-  const totalStages = Math.max(stageOrder + 2, 5); // rough estimate
-  return Math.min(95, Math.round(((stageOrder - 1 + statusBonus) / totalStages) * 100));
-}
-
 function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
+  const hasCompletionTruth = typeof project.completion_percent === "number";
+
   return (
     <Card className="overflow-hidden border-slate-200 shadow-sm">
       <CardHeader className="space-y-2 p-4 pb-3">
@@ -97,9 +88,11 @@ function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
         <div>
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Completion</span>
-            <span className="font-semibold">{project.completion_percent.toFixed(0)}%</span>
+            <span className="font-semibold">
+              {hasCompletionTruth ? `${project.completion_percent.toFixed(0)}%` : "Truth unavailable"}
+            </span>
           </div>
-          <Progress value={project.completion_percent} className="mt-2 h-2" />
+          {hasCompletionTruth ? <Progress value={project.completion_percent} className="mt-2 h-2" /> : null}
         </div>
         <div className="grid grid-cols-3 gap-2 text-center text-xs">
           <div className="rounded-lg bg-muted/50 p-2">
@@ -123,7 +116,7 @@ function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
         {project.team_lead_name && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <User className="h-3 w-3" />
-              <span>Team Leader: {project.team_lead_name || project.project_leader_name || 'No operational team leader assigned'}</span>
+              <span>Team Leader: {project.team_lead_name}</span>
           </div>
         )}
       </CardContent>
@@ -133,7 +126,7 @@ function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
 
 function FixtureOperationalRow({ fixture }: { fixture: DesignFixtureOption }) {
   const revCode = formatFixtureRevisionCode(fixture);
-  const progress = computeFixtureProgress(fixture);
+  const progress = typeof fixture.workflow_progress_percent === "number" ? fixture.workflow_progress_percent : null;
   const isAssigned = Boolean(fixture.workflow_assigned_to);
   const isOutsourced = Boolean(fixture.remark && /outsourc/i.test(fixture.remark));
   const displayStage = fixture.workflow_stage_label || fixture.workflow_stage;
@@ -205,10 +198,12 @@ function FixtureOperationalRow({ fixture }: { fixture: DesignFixtureOption }) {
           <User className="h-3 w-3" />
           {fixture.workflow_assigned_to_name || fixture.workflow_assigned_to || 'Unassigned'}
         </span>
-        <div className="flex items-center gap-2">
-          <Progress value={progress} className="h-1.5 w-16" />
-          <span className="font-medium">{progress}%</span>
-        </div>
+        {progress !== null ? (
+          <div className="flex items-center gap-2">
+            <Progress value={progress} className="h-1.5 w-16" />
+            <span className="font-medium">{progress}%</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -265,7 +260,7 @@ export default function Dashboard() {
     active: projectSummaries.filter((project) => project.project_status === "active").length,
     onHold: projectSummaries.filter((project) => project.project_status === "on_hold").length,
     completed: projectSummaries.filter((project) => project.project_status === "completed").length,
-    pendingTasks: projectSummaries.reduce((sum, project) => sum + project.pending_tasks, 0),
+    pendingFixtures: projectSummaries.reduce((sum, project) => sum + project.pending_tasks, 0),
   };
 
   const fixtures = fixtureQuery.data ?? [];
@@ -279,8 +274,8 @@ export default function Dashboard() {
     const groups = new Map<string, { leaderId: string | null; leaderName: string; projects: ProjectDashboardSummary[] }>();
 
     for (const project of projectSummaries) {
-      const leaderId = project.team_lead_id || project.project_leader_id || null;
-      const leaderName = project.team_lead_name || project.project_leader_name || 'No operational team leader assigned';
+      const leaderId = project.team_lead_id || null;
+      const leaderName = project.team_lead_name || 'No operational team leader assigned';
       const key = `${leaderId || '__none__'}::${leaderName}`;
 
       if (!groups.has(key)) {
@@ -307,7 +302,7 @@ export default function Dashboard() {
           <MetricCard label="Active" value={projectMetrics.active} icon={PlayCircle} color="text-info" />
           <MetricCard label="On Hold" value={projectMetrics.onHold} icon={PauseCircle} color="text-warning" />
           <MetricCard label="Completed" value={projectMetrics.completed} icon={PackageCheck} color="text-success" />
-          <MetricCard label="Pending Tasks" value={projectMetrics.pendingTasks} icon={Clock} color="text-muted-foreground" />
+          <MetricCard label="Pending Fixtures" value={projectMetrics.pendingFixtures} icon={Clock} color="text-muted-foreground" />
         </div>
       ) : (
         /* ── Operational users: project-aware compact summary ───────────── */
@@ -321,7 +316,22 @@ export default function Dashboard() {
       )}
 
       {(canUploadDesignLegacy || canUploadDesignNative) && (
-        <DesignExcelUploadModal useOperationalSpreadsheet={canUploadDesignNative} />
+        <div className="grid gap-3 md:grid-cols-2">
+          {canUploadDesignNative ? (
+            <DesignExcelUploadModal
+              useOperationalSpreadsheet
+              permissionMode="native"
+              triggerLabel="Native Fixture Upload"
+            />
+          ) : null}
+          {canUploadDesignLegacy ? (
+            <DesignExcelUploadModal
+              useOperationalSpreadsheet={false}
+              permissionMode="legacy"
+              triggerLabel="Legacy Fixture Upload"
+            />
+          ) : null}
+        </div>
       )}
 
       {/* ── Project-Centric Operational View — promoted to top for all users ── */}

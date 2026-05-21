@@ -16,13 +16,13 @@ test("role keys normalize Director/CEO variants for project authority checks", (
   assert.equal(normalizeRoleKey(" director ceo "), "director_ceo");
   assert.equal(isProjectAuthorityRoleIdentity("Director/CEO"), true);
   assert.equal(isProjectAuthorityRoleIdentity("director_ceo"), true);
-  assert.equal(isProjectAuthorityRoleIdentity("r2"), true);
+  assert.equal(isProjectAuthorityRoleIdentity("r2"), false);
   assert.equal(isProjectAuthorityRoleIdentity("r3"), false);
 });
 
-test("project authority is granted only to top hierarchy levels", () => {
-  assert.equal(isProjectAuthorityRoleLevel(1), true);
-  assert.equal(isProjectAuthorityRoleLevel(2), true);
+test("project authority is not granted by numeric hierarchy level", () => {
+  assert.equal(isProjectAuthorityRoleLevel(1), false);
+  assert.equal(isProjectAuthorityRoleLevel(2), false);
   assert.equal(isProjectAuthorityRoleLevel(3), false);
   assert.equal(isProjectAuthorityRoleLevel(null), false);
 });
@@ -33,6 +33,16 @@ test("visible users CTE gives project authority roles all active uploaders", () 
   assert.match(sql, /director_ceo/);
   assert.match(sql, /JOIN users child\s+ON COALESCE\(child\.is_active, TRUE\) = TRUE/);
   assert.doesNotMatch(sql, /child_role\.hierarchy_level[\s\S]*>\s*root\.hierarchy_level/);
+});
+
+test("visible users CTE gives co-leaders only direct parent Team Leader expansion", () => {
+  const sql = buildVisibleUsersCte("$1");
+
+  assert.match(sql, /direct_parent_team_leader/);
+  assert.match(sql, /root\.role_key = ANY\(ARRAY\['co_leader', 'team_co_leader'\]::text\[\]\)/);
+  assert.match(sql, /role_key = 'team_leader'|team_leader/);
+  assert.doesNotMatch(sql, /department_id\s*=/);
+  assert.doesNotMatch(sql, /project_leader_id|team_lead_id/);
 });
 
 test("project visibility predicate gives project authority roles full project visibility", () => {

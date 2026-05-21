@@ -15,24 +15,25 @@ async function testAuthorityBypass() {
   console.log("========================================\n");
 
   try {
-    // Find an ADMIN user
+    // Find an absolute project authority user by role identity only.
     const adminResult = await pool.query(
       `
         SELECT u.id, u.employee_id, u.name, u.role, r.name as role_name, r.hierarchy_level
         FROM users u
         LEFT JOIN roles r ON r.id = u.role
-        WHERE r.name = 'admin' OR r.name ILIKE '%admin%' OR r.hierarchy_level <= 2
+        WHERE LOWER(BTRIM(REGEXP_REPLACE(COALESCE(r.name, u.role, ''), '[^[:alnum:]]+', '_', 'g'), '_'))
+          IN ('admin', 'ceo', 'director', 'director_ceo')
         LIMIT 1
       `
     );
 
     const adminUser = adminResult.rows[0];
     if (!adminUser) {
-      console.log("❌ ERROR: No admin user found in database");
+      console.log("❌ ERROR: No project authority user found in database");
       process.exit(1);
     }
 
-    console.log(`Found admin user: ${adminUser.name} (ID: ${adminUser.employee_id})`);
+    console.log(`Found authority user: ${adminUser.name} (ID: ${adminUser.employee_id})`);
     console.log(`Role: ${adminUser.role_name} (Level: ${adminUser.hierarchy_level})\n`);
 
     // Count total projects in database
@@ -81,7 +82,8 @@ async function testAuthorityBypass() {
         SELECT u.id, u.employee_id, u.name, u.role, r.name as role_name, r.hierarchy_level
         FROM users u
         LEFT JOIN roles r ON r.id = u.role
-        WHERE (r.name IS NOT NULL AND r.name != 'admin' AND r.hierarchy_level > 2)
+        WHERE LOWER(BTRIM(REGEXP_REPLACE(COALESCE(r.name, u.role, ''), '[^[:alnum:]]+', '_', 'g'), '_'))
+          NOT IN ('admin', 'ceo', 'director', 'director_ceo')
            OR (r.name IS NULL AND u.role IS NOT NULL)
         LIMIT 1
       `

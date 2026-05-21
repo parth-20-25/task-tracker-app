@@ -290,23 +290,38 @@ function buildParsedRow(cells, rowNumber) {
   };
 }
 
-function parsePasteData(text) {
-  if (!text) {
-    throw new AppError(400, "No paste data provided");
+function normalizeRawRowEntry(entry, index) {
+  if (entry && typeof entry === "object") {
+    return {
+      text: String(entry.text || "").trim(),
+      row_number: Number.isFinite(Number(entry.row_number)) ? Number(entry.row_number) : index + 1,
+      excel_row: Number.isFinite(Number(entry.excel_row)) ? Number(entry.excel_row) : null,
+      sheet_name: entry.sheet_name || null,
+    };
   }
 
-  const normalizedText = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  const rawRows = normalizedText.split("\n").map((row) => row.trim()).filter(Boolean);
+  return {
+    text: String(entry || "").trim(),
+    row_number: index + 1,
+    excel_row: null,
+    sheet_name: null,
+  };
+}
+
+function parseTabularRows(rawEntries, emptyMessage) {
+  const rawRows = (rawEntries || [])
+    .map(normalizeRawRowEntry)
+    .filter((entry) => entry.text);
 
   if (rawRows.length === 0) {
-    throw new AppError(400, "Paste data is empty.");
+    throw new AppError(400, emptyMessage);
   }
 
-  const file_info = extractFileInfo(rawRows);
+  const file_info = extractFileInfo(rawRows.map((row) => row.text));
   const parsedRows = [];
 
-  rawRows.forEach((row, rowIndex) => {
-    const cells = splitRowIntoCells(row);
+  rawRows.forEach((row) => {
+    const cells = splitRowIntoCells(row.text);
 
     if (!cells.length || isMetadataRow(cells)) {
       return;
@@ -316,11 +331,18 @@ function parsePasteData(text) {
       return;
     }
 
-    parsedRows.push(buildParsedRow(cells, rowIndex + 1));
+    const parsedRow = buildParsedRow(cells, row.row_number);
+    parsedRow.excel_row = row.excel_row;
+    parsedRow.raw_data = {
+      ...(parsedRow.raw_data || {}),
+      excel_row: row.excel_row,
+      sheet_name: row.sheet_name,
+    };
+    parsedRows.push(parsedRow);
   });
 
   if (parsedRows.length === 0) {
-    throw new AppError(400, "No fixture-like rows were detected in pasted data.");
+    throw new AppError(400, "No fixture-like rows were detected.");
   }
 
   return {
@@ -329,9 +351,21 @@ function parsePasteData(text) {
   };
 }
 
+function parsePasteData(text) {
+  if (!text) {
+    throw new AppError(400, "No paste data provided");
+  }
+
+  const normalizedText = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  const rawRows = normalizedText.split("\n").map((row) => row.trim()).filter(Boolean);
+
+  return parseTabularRows(rawRows, "Paste data is empty.");
+}
+
 module.exports = {
   FIXTURE_NO_REGEX,
   normalize,
   normalizePastedCell,
+  parseTabularRows,
   parsePasteData,
 };

@@ -242,8 +242,25 @@ export function uploadDesignExcel(file: File) {
   });
 }
 
+export function uploadNativeDesignExcel(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return apiRequest<DesignExcelUploadResponse>("/upload/design-native-excel", {
+    method: "POST",
+    body: formData,
+  });
+}
+
 export function confirmDesignUpload(payload: ConfirmDesignUploadPayload) {
   return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/upload/design-excel/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmNativeDesignUpload(payload: ConfirmDesignUploadPayload) {
+  return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/upload/design-native-excel/confirm", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -256,8 +273,22 @@ export function pastePasteFixtureData(text: string) {
   });
 }
 
+export function pasteNativeFixtureData(text: string) {
+  return apiRequest<DesignExcelUploadResponse>("/design/native-upload", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
 export function confirmPasteFixtureData(payload: ConfirmDesignUploadPayload) {
   return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/design/upload/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmNativePasteFixtureData(payload: ConfirmDesignUploadPayload) {
+  return apiRequest<{ success: boolean; batch_id: string; accepted_count: number }>("/design/native-upload/confirm", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -270,6 +301,18 @@ export function validateRejectedDesignRow(payload: {
   reserved_fixture_numbers: string[];
 }) {
   return apiRequest<ValidateRejectedDesignRowResponse>("/design/upload/rejected-row/validate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function validateNativeRejectedDesignRow(payload: {
+  file_info: DesignExcelUploadResponse["file_info"];
+  original_row: DesignExcelRejectedRow;
+  corrected_row: Record<string, unknown>;
+  reserved_fixture_numbers: string[];
+}) {
+  return apiRequest<ValidateRejectedDesignRowResponse>("/design/native-upload/rejected-row/validate", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -288,6 +331,23 @@ export function listFixturesByUploadBatch(batchId: string, departmentId?: string
     image_2_url: string | null;
     ingestion_source: string | null;
   }>>(`/design/upload-batches/${encodeURIComponent(batchId)}/fixtures${params.toString() ? `?${params.toString()}` : ""}`, {
+    method: "GET",
+  });
+}
+
+export function listNativeFixturesByUploadBatch(batchId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<Array<{
+    fixture_id: string;
+    fixture_no: string;
+    image_1_url: string | null;
+    image_2_url: string | null;
+    ingestion_source: string | null;
+  }>>(`/design/native-upload-batches/${encodeURIComponent(batchId)}/fixtures${params.toString() ? `?${params.toString()}` : ""}`, {
     method: "GET",
   });
 }
@@ -312,6 +372,31 @@ export function uploadFixtureReferenceImage(
     previous_image_url: string | null;
     new_image_url: string;
   }>(`/design/fixtures/${encodeURIComponent(fixtureId)}/reference-image${params.toString() ? `?${params.toString()}` : ""}`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function uploadNativeFixtureReferenceImage(
+  fixtureId: string,
+  imageType: "part" | "fixture",
+  file: File,
+  departmentId?: string,
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("image_type", imageType);
+
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<{
+    fixture_no: string;
+    previous_image_url: string | null;
+    new_image_url: string;
+  }>(`/design/native/fixtures/${encodeURIComponent(fixtureId)}/reference-image${params.toString() ? `?${params.toString()}` : ""}`, {
     method: "POST",
     body: formData,
   });

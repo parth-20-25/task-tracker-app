@@ -178,10 +178,14 @@ export interface UploadBatch {
   total_fixtures: number;
   active_count: number;
   project_status: ProjectStatus;
-  project_completion_percent: number;
+  project_completion_percent: number | null;
+  completion_truth_status?: string | null;
+  completion_truth_errors?: string[];
   total_tasks: number;
   pending_tasks: number;
   completed_tasks: number;
+  pending_fixtures?: number;
+  completed_fixtures?: number;
   status_summary: string;
   deletion_blocked: boolean;
   delete_blocked_reason?: string | null;
@@ -195,7 +199,10 @@ export interface ProjectDashboardSummary {
   department_id: string;
   department_name?: string | null;
   project_status: ProjectStatus;
-  completion_percent: number;
+  completion_percent: number | null;
+  completion_truth_status?: string | null;
+  completion_strict_complete?: boolean;
+  completion_truth_errors?: string[];
   total_fixtures: number;
   total_tasks: number;
   pending_tasks: number;
@@ -548,6 +555,7 @@ export interface DesignFixtureOption {
   workflow_status?: string | null;
   workflow_assigned_to?: string | null;
   workflow_assigned_to_name?: string | null;
+  workflow_progress_percent?: number | null;
   workflow_stage_active?: boolean;
   review_pending?: boolean;
   blocked?: boolean;

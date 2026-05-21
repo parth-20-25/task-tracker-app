@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
-import { isProjectAuthorityUser } from "@/lib/permissions";
+import { isAdminUser, isProjectAuthorityUser } from "@/lib/permissions";
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import { ProjectStatus, UploadBatch } from "@/types";
@@ -70,7 +70,7 @@ function DeleteAction({
 }) {
   const disabled = !canDelete || batch.deletion_blocked;
   const reason = !canDelete
-    ? "Only the uploader of this batch or an admin can delete it."
+    ? "Only the canonical project owner or an admin can delete it."
     : batch.delete_blocked_reason || "Cannot delete this batch while active work exists.";
 
   return (
@@ -110,8 +110,8 @@ function DeleteAction({
 
 export default function Batches() {
   const queryClient = useQueryClient();
-  const { access, role, user } = useAuth();
-  const isAdmin = role?.hierarchy_level === 1;
+  const { access, user } = useAuth();
+  const isAdmin = isAdminUser(user);
   const isProjectAuthority = isProjectAuthorityUser(user);
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
 
@@ -253,6 +253,7 @@ export default function Batches() {
               ) : null}
 
               {batchesQuery.data?.map((batch) => {
+                const hasCompletionTruth = typeof batch.project_completion_percent === "number";
                 const isOwner = Boolean(
                   user?.employee_id
                   && ((batch.uploaded_by_user_id || batch.uploaded_by) === user.employee_id),
@@ -278,10 +279,12 @@ export default function Batches() {
                     </TableCell>
                     <TableCell className="min-w-[160px]">
                       <div className="flex items-center justify-between gap-3 text-xs">
-                        <span className="font-semibold">{batch.project_completion_percent.toFixed(0)}%</span>
-                        <span className="text-muted-foreground">{batch.completed_tasks}/{batch.total_tasks} tasks</span>
+                        <span className="font-semibold">
+                          {hasCompletionTruth ? `${batch.project_completion_percent.toFixed(0)}%` : "Truth unavailable"}
+                        </span>
+                        <span className="text-muted-foreground">{batch.completed_tasks}/{batch.total_tasks} fixtures</span>
                       </div>
-                      <Progress value={batch.project_completion_percent} className="mt-2 h-2" />
+                      {hasCompletionTruth ? <Progress value={batch.project_completion_percent} className="mt-2 h-2" /> : null}
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -367,10 +370,14 @@ export default function Batches() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Completion</span>
-                <span>{selectedBatch.project_completion_percent.toFixed(0)}%</span>
+                <span>
+                  {typeof selectedBatch.project_completion_percent === "number"
+                    ? `${selectedBatch.project_completion_percent.toFixed(0)}%`
+                    : "Truth unavailable"}
+                </span>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <span className="text-muted-foreground">Tasks</span>
+                <span className="text-muted-foreground">Fixtures</span>
                 <span>{selectedBatch.completed_tasks} completed / {selectedBatch.pending_tasks} pending</span>
               </div>
               <div className="grid grid-cols-2 gap-3">

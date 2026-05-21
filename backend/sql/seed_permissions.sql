@@ -2,7 +2,7 @@ INSERT INTO permissions (id, name, description)
 VALUES
   ('can_assign_tasks', 'Assign Task', 'Allows assigning tasks to other users.'),
   ('transfer_task', 'Transfer Task', 'Allows transferring Design stage work while preserving contribution history.'),
-  ('can_verify_task', 'Verify Task', 'Allows reviewing and approving submitted tasks.'),
+  ('approve_completed_task', 'Approve Completed Task', 'Allows approving completed non-quality task submissions.'),
   ('can_approve_quality', 'Approve Quality', 'Allows performing quality-stage approval.'),
   ('can_view_self_tasks', 'View Self Tasks Only', 'Allows viewing only tasks assigned to self or created by self.'),
   ('can_view_all_tasks', 'View All Tasks', 'Allows viewing broader task queues within the authorized manager/admin scope.'),
@@ -10,7 +10,6 @@ VALUES
   ('can_edit_task', 'Edit Task', 'Allows updating task execution and details.'),
   ('can_delete_task', 'Delete Task', 'Allows deleting tasks.'),
   ('can_upload_proofs', 'Upload Proofs', 'Allows uploading task proof attachments.'),
-  ('can_upload_data', 'Upload Data', 'Allows uploading department-owned master data.'),
   ('upload_legacy_design_data', 'Upload Legacy Design Data', 'Allows Design fixture ingestion via legacy Excel/paste pipeline (temporary during native rollout).'),
   ('upload_native_design_data', 'Upload Native Design Data', 'Allows Design fixture ingestion via native spreadsheet session pipeline.'),
   ('can_manage_users', 'Manage Users', 'Allows managing user accounts.'),

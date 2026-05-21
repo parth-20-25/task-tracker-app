@@ -12,18 +12,6 @@ function aggregateProjectCompletionTruth(projectBundle, options = {}) {
   );
 
   if (requiredBundles.length === 0) {
-    const projectStatus = projectBundle.project_status || PROJECT_STATUSES.ACTIVE;
-    if (projectStatus === PROJECT_STATUSES.COMPLETED) {
-      return buildProjectTruth({
-        projectBundle,
-        fixtureTruths: [],
-        completionPercent: 100,
-        truthStatus: COMPLETION_TRUTH_STATUSES.COMPLETE,
-        strictComplete: true,
-        truthErrors: [],
-      });
-    }
-
     return buildProjectTruth({
       projectBundle,
       fixtureTruths: [],

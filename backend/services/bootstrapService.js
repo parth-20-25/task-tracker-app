@@ -9,6 +9,7 @@ const {
   syncTaskWorkflowState,
 } = require("../repositories/bootstrapRepository");
 const { ensurePerformanceAnalyticsTables } = require("../repositories/performanceAnalyticsRepository");
+const { alignPermissionData } = require("../repositories/permissionRepository");
 const { refreshPerformanceAnalyticsAtStartup } = require("./performanceAnalyticsService");
 
 async function initDatabase() {
@@ -30,6 +31,7 @@ async function initDatabase() {
     await ensureUsersTable(client);
     await ensureTasksTable(client);
     await ensureReferenceTables(client);
+    await alignPermissionData(client);
     await ensurePerformanceAnalyticsTables(client);
     await ensureDesignDepartmentSchema(client);
 

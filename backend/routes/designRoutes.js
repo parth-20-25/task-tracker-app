@@ -19,9 +19,9 @@ const {
   validateRejectedUploadRow,
 } = require("../services/designExcelService");
 const {
+  findFixtureByIdForUser,
   findProjectByIdForUser,
   listFixturesByUploadBatchForUser,
-  updateFixtureReferenceImageForDepartment,
 } = require("../repositories/designProjectCatalogRepository");
 const {
   getFixtureCompletionTruth,
@@ -41,6 +41,79 @@ const router = express.Router();
 
 router.use(authenticate);
 
+async function handleListUploadBatchFixtures(req, res) {
+  const requestedDepartmentId = String(req.query.department_id || "").trim();
+  const departmentId = requestedDepartmentId
+    ? resolveAccessibleDepartmentId(req.user, requestedDepartmentId, "Invalid department context")
+    : null;
+
+  const batchId = req.params.batchId;
+  const fixtures = await listFixturesByUploadBatchForUser(batchId, req.user, departmentId);
+
+  return sendSuccess(res, fixtures, 200);
+}
+
+async function handleReferenceImageUploadRequest(req, res) {
+  const requestedDepartmentId = String(req.query.department_id || "").trim();
+  const departmentId = requestedDepartmentId
+    ? resolveAccessibleDepartmentId(req.user, requestedDepartmentId, "Invalid department context")
+    : null;
+
+  if (!req.file) {
+    throw new AppError(400, "No image file uploaded");
+  }
+
+  const imageType = String(req.body?.image_type || req.query?.image_type || "").trim().toLowerCase();
+  if (!imageType || !["part", "fixture"].includes(imageType)) {
+    throw new AppError(400, "Invalid image_type. Expected 'part' or 'fixture'.");
+  }
+
+  const fixtureId = req.params.fixtureId;
+  console.info("[design-reference-image-upload]", {
+    event: "reference_image_upload_start",
+    fixture_id: fixtureId,
+    department_id: departmentId,
+    image_type: imageType,
+    file_name: req.file.originalname,
+    file_size_bytes: req.file.size,
+    mime_type: req.file.mimetype,
+    user_id: req.user.id,
+    employee_id: req.user.employee_id,
+  });
+
+  const uploadedImage = await uploadFixtureReferenceImageFile({
+    fixtureId,
+    imageType,
+    file: req.file,
+  });
+  const imageUrl = uploadedImage.publicUrl;
+
+  const result = await uploadFixtureReferenceImage(
+    req.user,
+    fixtureId,
+    departmentId,
+    imageType,
+    imageUrl,
+  );
+
+  await createAuditLog({
+    userEmployeeId: req.user.employee_id,
+    actionType: "DESIGN_FIXTURE_REFERENCE_IMAGE_UPLOADED",
+    targetType: "design_fixture",
+    targetId: fixtureId,
+    metadata: {
+      image_type: imageType,
+      image_url: imageUrl,
+      storage_bucket: uploadedImage.bucket,
+      storage_path: uploadedImage.path,
+      previous_image_url: result.previous_image_url,
+      fixture_no: result.fixture_no,
+    },
+  });
+
+  return sendSuccess(res, result, 200);
+}
+
 router.get(
   "/department-projects",
   asyncHandler(async (req, res) => {
@@ -51,7 +124,7 @@ router.get(
 
 router.post(
   "/department-projects",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await uploadDepartmentProjectsForUser(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -98,18 +171,17 @@ router.get(
 router.get(
   "/design/completion/projects/:projectId",
   asyncHandler(async (req, res) => {
-    const departmentId = resolveAccessibleDepartmentId(
-      req.user,
-      req.query.department_id,
-      "A department is required for completion truth",
-    );
+    const requestedDepartmentId = String(req.query.department_id || "").trim();
+    const departmentId = requestedDepartmentId
+      ? resolveAccessibleDepartmentId(req.user, requestedDepartmentId, "A department is required for completion truth")
+      : null;
     const project = await findProjectByIdForUser(req.params.projectId, req.user, departmentId);
 
     if (!project) {
       throw new AppError(404, "Project not found for the selected department");
     }
 
-    const truth = await getProjectCompletionTruthById(project.project_id, departmentId);
+    const truth = await getProjectCompletionTruthById(project.project_id, project.department_id);
     if (!truth) {
       throw new AppError(404, "Project completion truth unavailable");
     }
@@ -121,12 +193,17 @@ router.get(
 router.get(
   "/design/completion/fixtures/:fixtureId",
   asyncHandler(async (req, res) => {
-    const departmentId = resolveAccessibleDepartmentId(
-      req.user,
-      req.query.department_id,
-      "A department is required for completion truth",
-    );
-    const truth = await getFixtureCompletionTruth(req.params.fixtureId, departmentId);
+    const requestedDepartmentId = String(req.query.department_id || "").trim();
+    const departmentId = requestedDepartmentId
+      ? resolveAccessibleDepartmentId(req.user, requestedDepartmentId, "A department is required for completion truth")
+      : null;
+    const fixture = await findFixtureByIdForUser(req.params.fixtureId, req.user, departmentId);
+
+    if (!fixture) {
+      throw new AppError(404, "Fixture not found for the selected department");
+    }
+
+    const truth = await getFixtureCompletionTruth(req.params.fixtureId, fixture.department_id);
 
     if (!truth) {
       throw new AppError(404, "Fixture not found for the selected department");
@@ -139,11 +216,10 @@ router.get(
 router.get(
   "/design/workflow-preview",
   asyncHandler(async (req, res) => {
-    let departmentId = resolveAccessibleDepartmentId(
-      req.user,
-      req.query.department_id,
-      "Invalid department context",
-    );
+    const requestedDepartmentId = String(req.query.department_id || "").trim();
+    let departmentId = requestedDepartmentId
+      ? resolveAccessibleDepartmentId(req.user, requestedDepartmentId, "Invalid department context")
+      : null;
 
     if (req.query.project_id) {
       const project = await findProjectByIdForUser(req.query.project_id, req.user, departmentId, { activeOnly: true });
@@ -152,7 +228,11 @@ router.get(
         throw new AppError(409, "Project is not active for assignment");
       }
 
-      departmentId = resolveAccessibleDepartmentId(req.user, project.department_id, "Invalid department context");
+      departmentId = project.department_id;
+    }
+
+    if (!departmentId) {
+      departmentId = resolveAccessibleDepartmentId(req.user, req.query.department_id, "Invalid department context");
     }
 
     const workflow = await resolveWorkflowForDepartment(departmentId);
@@ -180,8 +260,29 @@ router.post(
 );
 
 router.post(
+  "/upload/design-native-excel",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  handleDesignExcelUpload,
+  asyncHandler(async (req, res) => {
+    const result = await parseAndPreviewUploadedWorkbook(req.user, req.file, {
+      catalogMembershipMode: req.body?.catalog_membership_mode,
+    });
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
   "/upload/design-excel/confirm",
   authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await confirmUpload(req.user, req.body);
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
+  "/upload/design-native-excel/confirm",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await confirmUpload(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -198,6 +299,15 @@ router.post(
 );
 
 router.post(
+  "/design/native-upload",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await parseAndPreviewUpload(req.user, req.body);
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
   "/design/upload/confirm",
   authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   asyncHandler(async (req, res) => {
@@ -207,8 +317,26 @@ router.post(
 );
 
 router.post(
+  "/design/native-upload/confirm",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await confirmUpload(req.user, req.body);
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
   "/design/upload/rejected-row/validate",
   authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await validateRejectedUploadRow(req.user, req.body);
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
+  "/design/native-upload/rejected-row/validate",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await validateRejectedUploadRow(req.user, req.body);
     return sendSuccess(res, result, 200);
@@ -227,85 +355,27 @@ router.post(
 router.get(
   "/design/upload-batches/:batchId/fixtures",
   authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    const departmentId = resolveAccessibleDepartmentId(
-      req.user,
-      req.query.department_id,
-      "Invalid department context",
-    );
+  asyncHandler(handleListUploadBatchFixtures),
+);
 
-    const batchId = req.params.batchId;
-    const fixtures = await listFixturesByUploadBatchForUser(batchId, req.user, departmentId);
-
-    return sendSuccess(res, fixtures, 200);
-  }),
+router.get(
+  "/design/native-upload-batches/:batchId/fixtures",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  asyncHandler(handleListUploadBatchFixtures),
 );
 
 router.post(
   "/design/fixtures/:fixtureId/reference-image",
   authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   handleReferenceImageUpload,
-  asyncHandler(async (req, res) => {
-    const departmentId = resolveAccessibleDepartmentId(
-      req.user,
-      req.query.department_id,
-      "Invalid department context",
-    );
+  asyncHandler(handleReferenceImageUploadRequest),
+);
 
-    if (!req.file) {
-      throw new AppError(400, "No image file uploaded");
-    }
-
-    const imageType = String(req.body?.image_type || req.query?.image_type || "").trim().toLowerCase();
-    if (!imageType || !["part", "fixture"].includes(imageType)) {
-      throw new AppError(400, "Invalid image_type. Expected 'part' or 'fixture'.");
-    }
-
-    const fixtureId = req.params.fixtureId;
-    console.info("[design-reference-image-upload]", {
-      event: "reference_image_upload_start",
-      fixture_id: fixtureId,
-      department_id: departmentId,
-      image_type: imageType,
-      file_name: req.file.originalname,
-      file_size_bytes: req.file.size,
-      mime_type: req.file.mimetype,
-      user_id: req.user.id,
-      employee_id: req.user.employee_id,
-    });
-
-    const uploadedImage = await uploadFixtureReferenceImageFile({
-      fixtureId,
-      imageType,
-      file: req.file,
-    });
-    const imageUrl = uploadedImage.publicUrl;
-
-    const result = await uploadFixtureReferenceImage(
-      req.user,
-      fixtureId,
-      departmentId,
-      imageType,
-      imageUrl,
-    );
-
-    await createAuditLog({
-      userEmployeeId: req.user.employee_id,
-      actionType: "DESIGN_FIXTURE_REFERENCE_IMAGE_UPLOADED",
-      targetType: "design_fixture",
-      targetId: fixtureId,
-      metadata: {
-        image_type: imageType,
-        image_url: imageUrl,
-        storage_bucket: uploadedImage.bucket,
-        storage_path: uploadedImage.path,
-        previous_image_url: result.previous_image_url,
-        fixture_no: result.fixture_no,
-      },
-    });
-
-    return sendSuccess(res, result, 200);
-  }),
+router.post(
+  "/design/native/fixtures/:fixtureId/reference-image",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  handleReferenceImageUpload,
+  asyncHandler(handleReferenceImageUploadRequest),
 );
 
 module.exports = {

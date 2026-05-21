@@ -154,6 +154,7 @@ function mapFixtureOptionRow(row) {
   return {
     fixture_id: row.fixture_id || row.id,
     project_id: row.project_id || null,
+    department_id: row.department_id || null,
     batch_id: row.batch_id || null,
     fixture_no: row.fixture_no,
     part_name: row.part_name,
@@ -177,7 +178,7 @@ function mapFixtureOptionRow(row) {
     workflow_assigned_to: row.workflow_assigned_to || null,
     workflow_assigned_to_name: row.workflow_assigned_to_name || null,
     workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
-      ? 0
+      ? null
       : Number(row.workflow_progress_percent),
     workflow_stage_active: workflowStatus === "IN_PROGRESS",
     review_pending: workflowStatus === "COMPLETED",
@@ -193,6 +194,97 @@ function requireRow(result, errorMessage) {
   }
 
   return row;
+}
+
+function sqlRoleKey(expression) {
+  return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
+}
+
+function fixtureOperationalStatsLateral(projectAlias = "p") {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::integer AS total_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.is_completed)::integer AS completed_fixtures,
+          COUNT(*) FILTER (
+            WHERE NOT fixture_state.is_completed
+              AND fixture_state.is_active
+          )::integer AS active_fixtures,
+          COUNT(*) FILTER (
+            WHERE NOT fixture_state.is_completed
+              AND NOT fixture_state.is_active
+          )::integer AS pending_fixtures
+        FROM (
+          SELECT
+            f.id,
+            (
+              f.is_workflow_complete IS TRUE
+              OR (
+                COUNT(fwp.fixture_id) > 0
+                AND BOOL_AND(UPPER(COALESCE(fwp.status, '')) = 'APPROVED')
+              )
+            ) AS is_completed,
+            COALESCE(BOOL_OR(
+              UPPER(COALESCE(fwp.status, '')) IN ('IN_PROGRESS', 'COMPLETED', 'REJECTED')
+              OR fwp.assigned_to IS NOT NULL
+              OR fwp.started_at IS NOT NULL
+            ), FALSE) AS is_active
+          FROM design.fixtures f
+          LEFT JOIN fixture_workflow_progress fwp
+            ON fwp.fixture_id = f.id
+           AND fwp.department_id = ${projectAlias}.department_id
+          WHERE f.project_id = ${projectAlias}.id
+            AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
+          GROUP BY f.id, f.is_workflow_complete
+        ) fixture_state
+      ) fixture_stats ON TRUE
+  `;
+}
+
+function hierarchyTeamLeaderLateral(projectAlias = "p") {
+  return `
+      LEFT JOIN LATERAL (
+        WITH RECURSIVE owner_ancestry AS (
+          SELECT
+            u.id::text AS user_uuid,
+            u.employee_id,
+            u.name,
+            u.parent_id::text AS parent_id,
+            ${sqlRoleKey("COALESCE(r.name, u.role)")} AS role_key,
+            0::integer AS depth,
+            ARRAY[u.id::text, u.employee_id]::text[] AS path
+          FROM users u
+          LEFT JOIN roles r ON r.id = u.role
+          WHERE u.employee_id = ${projectAlias}.created_by_user_id
+            AND COALESCE(u.is_active, TRUE) = TRUE
+
+          UNION ALL
+
+          SELECT
+            parent.id::text AS user_uuid,
+            parent.employee_id,
+            parent.name,
+            parent.parent_id::text AS parent_id,
+            ${sqlRoleKey("COALESCE(parent_role.name, parent.role)")} AS role_key,
+            owner_ancestry.depth + 1,
+            owner_ancestry.path || parent.id::text || parent.employee_id
+          FROM owner_ancestry
+          JOIN users parent
+            ON parent.id::text = owner_ancestry.parent_id
+            OR parent.employee_id = owner_ancestry.parent_id
+          LEFT JOIN roles parent_role ON parent_role.id = parent.role
+          WHERE COALESCE(parent.is_active, TRUE) = TRUE
+            AND owner_ancestry.depth < 32
+            AND NOT parent.id::text = ANY(owner_ancestry.path)
+            AND NOT parent.employee_id = ANY(owner_ancestry.path)
+        )
+        SELECT employee_id, name
+        FROM owner_ancestry
+        WHERE role_key = 'team_leader'
+        ORDER BY depth ASC
+        LIMIT 1
+      ) hierarchy_team_lead ON TRUE
+  `;
 }
 
 async function logVisibilityDecision({
@@ -321,7 +413,7 @@ async function listProjectOptionsForUser(user, departmentId, { activeOnly = fals
         p.department_id,
         COALESCE(p.status, $4) AS project_status
       FROM design.projects p
-      WHERE p.department_id = $2
+      WHERE ($2::text IS NULL OR p.department_id = $2)
         AND ${visibleProjectPredicate("p")}
         AND ($3::boolean = FALSE OR COALESCE(p.status, $4) = $4)
       ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
@@ -373,67 +465,23 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         d.name AS department_name,
         COALESCE(p.status, $3) AS project_status,
         p.uploaded_by,
-        p.team_lead_id,
-        p.project_leader_id,
-        team_lead.name AS team_lead_name,
-        project_leader.name AS project_leader_name,
+        hierarchy_team_lead.employee_id AS team_lead_id,
+        hierarchy_team_lead.name AS team_lead_name,
         uploader.name AS uploaded_by_name,
         p.created_at,
         p.updated_at,
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
-        COALESCE(active_stats.active_fixtures, 0)::integer AS active_tasks,
-        COALESCE(pending_stats.pending_fixtures, 0)::integer AS pending_tasks,
-        0::integer AS total_tasks,
-        0::integer AS completed_tasks
+        COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_tasks,
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_tasks,
+        COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_tasks,
+        COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_tasks
       FROM design.projects p
       LEFT JOIN departments d
         ON d.id = p.department_id
-      LEFT JOIN users team_lead
-        ON team_lead.employee_id = p.team_lead_id
       LEFT JOIN users uploader
         ON uploader.employee_id = p.uploaded_by
-      LEFT JOIN users project_leader
-        ON project_leader.employee_id = p.project_leader_id
-      LEFT JOIN LATERAL (
-        -- Total non-archived fixtures (operational truth)
-        SELECT COUNT(*)::integer AS total_fixtures
-        FROM design.fixtures f1
-        WHERE f1.project_id = p.id
-          AND COALESCE(f1.status, 'active') <> 'archived'
-      ) fixture_stats ON TRUE
-      LEFT JOIN LATERAL (
-        -- Active fixtures: assigned OR in workflow progress OR under active operational work
-        SELECT COUNT(*)::integer AS active_fixtures
-        FROM design.fixtures f2
-        WHERE f2.project_id = p.id
-          AND COALESCE(f2.status, 'active') <> 'archived'
-          AND (
-            EXISTS (
-              SELECT 1 FROM fixture_workflow_progress fwp
-              WHERE fwp.fixture_id = f2.id
-                AND fwp.department_id = p.department_id
-                AND fwp.status IN ('assigned', 'in_progress', 'under_review', 'rework')
-            )
-            OR EXISTS (
-              SELECT 1 FROM fixture_workflow_progress fwp
-              WHERE fwp.fixture_id = f2.id
-                AND fwp.department_id = p.department_id
-                AND fwp.assigned_to IS NOT NULL
-            )
-          )
-      ) active_stats ON TRUE
-      LEFT JOIN LATERAL (
-        -- Pending fixtures: no workflow progress recorded (awaiting initiation)
-        SELECT COUNT(*)::integer AS pending_fixtures
-        FROM design.fixtures f3
-        WHERE f3.project_id = p.id
-          AND COALESCE(f3.status, 'active') <> 'archived'
-          AND NOT EXISTS (
-            SELECT 1 FROM fixture_workflow_progress fwp
-            WHERE fwp.fixture_id = f3.id
-              AND fwp.department_id = p.department_id
-          )
-      ) pending_stats ON TRUE
+      ${hierarchyTeamLeaderLateral("p")}
+      ${fixtureOperationalStatsLateral("p")}
       WHERE ($2::text IS NULL OR p.department_id = $2)
         AND ${visibleProjectPredicate("p")}
       ORDER BY
@@ -500,7 +548,7 @@ async function findProjectByIdForUser(projectId, user, departmentId, { activeOnl
         COALESCE(p.status, $4) AS project_status
       FROM design.projects p
       WHERE p.id = $2
-        AND p.department_id = $3
+        AND ($3::text IS NULL OR p.department_id = $3)
         AND ${visibleProjectPredicate("p")}
         AND ($5::boolean = FALSE OR COALESCE(p.status, $4) = $4)
       LIMIT 1
@@ -514,7 +562,7 @@ async function findProjectByIdForUser(projectId, user, departmentId, { activeOnl
     user,
     requestedProjectId: projectId,
     requestedDepartmentId: departmentId,
-    queryFilter: "p.id = $2 AND p.department_id = $3 AND p.created_by_user_id IN GetAccessibleUserIds($1)",
+    queryFilter: "p.id = $2 AND ($3 IS NULL OR p.department_id = $3) AND p.created_by_user_id IN GetAccessibleUserIds($1)",
     permissionResult: Boolean(project),
     client,
   });
@@ -583,7 +631,7 @@ async function listDepartmentProjectsForUser(user, departmentId, client = pool) 
         p.created_at,
         p.updated_at
       FROM design.projects p
-      WHERE p.department_id = $2
+      WHERE ($2::text IS NULL OR p.department_id = $2)
         AND ${visibleProjectPredicate("p")}
       ORDER BY p.updated_at DESC, p.created_at DESC, p.project_no ASC
     `,
@@ -608,6 +656,11 @@ async function findDepartmentProjectByIdForDepartment(projectId, departmentId, c
 }
 
 async function upsertProjectByNumber(project, client = pool) {
+  const createdByUserId = String(project.created_by_user_id || "").trim();
+  if (!createdByUserId) {
+    throw new AppError(400, "created_by_user_id is required for design project creation");
+  }
+
   const insertedProject = await client.query(
     `
       INSERT INTO design.projects (
@@ -644,7 +697,7 @@ async function upsertProjectByNumber(project, client = pool) {
       project.customer_name,
       project.department_id,
       project.uploaded_by || null,
-      project.created_by_user_id || project.uploaded_by || null,
+      createdByUserId,
     ],
   );
 
@@ -657,6 +710,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       SELECT
         di.id AS fixture_id,
         di.project_id,
+        dp.department_id,
         di.batch_id,
         di.fixture_no,
         di.part_name,
@@ -717,6 +771,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       SELECT
         di.id AS fixture_id,
         di.project_id,
+        dp.department_id,
         di.batch_id,
         di.fixture_no,
         di.part_name,
@@ -760,7 +815,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       LEFT JOIN users workflow_assignee
         ON workflow_assignee.employee_id = current_progress.assigned_to
       WHERE dp.id = $2
-        AND dp.department_id = $3
+        AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
         AND ($4::boolean = FALSE OR COALESCE(dp.status, $5) = $5)
       ORDER BY di.fixture_no ASC, di.id ASC
@@ -777,6 +832,7 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
       SELECT
         di.id AS fixture_id,
         di.project_id,
+        dp.department_id,
         di.batch_id,
         di.fixture_no,
         di.part_name,
@@ -806,6 +862,7 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
       SELECT
         di.id AS fixture_id,
         di.project_id,
+        dp.department_id,
         di.batch_id,
         di.fixture_no,
         di.part_name,
@@ -819,7 +876,7 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
       JOIN design.projects dp
         ON dp.id = di.project_id
       WHERE di.id = $2
-        AND dp.department_id = $3
+        AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
       LIMIT 1
     `,
@@ -832,7 +889,7 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
     user,
     requestedFixtureId: fixtureId,
     requestedDepartmentId: departmentId,
-    queryFilter: "di.id = $2 AND dp.department_id = $3 AND dp.created_by_user_id IN GetAccessibleUserIds($1)",
+    queryFilter: "di.id = $2 AND ($3 IS NULL OR dp.department_id = $3) AND dp.created_by_user_id IN GetAccessibleUserIds($1)",
     permissionResult: Boolean(fixture),
     client,
   });
@@ -919,6 +976,14 @@ async function createUploadBatch(batchData, client = pool) {
         status
       )
       VALUES ($1, $2, $3, $4, $5, $6, 'active')
+      ON CONFLICT (project_id) WHERE status = 'active'
+      DO UPDATE SET
+        uploaded_by = EXCLUDED.uploaded_by,
+        uploaded_by_user_id = EXCLUDED.uploaded_by_user_id,
+        uploaded_at = NOW(),
+        total_rows = COALESCE(design.upload_batches.total_rows, 0) + EXCLUDED.total_rows,
+        accepted_rows = COALESCE(design.upload_batches.accepted_rows, 0) + EXCLUDED.accepted_rows,
+        rejected_rows = COALESCE(design.upload_batches.rejected_rows, 0) + EXCLUDED.rejected_rows
       RETURNING id
     `,
     [
@@ -1070,7 +1135,7 @@ async function listFixturesByUploadBatchForUser(batchId, user, departmentId, cli
       JOIN design.projects dp
         ON dp.id = di.project_id
       WHERE ub.id = $2
-        AND dp.department_id = $3
+        AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
       ORDER BY di.fixture_no ASC, di.id ASC
     `,
@@ -1110,7 +1175,7 @@ async function updateFixtureReferenceImageForDepartment({
       JOIN design.projects dp
         ON dp.id = di.project_id
       WHERE di.id = $1
-        AND dp.department_id = $2
+        AND ($2::text IS NULL OR dp.department_id = $2)
       LIMIT 1
     `,
     [fixtureId, departmentId],

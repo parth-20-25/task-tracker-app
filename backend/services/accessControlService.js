@@ -4,16 +4,10 @@ const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
   isProjectAuthorityRoleIdentity,
-  isProjectAuthorityRoleLevel,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
 const { normalizePermissionIds, normalizePermissionId } = require("../repositories/permissionRepository");
-
-
-function getEquivalentPermissions(permission) {
-  return [...new Set([permission, ...(PERMISSION_ALIASES[permission] || [])])];
-}
 
 function getRoleDetails(user) {
   if (user?.role && typeof user.role === "object") {
@@ -47,9 +41,8 @@ function getRoleLevel(user) {
 
 function isProjectAuthorityRole(user) {
   const roleDetails = getRoleDetails(user);
-  const roleLevel = getRoleLevel(user);
 
-  return isProjectAuthorityRoleLevel(roleLevel)
+  return isAdmin(user)
     || isProjectAuthorityRoleIdentity(roleDetails?.name)
     || isProjectAuthorityRoleIdentity(getRoleId(user));
 }
@@ -138,7 +131,11 @@ async function HasPermission(userOrId, permission, client = pool) {
 }
 
 function isAdmin(user) {
-  return getRoleLevel(user) === 1;
+  const roleDetails = getRoleDetails(user);
+  const roleId = getRoleId(user);
+  return isProjectAuthorityRoleIdentity(roleDetails?.name) && String(roleDetails?.name || "").trim().toLowerCase() === "admin"
+    || String(roleId || "").trim().toLowerCase() === "r1"
+    || String(roleId || "").trim().toLowerCase() === "admin";
 }
 
 function isSupervisor(user) {

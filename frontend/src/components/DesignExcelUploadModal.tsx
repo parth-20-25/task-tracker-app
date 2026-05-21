@@ -4,11 +4,18 @@ import { AlertTriangle, CheckCircle2, FileSpreadsheet, ImageIcon, UploadCloud, X
 import {
   confirmDesignUpload,
   uploadDesignExcel,
+  confirmNativeDesignUpload,
+  uploadNativeDesignExcel,
   pastePasteFixtureData,
+  pasteNativeFixtureData,
   confirmPasteFixtureData,
+  confirmNativePasteFixtureData,
   listFixturesByUploadBatch,
+  listNativeFixturesByUploadBatch,
   uploadFixtureReferenceImage,
+  uploadNativeFixtureReferenceImage,
   validateRejectedDesignRow,
+  validateNativeRejectedDesignRow,
 } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -776,9 +783,15 @@ function PostConfirmReviewStage({
 interface DesignExcelUploadModalProps {
   /** Native operational spreadsheet (virtualized grid, clipboard, bulk ops). */
   useOperationalSpreadsheet?: boolean;
+  permissionMode?: "legacy" | "native";
+  triggerLabel?: string;
 }
 
-export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: DesignExcelUploadModalProps) {
+export function DesignExcelUploadModal({
+  useOperationalSpreadsheet = false,
+  permissionMode = useOperationalSpreadsheet ? "native" : "legacy",
+  triggerLabel = useOperationalSpreadsheet ? "Native Fixture Upload" : "Legacy Fixture Upload",
+}: DesignExcelUploadModalProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fileUploadRef = useRef<HTMLInputElement | null>(null);
@@ -895,7 +908,10 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
         }
 
         try {
-          const data = await uploadFixtureReferenceImage(batchFixture.fixture_id, imageType, queuedImage.file);
+          const uploadReferenceImage = permissionMode === "native"
+            ? uploadNativeFixtureReferenceImage
+            : uploadFixtureReferenceImage;
+          const data = await uploadReferenceImage(batchFixture.fixture_id, imageType, queuedImage.file);
           nextFixtures = nextFixtures.map((fixture) => (
             fixture.fixture_id === batchFixture.fixture_id
               ? {
@@ -952,7 +968,9 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
   };
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadDesignExcel(file),
+    mutationFn: (file: File) => (
+      permissionMode === "native" ? uploadNativeDesignExcel(file) : uploadDesignExcel(file)
+    ),
     onSuccess: (data) => {
       setPreview(data);
       const initialDecisions: Record<string, "incoming" | "existing"> = {};
@@ -975,7 +993,9 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
   });
 
   const pasteMutation = useMutation({
-    mutationFn: (text: string) => pastePasteFixtureData(text),
+    mutationFn: (text: string) => (
+      permissionMode === "native" ? pasteNativeFixtureData(text) : pastePasteFixtureData(text)
+    ),
     onSuccess: (data) => {
       setPreview(data);
       const initialDecisions: Record<string, "incoming" | "existing"> = {};
@@ -1000,16 +1020,18 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
   const confirmMutation = useMutation({
     mutationFn: (payload: any) => {
       if (uploadMode === "excel") {
-        return confirmDesignUpload(payload);
+        return permissionMode === "native" ? confirmNativeDesignUpload(payload) : confirmDesignUpload(payload);
       } else {
-        return confirmPasteFixtureData(payload);
+        return permissionMode === "native" ? confirmNativePasteFixtureData(payload) : confirmPasteFixtureData(payload);
       }
     },
     onSuccess: async (data) => {
       setBatchId(data.batch_id);
       setConfirmationStage("review");
       try {
-        const fixtures = await listFixturesByUploadBatch(data.batch_id);
+        const fixtures = permissionMode === "native"
+          ? await listNativeFixturesByUploadBatch(data.batch_id)
+          : await listFixturesByUploadBatch(data.batch_id);
         const fixturesWithQueuedImages = await uploadQueuedPreviewImages(fixtures);
         setBatchFixtures(fixturesWithQueuedImages);
       } catch (err) {
@@ -1032,7 +1054,9 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
 
   const referenceImageMutation = useMutation({
     mutationFn: ({ fixtureId, imageType, file }: { fixtureId: string; imageType: "part" | "fixture"; file: File }) =>
-      uploadFixtureReferenceImage(fixtureId, imageType, file),
+      permissionMode === "native"
+        ? uploadNativeFixtureReferenceImage(fixtureId, imageType, file)
+        : uploadFixtureReferenceImage(fixtureId, imageType, file),
     onSuccess: (data) => {
       toast({
         title: "Image uploaded",
@@ -1069,7 +1093,7 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
   });
 
   const validateRejectedRowMutation = useMutation({
-    mutationFn: validateRejectedDesignRow,
+    mutationFn: permissionMode === "native" ? validateNativeRejectedDesignRow : validateRejectedDesignRow,
   });
 
   const getCorrectionDraftForRow = (rejected: DesignExcelRejectedRow) => {
@@ -1341,14 +1365,14 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
         <div>
           <h3 className="text-lg font-bold tracking-tight">Design Department Ingestion</h3>
           <p className="text-sm text-muted-foreground">
-            Excel upload or manual paste with Python extraction, conflict review, and optional reference images.
+            Excel upload or manual paste with backend validation, conflict review, and optional reference images.
           </p>
         </div>
         <Dialog open={open} onOpenChange={handleOpenChange}>
           <DialogTrigger asChild>
             <Button className="h-10 rounded-full bg-primary px-5 font-semibold shadow-sm transition-all hover:bg-primary/90">
               <UploadCloud className="mr-2 h-4 w-4" />
-              Fixture Upload
+              {triggerLabel}
             </Button>
           </DialogTrigger>
           <DialogContent className={cn(
@@ -1402,7 +1426,7 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
                             <RadioGroupItem value="excel" id="mode-excel" className="absolute right-3 top-3" />
                             <Label htmlFor="mode-excel" className="cursor-pointer">
                               <div className="text-sm font-medium">Excel File</div>
-                              <div className="text-xs text-muted-foreground">Upload .xlsx with Python extraction</div>
+                              <div className="text-xs text-muted-foreground">Upload .xlsx for backend validation</div>
                             </Label>
                           </div>
                           <div className="relative rounded-md border p-3 cursor-pointer hover:bg-muted/30">
@@ -1460,7 +1484,7 @@ export function DesignExcelUploadModal({ useOperationalSpreadsheet = false }: De
                             <div>
                               <p className="text-lg font-semibold">Drag and drop your Excel workbook here</p>
                               <p className="text-sm text-muted-foreground">
-                                `.xlsx` only, up to 10 MB. The backend forwards the file to the private Python extraction service.
+                                `.xlsx` only, up to 10 MB. The backend parses and validates workbook rows.
                               </p>
                             </div>
                             <Button type="button" variant="outline" className="rounded-full">

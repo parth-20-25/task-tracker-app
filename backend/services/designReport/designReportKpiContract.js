@@ -74,8 +74,16 @@ function resolveReportKpisFromCompletionTruth(projectTruth, fixtureRows = []) {
     rejected: 0,
   };
 
-  fixtureRows.forEach((row) => {
+  for (const row of fixtureRows) {
     const truth = fixtureTruthById.get(String(row.fixture_id));
+    if (!truth) {
+      return {
+        ok: false,
+        error: "fixture completion truth is unavailable",
+        truth_errors: [`missing_fixture_truth:${row.fixture_id}`],
+      };
+    }
+
     const globalStatus = resolveFixtureGlobalStatus(truth, row);
 
     if (globalStatus === STATUS_LABELS.CLOSED) {
@@ -89,12 +97,12 @@ function resolveReportKpisFromCompletionTruth(projectTruth, fixtureRows = []) {
     } else if (globalStatus === STATUS_LABELS.REWORK) {
       statusCounts.rejected += 1;
     }
-  });
+  }
 
   const totalFixtures = fixtureRows.length;
   const overallPercent = projectTruth.strict_complete
     ? 100
-    : Number(projectTruth.completion_percent || 0);
+    : Number(projectTruth.completion_percent);
 
   return {
     ok: true,

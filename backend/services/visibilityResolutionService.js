@@ -5,6 +5,7 @@ const {
   getAccessibleProjectIds,
   isProjectAuthorityRoleIdentity,
   isProjectAuthorityRoleLevel,
+  normalizeRoleKey,
   projectAuthoritySqlPredicate,
   visibleFixturePredicate,
   visibleProjectPredicate,
@@ -43,10 +44,6 @@ function getRoleLevel(user) {
 const VISIBILITY_REASONS = {
   ORG_WIDE_AUTHORITY: "org_wide_authority",
   DESCENDANT_UPLOADER: "descendant_uploader",
-  DESCENDANT_TEAM_LEAD: "descendant_team_lead",
-  DESCENDANT_PROJECT_LEADER: "descendant_project_leader",
-  DEPARTMENT_SCOPE: "department_scope",
-  DIRECT_ASSIGNMENT: "direct_assignment",
   DENIED: "denied",
 };
 
@@ -257,22 +254,20 @@ async function resolveProjectDepartmentForUser(user, projectId, requestedDepartm
     return requested;
   }
 
-  if (!hasOrgWideVisibility(user)) {
-    return String(user?.department_id || "").trim() || null;
-  }
-
   if (!normalizedProjectId) {
     return null;
   }
 
   const result = await client.query(
     `
+      ${buildVisibleUsersCte("$1")}
       SELECT department_id
-      FROM design.projects
-      WHERE id = $1
+      FROM design.projects p
+      WHERE p.id = $2
+        AND ${visibleProjectPredicate("p")}
       LIMIT 1
     `,
-    [normalizedProjectId],
+    [user.employee_id, normalizedProjectId],
   );
 
   return result.rows[0]?.department_id || null;
@@ -282,8 +277,8 @@ function groupProjectsByTeamLeader(projects = []) {
   const groups = new Map();
 
   for (const project of projects) {
-    const leaderId = project.team_lead_id || project.project_leader_id || "__unassigned__";
-    const leaderName = project.team_lead_name || project.project_leader_name || "No operational team leader assigned";
+    const leaderId = project.team_lead_id || "__unassigned__";
+    const leaderName = project.team_lead_name || "No operational team leader assigned";
     const key = `${leaderId}::${leaderName}`;
 
     if (!groups.has(key)) {

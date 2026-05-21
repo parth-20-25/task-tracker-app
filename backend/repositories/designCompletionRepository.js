@@ -74,6 +74,7 @@ async function loadFixtureBundlesForProject(projectId, departmentId, client = po
        AND fwp.department_id = dp.department_id
       WHERE df.project_id = $1
         AND dp.department_id = $2
+        AND COALESCE(df.removed_from_latest_ingestion, FALSE) = FALSE
       GROUP BY
         df.id,
         df.fixture_no,
@@ -130,6 +131,7 @@ async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
        AND fwp.department_id = dp.department_id
       WHERE df.id = $1
         AND dp.department_id = $2
+        AND COALESCE(df.removed_from_latest_ingestion, FALSE) = FALSE
       GROUP BY
         df.id,
         df.fixture_no,
@@ -183,7 +185,9 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
           '[]'::json
         ) AS fixture_bundles
       FROM design.projects dp
-      LEFT JOIN design.fixtures df ON df.project_id = dp.id
+      LEFT JOIN design.fixtures df
+        ON df.project_id = dp.id
+       AND COALESCE(df.removed_from_latest_ingestion, FALSE) = FALSE
       LEFT JOIN LATERAL (
         SELECT COALESCE(
           json_agg(

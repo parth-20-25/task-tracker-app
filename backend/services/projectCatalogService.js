@@ -62,15 +62,14 @@ function validateResolvedDesignTaskContext({ projectId, fixtureId, currentStage,
 
 async function listDepartmentProjectsForUser(user) {
   requireDesignDepartment(user);
-  return listDepartmentProjectsByUserVisibility(user, requireUserDepartment(user));
+  return listDepartmentProjectsByUserVisibility(user, null);
 }
 
 async function listDesignProjectsForUser(user, requestedDepartmentId, options = {}) {
-  const departmentId = resolveAccessibleDepartmentId(
-    user,
-    requestedDepartmentId,
-    "A department is required for project data access",
-  );
+  const requested = String(requestedDepartmentId || "").trim();
+  const departmentId = requested
+    ? resolveAccessibleDepartmentId(user, requested, "A department is required for project data access")
+    : null;
 
   if (!departmentId) {
     const { listProjectSummariesForUser } = require("../repositories/designProjectCatalogRepository");
@@ -100,10 +99,14 @@ async function listDesignFixturesForUser(user, projectId, requestedDepartmentId,
   }
 
   const { resolveProjectDepartmentForUser } = require("./visibilityResolutionService");
+  const requested = String(requestedDepartmentId || "").trim();
+  const requestedDepartmentContext = requested
+    ? resolveAccessibleDepartmentId(user, requested, "A department is required for project data access")
+    : null;
   const departmentId = await resolveProjectDepartmentForUser(
     user,
     normalizedProjectId,
-    resolveAccessibleDepartmentId(user, requestedDepartmentId, "A department is required for project data access"),
+    requestedDepartmentContext,
   );
 
   if (!departmentId) {
@@ -199,6 +202,7 @@ async function uploadDepartmentProjectsForUser(user, payload = {}) {
         customer_name: normalizedRow.customer_name,
         department_id: departmentId,
         uploaded_by: user.employee_id,
+        created_by_user_id: user.employee_id,
       }, client);
 
       await createAuditLog({

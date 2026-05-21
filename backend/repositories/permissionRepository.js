@@ -1,14 +1,18 @@
 const { env } = require("../config/env");
 const {
   PERMISSION_DEFINITIONS,
-  PERMISSION_ID_ALIASES,
 } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 
 const permissionDefinitionMap = new Map(
   PERMISSION_DEFINITIONS.map(([id, name, description]) => [id, { id, name, description }]),
 );
-const STALE_PERMISSION_IDS = ["tasks_assign"];
+const LEGACY_PERMISSION_MIGRATIONS = {
+  can_assign_task: "can_assign_tasks",
+  can_verify_task: "approve_completed_task",
+  can_upload_data: "upload_legacy_design_data",
+};
+const STALE_PERMISSION_IDS = ["tasks_assign", ...Object.keys(LEGACY_PERMISSION_MIGRATIONS)];
 
 function normalizePermissionId(permissionId) {
   if (typeof permissionId !== "string") {
@@ -16,7 +20,7 @@ function normalizePermissionId(permissionId) {
   }
 
   const trimmedPermissionId = permissionId.trim();
-  return PERMISSION_ID_ALIASES[trimmedPermissionId] || trimmedPermissionId;
+  return trimmedPermissionId;
 }
 
 function normalizePermissionIds(permissionIds = []) {
@@ -164,7 +168,7 @@ async function alignPermissionData(client) {
     [JSON.stringify(canonicalPermissionMap)],
   );
 
-  for (const [legacyPermissionId, canonicalPermissionId] of Object.entries(PERMISSION_ID_ALIASES)) {
+  for (const [legacyPermissionId, canonicalPermissionId] of Object.entries(LEGACY_PERMISSION_MIGRATIONS)) {
     if (!legacyPermissionId || !canonicalPermissionId || legacyPermissionId === canonicalPermissionId) {
       continue;
     }

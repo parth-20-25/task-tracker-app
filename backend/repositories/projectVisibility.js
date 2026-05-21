@@ -7,9 +7,11 @@ const PROJECT_AUTHORITY_ROLE_KEYS = [
   "director",
   "director_ceo",
 ];
-// Numeric hierarchy threshold for legacy authority checks (kept for compatibility/tests)
-const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = 2;
+// Numeric hierarchy is not an authority contract. Kept only as a deprecated export.
+const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = null;
 const DEFAULT_PARENT_ROLE_NAMES = PROJECT_AUTHORITY_ROLE_KEYS;
+const CO_LEADER_ROLE_KEYS = ["co_leader", "team_co_leader"];
+const TEAM_LEADER_ROLE_KEYS = ["team_leader"];
 
 function normalizeRoleKey(value) {
   return String(value || "")
@@ -21,30 +23,12 @@ function normalizeRoleKey(value) {
 
 function isProjectAuthorityRoleIdentity(value) {
   const key = normalizeRoleKey(value);
-
-  // Accept explicit authority role keys (e.g. 'director_ceo')
-  if (PROJECT_AUTHORITY_ROLE_KEYS.includes(key)) {
-    return true;
-  }
-
-  // Also accept legacy role id tokens like 'r2' where the numeric
-  // hierarchy level is within the authority threshold.
-  const m = String(value || "").trim().toLowerCase().match(/^r(\d+)$/);
-  if (m) {
-    const level = Number(m[1]);
-    return Number.isFinite(level) && level <= PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL;
-  }
-
-  return false;
+  return PROJECT_AUTHORITY_ROLE_KEYS.includes(key);
 }
 
 function isProjectAuthorityRoleLevel(level) {
-  if (level === null || level === undefined || String(level).trim() === "") {
-    return false;
-  }
-
-  const numericLevel = Number(level);
-  return Number.isFinite(numericLevel) && numericLevel <= PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL;
+  void level;
+  return false;
 }
 
 function sqlLiteral(value) {
@@ -60,7 +44,8 @@ function roleKeySql(expression) {
 }
 
 function projectAuthoritySqlPredicate(rootAlias = "root") {
-  // Absolute identity-based check only (no hierarchy-level dependency).
+  // Absolute identity-based check only. General Manager or hierarchy level
+  // never bypasses canonical project ownership filtering.
   return `(
           ${rootAlias}.role_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
           OR ${rootAlias}.role_id_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
@@ -79,6 +64,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
       SELECT
         u.id::text AS user_uuid,
         u.employee_id,
+        u.parent_id::text AS parent_id,
         u.department_id,
         COALESCE(r.hierarchy_level, 2147483647)::integer AS hierarchy_level,
         LOWER(BTRIM(COALESCE(r.name, u.role, ''))) AS role_name,
@@ -95,6 +81,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
       SELECT
         root.user_uuid AS user_uuid,
         root.employee_id,
+        root.parent_id,
         root.department_id,
         root.employee_id AS root_employee_id,
         ARRAY[root.user_uuid, root.employee_id]::text[] AS path
@@ -105,6 +92,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
       SELECT
         child.id::text AS user_uuid,
         child.employee_id,
+        child.parent_id::text AS parent_id,
         child.department_id,
         parent_tree.root_employee_id,
         parent_tree.path || child.id::text || child.employee_id
@@ -115,8 +103,26 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         AND NOT child.id::text = ANY(parent_tree.path)
         AND NOT child.employee_id = ANY(parent_tree.path)
     ),
+    direct_parent_team_leader AS (
+      SELECT
+        parent.id::text AS user_uuid,
+        parent.employee_id,
+        parent.parent_id::text AS parent_id,
+        parent.department_id,
+        root.employee_id AS root_employee_id,
+        ARRAY[root.user_uuid, root.employee_id, parent.id::text, parent.employee_id]::text[] AS path
+      FROM root_user root
+      JOIN users parent
+        ON parent.id::text = root.parent_id
+        OR parent.employee_id = root.parent_id
+      LEFT JOIN roles parent_role
+        ON parent_role.id = parent.role
+      WHERE COALESCE(parent.is_active, TRUE) = TRUE
+        AND root.role_key = ANY(${sqlTextArray(CO_LEADER_ROLE_KEYS)})
+        AND ${roleKeySql("COALESCE(parent_role.name, parent.role)")} = ANY(${sqlTextArray(TEAM_LEADER_ROLE_KEYS)})
+    ),
     ${cteName} AS (
-      -- visible_users = self + descendants ONLY
+      -- visible_users = self + descendants, plus direct parent Team Leader for Co-Leaders only.
       SELECT
         user_uuid,
         employee_id,
@@ -124,6 +130,14 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         root_employee_id,
         path
       FROM parent_tree
+      UNION
+      SELECT
+        user_uuid,
+        employee_id,
+        department_id,
+        root_employee_id,
+        path
+      FROM direct_parent_team_leader
     )
   `;
 }

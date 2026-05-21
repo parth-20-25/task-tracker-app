@@ -726,7 +726,7 @@ async function parseAndPreviewUploadedWorkbook(user, file, options = {}) {
       project_code: String(fi.project_code || "").trim(),
       project_name_display: String(fi.project_name_display || fi.project_name || "").trim(),
       company_name: String(fi.company_name || "").trim(),
-      metadata_source: "python_excel_upload",
+      metadata_source: "native_excel_upload",
     };
 
     const sessionRow = await createIngestionSession({
@@ -777,7 +777,7 @@ async function parseAndPreviewUploadedWorkbook(user, file, options = {}) {
       validRows,
       rejectedRows,
       skippedRows,
-      metadataSource: "python_excel_upload",
+      metadataSource: "native_excel_upload",
     });
   } catch (err) {
     logImportDecision("excel_upload_parse_error", {
@@ -1105,6 +1105,7 @@ async function confirmUpload(user, payload = {}) {
       customer_name: file_info.company_name,
       department_id: departmentId,
       uploaded_by: user.employee_id,
+      created_by_user_id: user.employee_id,
     }, client);
 
     // Project update logic if company name missing from existing project

@@ -25,11 +25,11 @@ function isBatchOwner(user, batch) {
 async function getBatches(user) {
   const hasGlobalProjectView = isAdmin(user) || isProjectAuthorityRole(user);
 
-  if (!user?.department_id && !hasGlobalProjectView) {
-    throw new AppError(400, "User missing department_id");
+  if (!user?.employee_id && !hasGlobalProjectView) {
+    throw new AppError(400, "User missing employee_id");
   }
 
-  return listBatchesWithSummaryForUser(user, hasGlobalProjectView ? null : user.department_id);
+  return listBatchesWithSummaryForUser(user, null);
 }
 
 function canManageProjectLifecycle(user, batch) {
@@ -66,12 +66,8 @@ async function deleteBatch(user, batchId, force = false) {
 
   const userIsAdmin = isAdmin(user);
 
-  if (!userIsAdmin && batch.department_id !== user.department_id) {
-    throw new AppError(403, "You do not have access to this batch");
-  }
-
   if (!userIsAdmin && !isBatchOwner(user, batch)) {
-    throw new AppError(403, "Only the uploader of this WBS batch or an admin can delete it");
+    throw new AppError(403, "Only the canonical project owner or an admin can delete it");
   }
 
   if (force) {

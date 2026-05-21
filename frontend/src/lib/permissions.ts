@@ -15,7 +15,6 @@ export const PERMISSIONS = {
   EDIT_TASK: "can_edit_task",
   DELETE_TASK: "can_delete_task",
   UPLOAD_PROOFS: "can_upload_proofs",
-  UPLOAD_DATA: "can_upload_data",
   UPLOAD_LEGACY_DESIGN_DATA: "upload_legacy_design_data",
   UPLOAD_NATIVE_DESIGN_DATA: "upload_native_design_data",
   MANAGE_USERS: "can_manage_users",
@@ -41,17 +40,6 @@ export const PERMISSIONS = {
   VIEW_WORKFLOW_HEALTH: "view_workflow_health",
   VIEW_PREDICTIVE_ANALYTICS: "view_predictive_analytics",
 } as const;
-
-export const PERMISSION_ALIASES: Record<string, string> = {
-  can_assign_task: PERMISSIONS.ASSIGN_TASK,
-  can_verify_task: PERMISSIONS.APPROVE_COMPLETED_TASK,
-  view_self_user: PERMISSIONS.VIEW_SELF_ANALYTICS,
-  view_self_department: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
-  view_department_comparison: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
-  view_user_comparison: PERMISSIONS.VIEW_ALL_USERS_ANALYTICS,
-  scope_department_only: PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS,
-  scope_all_departments: PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS,
-};
 
 export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);
 
@@ -105,7 +93,6 @@ export interface UiAccess {
   canManageShifts: boolean;
   canManageMachines: boolean;
   canManageWorkflows: boolean;
-  canUploadData: boolean;
   canUploadLegacyDesignData: boolean;
   canUploadNativeDesignData: boolean;
   canUploadProofs: boolean;
@@ -124,7 +111,7 @@ export interface UiAccess {
 }
 
 export function normalizePermissionId(permission: string) {
-  return PERMISSION_ALIASES[permission] || permission;
+  return permission;
 }
 
 export function buildRolePermissionSet(role: Role | null | undefined) {
@@ -186,17 +173,17 @@ export function hasAnyUserPermission(user: User | null | undefined, permissions:
 }
 
 export function isAdminUser(user: User | null | undefined) {
-  return user?.role?.hierarchy_level === 1 || user?.role?.id === "r1" || user?.role_id === "r1";
+  const roleName = normalizeRoleKey(user?.role?.name);
+  const roleId = normalizeRoleKey(user?.role?.id || user?.role_id);
+  return roleName === "admin" || roleId === "admin" || roleId === "r1";
 }
 
 export function isProjectAuthorityUser(user: User | null | undefined) {
   const roleName = normalizeRoleKey(user?.role?.name);
   const roleId = normalizeRoleKey(user?.role?.id || user?.role_id);
-  const hierarchyLevel = Number(user?.role?.hierarchy_level);
 
-  return (Number.isFinite(hierarchyLevel) && hierarchyLevel <= 2)
-    || ["admin", "ceo", "director", "director_ceo", "ceo_director", "plant_head", "r1", "r2"].includes(roleName)
-    || ["admin", "ceo", "director", "director_ceo", "ceo_director", "plant_head", "r1", "r2"].includes(roleId)
+  return ["admin", "ceo", "director", "director_ceo", "ceo_director"].includes(roleName)
+    || ["admin", "ceo", "director"].includes(roleId)
     || isAdminUser(user);
 }
 
@@ -227,8 +214,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canManageShifts = hasUserPermission(user, PERMISSIONS.MANAGE_SHIFTS);
   const canManageMachines = hasUserPermission(user, PERMISSIONS.MANAGE_MACHINES);
   const canManageWorkflows = hasUserPermission(user, PERMISSIONS.MANAGE_WORKFLOWS);
-  const canUploadData = hasUserPermission(user, PERMISSIONS.UPLOAD_DATA);
-  // Strict mapping: legacy upload UI only when explicit legacy permission granted.
   const canUploadLegacyDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA);
   const canUploadNativeDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
@@ -259,7 +244,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canManageShifts,
     canManageMachines,
     canManageWorkflows,
-    canUploadData,
     canUploadLegacyDesignData,
     canUploadNativeDesignData,
     canUploadProofs,

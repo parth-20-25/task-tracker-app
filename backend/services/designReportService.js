@@ -5,12 +5,8 @@ const { execFile } = require("child_process");
 const ExcelJS = require("exceljs");
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
-const {
-  getEffectiveDepartment,
-  requireDepartmentContext,
-} = require("../lib/departmentContext");
+const { requireDepartmentContext } = require("../lib/departmentContext");
 const { logger } = require("../lib/logger");
-const { isAdmin, isProjectAuthorityRole } = require("./accessControlService");
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
@@ -40,6 +36,56 @@ const DESIGN_REPORT_TEMPLATE_PATH = path.join(
 
 const DESIGN_REPORT_TRUTH_LAYER_ERROR =
   "Design Project Execution report export is disabled until the Design truth layer is complete.";
+
+function sqlRoleKey(expression) {
+  return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
+}
+
+function hierarchyTeamLeaderLateral(projectAlias = "p") {
+  return `
+      LEFT JOIN LATERAL (
+        WITH RECURSIVE owner_ancestry AS (
+          SELECT
+            u.id::text AS user_uuid,
+            u.employee_id,
+            u.name,
+            u.parent_id::text AS parent_id,
+            ${sqlRoleKey("COALESCE(r.name, u.role)")} AS role_key,
+            0::integer AS depth,
+            ARRAY[u.id::text, u.employee_id]::text[] AS path
+          FROM users u
+          LEFT JOIN roles r ON r.id = u.role
+          WHERE u.employee_id = ${projectAlias}.created_by_user_id
+            AND COALESCE(u.is_active, TRUE) = TRUE
+
+          UNION ALL
+
+          SELECT
+            parent.id::text AS user_uuid,
+            parent.employee_id,
+            parent.name,
+            parent.parent_id::text AS parent_id,
+            ${sqlRoleKey("COALESCE(parent_role.name, parent.role)")} AS role_key,
+            owner_ancestry.depth + 1,
+            owner_ancestry.path || parent.id::text || parent.employee_id
+          FROM owner_ancestry
+          JOIN users parent
+            ON parent.id::text = owner_ancestry.parent_id
+            OR parent.employee_id = owner_ancestry.parent_id
+          LEFT JOIN roles parent_role ON parent_role.id = parent.role
+          WHERE COALESCE(parent.is_active, TRUE) = TRUE
+            AND owner_ancestry.depth < 32
+            AND NOT parent.id::text = ANY(owner_ancestry.path)
+            AND NOT parent.employee_id = ANY(owner_ancestry.path)
+        )
+        SELECT employee_id, name
+        FROM owner_ancestry
+        WHERE role_key = 'team_leader'
+        ORDER BY depth ASC
+        LIMIT 1
+      ) hierarchy_team_lead ON TRUE
+  `;
+}
 
 const STATUS_LABELS = {
   ASSIGNED: "Assigned",
@@ -1455,16 +1501,13 @@ function buildScopeReportSourceRows(fixtures, progressRows, attemptRows, attachm
 }
 
 function resolveReportDepartmentId(user, requestedDepartmentId) {
-  const effectiveDepartmentId = requireDepartmentContext(
-    getEffectiveDepartment(user, requestedDepartmentId),
-    "Invalid department context",
-  );
+  const requested = String(requestedDepartmentId || "").trim();
 
-  if (!isAdmin(user) && !isProjectAuthorityRole(user) && effectiveDepartmentId !== user.department_id) {
-    throw new AppError(403, "You do not have permission to access another department");
+  if (!requested) {
+    return null;
   }
 
-  return effectiveDepartmentId;
+  return requireDepartmentContext(requested, "Invalid department context");
 }
 
 async function getProjectContext(user, projectId, departmentId) {
@@ -1480,15 +1523,14 @@ async function getProjectContext(user, projectId, departmentId) {
         p.plant,
         p.project_leader_id,
         project_leader.name AS project_leader_name,
-        p.team_lead_id,
-        team_lead.name AS team_lead_name
+        hierarchy_team_lead.employee_id AS team_lead_id,
+        hierarchy_team_lead.name AS team_lead_name
       FROM design.projects p
       LEFT JOIN users project_leader
         ON project_leader.employee_id = p.project_leader_id
-      LEFT JOIN users team_lead
-        ON team_lead.employee_id = p.team_lead_id
+      ${hierarchyTeamLeaderLateral("p")}
       WHERE p.id = $2
-        AND p.department_id = $3
+        AND ($3::text IS NULL OR p.department_id = $3)
         AND ${visibleProjectPredicate("p")}
       LIMIT 1
     `,
@@ -2079,11 +2121,11 @@ async function exportDesignReport(user, query = {}, options = {}) {
     throw new AppError(404, "No fixtures found for this report");
   }
 
-  const reportData = await loadDesignReportExportData({
-    fixtures,
-    projectId: context.project_id,
-    departmentId,
-  });
+    const reportData = await loadDesignReportExportData({
+      fixtures,
+      projectId: context.project_id,
+      departmentId: context.department_id,
+    });
 
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "design-report-"));
   const finalPath = path.join(tempDirectory, buildReportFileName(context));

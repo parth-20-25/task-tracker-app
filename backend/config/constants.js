@@ -28,8 +28,6 @@ const PERMISSIONS = {
   EDIT_TASK: "can_edit_task",
   DELETE_TASK: "can_delete_task",
   UPLOAD_PROOFS: "can_upload_proofs",
-  UPLOAD_DATA: "can_upload_data",
-  // Design ingestion rollout (Design department only; legacy remains during migration)
   UPLOAD_LEGACY_DESIGN_DATA: "upload_legacy_design_data",
   UPLOAD_NATIVE_DESIGN_DATA: "upload_native_design_data",
   MANAGE_USERS: "can_manage_users",
@@ -59,11 +57,6 @@ const PERMISSIONS = {
   VIEW_PREDICTIVE_ANALYTICS: "view_predictive_analytics",
 };
 
-const PERMISSION_ID_ALIASES = {
-  can_assign_task: PERMISSIONS.ASSIGN_TASK,
-  can_verify_task: PERMISSIONS.APPROVE_COMPLETED_TASK,
-};
-
 const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.ASSIGN_TASK, "Assign Task", "Allows assigning tasks to other users."],
   [PERMISSIONS.TRANSFER_TASK, "Transfer Task", "Allows transferring Design stage work while preserving contribution history."],
@@ -79,7 +72,6 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.EDIT_TASK, "Edit Task", "Allows updating task execution and details."],
   [PERMISSIONS.DELETE_TASK, "Delete Task", "Allows deleting tasks."],
   [PERMISSIONS.UPLOAD_PROOFS, "Upload Proofs", "Allows uploading task proof attachments."],
-  [PERMISSIONS.UPLOAD_DATA, "Upload Data", "Allows uploading department-owned master data."],
   [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA, "Upload Legacy Design Data", "Allows Design fixture ingestion via legacy Excel/paste pipeline (temporary during native rollout)."],
   [PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA, "Upload Native Design Data", "Allows Design fixture ingestion via native spreadsheet session pipeline."],
   [PERMISSIONS.MANAGE_USERS, "Manage Users", "Allows managing user accounts."],
@@ -246,7 +238,6 @@ const TASK_TRANSITIONS = {
 
 module.exports = {
   PERMISSION_DEFINITIONS,
-  PERMISSION_ID_ALIASES,
   PERMISSIONS,
   PROJECT_STATUSES,
   ROLE_LEVELS,

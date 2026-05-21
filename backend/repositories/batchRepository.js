@@ -30,6 +30,73 @@ function setCachedSchemaMetadata(cacheKey, value) {
   });
 }
 
+function fixtureOperationalStatsLateral(projectAlias = "dp") {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::integer AS total_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.is_completed)::integer AS completed_fixtures,
+          COUNT(*) FILTER (
+            WHERE NOT fixture_state.is_completed
+              AND fixture_state.is_active
+          )::integer AS active_fixtures,
+          COUNT(*) FILTER (
+            WHERE NOT fixture_state.is_completed
+              AND NOT fixture_state.is_active
+          )::integer AS pending_fixtures
+        FROM (
+          SELECT
+            f.id,
+            (
+              f.is_workflow_complete IS TRUE
+              OR (
+                COUNT(fwp.fixture_id) > 0
+                AND BOOL_AND(UPPER(COALESCE(fwp.status, '')) = 'APPROVED')
+              )
+            ) AS is_completed,
+            COALESCE(BOOL_OR(
+              UPPER(COALESCE(fwp.status, '')) IN ('IN_PROGRESS', 'COMPLETED', 'REJECTED')
+              OR fwp.assigned_to IS NOT NULL
+              OR fwp.started_at IS NOT NULL
+            ), FALSE) AS is_active
+          FROM design.fixtures f
+          LEFT JOIN fixture_workflow_progress fwp
+            ON fwp.fixture_id = f.id
+           AND fwp.department_id = ${projectAlias}.department_id
+          WHERE f.project_id = ${projectAlias}.id
+            AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
+          GROUP BY f.id, f.is_workflow_complete
+        ) fixture_state
+      ) fixture_stats ON TRUE
+  `;
+}
+
+async function enrichBatchSummariesWithCompletionTruth(summaries, client = pool) {
+  if (!Array.isArray(summaries) || summaries.length === 0) {
+    return summaries;
+  }
+
+  const { enrichProjectSummariesWithCompletionTruth } = require("../services/designCompletion/designCompletionEngine");
+  const projectSummaries = summaries.map((summary) => ({
+    project_id: summary.project_id,
+    project_no: summary.project_no,
+    department_id: summary.department_id,
+    project_status: summary.project_status,
+  }));
+  const enrichedProjects = await enrichProjectSummariesWithCompletionTruth(projectSummaries, client);
+  const truthByProjectId = new Map(enrichedProjects.map((project) => [project.project_id, project]));
+
+  return summaries.map((summary) => {
+    const truth = truthByProjectId.get(summary.project_id);
+    return {
+      ...summary,
+      project_completion_percent: truth?.completion_percent ?? null,
+      completion_truth_status: truth?.completion_truth_status || "incomplete_truth",
+      completion_truth_errors: truth?.completion_truth_errors || ["completion_truth_unavailable"],
+    };
+  });
+}
+
 async function tableExists(tableName, client = pool) {
   const cacheKey = `table:${tableName}`;
   const cachedValue = getCachedSchemaMetadata(cacheKey);
@@ -90,6 +157,8 @@ async function columnExists(tableName, columnName, client = pool) {
 function mapBatchSummary(row) {
   const activeCount = Number(row.active_count || 0);
   const totalFixtures = Number(row.total_fixtures || 0);
+  const pendingFixtures = Number(row.pending_fixtures || 0);
+  const completedFixtures = Number(row.completed_fixtures || 0);
 
   return {
     id: row.id,
@@ -102,11 +171,13 @@ function mapBatchSummary(row) {
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
     project_completion_percent: row.project_completion_percent === null || row.project_completion_percent === undefined
-      ? 0
+      ? null
       : Number(row.project_completion_percent),
-    total_tasks: Number(row.total_tasks || 0),
-    pending_tasks: Number(row.pending_tasks || 0),
-    completed_tasks: Number(row.completed_tasks || 0),
+    completion_truth_status: row.completion_truth_status || null,
+    completion_truth_errors: Array.isArray(row.completion_truth_errors) ? row.completion_truth_errors : [],
+    total_tasks: totalFixtures,
+    pending_tasks: pendingFixtures,
+    completed_tasks: completedFixtures,
     uploaded_by: row.uploaded_by,
     uploaded_by_user_id: row.uploaded_by_user_id || row.uploaded_by || null,
     uploaded_at: row.uploaded_at,
@@ -115,7 +186,9 @@ function mapBatchSummary(row) {
     rejected_rows: Number(row.rejected_rows || 0),
     total_fixtures: totalFixtures,
     active_count: activeCount,
-    status_summary: `${activeCount} active / ${totalFixtures} total`,
+    pending_fixtures: pendingFixtures,
+    completed_fixtures: completedFixtures,
+    status_summary: `${activeCount} active / ${pendingFixtures} pending / ${completedFixtures} complete`,
     deletion_blocked: activeCount > 0,
     delete_blocked_reason: activeCount > 0 ? BATCH_DELETE_BLOCK_REASON : null,
   };
@@ -140,25 +213,19 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
-        COALESCE(dp.status, $${params.length + 2}) AS project_status,
-        COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
-        COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
-        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks,
-        CASE
-          WHEN COALESCE(dp.status, $${params.length + 2}) = $${params.length + 3} THEN 100::numeric
-          WHEN COALESCE(task_stats.total_tasks, 0) = 0 THEN 0::numeric
-          ELSE ROUND(task_stats.avg_completion_percent::numeric, 2)
-        END AS project_completion_percent,
+        COALESCE(dp.status, $${params.length + 1}) AS project_status,
+        NULL::numeric AS project_completion_percent,
+        NULL::text AS completion_truth_status,
+        ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
-        COUNT(DISTINCT pf.id)::integer AS total_fixtures,
-        COUNT(DISTINCT pf.id) FILTER (
-          WHERE fwp.status IS NOT NULL
-            AND NOT (fwp.status = ANY($${params.length + 1}::text[]))
-        )::integer AS active_count
+        COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
+        COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
+        COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
       FROM (
         SELECT DISTINCT ON (project_id)
           id,
@@ -173,43 +240,14 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         ORDER BY project_id, uploaded_at DESC, id DESC
       ) ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN design.fixtures pf ON pf.project_id = dp.id
-      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = pf.id
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::integer AS total_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') NOT IN ('closed', 'cancelled'))::integer AS pending_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') = 'closed')::integer AS completed_tasks,
-          AVG(
-            COALESCE(
-              t.completion_percent,
-              CASE WHEN t.status = 'closed' OR t.verification_status = 'approved' THEN 100 ELSE 0 END
-            )
-          ) AS avg_completion_percent
-        FROM tasks t
-        WHERE t.project_id = dp.id
-          AND COALESCE(t.status, '') <> 'cancelled'
-      ) task_stats ON TRUE
+      ${fixtureOperationalStatsLateral("dp")}
       ${departmentFilter}
-      GROUP BY
-        ub.id,
-        ub.project_id,
-        dp.project_no,
-        dp.project_name,
-        dp.customer_name,
-        dp.department_id,
-        dp.status,
-        task_stats.total_tasks,
-        task_stats.pending_tasks,
-        task_stats.completed_tasks,
-        task_stats.avg_completion_percent
       ORDER BY ub.uploaded_at DESC
     `,
-    [...params, DELETABLE_FIXTURE_STATUSES, PROJECT_STATUSES.ACTIVE, PROJECT_STATUSES.COMPLETED],
+    [...params, PROJECT_STATUSES.ACTIVE],
   );
 
-  await _debugLogBatchQueryForUser("listBatchesWithSummaryForUser", user, departmentId, result.rows, client);
-  return result.rows.map(mapBatchSummary);
+  return enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
 }
 
 
@@ -227,25 +265,19 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
-        COALESCE(dp.status, $4) AS project_status,
-        COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
-        COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
-        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks,
-        CASE
-          WHEN COALESCE(dp.status, $4) = $5 THEN 100::numeric
-          WHEN COALESCE(task_stats.total_tasks, 0) = 0 THEN 0::numeric
-          ELSE ROUND(task_stats.avg_completion_percent::numeric, 2)
-        END AS project_completion_percent,
+        COALESCE(dp.status, $3) AS project_status,
+        NULL::numeric AS project_completion_percent,
+        NULL::text AS completion_truth_status,
+        ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
-        COUNT(DISTINCT pf.id)::integer AS total_fixtures,
-        COUNT(DISTINCT pf.id) FILTER (
-          WHERE fwp.status IS NOT NULL
-            AND NOT (fwp.status = ANY($3::text[]))
-        )::integer AS active_count
+        COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
+        COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
+        COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
       FROM (
         SELECT DISTINCT ON (project_id)
           id,
@@ -260,42 +292,14 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         ORDER BY project_id, uploaded_at DESC, id DESC
       ) ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN design.fixtures pf ON pf.project_id = dp.id
-      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = pf.id
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::integer AS total_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') NOT IN ('closed', 'cancelled'))::integer AS pending_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') = 'closed')::integer AS completed_tasks,
-          AVG(
-            COALESCE(
-              t.completion_percent,
-              CASE WHEN t.status = 'closed' OR t.verification_status = 'approved' THEN 100 ELSE 0 END
-            )
-          ) AS avg_completion_percent
-        FROM tasks t
-        WHERE t.project_id = dp.id
-          AND COALESCE(t.status, '') <> 'cancelled'
-      ) task_stats ON TRUE
+      ${fixtureOperationalStatsLateral("dp")}
       WHERE ($2::text IS NULL OR dp.department_id = $2)
         AND ${visibleProjectPredicate("dp")}
-      GROUP BY
-        ub.id,
-        ub.project_id,
-        dp.project_no,
-        dp.project_name,
-        dp.customer_name,
-        dp.department_id,
-        dp.status,
-        task_stats.total_tasks,
-        task_stats.pending_tasks,
-        task_stats.completed_tasks,
-        task_stats.avg_completion_percent
       ORDER BY
-        CASE COALESCE(dp.status, $4)
-          WHEN $4 THEN 0
-          WHEN $6 THEN 1
-          WHEN $5 THEN 2
+        CASE COALESCE(dp.status, $3)
+          WHEN $3 THEN 0
+          WHEN $5 THEN 1
+          WHEN $4 THEN 2
           ELSE 3
         END,
         ub.uploaded_at DESC
@@ -303,14 +307,13 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
     [
       user.employee_id,
       departmentId,
-      DELETABLE_FIXTURE_STATUSES,
       PROJECT_STATUSES.ACTIVE,
       PROJECT_STATUSES.COMPLETED,
       PROJECT_STATUSES.ON_HOLD,
     ],
   );
 
-  return result.rows.map(mapBatchSummary);
+  return enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
 }
 
 async function _debugLogBatchQueryForUser(event, user, departmentId, rows, client) {
@@ -343,62 +346,29 @@ async function getBatchById(batchId, client = pool) {
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
-        COALESCE(dp.status, $3) AS project_status,
-        COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
-        COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
-        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks,
-        CASE
-          WHEN COALESCE(dp.status, $3) = $4 THEN 100::numeric
-          WHEN COALESCE(task_stats.total_tasks, 0) = 0 THEN 0::numeric
-          ELSE ROUND(task_stats.avg_completion_percent::numeric, 2)
-        END AS project_completion_percent,
+        COALESCE(dp.status, $2) AS project_status,
+        NULL::numeric AS project_completion_percent,
+        NULL::text AS completion_truth_status,
+        ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
-        COUNT(DISTINCT f.id)::integer AS total_fixtures,
-        COUNT(DISTINCT f.id) FILTER (
-          WHERE fwp.status IS NOT NULL
-            AND NOT (fwp.status = ANY($2::text[]))
-        )::integer AS active_count
+        COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
+        COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
+        COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN design.fixtures f ON f.batch_id = ub.id
-      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::integer AS total_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') NOT IN ('closed', 'cancelled'))::integer AS pending_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') = 'closed')::integer AS completed_tasks,
-          AVG(
-            COALESCE(
-              t.completion_percent,
-              CASE WHEN t.status = 'closed' OR t.verification_status = 'approved' THEN 100 ELSE 0 END
-            )
-          ) AS avg_completion_percent
-        FROM tasks t
-        WHERE t.project_id = dp.id
-          AND COALESCE(t.status, '') <> 'cancelled'
-      ) task_stats ON TRUE
+      ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $1
-      GROUP BY
-        ub.id,
-        ub.project_id,
-        dp.project_no,
-        dp.project_name,
-        dp.customer_name,
-        dp.department_id,
-        dp.status,
-        task_stats.total_tasks,
-        task_stats.pending_tasks,
-        task_stats.completed_tasks,
-        task_stats.avg_completion_percent
     `,
-    [batchId, DELETABLE_FIXTURE_STATUSES, PROJECT_STATUSES.ACTIVE, PROJECT_STATUSES.COMPLETED],
+    [batchId, PROJECT_STATUSES.ACTIVE],
   );
 
-  return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
+  const summaries = await enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
+  return summaries[0] || null;
 }
 
 
@@ -410,73 +380,39 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         ub.id,
         ub.project_id,
         dp.project_no,
+        dp.created_by_user_id AS project_created_by_user_id,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
-        COALESCE(dp.status, $4) AS project_status,
-        COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
-        COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
-        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks,
-        CASE
-          WHEN COALESCE(dp.status, $4) = $5 THEN 100::numeric
-          WHEN COALESCE(task_stats.total_tasks, 0) = 0 THEN 0::numeric
-          ELSE ROUND(task_stats.avg_completion_percent::numeric, 2)
-        END AS project_completion_percent,
+        COALESCE(dp.status, $3) AS project_status,
+        NULL::numeric AS project_completion_percent,
+        NULL::text AS completion_truth_status,
+        ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
-        COUNT(DISTINCT f.id)::integer AS total_fixtures,
-        COUNT(DISTINCT f.id) FILTER (
-          WHERE fwp.status IS NOT NULL
-            AND NOT (fwp.status = ANY($3::text[]))
-        )::integer AS active_count
+        COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
+        COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
+        COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN design.fixtures f ON f.batch_id = ub.id
-      LEFT JOIN fixture_workflow_progress fwp ON fwp.fixture_id = f.id
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::integer AS total_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') NOT IN ('closed', 'cancelled'))::integer AS pending_tasks,
-          COUNT(*) FILTER (WHERE COALESCE(t.status, '') = 'closed')::integer AS completed_tasks,
-          AVG(
-            COALESCE(
-              t.completion_percent,
-              CASE WHEN t.status = 'closed' OR t.verification_status = 'approved' THEN 100 ELSE 0 END
-            )
-          ) AS avg_completion_percent
-        FROM tasks t
-        WHERE t.project_id = dp.id
-          AND COALESCE(t.status, '') <> 'cancelled'
-      ) task_stats ON TRUE
+      ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $2
         AND ${visibleProjectPredicate("dp")}
-      GROUP BY
-        ub.id,
-        ub.project_id,
-        dp.project_no,
-        dp.project_name,
-        dp.customer_name,
-        dp.department_id,
-        dp.status,
-        task_stats.total_tasks,
-        task_stats.pending_tasks,
-        task_stats.completed_tasks,
-        task_stats.avg_completion_percent
     `,
     [
       user.employee_id,
       batchId,
-      DELETABLE_FIXTURE_STATUSES,
       PROJECT_STATUSES.ACTIVE,
-      PROJECT_STATUSES.COMPLETED,
     ],
   );
 
-    await _debugLogBatchQueryForUser("getBatchByIdForUser", user, null, result.rows, client);
-    return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
+  await _debugLogBatchQueryForUser("getBatchByIdForUser", user, null, result.rows, client);
+  const summaries = await enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
+  return summaries[0] || null;
 }
 
 async function checkBatchDeletionBlocked(batchId, client = pool) {

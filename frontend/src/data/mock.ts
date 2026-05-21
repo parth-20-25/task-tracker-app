@@ -8,7 +8,7 @@ export const roles: Role[] = [
     hierarchy_level: 2,
     permissions: {
       can_assign_tasks: true,
-      can_verify_task: true,
+      approve_completed_task: true,
       can_approve_quality: true,
       can_view_all_tasks: true,
       can_create_task: true,
@@ -37,7 +37,7 @@ export const roles: Role[] = [
     hierarchy_level: 3,
     permissions: {
       can_assign_tasks: true,
-      can_verify_task: true,
+      approve_completed_task: true,
       can_view_all_tasks: true,
       can_create_task: true,
       can_edit_task: true,
@@ -53,7 +53,7 @@ export const roles: Role[] = [
     hierarchy_level: 4,
     permissions: {
       can_assign_tasks: true,
-      can_verify_task: true,
+      approve_completed_task: true,
       can_view_all_tasks: true,
       can_create_task: true,
       can_edit_task: true,
@@ -67,7 +67,7 @@ export const roles: Role[] = [
     name: 'Quality Inspector',
     hierarchy_level: 4,
     permissions: {
-      can_verify_task: true,
+      approve_completed_task: true,
       can_approve_quality: true,
       can_view_all_tasks: true,
       can_view_reports: true,

@@ -121,9 +121,9 @@ function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
           <span>{project.customer_name || "No customer"}</span>
         </div>
         {project.team_lead_name && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <User className="h-3 w-3" />
-            <span>Lead: {project.team_lead_name}</span>
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <User className="h-3 w-3" />
+              <span>Team Leader: {project.team_lead_name || project.project_leader_name || 'No operational team leader assigned'}</span>
           </div>
         )}
       </CardContent>
@@ -279,8 +279,8 @@ export default function Dashboard() {
     const groups = new Map<string, { leaderId: string | null; leaderName: string; projects: ProjectDashboardSummary[] }>();
 
     for (const project of projectSummaries) {
-      const leaderId = project.team_lead_id || project.uploaded_by || null;
-      const leaderName = project.team_lead_name || project.uploaded_by_name || 'Unassigned';
+      const leaderId = project.team_lead_id || project.project_leader_id || null;
+      const leaderName = project.team_lead_name || project.project_leader_name || 'No operational team leader assigned';
       const key = `${leaderId || '__none__'}::${leaderName}`;
 
       if (!groups.has(key)) {

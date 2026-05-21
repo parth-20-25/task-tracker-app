@@ -228,7 +228,8 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canManageMachines = hasUserPermission(user, PERMISSIONS.MANAGE_MACHINES);
   const canManageWorkflows = hasUserPermission(user, PERMISSIONS.MANAGE_WORKFLOWS);
   const canUploadData = hasUserPermission(user, PERMISSIONS.UPLOAD_DATA);
-  const canUploadLegacyDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA) || canUploadData;
+  // Strict mapping: legacy upload UI only when explicit legacy permission granted.
+  const canUploadLegacyDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA);
   const canUploadNativeDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
   const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);

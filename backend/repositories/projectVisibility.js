@@ -74,13 +74,12 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
     ),
     parent_tree AS (
       SELECT
-        u.id::text AS user_uuid,
-        u.employee_id,
-        u.department_id,
-        u.employee_id AS root_employee_id,
-        ARRAY[u.id::text, u.employee_id]::text[] AS path
-      FROM users u
-      JOIN root_user root ON root.employee_id = u.employee_id
+        root.user_uuid AS user_uuid,
+        root.employee_id,
+        root.department_id,
+        root.employee_id AS root_employee_id,
+        ARRAY[root.user_uuid, root.employee_id]::text[] AS path
+      FROM root_user root
 
       UNION ALL
 

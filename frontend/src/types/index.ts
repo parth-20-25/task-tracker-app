@@ -204,6 +204,8 @@ export interface ProjectDashboardSummary {
   uploaded_by?: string | null;
   team_lead_id?: string | null;
   team_lead_name?: string | null;
+  project_leader_id?: string | null;
+  project_leader_name?: string | null;
   uploaded_by_name?: string | null;
   created_at: string;
   updated_at: string;

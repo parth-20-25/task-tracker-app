@@ -367,15 +367,17 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         COALESCE(p.status, $3) AS project_status,
         p.uploaded_by,
         p.team_lead_id,
-        COALESCE(team_lead.name, uploader.name) AS team_lead_name,
+        p.project_leader_id,
+        team_lead.name AS team_lead_name,
+        project_leader.name AS project_leader_name,
         uploader.name AS uploaded_by_name,
         p.created_at,
         p.updated_at,
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
-        COALESCE(task_stats.total_tasks, 0)::integer AS total_tasks,
-        COALESCE(task_stats.pending_tasks, 0)::integer AS pending_tasks,
-        COALESCE(task_stats.active_tasks, 0)::integer AS active_tasks,
-        COALESCE(task_stats.completed_tasks, 0)::integer AS completed_tasks
+        COALESCE(active_stats.active_fixtures, 0)::integer AS active_tasks,
+        COALESCE(pending_stats.pending_fixtures, 0)::integer AS pending_tasks,
+        0::integer AS total_tasks,
+        0::integer AS completed_tasks
       FROM design.projects p
       LEFT JOIN departments d
         ON d.id = p.department_id
@@ -383,27 +385,48 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         ON team_lead.employee_id = p.team_lead_id
       LEFT JOIN users uploader
         ON uploader.employee_id = p.uploaded_by
+      LEFT JOIN users project_leader
+        ON project_leader.employee_id = p.project_leader_id
       LEFT JOIN LATERAL (
+        -- Total non-archived fixtures (operational truth)
         SELECT COUNT(*)::integer AS total_fixtures
-        FROM design.fixtures f
-        WHERE f.project_id = p.id
+        FROM design.fixtures f1
+        WHERE f1.project_id = p.id
+          AND COALESCE(f1.status, 'active') <> 'archived'
       ) fixture_stats ON TRUE
       LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*)::integer AS total_tasks,
-          COUNT(*) FILTER (
-            WHERE COALESCE(t.status, '') NOT IN ('closed', 'cancelled')
-          )::integer AS pending_tasks,
-          COUNT(*) FILTER (
-            WHERE COALESCE(t.status, '') IN ('assigned', 'in_progress', 'on_hold', 'under_review', 'rework')
-          )::integer AS active_tasks,
-          COUNT(*) FILTER (
-            WHERE COALESCE(t.status, '') = 'closed'
-          )::integer AS completed_tasks
-        FROM tasks t
-        WHERE t.project_id = p.id
-          AND COALESCE(t.status, '') <> 'cancelled'
-      ) task_stats ON TRUE
+        -- Active fixtures: assigned OR in workflow progress OR under active operational work
+        SELECT COUNT(*)::integer AS active_fixtures
+        FROM design.fixtures f2
+        WHERE f2.project_id = p.id
+          AND COALESCE(f2.status, 'active') <> 'archived'
+          AND (
+            EXISTS (
+              SELECT 1 FROM fixture_workflow_progress fwp
+              WHERE fwp.fixture_id = f2.id
+                AND fwp.department_id = p.department_id
+                AND fwp.status IN ('assigned', 'in_progress', 'under_review', 'rework')
+            )
+            OR EXISTS (
+              SELECT 1 FROM fixture_workflow_progress fwp
+              WHERE fwp.fixture_id = f2.id
+                AND fwp.department_id = p.department_id
+                AND fwp.assigned_to IS NOT NULL
+            )
+          )
+      ) active_stats ON TRUE
+      LEFT JOIN LATERAL (
+        -- Pending fixtures: no workflow progress recorded (awaiting initiation)
+        SELECT COUNT(*)::integer AS pending_fixtures
+        FROM design.fixtures f3
+        WHERE f3.project_id = p.id
+          AND COALESCE(f3.status, 'active') <> 'archived'
+          AND NOT EXISTS (
+            SELECT 1 FROM fixture_workflow_progress fwp
+            WHERE fwp.fixture_id = f3.id
+              AND fwp.department_id = p.department_id
+          )
+      ) pending_stats ON TRUE
       WHERE ($2::text IS NULL OR p.department_id = $2)
         AND ${visibleProjectPredicate("p")}
       ORDER BY

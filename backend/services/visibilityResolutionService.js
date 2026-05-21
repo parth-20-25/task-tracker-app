@@ -235,8 +235,8 @@ function groupProjectsByTeamLeader(projects = []) {
   const groups = new Map();
 
   for (const project of projects) {
-    const leaderId = project.team_lead_id || project.uploaded_by || "__unassigned__";
-    const leaderName = project.team_lead_name || project.uploaded_by_name || "Unassigned";
+    const leaderId = project.team_lead_id || project.project_leader_id || "__unassigned__";
+    const leaderName = project.team_lead_name || project.project_leader_name || "No operational team leader assigned";
     const key = `${leaderId}::${leaderName}`;
 
     if (!groups.has(key)) {

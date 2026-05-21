@@ -315,7 +315,7 @@ async function ensureDesignDepartmentSchema(client) {
         SELECT 1 FROM pg_proc WHERE proname = 'prevent_created_by_update'
       ) THEN
         CREATE OR REPLACE FUNCTION prevent_created_by_update()
-        RETURNS trigger AS $$
+        RETURNS trigger AS $prevent_created_by_update$
         BEGIN
           IF TG_OP = 'UPDATE' THEN
             IF OLD.created_by_user_id IS NOT NULL
@@ -325,7 +325,7 @@ async function ensureDesignDepartmentSchema(client) {
           END IF;
           RETURN NEW;
         END;
-        $$ LANGUAGE plpgsql;
+        $prevent_created_by_update$ LANGUAGE plpgsql;
       END IF;
 
       IF NOT EXISTS (

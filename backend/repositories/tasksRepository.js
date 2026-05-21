@@ -43,6 +43,7 @@ function taskSelectQuery(whereClause = "") {
       COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
       fixture.part_name AS resolved_part_name,
       project.uploaded_by AS project_uploaded_by,
+      project.created_by_user_id AS project_created_by_user_id,
       COALESCE(project.status, 'active') AS project_status,
       fixture_batch.uploaded_by AS fixture_batch_uploaded_by,
       fixture_batch.uploaded_by_user_id AS fixture_batch_uploaded_by_user_id,

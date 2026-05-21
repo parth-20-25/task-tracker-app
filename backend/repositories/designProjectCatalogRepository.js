@@ -215,11 +215,13 @@ async function logVisibilityDecision({
       client,
     );
 
+    const VISIBILITY_DEBUG = process.env.PROJECT_VISIBILITY_DEBUG === "true";
+
     let projectContext = null;
     if (requestedProjectId) {
       const projectResult = await client.query(
         `
-          SELECT id::text AS project_id, department_id, uploaded_by
+          SELECT id::text AS project_id, department_id, uploaded_by, created_by_user_id
           FROM design.projects
           WHERE id = $1
           LIMIT 1
@@ -238,7 +240,8 @@ async function logVisibilityDecision({
             f.project_id::text AS project_id,
             f.batch_id::text AS batch_id,
             p.department_id,
-            p.uploaded_by
+            p.uploaded_by,
+            p.created_by_user_id
           FROM design.fixtures f
           JOIN design.projects p ON p.id = f.project_id
           WHERE f.id = $1
@@ -252,25 +255,29 @@ async function logVisibilityDecision({
           project_id: fixtureContext.project_id,
           department_id: fixtureContext.department_id,
           uploaded_by: fixtureContext.uploaded_by,
+          created_by_user_id: fixtureContext.created_by_user_id,
         };
       }
     }
 
-    console.info("[project-visibility]", {
-      event,
-      requested_fixture_id: requestedFixtureId,
-      requested_project_id: requestedProjectId || fixtureContext?.project_id || null,
-      requested_department_id: requestedDepartmentId,
-      current_user_id: currentUserId,
-      current_employee_id: currentEmployeeId,
-      uploader_id: projectContext?.uploaded_by || fixtureContext?.uploaded_by || null,
-      accessible_user_ids: accessibleUserIds,
-      accessible_project_ids: accessibleProjectIds,
-      generated_query_filter: queryFilter,
-      permission_result: permissionResult,
-      project_context: projectContext,
-      fixture_context: fixtureContext,
-    });
+    if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
+      console.info("[project-visibility]", {
+        event,
+        requested_fixture_id: requestedFixtureId,
+        requested_project_id: requestedProjectId || fixtureContext?.project_id || null,
+        requested_department_id: requestedDepartmentId,
+        current_user_id: currentUserId,
+        current_employee_id: currentEmployeeId,
+        uploader_id: projectContext?.uploaded_by || fixtureContext?.uploaded_by || null,
+        creator_id: projectContext?.created_by_user_id || fixtureContext?.created_by_user_id || null,
+        accessible_user_ids: accessibleUserIds,
+        accessible_project_ids: accessibleProjectIds,
+        generated_query_filter: queryFilter,
+        permission_result: permissionResult,
+        project_context: projectContext,
+        fixture_context: fixtureContext,
+      });
+    }
   } catch (error) {
     console.warn("[project-visibility] diagnostic logging failed", {
       event,
@@ -507,7 +514,7 @@ async function findProjectByIdForUser(projectId, user, departmentId, { activeOnl
     user,
     requestedProjectId: projectId,
     requestedDepartmentId: departmentId,
-    queryFilter: "p.id = $2 AND p.department_id = $3 AND p.uploaded_by IN GetAccessibleUserIds($1)",
+    queryFilter: "p.id = $2 AND p.department_id = $3 AND p.created_by_user_id IN GetAccessibleUserIds($1)",
     permissionResult: Boolean(project),
     client,
   });
@@ -609,10 +616,11 @@ async function upsertProjectByNumber(project, client = pool) {
         customer_name,
         department_id,
         uploaded_by,
+        created_by_user_id,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
       ON CONFLICT (project_no, department_id) DO UPDATE
       SET project_name = EXCLUDED.project_name,
           customer_name = EXCLUDED.customer_name,
@@ -626,6 +634,7 @@ async function upsertProjectByNumber(project, client = pool) {
         department_id,
         COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
         uploaded_by,
+        created_by_user_id,
         created_at,
         updated_at
     `,
@@ -635,6 +644,7 @@ async function upsertProjectByNumber(project, client = pool) {
       project.customer_name,
       project.department_id,
       project.uploaded_by || null,
+      project.created_by_user_id || project.uploaded_by || null,
     ],
   );
 
@@ -822,7 +832,7 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
     user,
     requestedFixtureId: fixtureId,
     requestedDepartmentId: departmentId,
-    queryFilter: "di.id = $2 AND dp.department_id = $3 AND dp.uploaded_by IN GetAccessibleUserIds($1)",
+    queryFilter: "di.id = $2 AND dp.department_id = $3 AND dp.created_by_user_id IN GetAccessibleUserIds($1)",
     permissionResult: Boolean(fixture),
     client,
   });

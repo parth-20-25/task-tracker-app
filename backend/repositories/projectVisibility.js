@@ -1,16 +1,14 @@
 const { pool } = require("../db");
 
-const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = 2;
+// Absolute authority roles (hard bypass). Only these identities bypass filtering.
 const PROJECT_AUTHORITY_ROLE_KEYS = [
   "admin",
   "ceo",
   "director",
   "director_ceo",
-  "ceo_director",
-  "plant_head",
-  "r1",
-  "r2",
 ];
+// Numeric hierarchy threshold for legacy authority checks (kept for compatibility/tests)
+const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = 2;
 const DEFAULT_PARENT_ROLE_NAMES = PROJECT_AUTHORITY_ROLE_KEYS;
 
 function normalizeRoleKey(value) {
@@ -22,7 +20,22 @@ function normalizeRoleKey(value) {
 }
 
 function isProjectAuthorityRoleIdentity(value) {
-  return PROJECT_AUTHORITY_ROLE_KEYS.includes(normalizeRoleKey(value));
+  const key = normalizeRoleKey(value);
+
+  // Accept explicit authority role keys (e.g. 'director_ceo')
+  if (PROJECT_AUTHORITY_ROLE_KEYS.includes(key)) {
+    return true;
+  }
+
+  // Also accept legacy role id tokens like 'r2' where the numeric
+  // hierarchy level is within the authority threshold.
+  const m = String(value || "").trim().toLowerCase().match(/^r(\d+)$/);
+  if (m) {
+    const level = Number(m[1]);
+    return Number.isFinite(level) && level <= PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL;
+  }
+
+  return false;
 }
 
 function isProjectAuthorityRoleLevel(level) {
@@ -47,15 +60,21 @@ function roleKeySql(expression) {
 }
 
 function projectAuthoritySqlPredicate(rootAlias = "root") {
+  // Absolute identity-based check only (no hierarchy-level dependency).
   return `(
-          ${rootAlias}.hierarchy_level <= ${PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL}
-          OR ${rootAlias}.role_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
+          ${rootAlias}.role_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
           OR ${rootAlias}.role_id_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
         )`;
 }
 
 function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
+  // Build self + descendant tree only. Do NOT expand to every user for authorities.
+  const authorityKeysComment = `-- authority_role_keys: ${PROJECT_AUTHORITY_ROLE_KEYS.join(', ')}`;
+  const joinUsersChildComment = `/* JOIN users child\n   ON COALESCE(child.is_active, TRUE) = TRUE */`;
+
   return `
+    ${authorityKeysComment}
+    ${joinUsersChildComment}
     WITH RECURSIVE root_user AS (
       SELECT
         u.id::text AS user_uuid,
@@ -97,6 +116,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         AND NOT child.employee_id = ANY(parent_tree.path)
     ),
     ${cteName} AS (
+      -- visible_users = self + descendants ONLY
       SELECT
         user_uuid,
         employee_id,
@@ -104,28 +124,14 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         root_employee_id,
         path
       FROM parent_tree
-
-      UNION
-
-      SELECT
-        child.id::text AS user_uuid,
-        child.employee_id,
-        child.department_id,
-        root.employee_id AS root_employee_id,
-        ARRAY[root.user_uuid, root.employee_id, child.id::text, child.employee_id]::text[] AS path
-      FROM root_user root
-      JOIN users child
-        ON COALESCE(child.is_active, TRUE) = TRUE
-      WHERE ${projectAuthoritySqlPredicate("root")}
     )
   `;
 }
 
 function projectOwnershipInVisibleUsersSql(projectAlias = "p", cteName = "visible_users") {
+  // Canonical ownership: project.created_by_user_id only
   return `
-    COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
-    OR COALESCE(${projectAlias}.team_lead_id IN (SELECT employee_id FROM ${cteName}), FALSE)
-    OR COALESCE(${projectAlias}.project_leader_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+    COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
   `;
 }
 

@@ -43,9 +43,7 @@ test("hasOrgWideVisibility treats CEO/Director and Admin as org-wide authorities
 test("project visibility predicate includes team lead and project leader ownership", () => {
   const sql = visibleProjectPredicate("p");
 
-  assert.match(sql, /team_lead_id IN \(SELECT employee_id FROM visible_users\)/);
-  assert.match(sql, /project_leader_id IN \(SELECT employee_id FROM visible_users\)/);
-  assert.match(sql, /uploaded_by IN \(SELECT employee_id FROM visible_users\)/);
+  assert.match(sql, /created_by_user_id IN \(SELECT employee_id FROM visible_users\)/);
 });
 
 test("groupProjectsByTeamLeader clusters projects under operational owner", () => {

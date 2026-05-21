@@ -52,10 +52,9 @@ const VISIBILITY_REASONS = {
 
 function hasOrgWideVisibility(user) {
   const roleDetails = getRoleDetails(user);
-  const roleLevel = getRoleLevel(user);
 
-  return isProjectAuthorityRoleLevel(roleLevel)
-    || isProjectAuthorityRoleIdentity(roleDetails?.name)
+  // Org-wide visibility is identity-based only (ADMIN/CEO/DIRECTOR).
+  return isProjectAuthorityRoleIdentity(roleDetails?.name)
     || isProjectAuthorityRoleIdentity(getRoleId(user));
 }
 
@@ -77,10 +76,9 @@ function getVisibilityContext(user) {
 }
 
 function projectOwnershipMatchSql(projectAlias = "p", cteName = "visible_users") {
+  // Canonical ownership: created_by_user_id only
   return `
-    COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
-    OR COALESCE(${projectAlias}.team_lead_id IN (SELECT employee_id FROM ${cteName}), FALSE)
-    OR COALESCE(${projectAlias}.project_leader_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+    COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
   `;
 }
 
@@ -111,13 +109,48 @@ async function resolveAccessibleUserIds(user, client = pool) {
     return [];
   }
 
+  // Explicit override via precomputed visible_user_ids still respected
   if (Array.isArray(user?.visible_user_ids) && user.visible_user_ids.length > 0) {
     const merged = new Set(user.visible_user_ids.filter(Boolean));
     merged.add(employeeId);
     return [...merged].sort();
   }
 
-  return GetAccessibleUserIds(employeeId, client);
+  // Base visible users are self + descendants
+  const accessible = await GetAccessibleUserIds(employeeId, client);
+
+  // CO-LEADER rule: add direct parent Team Leader only
+  try {
+    const roleKey = normalizeRoleKey(user?.role_details?.name || user?.role || user?.role_id);
+    if (roleKey === "co_leader") {
+      const parentRes = await client.query(
+        `
+          SELECT parent.employee_id, parent.role AS role_id, r.name AS role_name
+          FROM users child
+          LEFT JOIN users parent ON parent.employee_id = child.parent_id OR parent.id::text = child.parent_id
+          LEFT JOIN roles r ON r.id = parent.role
+          WHERE child.employee_id = $1
+          LIMIT 1
+        `,
+        [employeeId],
+      );
+
+      const parentRow = parentRes.rows[0];
+      if (parentRow && parentRow.employee_id) {
+        const parentRoleKey = normalizeRoleKey(parentRow.role_name || parentRow.role_id);
+        if (parentRoleKey === "team_leader") {
+          const merged = new Set(accessible.filter(Boolean));
+          merged.add(parentRow.employee_id);
+          return [...merged].sort();
+        }
+      }
+    }
+  } catch (err) {
+    // Non-fatal: fall back to base accessible list
+    console.warn("[visibility] co-leader parent resolution failed", { error: err?.message });
+  }
+
+  return accessible;
 }
 
 async function resolveAccessibleProjectIds(user, departmentId = null, client = pool) {
@@ -132,10 +165,30 @@ async function resolveAccessibleProjectIds(user, departmentId = null, client = p
       `,
       params,
     );
+    if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
+      const visibleUsers = await resolveAccessibleUserIds(user, client);
+      console.info("[project-visibility-debug]", {
+        resolved_role: getRoleId(user),
+        visibility_mode: "org_wide",
+        visible_users_count: visibleUsers.length,
+        project_count: result.rows.length,
+      });
+    }
     return result.rows.map((row) => row.project_id).filter(Boolean);
   }
 
-  return getAccessibleProjectIds(user?.employee_id, departmentId, client);
+  const projects = await getAccessibleProjectIds(user?.employee_id, departmentId, client);
+  if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
+    const visibleUsers = await resolveAccessibleUserIds(user, client);
+    console.info("[project-visibility-debug]", {
+      resolved_role: getRoleId(user),
+      visibility_mode: "hierarchical",
+      visible_users_count: visibleUsers.length,
+      project_count: projects.length,
+    });
+  }
+
+  return projects;
 }
 
 async function explainProjectVisibility(user, projectId, client = pool) {
@@ -153,9 +206,7 @@ async function explainProjectVisibility(user, projectId, client = pool) {
       SELECT
         p.id::text AS project_id,
         p.department_id,
-        p.uploaded_by,
-        p.team_lead_id,
-        p.project_leader_id
+        p.created_by_user_id
       FROM design.projects p
       WHERE p.id = $1
       LIMIT 1
@@ -181,16 +232,8 @@ async function explainProjectVisibility(user, projectId, client = pool) {
     reasons.push(VISIBILITY_REASONS.ORG_WIDE_AUTHORITY);
   }
 
-  if (project.uploaded_by && accessibleUserIds.includes(project.uploaded_by)) {
+  if (project.created_by_user_id && accessibleUserIds.includes(project.created_by_user_id)) {
     reasons.push(VISIBILITY_REASONS.DESCENDANT_UPLOADER);
-  }
-
-  if (project.team_lead_id && accessibleUserIds.includes(project.team_lead_id)) {
-    reasons.push(VISIBILITY_REASONS.DESCENDANT_TEAM_LEAD);
-  }
-
-  if (project.project_leader_id && accessibleUserIds.includes(project.project_leader_id)) {
-    reasons.push(VISIBILITY_REASONS.DESCENDANT_PROJECT_LEADER);
   }
 
   return {

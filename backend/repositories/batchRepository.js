@@ -1,7 +1,7 @@
 const { pool } = require("../db");
 const { PROJECT_STATUSES } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
-const { buildVisibleUsersCte, visibleProjectPredicate } = require("./projectVisibility");
+const { buildVisibleUsersCte, visibleProjectPredicate, GetAccessibleUserIds } = require("./projectVisibility");
 
 const BATCH_DELETE_BLOCK_REASON = "Cannot delete batch. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
@@ -96,6 +96,7 @@ function mapBatchSummary(row) {
     batch_id: row.id,
     project_id: row.project_id,
     project_no: row.project_no,
+      project_created_by_user_id: row.project_created_by_user_id || null,
     project_name: row.project_name,
     customer_name: row.customer_name,
     department_id: row.department_id,
@@ -135,6 +136,7 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         ub.id,
         ub.project_id,
         dp.project_no,
+        dp.created_by_user_id AS project_created_by_user_id,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -206,8 +208,12 @@ async function listBatchesWithSummary(departmentId, client = pool) {
     [...params, DELETABLE_FIXTURE_STATUSES, PROJECT_STATUSES.ACTIVE, PROJECT_STATUSES.COMPLETED],
   );
 
+  await _debugLogBatchQueryForUser("listBatchesWithSummaryForUser", user, departmentId, result.rows, client);
   return result.rows.map(mapBatchSummary);
 }
+
+
+  // NOTE: debug logging for per-user batch listing
 
 async function listBatchesWithSummaryForUser(user, departmentId, client = pool) {
   const result = await client.query(
@@ -217,6 +223,7 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         ub.id,
         ub.project_id,
         dp.project_no,
+        dp.created_by_user_id AS project_created_by_user_id,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -306,6 +313,25 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
   return result.rows.map(mapBatchSummary);
 }
 
+async function _debugLogBatchQueryForUser(event, user, departmentId, rows, client) {
+  if (process.env.PROJECT_VISIBILITY_DEBUG !== "true") {
+    return;
+  }
+
+  try {
+    const visibleUsers = await GetAccessibleUserIds(user?.employee_id, client);
+    console.info("[project-visibility-debug]", {
+      event,
+      current_user_id: user?.employee_id || null,
+      requested_department_id: departmentId || null,
+      visible_users_count: visibleUsers.length,
+      batch_count: Array.isArray(rows) ? rows.length : (rows ? 1 : 0),
+    });
+  } catch (err) {
+    console.warn("[project-visibility-debug] batch debug log failed", { error: err?.message });
+  }
+}
+
 async function getBatchById(batchId, client = pool) {
   const result = await client.query(
     `
@@ -313,6 +339,7 @@ async function getBatchById(batchId, client = pool) {
         ub.id,
         ub.project_id,
         dp.project_no,
+        dp.created_by_user_id AS project_created_by_user_id,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -373,6 +400,7 @@ async function getBatchById(batchId, client = pool) {
 
   return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
 }
+
 
 async function getBatchByIdForUser(batchId, user, client = pool) {
   const result = await client.query(
@@ -447,7 +475,8 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
     ],
   );
 
-  return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
+    await _debugLogBatchQueryForUser("getBatchByIdForUser", user, null, result.rows, client);
+    return result.rows[0] ? mapBatchSummary(result.rows[0]) : null;
 }
 
 async function checkBatchDeletionBlocked(batchId, client = pool) {

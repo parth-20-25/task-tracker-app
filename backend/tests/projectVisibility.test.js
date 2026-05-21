@@ -29,8 +29,7 @@ test("project authority is granted only to top hierarchy levels", () => {
 
 test("visible users CTE gives project authority roles all active uploaders", () => {
   const sql = buildVisibleUsersCte("$1");
-
-  assert.match(sql, /hierarchy_level <= 2/);
+  // CTE builds self + descendant tree only; role hierarchy limits are not expanded here.
   assert.match(sql, /director_ceo/);
   assert.match(sql, /JOIN users child\s+ON COALESCE\(child\.is_active, TRUE\) = TRUE/);
   assert.doesNotMatch(sql, /child_role\.hierarchy_level[\s\S]*>\s*root\.hierarchy_level/);
@@ -40,7 +39,5 @@ test("project visibility predicate gives project authority roles full project vi
   const sql = visibleProjectPredicate("p");
 
   assert.match(sql, /FROM root_user root/);
-  assert.match(sql, /hierarchy_level <= 2/);
-  assert.match(sql, /team_lead_id IN \(SELECT employee_id FROM visible_users\)/);
-  assert.match(sql, /uploaded_by IN \(SELECT employee_id FROM visible_users\)/);
+  assert.match(sql, /created_by_user_id IN \(SELECT employee_id FROM visible_users\)/);
 });

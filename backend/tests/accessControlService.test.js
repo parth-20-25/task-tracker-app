@@ -27,7 +27,7 @@ function makeUser(overrides = {}) {
 }
 
 function makeTask(overrides = {}) {
-  return {
+  const base = {
     id: 10,
     department_id: "d9",
     assigned_to: "EMP200",
@@ -38,8 +38,17 @@ function makeTask(overrides = {}) {
     project_id: "2c0df497-c59f-4239-a9d6-3ee2c2f47140",
     project_uploaded_by: "EMP900",
     fixture_uploaded_by: null,
-    ...overrides,
   };
+
+  const merged = { ...base, ...overrides };
+
+  // Tests historically used `project_uploaded_by` as the creator; ensure
+  // `project_created_by_user_id` is present for visibility checks.
+  if (!merged.project_created_by_user_id) {
+    merged.project_created_by_user_id = merged.project_uploaded_by || null;
+  }
+
+  return merged;
 }
 
 test("View Self Tasks Only allows direct assignee across project hierarchy", () => {

@@ -165,6 +165,7 @@ function mapTaskRow(row) {
     project_id: row.resolved_project_id || null,
     fixture_id: row.resolved_fixture_id || null,
     project_uploaded_by: row.project_uploaded_by || null,
+    project_created_by_user_id: row.project_created_by_user_id || null,
     project_status: row.project_status || "active",
     fixture_uploaded_by: row.fixture_batch_uploaded_by_user_id || row.fixture_batch_uploaded_by || null,
     project_no: projectNo,

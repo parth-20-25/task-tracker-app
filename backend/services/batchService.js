@@ -16,7 +16,9 @@ const {
 const { canAccessDepartment, hasPermission, isAdmin, isProjectAuthorityRole } = require("./accessControlService");
 
 function isBatchOwner(user, batch) {
-  const ownerId = batch?.uploaded_by_user_id || batch?.uploaded_by || null;
+  // Ownership checks must be based on the canonical project creator only.
+  // Do NOT treat the batch uploader as an owner for runtime visibility/permissions.
+  const ownerId = batch?.project_created_by_user_id || null;
   return Boolean(user?.employee_id && ownerId && user.employee_id === ownerId);
 }
 

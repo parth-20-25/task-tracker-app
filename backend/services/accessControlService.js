@@ -213,8 +213,7 @@ function isTaskOwnedByUser(user, task) {
   return [
     task.created_by,
     task.assigned_by,
-    task.project_uploaded_by,
-    task.fixture_uploaded_by,
+    task.project_created_by_user_id,
   ].filter(Boolean).includes(user.employee_id);
 }
 
@@ -223,12 +222,12 @@ function isTaskVisibleThroughProjectHierarchy(user, task) {
     return true;
   }
 
-  const uploadOwner = task.fixture_uploaded_by || task.project_uploaded_by;
-  if (!uploadOwner) {
+  const owner = task.project_created_by_user_id || null;
+  if (!owner) {
     return false;
   }
 
-  return getVisibleUserIds(user).includes(uploadOwner);
+  return getVisibleUserIds(user).includes(owner);
 }
 
 function canAccessTask(user, task) {
@@ -324,7 +323,7 @@ function buildTaskSelfScopePredicate(params, user, {
   ];
 
   if (projectAlias) {
-    ownerPredicates.push(`COALESCE(${projectAlias}.uploaded_by = ${employeeIdParam}, FALSE)`);
+    ownerPredicates.push(`COALESCE(${projectAlias}.created_by_user_id = ${employeeIdParam}, FALSE)`);
   }
 
   return `

@@ -36,6 +36,7 @@ async function backfillDesignProjectRelations(client) {
       customer_name,
       department_id,
       uploaded_by,
+      created_by_user_id,
       created_at,
       updated_at
     )
@@ -45,6 +46,7 @@ async function backfillDesignProjectRelations(client) {
       sp.customer_name,
       sp.department_id,
       sp.uploaded_by,
+      sp.uploaded_by AS created_by_user_id,
       sp.created_at,
       sp.updated_at
     FROM source_projects sp
@@ -268,6 +270,7 @@ async function ensureDesignDepartmentSchema(client) {
       project_leader_id VARCHAR(50),
       team_lead_id VARCHAR(50),
       uploaded_by VARCHAR(50),
+      created_by_user_id VARCHAR(50),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT design_projects_status_check CHECK (status IN ('active', 'on_hold', 'completed')),
@@ -278,6 +281,7 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     ALTER TABLE design.projects
     ADD COLUMN IF NOT EXISTS uploaded_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS created_by_user_id VARCHAR(50),
     ADD COLUMN IF NOT EXISTS plant TEXT,
     ADD COLUMN IF NOT EXISTS project_leader_id VARCHAR(50),
     ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50),
@@ -293,6 +297,46 @@ async function ensureDesignDepartmentSchema(client) {
     SET status = 'active'
     WHERE status IS NULL
        OR status NOT IN ('active', 'on_hold', 'completed')
+  `);
+
+  await client.query(`
+    UPDATE design.projects
+    SET created_by_user_id = uploaded_by
+    WHERE created_by_user_id IS NULL
+      AND uploaded_by IS NOT NULL
+  `);
+
+  // Prevent accidental or malicious updates to created_by_user_id after initial set.
+  // Backfill must run before this trigger is installed (one-time migration backfill).
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_proc WHERE proname = 'prevent_created_by_update'
+      ) THEN
+        CREATE OR REPLACE FUNCTION prevent_created_by_update()
+        RETURNS trigger AS $$
+        BEGIN
+          IF TG_OP = 'UPDATE' THEN
+            IF OLD.created_by_user_id IS NOT NULL
+               AND (OLD.created_by_user_id IS DISTINCT FROM NEW.created_by_user_id) THEN
+              RAISE EXCEPTION 'created_by_user_id is immutable and cannot be changed after creation';
+            END IF;
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_prevent_created_by_update'
+      ) THEN
+        CREATE TRIGGER trg_prevent_created_by_update
+        BEFORE UPDATE ON design.projects
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_created_by_update();
+      END IF;
+    END $$;
   `);
 
   await client.query(`

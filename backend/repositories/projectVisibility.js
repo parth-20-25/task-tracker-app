@@ -172,7 +172,17 @@ async function GetAccessibleUserIds(currentUserId, client = pool) {
     [normalizedUserId],
   );
 
-  return result.rows.map((row) => row.employee_id).filter(Boolean);
+  const visibleUserIds = result.rows.map((row) => row.employee_id).filter(Boolean);
+
+  if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
+    console.info("[visibility-accessible-users]", {
+      current_user_id: normalizedUserId,
+      visible_users_count: visibleUserIds.length,
+      visible_user_ids: visibleUserIds,
+    });
+  }
+
+  return visibleUserIds;
 }
 
 async function getAccessibleProjectIds(currentUserId, departmentId = null, client = pool) {
@@ -182,6 +192,46 @@ async function getAccessibleProjectIds(currentUserId, departmentId = null, clien
     return [];
   }
 
+  // HARD BYPASS: Check if user has org-wide authority FIRST
+  // Authority roles NEVER depend on hierarchy traversal or CTE logic
+  const authorityCheck = await client.query(
+    `
+      SELECT 1
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role
+      WHERE (u.id::text = $1 OR u.employee_id = $1)
+        AND COALESCE(u.is_active, TRUE) = TRUE
+        AND (
+          ${roleKeySql("r.name")} = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
+          OR ${roleKeySql("u.role")} = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
+        )
+      LIMIT 1
+    `,
+    [normalizedUserId],
+  );
+
+  if (authorityCheck.rows.length > 0) {
+    // Authority user: return ALL projects
+    if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
+      console.info("[visibility-hard-bypass]", {
+        current_user_id: normalizedUserId,
+        authority_bypass: true,
+        query_mode: "all_projects_no_filter",
+      });
+    }
+    const result = await client.query(
+      `
+        SELECT p.id::text AS project_id
+        FROM design.projects p
+        WHERE ($1::text IS NULL OR p.department_id = $1)
+        ORDER BY p.updated_at DESC, p.created_at DESC, p.id ASC
+      `,
+      [departmentId || null],
+    );
+    return result.rows.map((row) => row.project_id).filter(Boolean);
+  }
+
+  // Non-authority user: use hierarchical CTE
   const result = await client.query(
     `
       ${buildVisibleUsersCte("$1")}
@@ -193,6 +243,15 @@ async function getAccessibleProjectIds(currentUserId, departmentId = null, clien
     `,
     [normalizedUserId, departmentId || null],
   );
+
+  if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
+    console.info("[visibility-hierarchical]", {
+      current_user_id: normalizedUserId,
+      authority_bypass: false,
+      project_count: result.rows.length,
+      query_mode: "cte_with_ownership_check",
+    });
+  }
 
   return result.rows.map((row) => row.project_id).filter(Boolean);
 }

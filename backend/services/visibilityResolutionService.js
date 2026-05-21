@@ -167,11 +167,13 @@ async function resolveAccessibleProjectIds(user, departmentId = null, client = p
     );
     if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
       const visibleUsers = await resolveAccessibleUserIds(user, client);
-      console.info("[project-visibility-debug]", {
+      console.info("[project-visibility-debug] AUTHORITY_USER", {
         resolved_role: getRoleId(user),
-        visibility_mode: "org_wide",
+        resolved_role_name: user?.role?.name || user?.role_details?.name || null,
+        visibility_mode: "org_wide_authority",
         visible_users_count: visibleUsers.length,
         project_count: result.rows.length,
+        authority_detection: "HARD_BYPASS_SUCCESS",
       });
     }
     return result.rows.map((row) => row.project_id).filter(Boolean);
@@ -180,11 +182,13 @@ async function resolveAccessibleProjectIds(user, departmentId = null, client = p
   const projects = await getAccessibleProjectIds(user?.employee_id, departmentId, client);
   if (process.env.PROJECT_VISIBILITY_DEBUG === "true") {
     const visibleUsers = await resolveAccessibleUserIds(user, client);
-    console.info("[project-visibility-debug]", {
+    console.info("[project-visibility-debug] HIERARCHICAL_USER", {
       resolved_role: getRoleId(user),
+      resolved_role_name: user?.role?.name || user?.role_details?.name || null,
       visibility_mode: "hierarchical",
       visible_users_count: visibleUsers.length,
       project_count: projects.length,
+      authority_detection: "NOT_AUTHORITY_USER",
     });
   }
 

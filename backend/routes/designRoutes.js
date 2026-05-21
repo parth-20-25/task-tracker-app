@@ -243,7 +243,7 @@ router.get(
 
 router.post(
   "/design/fixtures/:fixtureId/reference-image",
-  authorize(PERMISSIONS.UPLOAD_DATA),
+  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
   handleReferenceImageUpload,
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(

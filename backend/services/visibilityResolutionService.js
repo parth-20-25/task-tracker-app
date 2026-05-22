@@ -44,6 +44,7 @@ function getRoleLevel(user) {
 const VISIBILITY_REASONS = {
   ORG_WIDE_AUTHORITY: "org_wide_authority",
   DESCENDANT_UPLOADER: "descendant_uploader",
+  ASSIGNED_WORKFLOW: "assigned_workflow",
   DENIED: "denied",
 };
 
@@ -73,9 +74,26 @@ function getVisibilityContext(user) {
 }
 
 function projectOwnershipMatchSql(projectAlias = "p", cteName = "visible_users") {
-  // Canonical ownership: created_by_user_id only
+  // Canonical ownership: project creator/uploader in the visible hierarchy.
   return `
-    COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+    (
+      COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+      OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+    )
+  `;
+}
+
+function projectAssignmentMatchSql(projectAlias = "p", cteName = "visible_users") {
+  return `
+    EXISTS (
+      SELECT 1
+      FROM design.fixtures visible_fixture
+      JOIN fixture_workflow_progress visible_progress
+        ON visible_progress.fixture_id = visible_fixture.id
+      WHERE visible_fixture.project_id = ${projectAlias}.id
+        AND visible_progress.assigned_to IN (SELECT employee_id FROM ${cteName})
+      LIMIT 1
+    )
   `;
 }
 
@@ -88,6 +106,7 @@ function buildAuthoritativeProjectVisibilityPredicate(projectAlias = "p", cteNam
         WHERE ${projectAuthoritySqlPredicate("root")}
       )
       OR (${projectOwnershipMatchSql(projectAlias, cteName)})
+      OR (${projectAssignmentMatchSql(projectAlias, cteName)})
     )
   `;
 }
@@ -235,6 +254,24 @@ async function explainProjectVisibility(user, projectId, client = pool) {
 
   if (project.created_by_user_id && accessibleUserIds.includes(project.created_by_user_id)) {
     reasons.push(VISIBILITY_REASONS.DESCENDANT_UPLOADER);
+  }
+
+  if (accessibleUserIds.length > 0) {
+    const assignmentResult = await client.query(
+      `
+        SELECT 1
+        FROM design.fixtures visible_fixture
+        JOIN fixture_workflow_progress visible_progress
+          ON visible_progress.fixture_id = visible_fixture.id
+        WHERE visible_fixture.project_id = $1
+          AND visible_progress.assigned_to = ANY($2::text[])
+        LIMIT 1
+      `,
+      [normalizedProjectId, accessibleUserIds],
+    );
+    if (assignmentResult.rows.length > 0) {
+      reasons.push(VISIBILITY_REASONS.ASSIGNED_WORKFLOW);
+    }
   }
 
   return {

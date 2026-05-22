@@ -1,48 +1,52 @@
 const { AppError } = require("../../lib/AppError");
-const { requireUserDepartment, resolveAccessibleDepartmentId } = require("../../lib/departmentContext");
+const { resolveAccessibleDepartmentId } = require("../../lib/departmentContext");
 const { pool } = require("../../db");
+const { hasOrgWideVisibility } = require("../visibilityResolutionService");
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../../repositories/projectVisibility");
 const {
-  FIXTURE_NO_PATTERN,
   collapseWhitespace,
-  isEmptyNativeRow,
   normalizeComparable,
   normalizeFixtureNo,
   normalizeNativeContext,
   normalizeNativeRow,
+  normalizeProjectCode,
+  isEmptyNativeRow,
 } = require("./normalization");
 
 const ISSUE_SEVERITY = Object.freeze({
   ERROR: "error",
   WARNING: "warning",
-  CONFLICT: "conflict",
 });
 
-function resolveNativeDepartmentId(user, requestedDepartmentId) {
+function resolveNativeDepartmentId(user, requestedDepartmentId, options = {}) {
+  const {
+    requireDepartment = true,
+    message = "Invalid native ingestion department context",
+  } = options;
   const departmentId = collapseWhitespace(requestedDepartmentId);
-  if (departmentId) {
-    return resolveAccessibleDepartmentId(user, departmentId, "Invalid native ingestion department context");
+
+  if (departmentId || !hasOrgWideVisibility(user)) {
+    return resolveAccessibleDepartmentId(user, departmentId, message);
   }
-  return requireUserDepartment(user);
+
+  if (requireDepartment) {
+    throw new AppError(400, "department_id is required for native ingestion operation");
+  }
+
+  return null;
 }
 
 function cellStateFromIssues(issues) {
   const cellStates = {};
   for (const issue of issues) {
     for (const column of issue.columns || []) {
-      const existing = cellStates[column];
-      if (existing === "error") {
-        continue;
-      }
       if (issue.severity === ISSUE_SEVERITY.ERROR) {
         cellStates[column] = "error";
-      } else if (issue.severity === ISSUE_SEVERITY.CONFLICT && existing !== "error") {
-        cellStates[column] = "conflict";
-      } else if (!existing) {
+      } else if (!cellStates[column]) {
         cellStates[column] = "warning";
       }
     }
@@ -54,12 +58,21 @@ function addIssue(issues, severity, code, message, columns = []) {
   issues.push({ severity, code, message, columns });
 }
 
-function existingImageDiff(existingValue, incomingValue) {
-  const incoming = collapseWhitespace(incomingValue);
-  if (!incoming) {
-    return false;
+function isValidImageReference(value) {
+  const image = collapseWhitespace(value);
+  if (!image) {
+    return true;
   }
-  return collapseWhitespace(existingValue) !== incoming;
+  if (/^https?:\/\/\S+$/i.test(image)) {
+    return true;
+  }
+  if (/^\/uploads\/\S+$/i.test(image)) {
+    return true;
+  }
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp|heic|heif);base64,[A-Za-z0-9+/=\s]+$/i.test(image)) {
+    return true;
+  }
+  return false;
 }
 
 function normalizeExistingFixture(row) {
@@ -76,9 +89,9 @@ function normalizeExistingFixture(row) {
     fixture_type: row.fixture_type || "",
     remark: row.remark || null,
     qty: Number(row.qty),
+    reference_image_url: row.image_1_url || null,
     image_1_url: row.image_1_url || null,
-    image_2_url: row.image_2_url || null,
-    revision_no: Number(row.revision_no || 0),
+    assigned_team: row.assigned_team || null,
     is_workflow_complete: row.is_workflow_complete === true,
     is_legacy_workflow: row.is_legacy_workflow === true,
     is_outsourced: row.is_outsourced === true,
@@ -89,9 +102,9 @@ function normalizeExistingFixture(row) {
 
 async function loadProjectTruthForNative(user, context, client = pool) {
   const departmentId = resolveNativeDepartmentId(user, context.department_id);
-  const projectNo = normalizeFixtureNo(context.project_no);
+  const projectCode = normalizeProjectCode(context.project_code);
 
-  if (!projectNo) {
+  if (!projectCode) {
     return {
       department_id: departmentId,
       project: null,
@@ -109,11 +122,11 @@ async function loadProjectTruthForNative(user, context, client = pool) {
         AND NOT (${visibleProjectPredicate("p")})
       LIMIT 1
     `,
-    [user.employee_id, projectNo, departmentId],
+    [user.employee_id, projectCode, departmentId],
   );
 
   if (hidden.rows.length > 0) {
-    throw new AppError(403, "Project No is outside your reporting-tree visibility and cannot be ingested natively.");
+    throw new AppError(403, "Project is outside your reporting-tree visibility and cannot be ingested natively.");
   }
 
   const projectResult = await client.query(
@@ -132,7 +145,7 @@ async function loadProjectTruthForNative(user, context, client = pool) {
         AND ${visibleProjectPredicate("p")}
       LIMIT 1
     `,
-    [user.employee_id, projectNo, departmentId],
+    [user.employee_id, projectCode, departmentId],
   );
 
   const project = projectResult.rows[0] || null;
@@ -156,16 +169,30 @@ async function loadProjectTruthForNative(user, context, client = pool) {
         f.remark,
         f.qty,
         f.image_1_url,
-        f.image_2_url,
-        f.revision_no,
         f.is_workflow_complete,
         f.is_legacy_workflow,
         f.is_outsourced,
         f.vendor_name,
-        f.removed_from_latest_ingestion
+        f.removed_from_latest_ingestion,
+        COALESCE(current_progress.assigned_team, current_progress.assigned_to) AS assigned_team
       FROM design.fixtures f
       JOIN design.projects p
         ON p.id = f.project_id
+      LEFT JOIN LATERAL (
+        SELECT
+          fwp.assigned_to,
+          assignee.name AS assigned_team
+        FROM fixture_workflow_progress fwp
+        LEFT JOIN users assignee
+          ON assignee.employee_id = fwp.assigned_to
+        WHERE fwp.fixture_id = f.id
+          AND fwp.department_id = p.department_id
+        ORDER BY
+          CASE WHEN fwp.status <> 'APPROVED' THEN 0 ELSE 1 END ASC,
+          CASE WHEN fwp.status <> 'APPROVED' THEN fwp.stage_order END ASC NULLS LAST,
+          CASE WHEN fwp.status = 'APPROVED' THEN fwp.stage_order END DESC NULLS LAST
+        LIMIT 1
+      ) current_progress ON TRUE
       WHERE f.project_id = $2
         AND ${visibleFixturePredicate("f", "p")}
     `,
@@ -179,88 +206,85 @@ async function loadProjectTruthForNative(user, context, client = pool) {
   };
 }
 
-function classifyAgainstExisting(row, existing, context, issues) {
+function hasIncomingImage(row) {
+  return Boolean(collapseWhitespace(row.reference_image_url));
+}
+
+function classifyAgainstExisting(row, existing) {
   const partDiff = normalizeComparable(existing.part_name) !== normalizeComparable(row.part_name);
   const typeDiff = normalizeComparable(existing.fixture_type) !== normalizeComparable(row.fixture_type);
   const qtyDiff = Number(existing.qty) !== Number(row.qty);
   const remarkDiff = collapseWhitespace(existing.remark) !== collapseWhitespace(row.remark);
   const outsourcedDiff = existing.is_outsourced !== row.is_outsourced;
   const vendorDiff = normalizeComparable(existing.vendor_name) !== normalizeComparable(row.vendor_name);
-  const image1Diff = existingImageDiff(existing.image_1_url, row.image_1_url);
-  const image2Diff = existingImageDiff(existing.image_2_url, row.image_2_url);
-  const revisionNo = Number.isFinite(Number(context.revision_no)) ? Number(context.revision_no) : null;
-  const incomingChangesDefinition = partDiff || typeDiff || image1Diff || image2Diff;
+  const imageDiff = hasIncomingImage(row)
+    && collapseWhitespace(existing.reference_image_url) !== collapseWhitespace(row.reference_image_url);
 
-  if (revisionNo !== null && existing.revision_no > revisionNo) {
-    addIssue(
-      issues,
-      ISSUE_SEVERITY.CONFLICT,
-      "conflicting_revision",
-      `Existing fixture revision ${existing.revision_no} is newer than workspace revision ${revisionNo}.`,
-      ["validation_state"],
-    );
-  }
-
-  if (incomingChangesDefinition && existing.is_workflow_complete) {
-    addIssue(
-      issues,
-      ISSUE_SEVERITY.CONFLICT,
-      "unsafe_completed_fixture_update",
-      "Definition/image update targets a workflow-complete fixture and requires explicit resolution.",
-      ["part_name", "fixture_type", "image_1_url", "image_2_url"],
-    );
-  }
-
-  if (partDiff) {
-    addIssue(issues, ISSUE_SEVERITY.CONFLICT, "part_name_conflict", "Existing part name differs from incoming row.", ["part_name"]);
-  }
-  if (typeDiff) {
-    addIssue(issues, ISSUE_SEVERITY.CONFLICT, "fixture_type_conflict", "Existing fixture type differs from incoming row.", ["fixture_type"]);
-  }
-  if (image1Diff) {
-    addIssue(issues, ISSUE_SEVERITY.CONFLICT, "image_1_conflict", "Existing Image 1 differs from incoming row.", ["image_1_url"]);
-  }
-  if (image2Diff) {
-    addIssue(issues, ISSUE_SEVERITY.CONFLICT, "image_2_conflict", "Existing Image 2 differs from incoming row.", ["image_2_url"]);
-  }
-
-  const hasConflict = issues.some((issue) => issue.severity === ISSUE_SEVERITY.CONFLICT);
-  if (hasConflict) {
-    return "CONFLICT";
-  }
-
-  if (qtyDiff || remarkDiff || outsourcedDiff || vendorDiff) {
-    return "UPDATED";
-  }
-
-  return "EXISTING";
+  return (
+    partDiff
+    || typeDiff
+    || qtyDiff
+    || remarkDiff
+    || outsourcedDiff
+    || vendorDiff
+    || imageDiff
+    || existing.removed_from_latest_ingestion
+  )
+    ? "UPDATED"
+    : "EXISTING";
 }
 
 function buildValidationState(classification, issues) {
-  if (issues.length === 0) {
-    if (classification === "NEW") return "Safe to create";
-    if (classification === "UPDATED") return "Safe metadata update";
-    if (classification === "EXISTING") return "No production change";
-    return "Validated";
+  if (issues.length > 0) {
+    return issues.map((issue) => issue.message).join(" ");
   }
-
-  return issues.map((issue) => issue.message).join(" ");
+  if (classification === "NEW") return "Valid new fixture";
+  if (classification === "UPDATED") return "Valid fixture update";
+  if (classification === "EXISTING") return "Already matches project";
+  if (classification === "DUPLICATE") return "Duplicate imported row";
+  return "Validated";
 }
 
-function buildSummary(rows) {
+function buildSummary(rows, truth, context) {
+  const presentSet = new Set(
+    rows
+      .filter((row) => row.severity !== "error" && row.incoming?.fixture_no)
+      .map((row) => normalizeFixtureNo(row.incoming.fixture_no).toLowerCase()),
+  );
+  const deletedFixtureNos = context.upload_mode === "full_project_update"
+    ? truth.existing
+      .filter((fixture) => !fixture.removed_from_latest_ingestion)
+      .filter((fixture) => !presentSet.has(fixture.canonical_fixture_no.toLowerCase()))
+      .map((fixture) => fixture.fixture_no)
+    : [];
+
   return rows.reduce((acc, row) => {
     acc.total_rows += 1;
     acc.by_classification[row.classification] = (acc.by_classification[row.classification] || 0) + 1;
-    if (row.severity === "error") acc.error_rows += 1;
-    if (row.severity === "warning") acc.warning_rows += 1;
-    if (row.severity === "conflict") acc.conflict_rows += 1;
+    if (row.classification === "DUPLICATE") {
+      acc.duplicate_rows += 1;
+    }
+    if (row.severity === "error") {
+      acc.invalid_rows += 1;
+    } else {
+      acc.valid_rows += 1;
+      if (row.classification === "NEW") {
+        acc.new_fixture_nos.push(row.incoming.fixture_no);
+      }
+      if (row.classification === "UPDATED") {
+        acc.modified_fixture_nos.push(row.incoming.fixture_no);
+      }
+    }
     return acc;
   }, {
     total_rows: 0,
     by_classification: {},
-    error_rows: 0,
-    warning_rows: 0,
-    conflict_rows: 0,
+    valid_rows: 0,
+    invalid_rows: 0,
+    duplicate_rows: 0,
+    deleted_fixture_nos: deletedFixtureNos,
+    modified_fixture_nos: [],
+    new_fixture_nos: [],
   });
 }
 
@@ -291,16 +315,17 @@ async function validateNativeRows(user, payload = {}, client = pool) {
     let classification = "NEW";
     const key = row.fixture_no.toLowerCase();
 
-    if (!context.project_no) {
-      addIssue(issues, ISSUE_SEVERITY.ERROR, "project_no_required", "Project No is required before validation.", ["validation_state"]);
-    }
-    if (!context.customer) {
-      addIssue(issues, ISSUE_SEVERITY.ERROR, "customer_required", "Customer is required before validation.", ["validation_state"]);
+    if (!context.project_code || !context.project_name || !context.customer_name) {
+      addIssue(
+        issues,
+        ISSUE_SEVERITY.ERROR,
+        "project_identity_required",
+        "Project identity must include Project Number, Project Name, and Customer Name.",
+        ["validation_state"],
+      );
     }
     if (!row.fixture_no) {
       addIssue(issues, ISSUE_SEVERITY.ERROR, "fixture_no_required", "Fixture No is required.", ["fixture_no"]);
-    } else if (!FIXTURE_NO_PATTERN.test(row.fixture_no)) {
-      addIssue(issues, ISSUE_SEVERITY.ERROR, "fixture_no_malformed", "Fixture No must match PARC followed by at least three digits.", ["fixture_no"]);
     }
     if (!row.part_name) {
       addIssue(issues, ISSUE_SEVERITY.ERROR, "part_name_required", "Part Name is required.", ["part_name"]);
@@ -311,19 +336,31 @@ async function validateNativeRows(user, payload = {}, client = pool) {
     if (row.qty === null) {
       addIssue(issues, ISSUE_SEVERITY.ERROR, "qty_invalid", "Qty must be a positive whole number.", ["qty"]);
     }
-    if (row.is_outsourced && !row.vendor_name) {
-      addIssue(issues, ISSUE_SEVERITY.ERROR, "outsourced_vendor_required", "Vendor is required when Outsourced is checked.", ["vendor_name"]);
+    if (!isValidImageReference(row.reference_image_url)) {
+      addIssue(
+        issues,
+        ISSUE_SEVERITY.ERROR,
+        "image_malformed",
+        "Reference Image must be a URL, local staged upload path, or image data URL.",
+        ["reference_image_url"],
+      );
     }
-    if (!row.is_outsourced && row.vendor_name) {
-      addIssue(issues, ISSUE_SEVERITY.ERROR, "vendor_without_outsourcing", "Vendor must be empty when Outsourced is unchecked.", ["vendor_name", "is_outsourced"]);
+    if (row.is_outsourced && !row.vendor_name) {
+      addIssue(
+        issues,
+        ISSUE_SEVERITY.ERROR,
+        "outsourced_vendor_required",
+        "Vendor is required when Outsourced is checked.",
+        ["vendor_name"],
+      );
     }
     if (key && countsByFixture.get(key) > 1) {
       classification = "DUPLICATE";
       addIssue(
         issues,
         ISSUE_SEVERITY.ERROR,
-        "duplicate_fixture",
-        "Duplicate normalized Fixture No exists in this ingestion session.",
+        "duplicate_imported_row",
+        "Duplicate Fixture No exists in this import.",
         ["fixture_no"],
       );
     }
@@ -331,17 +368,27 @@ async function validateNativeRows(user, payload = {}, client = pool) {
     const hasHardError = issues.some((issue) => issue.severity === ISSUE_SEVERITY.ERROR);
     const existing = key ? existingByFixtureNo.get(key) || null : null;
     if (!hasHardError && classification !== "DUPLICATE") {
-      classification = existing ? classifyAgainstExisting(row, existing, context, issues) : "NEW";
+      classification = existing ? classifyAgainstExisting(row, existing) : "NEW";
     }
 
-    const hasConflict = issues.some((issue) => issue.severity === ISSUE_SEVERITY.CONFLICT);
     const severity = hasHardError
       ? "error"
-      : hasConflict
-        ? "conflict"
-        : issues.length > 0
-          ? "warning"
-          : "safe";
+      : issues.length > 0
+        ? "warning"
+        : "safe";
+
+    const normalized = {
+      fixture_no: row.fixture_no,
+      part_name: row.part_name,
+      fixture_type: row.fixture_type,
+      remark: row.remark,
+      qty: row.qty,
+      is_outsourced: row.is_outsourced,
+      vendor_name: row.vendor_name,
+      reference_image_url: row.reference_image_url,
+      image_1_url: row.reference_image_url,
+      image_2_url: null,
+    };
 
     return {
       row_id: row.row_id,
@@ -350,32 +397,16 @@ async function validateNativeRows(user, payload = {}, client = pool) {
       classification,
       severity,
       status: classification,
+      assigned_team: existing?.assigned_team || null,
       validation_state: buildValidationState(classification, issues),
       cell_states: cellStateFromIssues(issues),
       issues,
-      normalized: {
-        fixture_no: row.fixture_no,
-        part_name: row.part_name,
-        fixture_type: row.fixture_type,
-        remark: row.remark,
-        qty: row.qty,
-        is_outsourced: row.is_outsourced,
-        vendor_name: row.vendor_name,
-        image_1_url: row.image_1_url,
-        image_2_url: row.image_2_url,
-      },
+      normalized,
       incoming: {
         row_id: row.row_id,
         row_number: row.row_number,
-        fixture_no: row.fixture_no,
-        part_name: row.part_name,
-        fixture_type: row.fixture_type,
-        remark: row.remark,
-        qty: row.qty,
-        is_outsourced: row.is_outsourced,
-        vendor_name: row.vendor_name,
-        image_1_url: row.image_1_url,
-        image_2_url: row.image_2_url,
+        ...normalized,
+        assigned_team: existing?.assigned_team || null,
         image_storage: row.image_storage,
         raw_data: row.raw,
       },
@@ -390,8 +421,7 @@ async function validateNativeRows(user, payload = {}, client = pool) {
     },
     project: truth.project,
     rows: validationRows,
-    conflicts: validationRows.filter((row) => row.classification === "CONFLICT"),
-    summary: buildSummary(validationRows),
+    summary: buildSummary(validationRows, truth, context),
   };
 }
 

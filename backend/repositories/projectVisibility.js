@@ -143,9 +143,26 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
 }
 
 function projectOwnershipInVisibleUsersSql(projectAlias = "p", cteName = "visible_users") {
-  // Canonical ownership: project.created_by_user_id only
+  // Canonical ownership: project creator/uploader in the visible hierarchy.
   return `
-    COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+    (
+      COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
+      OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+    )
+  `;
+}
+
+function projectAssignmentInVisibleUsersSql(projectAlias = "p", cteName = "visible_users") {
+  return `
+    EXISTS (
+      SELECT 1
+      FROM design.fixtures visible_fixture
+      JOIN fixture_workflow_progress visible_progress
+        ON visible_progress.fixture_id = visible_fixture.id
+      WHERE visible_fixture.project_id = ${projectAlias}.id
+        AND visible_progress.assigned_to IN (SELECT employee_id FROM ${cteName})
+      LIMIT 1
+    )
   `;
 }
 
@@ -158,6 +175,7 @@ function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") 
         WHERE ${projectAuthoritySqlPredicate("root")}
       )
       OR (${projectOwnershipInVisibleUsersSql(projectAlias, cteName)})
+      OR (${projectAssignmentInVisibleUsersSql(projectAlias, cteName)})
     )
   `;
 }
@@ -282,6 +300,7 @@ module.exports = {
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,
   projectAuthoritySqlPredicate,
+  projectAssignmentInVisibleUsersSql,
   projectOwnershipInVisibleUsersSql,
   visibleFixturePredicate,
   visibleProjectPredicate,

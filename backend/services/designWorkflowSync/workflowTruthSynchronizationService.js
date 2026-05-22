@@ -71,11 +71,10 @@ function deriveOutsourcingState(incoming, existingRow, employeeId) {
 }
 
 function mergeImages(incoming, existing) {
-  const inc1 = incoming.image_1_url || null;
-  const inc2 = incoming.image_2_url || null;
+  const referenceImage = incoming.reference_image_url || incoming.image_1_url || null;
   return {
-    image_1_url: inc1 || existing.image_1_url || null,
-    image_2_url: inc2 || existing.image_2_url || null,
+    image_1_url: referenceImage || existing.image_1_url || null,
+    image_2_url: existing.image_2_url || null,
   };
 }
 
@@ -84,6 +83,27 @@ function resolveRemark(incoming, existing) {
     return collapseWhitespaceTrim(incoming.remark);
   }
   return existing.remark ?? null;
+}
+
+function comparable(value) {
+  return collapseWhitespaceTrim(value).toLowerCase();
+}
+
+function nullableText(value) {
+  const normalized = collapseWhitespaceTrim(value);
+  return normalized || null;
+}
+
+function safeFieldChanged(next, existing) {
+  return comparable(next.part_name) !== comparable(existing.part_name)
+    || comparable(next.fixture_type) !== comparable(existing.fixture_type)
+    || Number(next.qty) !== Number(existing.qty)
+    || nullableText(next.remark) !== nullableText(existing.remark)
+    || nullableText(next.image_1_url) !== nullableText(existing.image_1_url)
+    || nullableText(next.image_2_url) !== nullableText(existing.image_2_url)
+    || next.is_outsourced !== (existing.is_outsourced === true)
+    || nullableText(next.vendor_name) !== nullableText(existing.vendor_name)
+    || existing.removed_from_latest_ingestion === true;
 }
 
 /**
@@ -128,6 +148,7 @@ async function synchronizeDesignWorkflowTruthFromIngestion(client, params) {
     created_fixture_nos: [],
     updated_fixture_nos: [],
     archived_fixture_nos: [],
+    unchanged_fixture_nos: [],
     revived_fixture_count: 0,
     outsourcing_rows_touched: 0,
   };
@@ -158,8 +179,8 @@ async function synchronizeDesignWorkflowTruthFromIngestion(client, params) {
         fixture_type: raw.fixture_type,
         remark: resolveRemark(raw, { remark: null }),
         qty: raw.qty,
-        image_1_url: raw.image_1_url || null,
-        image_2_url: raw.image_2_url || null,
+        image_1_url: raw.reference_image_url || raw.image_1_url || null,
+        image_2_url: null,
         ingestion_source: ingestionSource,
         batch_id: batchId,
         is_outsourced: os.is_outsourced,
@@ -188,7 +209,7 @@ async function synchronizeDesignWorkflowTruthFromIngestion(client, params) {
       }
     }
 
-    rowsToUpdate.push({
+    const nextUpdate = {
       fixture_no: canonicalNo,
       part_name: raw.part_name,
       fixture_type: raw.fixture_type,
@@ -202,7 +223,13 @@ async function synchronizeDesignWorkflowTruthFromIngestion(client, params) {
       vendor_name: os.touched ? os.vendor_name : existing.vendor_name,
       outsourced_at: os.touched ? outsourced_at : existing.outsourced_at,
       outsourced_by: os.touched ? outsourced_by : existing.outsourced_by,
-    });
+    };
+
+    if (safeFieldChanged(nextUpdate, existing)) {
+      rowsToUpdate.push(nextUpdate);
+    } else {
+      audit.unchanged_fixture_nos.push(canonicalNo);
+    }
   }
 
   const inserted = await bulkInsertIngestionFixtures(rowsToInsert, client);

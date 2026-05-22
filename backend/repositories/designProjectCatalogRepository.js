@@ -61,6 +61,7 @@ function mapDepartmentProjectRow(row) {
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    was_created: row.was_created === true,
   };
 }
 
@@ -663,33 +664,46 @@ async function upsertProjectByNumber(project, client = pool) {
 
   const insertedProject = await client.query(
     `
-      INSERT INTO design.projects (
-        project_no,
-        project_name,
-        customer_name,
-        department_id,
-        uploaded_by,
-        created_by_user_id,
-        created_at,
-        updated_at
+      WITH existing_project AS (
+        SELECT id
+        FROM design.projects
+        WHERE project_no = $1
+          AND department_id = $4
+        LIMIT 1
+      ),
+      upserted_project AS (
+        INSERT INTO design.projects (
+          project_no,
+          project_name,
+          customer_name,
+          department_id,
+          uploaded_by,
+          created_by_user_id,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+        ON CONFLICT (project_no, department_id) DO UPDATE
+        SET project_name = EXCLUDED.project_name,
+            customer_name = EXCLUDED.customer_name,
+            uploaded_by = EXCLUDED.uploaded_by,
+            updated_at = NOW()
+        RETURNING
+          id AS project_id,
+          project_no,
+          project_name,
+          customer_name,
+          department_id,
+          COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
+          uploaded_by,
+          created_by_user_id,
+          created_at,
+          updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-      ON CONFLICT (project_no, department_id) DO UPDATE
-      SET project_name = EXCLUDED.project_name,
-          customer_name = EXCLUDED.customer_name,
-          uploaded_by = EXCLUDED.uploaded_by,
-          updated_at = NOW()
-      RETURNING
-        id AS project_id,
-        project_no,
-        project_name,
-        customer_name,
-        department_id,
-        COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
-        uploaded_by,
-        created_by_user_id,
-        created_at,
-        updated_at
+      SELECT
+        upserted_project.*,
+        NOT EXISTS (SELECT 1 FROM existing_project) AS was_created
+      FROM upserted_project
     `,
     [
       project.project_no,
@@ -702,6 +716,23 @@ async function upsertProjectByNumber(project, client = pool) {
   );
 
   return mapDesignProjectRow(insertedProject.rows[0]);
+}
+
+async function findActiveUploadBatchIdForProject(projectId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT id
+      FROM design.upload_batches
+      WHERE project_id = $1
+        AND COALESCE(status, 'active') = 'active'
+      ORDER BY uploaded_at DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [projectId],
+  );
+
+  return result.rows[0]?.id || null;
 }
 
 async function listFixturesByProjectForDepartment(projectId, departmentId, { activeOnly = false } = {}, client = pool) {
@@ -1271,6 +1302,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   createUploadErrors,
   createUploadRowCorrections,
   findDepartmentProjectByIdForDepartment,
+  findActiveUploadBatchIdForProject,
   findFixtureByIdForDepartment,
   findFixtureByIdForUser,
   findFixturesByProjectForDedupe,

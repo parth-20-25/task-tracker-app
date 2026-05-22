@@ -5,7 +5,7 @@
  * SAFE TO APPLY FROM INGESTION (metadata / catalog truth only):
  * - part_name, fixture_type, qty
  * - remark (remarks / notes from sheet)
- * - image_1_url, image_2_url (reference imagery from extraction — never replaces proof/verification tables)
+ * - image_1_url (native reference image; image_2_url remains legacy-compatible and is not populated by native upload)
  * - ingestion_source, batch_id (provenance of last catalog write)
  * - is_outsourced, vendor_name, outsourced_at, outsourced_by (only when ingestion explicitly supplies outsourcing intent)
  *

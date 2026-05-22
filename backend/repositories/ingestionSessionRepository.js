@@ -42,12 +42,12 @@ async function getDraftIngestionSessionForUser(sessionId, departmentId, employee
       SELECT *
       FROM design.ingestion_sessions
       WHERE id = $1
-        AND department_id = $2
-        AND created_by_employee_id = $3
+        AND created_by_employee_id = $2
+        AND ($3::text IS NULL OR department_id IS NULL OR department_id = $3)
         AND status = 'draft'
         AND expires_at > NOW()
     `,
-    [sessionId, departmentId, employeeId],
+    [sessionId, employeeId, departmentId || null],
   );
 
   return result.rows[0] || null;
@@ -70,7 +70,7 @@ async function markIngestionSessionCommitted(sessionId, batchId, client) {
 async function getIngestionSessionById(sessionId, client = pool) {
   const result = await client.query(
     `
-      SELECT id, status, expires_at, file_info, snapshot, committed_batch_id
+      SELECT id, status, expires_at, file_info, snapshot, committed_batch_id, department_id
       FROM design.ingestion_sessions
       WHERE id = $1
     `,
@@ -80,12 +80,13 @@ async function getIngestionSessionById(sessionId, client = pool) {
   return result.rows[0] || null;
 }
 
-async function finalizeIngestionSessionPreview(sessionId, { snapshot, file_info: fileInfo }, client = pool) {
+async function finalizeIngestionSessionPreview(sessionId, { snapshot, file_info: fileInfo, department_id: departmentId }, client = pool) {
   await client.query(
     `
       UPDATE design.ingestion_sessions
       SET snapshot = $2::jsonb,
           file_info = COALESCE($3::jsonb, file_info),
+          department_id = COALESCE($4::text, department_id),
           updated_at = NOW()
       WHERE id = $1
         AND status = 'draft'
@@ -94,6 +95,7 @@ async function finalizeIngestionSessionPreview(sessionId, { snapshot, file_info:
       sessionId,
       JSON.stringify(snapshot || {}),
       fileInfo ? JSON.stringify(fileInfo) : null,
+      departmentId || null,
     ],
   );
 }

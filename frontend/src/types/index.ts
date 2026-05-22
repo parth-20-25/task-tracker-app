@@ -33,7 +33,7 @@ export interface User {
   role_id: string;
   permissions?: string[];
   role?: Role;
-  department_id: string;
+  department_id: string | null;
   department?: Department;
   is_active: boolean;
   created_at: string;

@@ -15,20 +15,6 @@ export function createNativeIngestionSession(context: NativeIngestionContext) {
   });
 }
 
-export function saveNativeIngestionDraft(
-  sessionId: string,
-  context: NativeIngestionContext,
-  rows: NativeIngestionRow[],
-) {
-  return apiRequest<{ session_id: string; saved_at: string; row_count: number }>(
-    `/design/native-ingestion/sessions/${encodeURIComponent(sessionId)}/draft`,
-    {
-      method: "POST",
-      body: JSON.stringify({ context, rows }),
-    },
-  );
-}
-
 export function importNativeIngestionExcel(
   sessionId: string,
   context: NativeIngestionContext,
@@ -79,7 +65,6 @@ export function stageNativeIngestionImage(
   sessionId: string,
   context: NativeIngestionContext,
   row: NativeIngestionRow,
-  imageSlot: "image_1_url" | "image_2_url",
   file: File,
 ) {
   const form = new FormData();
@@ -87,7 +72,7 @@ export function stageNativeIngestionImage(
   form.append("context", JSON.stringify(context));
   form.append("row_id", row.row_id);
   form.append("fixture_no", row.fixture_no);
-  form.append("image_slot", imageSlot);
+  form.append("image_slot", "reference_image_url");
 
   return apiRequest<NativeStageImageResponse>(
     `/design/native-ingestion/sessions/${encodeURIComponent(sessionId)}/images/stage`,
@@ -102,13 +87,12 @@ export function commitNativeIngestion(
   sessionId: string,
   context: NativeIngestionContext,
   rows: NativeIngestionRow[],
-  resolutions: Record<string, "merge" | "replace" | "skip">,
 ) {
   return apiRequest<NativeCommitResponse>(
     `/design/native-ingestion/sessions/${encodeURIComponent(sessionId)}/commit`,
     {
       method: "POST",
-      body: JSON.stringify({ context, rows, resolutions }),
+      body: JSON.stringify({ context, rows }),
     },
   );
 }

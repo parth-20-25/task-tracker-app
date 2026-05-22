@@ -3,30 +3,31 @@ export type NativeClassification =
   | "UPDATED"
   | "EXISTING"
   | "DUPLICATE"
-  | "CONFLICT"
   | "INVALID";
 
-export type NativeSeverity = "safe" | "warning" | "conflict" | "error" | "idle";
+export type NativeSeverity = "safe" | "warning" | "error" | "idle";
+export type NativeUploadMode = "full_project_update" | "fixture_delta";
 
 export interface NativeIngestionContext {
-  project_no: string;
-  customer: string;
+  project_identity: string;
+  project_code: string;
+  project_name: string;
+  customer_name: string;
   department_id: string;
   department_name: string;
-  vendor: string;
-  operational_batch: string;
-  revision: string;
-  upload_source: string;
+  upload_mode: NativeUploadMode;
 }
 
 export interface NativeImageStorageMeta {
+  adapter?: "supabase" | "local";
   bucket?: string;
   path: string;
   staging: boolean;
+  warning?: string;
 }
 
 export interface NativeIngestionIssue {
-  severity: "error" | "warning" | "conflict";
+  severity: "error" | "warning";
   code: string;
   message: string;
   columns: NativeEditableColumn[];
@@ -39,12 +40,11 @@ export interface NativeExistingFixture {
   fixture_type: string;
   remark: string | null;
   qty: number;
-  image_1_url: string | null;
-  image_2_url: string | null;
-  revision_no: number;
+  reference_image_url: string | null;
   is_workflow_complete: boolean;
   is_outsourced: boolean;
   vendor_name: string | null;
+  assigned_team: string | null;
 }
 
 export interface NativeIngestionRow {
@@ -56,17 +56,18 @@ export interface NativeIngestionRow {
   fixture_type: string;
   remark: string;
   qty: string;
+  assigned_team?: string;
   is_outsourced: boolean;
   vendor_name: string;
-  image_1_url: string;
-  image_2_url: string;
+  reference_image_url: string;
   validation_state?: string;
   classification?: NativeClassification;
   severity?: NativeSeverity;
   cell_states?: Partial<Record<NativeEditableColumn | "validation_state", NativeSeverity>>;
   issues?: NativeIngestionIssue[];
   existing?: NativeExistingFixture | null;
-  image_storage?: Partial<Record<"image_1_url" | "image_2_url", NativeImageStorageMeta>>;
+  image_storage?: Partial<Record<"reference_image_url", NativeImageStorageMeta>>;
+  storage_warning?: string | null;
 }
 
 export interface NativeSessionResponse {
@@ -79,9 +80,12 @@ export interface NativeSessionResponse {
 export interface NativeValidationSummary {
   total_rows: number;
   by_classification: Record<string, number>;
-  error_rows: number;
-  warning_rows: number;
-  conflict_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  duplicate_rows: number;
+  deleted_fixture_nos?: string[];
+  modified_fixture_nos?: string[];
+  new_fixture_nos?: string[];
 }
 
 export interface NativeValidatedRow {
@@ -102,10 +106,10 @@ export interface NativeValidatedRow {
     fixture_type: string;
     remark: string | null;
     qty: number | null;
+    assigned_team?: string | null;
     is_outsourced: boolean;
     vendor_name: string | null;
-    image_1_url: string | null;
-    image_2_url: string | null;
+    reference_image_url: string | null;
     image_storage?: NativeIngestionRow["image_storage"];
   };
 }
@@ -114,24 +118,28 @@ export interface NativeValidationResponse {
   session_id: string;
   context: NativeIngestionContext;
   rows: NativeValidatedRow[];
-  conflicts: NativeValidatedRow[];
   summary: NativeValidationSummary;
 }
 
 export interface NativeStageImageResponse {
   public_url: string;
-  image_slot: "image_1_url" | "image_2_url";
+  image_slot: "reference_image_url";
   storage: NativeImageStorageMeta;
+  warning?: string | null;
 }
 
 export interface NativeCommitResponse {
   success: boolean;
   session_id: string;
-  batch_id: string;
+  batch_id: string | null;
+  project_id: string;
+  project_code: string;
+  project_was_created: boolean;
   accepted_count: number;
   created_fixture_nos: string[];
   updated_fixture_nos: string[];
-  skipped_count: number;
+  deleted_fixture_nos: string[];
+  unchanged_fixture_nos: string[];
 }
 
 export const NATIVE_COLUMNS = [
@@ -139,12 +147,12 @@ export const NATIVE_COLUMNS = [
   "fixture_no",
   "part_name",
   "fixture_type",
-  "remark",
   "qty",
+  "assigned_team",
+  "reference_image_url",
+  "remark",
   "is_outsourced",
   "vendor_name",
-  "image_1_url",
-  "image_2_url",
   "validation_state",
 ] as const;
 
@@ -158,17 +166,15 @@ export type NativeEditableColumn =
   | "qty"
   | "is_outsourced"
   | "vendor_name"
-  | "image_1_url"
-  | "image_2_url";
+  | "reference_image_url";
 
 export const NATIVE_EDITABLE_COLUMNS: NativeEditableColumn[] = [
   "fixture_no",
   "part_name",
   "fixture_type",
-  "remark",
   "qty",
+  "reference_image_url",
+  "remark",
   "is_outsourced",
   "vendor_name",
-  "image_1_url",
-  "image_2_url",
 ];

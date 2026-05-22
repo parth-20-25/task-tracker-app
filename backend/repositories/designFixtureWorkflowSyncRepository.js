@@ -144,6 +144,8 @@ async function bulkUpdateIngestionSafeFixtureFields(rows, projectId, client) {
         vendor_name = v.vendor_name,
         outsourced_at = v.outsourced_at,
         outsourced_by = v.outsourced_by,
+        removed_from_latest_ingestion = FALSE,
+        ingestion_archived_at = NULL,
         updated_at = NOW()
       FROM (
         VALUES ${placeholders.join(",\n")}

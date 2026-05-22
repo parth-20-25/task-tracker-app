@@ -1,22 +1,21 @@
 import React, { useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Clipboard,
   Download,
   FileSpreadsheet,
-  Save,
   ShieldCheck,
   UploadCloud,
   X,
 } from "lucide-react";
+import { fetchAllDepartments } from "@/api/adminApi";
 import {
   commitNativeIngestion,
   createNativeIngestionSession,
   downloadNativeIngestionTemplate,
   importNativeIngestionExcel,
   pasteNativeIngestionClipboard,
-  saveNativeIngestionDraft,
   stageNativeIngestionImage,
   validateNativeIngestion,
 } from "@/api/nativeIngestionApi";
@@ -25,6 +24,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MorphLoader } from "@/components/ui/morph-loader";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
 import { cn } from "@/lib/utils";
@@ -32,29 +38,23 @@ import type {
   NativeCommitResponse,
   NativeIngestionContext,
   NativeIngestionRow,
+  NativeUploadMode,
   NativeValidationSummary,
 } from "./NativeIngestionTypes";
-import { NativeConflictPanel } from "./NativeConflictPanel";
 import { NativeSpreadsheetGrid } from "./NativeSpreadsheetGrid";
 import {
   buildInitialRows,
   contextReady,
   defaultNativeContext,
+  formatProjectIdentity,
+  hydrateProjectIdentityContext,
   mergeValidationRows,
   nativeRowHasData,
+  normalizeUploadMode,
   padRows,
 } from "./nativeIngestionUtils";
 
-type BusyAction =
-  | "open"
-  | "import"
-  | "paste"
-  | "template"
-  | "validate"
-  | "draft"
-  | "commit"
-  | "image"
-  | null;
+type BusyAction = "open" | "import" | "paste" | "template" | "validate" | "commit" | "image" | null;
 
 function SummaryPill({
   label,
@@ -63,12 +63,11 @@ function SummaryPill({
 }: {
   label: string;
   value: number;
-  tone: "green" | "amber" | "orange" | "red" | "slate";
+  tone: "green" | "amber" | "red" | "slate";
 }) {
   const toneClass = {
     green: "border-emerald-200 bg-emerald-50 text-emerald-800",
     amber: "border-amber-200 bg-amber-50 text-amber-800",
-    orange: "border-orange-200 bg-orange-50 text-orange-800",
     red: "border-red-200 bg-red-50 text-red-800",
     slate: "border-slate-200 bg-slate-50 text-slate-700",
   }[tone];
@@ -81,16 +80,40 @@ function SummaryPill({
   );
 }
 
+export function NativeFixtureIngestionLauncher() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        className="h-auto min-h-16 justify-start gap-3 border-primary/30 bg-white px-4 py-3 text-left shadow-sm hover:bg-primary/5"
+        onClick={() => setOpen(true)}
+      >
+        <FileSpreadsheet className="h-5 w-5 text-primary" />
+        <span>
+          <span className="block font-semibold">Native Fixture Upload</span>
+          <span className="block text-xs text-muted-foreground">Production spreadsheet workspace</span>
+        </span>
+      </Button>
+      {open ? <WorkspaceSurface onClose={() => setOpen(false)} /> : null}
+    </>
+  );
+}
+
 function ContextInput({
   label,
   value,
   onChange,
   readOnly,
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange?: (value: string) => void;
   readOnly?: boolean;
+  placeholder?: string;
 }) {
   return (
     <div className="min-w-0">
@@ -98,6 +121,7 @@ function ContextInput({
       <Input
         value={value}
         readOnly={readOnly}
+        placeholder={placeholder}
         onChange={(event) => onChange?.(event.target.value)}
         className={cn("h-9 bg-white text-sm", readOnly && "bg-slate-50 text-slate-500")}
       />
@@ -114,27 +138,36 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [sessionId, setSessionId] = useState<string>("");
-  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
   const [context, setContext] = useState<NativeIngestionContext>(() => defaultNativeContext(user));
   const [rows, setRows] = useState<NativeIngestionRow[]>(() => buildInitialRows());
   const [summary, setSummary] = useState<NativeValidationSummary | null>(null);
-  const [focusedConflict, setFocusedConflict] = useState<NativeIngestionRow | null>(null);
-  const [resolutions, setResolutions] = useState<Record<string, "merge" | "replace" | "skip">>({});
   const [busy, setBusy] = useState<BusyAction>("open");
   const [lastCommit, setLastCommit] = useState<NativeCommitResponse | null>(null);
 
+  const needsDepartmentSelector = !context.department_id;
+  const departmentsQuery = useQuery({
+    queryKey: ["native-ingestion", "departments"],
+    queryFn: fetchAllDepartments,
+    enabled: needsDepartmentSelector,
+    staleTime: 5 * 60_000,
+  });
+
   React.useEffect(() => {
+    if (sessionId) {
+      return;
+    }
+
     let mounted = true;
     setBusy("open");
     void createNativeIngestionSession(context)
       .then((session) => {
         if (!mounted) return;
         setSessionId(session.session_id);
-        setSessionExpiresAt(session.expires_at);
         setContext((current) => ({
           ...current,
           ...session.context,
-          operational_batch: current.operational_batch,
+          project_identity: current.project_identity || session.context.project_identity || formatProjectIdentity(session.context),
+          upload_mode: normalizeUploadMode(current.upload_mode || session.context.upload_mode),
         }));
         setRows(padRows(session.rows?.length ? session.rows : rows));
       })
@@ -144,7 +177,6 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
           description: error instanceof Error ? error.message : "Could not create ingestion session",
           variant: "destructive",
         });
-        onClose();
       })
       .finally(() => mounted && setBusy(null));
 
@@ -152,34 +184,51 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
       mounted = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- create one backend session per workspace open
-  }, []);
+  }, [sessionId]);
 
   const busyLabel = busy ? busy.charAt(0).toUpperCase() + busy.slice(1) : "";
   const isBusy = busy !== null;
-  const conflictRows = rows.filter((row) => row.classification === "CONFLICT");
-  const unresolvedConflictCount = conflictRows.filter((row) => !resolutions[row.row_id]).length;
   const rowCounts = useMemo(() => {
     const populated = rows.filter(nativeRowHasData).length;
+    const duplicateRows = rows.filter((row) => row.classification === "DUPLICATE").length;
+    const invalidRows = rows.filter((row) => row.severity === "error").length;
     return {
       populated,
-      errors: rows.filter((row) => row.severity === "error").length,
-      conflicts: conflictRows.length,
-      safe: rows.filter((row) => row.severity === "safe").length,
+      valid: Math.max(0, populated - invalidRows),
+      invalid: invalidRows,
+      duplicate: duplicateRows,
     };
-  }, [conflictRows.length, rows]);
+  }, [rows]);
 
   const updateContext = (patch: Partial<NativeIngestionContext>) => {
     setContext((current) => ({ ...current, ...patch }));
+    setSummary(null);
+    setLastCommit(null);
+  };
+
+  const updateProjectIdentity = (value: string) => {
+    setContext((current) => hydrateProjectIdentityContext(current, value));
+    setSummary(null);
+    setLastCommit(null);
+  };
+
+  const requireSession = () => {
+    if (sessionId) return true;
+    toast({
+      title: "Department required",
+      description: "Choose a department before starting the native ingestion session.",
+      variant: "destructive",
+    });
+    return false;
   };
 
   const runImport = async (file: File) => {
-    if (!sessionId) return;
+    if (!requireSession()) return;
     setBusy("import");
     try {
       const result = await importNativeIngestionExcel(sessionId, context, file);
       setRows(padRows(result.rows));
       setSummary(null);
-      setResolutions({});
       toast({ title: "Workbook imported", description: `${result.rows.length} row(s) loaded from ${result.sheet_name}` });
     } catch (error) {
       toast({
@@ -193,14 +242,13 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
   };
 
   const runPasteFromClipboard = async () => {
-    if (!sessionId) return;
+    if (!requireSession()) return;
     setBusy("paste");
     try {
       const text = await navigator.clipboard.readText();
       const result = await pasteNativeIngestionClipboard(sessionId, context, text);
       setRows(padRows(result.rows));
       setSummary(null);
-      setResolutions({});
       toast({ title: "Clipboard pasted", description: `${result.rows.length} row(s) loaded into session state` });
     } catch (error) {
       toast({
@@ -214,11 +262,15 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
   };
 
   const runValidate = async () => {
-    if (!sessionId) return;
+    if (!requireSession()) return;
     setBusy("validate");
     try {
       const validation = await validateNativeIngestion(sessionId, context, rows);
-      setContext((current) => ({ ...current, ...validation.context }));
+      setContext((current) => ({
+        ...current,
+        ...validation.context,
+        upload_mode: normalizeUploadMode(current.upload_mode),
+      }));
       setRows(padRows(mergeValidationRows(rows, validation), rows.length));
       setSummary(validation.summary);
       toast({ title: "Validation complete", description: `${validation.summary.total_rows} populated row(s) checked` });
@@ -233,34 +285,19 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
     }
   };
 
-  const runSaveDraft = async () => {
-    if (!sessionId) return;
-    setBusy("draft");
-    try {
-      const result = await saveNativeIngestionDraft(sessionId, context, rows);
-      toast({ title: "Draft saved", description: `${result.row_count} row(s) saved to ingestion session` });
-    } catch (error) {
-      toast({
-        title: "Draft save failed",
-        description: error instanceof Error ? error.message : "Draft could not be saved",
-        variant: "destructive",
-      });
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const runCommit = async () => {
-    if (!sessionId) return;
+    if (!requireSession()) return;
     setBusy("commit");
     try {
-      const result = await commitNativeIngestion(sessionId, context, rows, resolutions);
+      const result = await commitNativeIngestion(sessionId, context, rows);
       setLastCommit(result);
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast({
         title: "Native transaction committed",
-        description: `Batch ${result.batch_id.slice(0, 8)} saved ${result.accepted_count} fixture change(s)`,
+        description: result.batch_id
+          ? `Batch ${result.batch_id.slice(0, 8)} saved ${result.accepted_count} fixture change(s)`
+          : `${result.accepted_count} fixture change(s) accepted`,
       });
     } catch (error) {
       toast({
@@ -288,24 +325,21 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
     }
   };
 
-  const runStageImage = async (
-    row: NativeIngestionRow,
-    imageSlot: "image_1_url" | "image_2_url",
-    file: File,
-  ) => {
-    if (!sessionId) return;
+  const runStageImage = async (row: NativeIngestionRow, file: File) => {
+    if (!requireSession()) return;
     setBusy("image");
     try {
-      const staged = await stageNativeIngestionImage(sessionId, context, row, imageSlot, file);
+      const staged = await stageNativeIngestionImage(sessionId, context, row, file);
       setRows((current) => current.map((item) => (
         item.row_id === row.row_id
           ? {
             ...item,
-            [imageSlot]: staged.public_url,
+            reference_image_url: staged.public_url,
             image_storage: {
               ...(item.image_storage || {}),
-              [imageSlot]: staged.storage,
+              reference_image_url: staged.storage,
             },
+            storage_warning: staged.warning || null,
             validation_state: "Image staged, validate before commit",
           }
           : item
@@ -322,6 +356,19 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
     }
   };
 
+  const departmentOptions = (departmentsQuery.data ?? []).filter((department) => department.is_active !== false);
+  const updateDepartment = (departmentId: string) => {
+    const department = departmentOptions.find((item) => item.id === departmentId);
+    updateContext({
+      department_id: departmentId,
+      department_name: department?.name || departmentId,
+    });
+  };
+
+  const updateUploadMode = (value: NativeUploadMode) => {
+    updateContext({ upload_mode: value });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-100 text-slate-950">
       <div className="flex shrink-0 items-center justify-between border-b bg-white px-4 py-3">
@@ -332,14 +379,13 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold">Native Fixture Ingestion Workspace</h2>
             <p className="truncate text-xs text-slate-500">
-              Session {sessionId ? sessionId.slice(0, 8) : "starting"}
-              {sessionExpiresAt ? ` · expires ${new Date(sessionExpiresAt).toLocaleString()}` : ""}
+              Session {sessionId ? sessionId.slice(0, 8) : "not started"}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {lastCommit ? (
+          {lastCommit?.batch_id ? (
             <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
               <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
               Batch {lastCommit.batch_id.slice(0, 8)}
@@ -358,14 +404,51 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
       </div>
 
       <div className="shrink-0 border-b bg-slate-50 px-4 py-3">
-        <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
-          <ContextInput label="Project No" value={context.project_no} onChange={(value) => updateContext({ project_no: value })} />
-          <ContextInput label="Customer" value={context.customer} onChange={(value) => updateContext({ customer: value })} />
-          <ContextInput label="Department" value={context.department_name || context.department_id} readOnly />
-          <ContextInput label="Vendor" value={context.vendor} onChange={(value) => updateContext({ vendor: value })} />
-          <ContextInput label="Operational Batch" value={context.operational_batch} onChange={(value) => updateContext({ operational_batch: value })} />
-          <ContextInput label="Revision" value={context.revision} onChange={(value) => updateContext({ revision: value })} />
-          <ContextInput label="Upload Source" value={context.upload_source} readOnly />
+        <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
+          <ContextInput
+            label="Project"
+            value={context.project_identity}
+            placeholder="PARC001 - Project - Customer"
+            onChange={updateProjectIdentity}
+          />
+          <ContextInput label="Project Code" value={context.project_code} readOnly />
+          <ContextInput label="Project Name" value={context.project_name} readOnly />
+          <ContextInput label="Customer" value={context.customer_name} readOnly />
+          {needsDepartmentSelector ? (
+            <div className="min-w-0">
+              <Label className="mb-1 block text-[11px] font-semibold uppercase text-slate-500">Department</Label>
+              <Select
+                value={context.department_id || undefined}
+                onValueChange={updateDepartment}
+                disabled={departmentsQuery.isLoading || departmentOptions.length === 0}
+              >
+                <SelectTrigger className="h-9 bg-white text-sm">
+                  <SelectValue placeholder={departmentsQuery.isLoading ? "Loading departments" : "Select department"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {departmentOptions.map((department) => (
+                    <SelectItem key={department.id} value={department.id}>
+                      {department.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <ContextInput label="Department" value={context.department_name || context.department_id} readOnly />
+          )}
+          <div className="min-w-0">
+            <Label className="mb-1 block text-[11px] font-semibold uppercase text-slate-500">Upload Mode</Label>
+            <Select value={context.upload_mode} onValueChange={(value) => updateUploadMode(normalizeUploadMode(value))}>
+              <SelectTrigger className="h-9 bg-white text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="full_project_update">Full Project Update</SelectItem>
+                <SelectItem value="fixture_delta">Fixture Delta</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -383,11 +466,11 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
             event.currentTarget.value = "";
           }}
         />
-        <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => fileInputRef.current?.click()}>
+        <Button type="button" size="sm" variant="outline" disabled={isBusy || !sessionId} onClick={() => fileInputRef.current?.click()}>
           <UploadCloud className="mr-2 h-4 w-4" />
           Import Excel
         </Button>
-        <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={runPasteFromClipboard}>
+        <Button type="button" size="sm" variant="outline" disabled={isBusy || !sessionId} onClick={runPasteFromClipboard}>
           <Clipboard className="mr-2 h-4 w-4" />
           Paste From Clipboard
         </Button>
@@ -395,18 +478,14 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
           <Download className="mr-2 h-4 w-4" />
           Download Template
         </Button>
-        <Button type="button" size="sm" variant="outline" disabled={isBusy || !contextReady(context)} onClick={runValidate}>
+        <Button type="button" size="sm" variant="outline" disabled={isBusy || !sessionId || !contextReady(context)} onClick={runValidate}>
           <ShieldCheck className="mr-2 h-4 w-4" />
           Validate
-        </Button>
-        <Button type="button" size="sm" variant="outline" disabled={isBusy || !sessionId} onClick={runSaveDraft}>
-          <Save className="mr-2 h-4 w-4" />
-          Save Draft
         </Button>
         <Button
           type="button"
           size="sm"
-          disabled={isBusy || !sessionId || unresolvedConflictCount > 0 || !contextReady(context)}
+          disabled={isBusy || !sessionId || !contextReady(context)}
           onClick={runCommit}
         >
           <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -415,10 +494,9 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <SummaryPill label="Rows" value={summary?.total_rows ?? rowCounts.populated} tone="slate" />
-          <SummaryPill label="Safe" value={rowCounts.safe} tone="green" />
-          <SummaryPill label="Warnings" value={summary?.warning_rows ?? 0} tone="amber" />
-          <SummaryPill label="Conflicts" value={rowCounts.conflicts} tone="orange" />
-          <SummaryPill label="Errors" value={rowCounts.errors} tone="red" />
+          <SummaryPill label="Valid" value={summary?.valid_rows ?? rowCounts.valid} tone="green" />
+          <SummaryPill label="Duplicates" value={summary?.duplicate_rows ?? rowCounts.duplicate} tone="amber" />
+          <SummaryPill label="Invalid" value={summary?.invalid_rows ?? rowCounts.invalid} tone="red" />
         </div>
       </div>
 
@@ -429,43 +507,11 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
             setRows(padRows(next, next.length));
             setLastCommit(null);
           }}
-          onFocusConflict={setFocusedConflict}
           onStageImage={runStageImage}
           isBusy={isBusy}
-        />
-        <NativeConflictPanel
-          rows={rows}
-          focusedRow={focusedConflict}
-          resolutions={resolutions}
-          onFocusRow={setFocusedConflict}
-          onResolutionChange={(rowId, resolution) => setResolutions((current) => ({
-            ...current,
-            [rowId]: resolution,
-          }))}
         />
       </div>
     </div>
   );
 }
 
-export function NativeFixtureIngestionLauncher() {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        className="h-auto min-h-16 justify-start gap-3 border-primary/30 bg-white px-4 py-3 text-left shadow-sm hover:bg-primary/5"
-        onClick={() => setOpen(true)}
-      >
-        <FileSpreadsheet className="h-5 w-5 text-primary" />
-        <span>
-          <span className="block font-semibold">Native Fixture Upload</span>
-          <span className="block text-xs text-muted-foreground">Spreadsheet ingestion workspace</span>
-        </span>
-      </Button>
-      {open ? <WorkspaceSurface onClose={() => setOpen(false)} /> : null}
-    </>
-  );
-}

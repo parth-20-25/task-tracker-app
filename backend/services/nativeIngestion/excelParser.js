@@ -6,29 +6,25 @@ const {
 } = require("./normalization");
 
 const TEMPLATE_HEADERS = [
-  "Status",
   "Fixture No",
   "Part Name",
   "Fixture Type",
-  "Remark",
   "Qty",
+  "Reference Image",
+  "Remarks",
   "Outsourced",
   "Vendor",
-  "Image 1",
-  "Image 2",
-  "Validation State",
 ];
 
 const DATA_HEADERS = [
   "fixture_no",
   "part_name",
   "fixture_type",
-  "remark",
   "qty",
+  "reference_image_url",
+  "remark",
   "is_outsourced",
   "vendor_name",
-  "image_1_url",
-  "image_2_url",
 ];
 
 const HEADER_ALIASES = {
@@ -47,10 +43,11 @@ const HEADER_ALIASES = {
   outsource: "is_outsourced",
   vendor: "vendor_name",
   vendorname: "vendor_name",
-  image1: "image_1_url",
-  partimage: "image_1_url",
-  image2: "image_2_url",
-  fixtureimage: "image_2_url",
+  image1: "reference_image_url",
+  referenceimage: "reference_image_url",
+  refimage: "reference_image_url",
+  partimage: "reference_image_url",
+  fixtureimage: "reference_image_url",
   validationstate: "validation_state",
 };
 
@@ -100,29 +97,26 @@ function mapRowWithHeader(row, rowNumber, headerMap) {
     fixture_no: cellText(row[headerMap.get("fixture_no")]),
     part_name: cellText(row[headerMap.get("part_name")]),
     fixture_type: cellText(row[headerMap.get("fixture_type")]),
-    remark: cellText(row[headerMap.get("remark")]),
     qty: cellText(row[headerMap.get("qty")]),
+    reference_image_url: cellText(row[headerMap.get("reference_image_url")]),
+    remark: cellText(row[headerMap.get("remark")]),
     is_outsourced: normalizeBoolean(row[headerMap.get("is_outsourced")]),
     vendor_name: cellText(row[headerMap.get("vendor_name")]),
-    image_1_url: cellText(row[headerMap.get("image_1_url")]),
-    image_2_url: cellText(row[headerMap.get("image_2_url")]),
   };
 }
 
 function mapRowByTemplateOrder(row, rowNumber) {
-  const offset = row.length >= TEMPLATE_HEADERS.length ? 1 : 0;
   return {
     row_id: `excel-${rowNumber}`,
     row_number: rowNumber,
-    fixture_no: cellText(row[offset + 0]),
-    part_name: cellText(row[offset + 1]),
-    fixture_type: cellText(row[offset + 2]),
-    remark: cellText(row[offset + 3]),
-    qty: cellText(row[offset + 4]),
-    is_outsourced: normalizeBoolean(row[offset + 5]),
-    vendor_name: cellText(row[offset + 6]),
-    image_1_url: cellText(row[offset + 7]),
-    image_2_url: cellText(row[offset + 8]),
+    fixture_no: cellText(row[0]),
+    part_name: cellText(row[1]),
+    fixture_type: cellText(row[2]),
+    qty: cellText(row[3]),
+    reference_image_url: cellText(row[4]),
+    remark: cellText(row[5]),
+    is_outsourced: normalizeBoolean(row[6]),
+    vendor_name: cellText(row[7]),
   };
 }
 
@@ -208,24 +202,29 @@ function parseNativeClipboard(text) {
 function buildNativeTemplateWorkbook() {
   const worksheet = XLSX.utils.aoa_to_sheet([
     TEMPLATE_HEADERS,
-    ["", "PARC001", "RH Bracket", "Checking Fixture", "", "1", "FALSE", "", "", "", ""],
+    ["PARC001", "RH Bracket", "Checking Fixture", "1", "paste/upload one reference image in workspace", "Use production fixture remarks here", "FALSE", ""],
+  ]);
+  const notes = XLSX.utils.aoa_to_sheet([
+    ["Native Fixture Ingestion Template"],
+    ["Project identity is entered in the workspace, not in this sheet."],
+    ["Required columns: Fixture No, Part Name, Fixture Type, Qty."],
+    ["Reference Image: paste, drag-drop, or upload one image per fixture row in the workspace. URLs are accepted when already hosted."],
+    ["Outsourced and Vendor are optional row-level fields; Vendor is required only when Outsourced is TRUE."],
   ]);
   worksheet["!cols"] = [
-    { wch: 14 },
     { wch: 18 },
     { wch: 28 },
     { wch: 24 },
-    { wch: 28 },
     { wch: 10 },
+    { wch: 28 },
+    { wch: 28 },
     { wch: 14 },
     { wch: 22 },
-    { wch: 28 },
-    { wch: 28 },
-    { wch: 34 },
   ];
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Native Ingestion");
+  XLSX.utils.book_append_sheet(workbook, notes, "Instructions");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
 

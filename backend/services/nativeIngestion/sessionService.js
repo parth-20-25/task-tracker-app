@@ -1,10 +1,14 @@
+const fs = require("fs/promises");
+const path = require("path");
 const { AppError } = require("../../lib/AppError");
 const { logger } = require("../../lib/logger");
 const { pool } = require("../../db");
+const { env } = require("../../config/env");
+const { generateUUID } = require("../../lib/uuid");
 const { createAuditLog } = require("../../repositories/auditRepository");
 const {
   createUploadBatch,
-  createUploadErrors,
+  findActiveUploadBatchIdForProject,
   upsertProjectByNumber,
 } = require("../../repositories/designProjectCatalogRepository");
 const { getActiveWorkflowForDepartment } = require("../../repositories/fixtureWorkflowRepository");
@@ -20,7 +24,10 @@ const {
   markIngestionSessionCommitted,
 } = require("../../repositories/ingestionSessionRepository");
 const {
+  DEFAULT_DESIGN_IMAGE_MAX_SIZE_BYTES,
   deleteStorageObjects,
+  normalizeExtension,
+  normalizeMimeType,
   promoteStagedExtractedDesignImage,
   uploadBufferToSupabaseStorage,
 } = require("../../lib/supabaseStorage");
@@ -44,6 +51,10 @@ const {
 
 const NATIVE_SUBSYSTEM = "native_spreadsheet_ingestion";
 const NATIVE_INGESTION_SOURCE = "native_workspace";
+const REFERENCE_IMAGE_SLOT = "reference_image_url";
+const DB_REFERENCE_IMAGE_SLOT = "image_1_url";
+const LOCAL_STORAGE_ADAPTER = "local";
+const SUPABASE_STORAGE_ADAPTER = "supabase";
 
 function parseJsonLike(value, fallback = {}) {
   if (!value) {
@@ -69,21 +80,30 @@ function sanitizeStorageSegment(value, fallback) {
   return sanitized || fallback;
 }
 
-function buildNativeFileInfo(context) {
-  return {
-    project_code: context.project_no || "",
-    project_name_display: context.project_no || "Native spreadsheet workspace",
-    company_name: context.customer || "",
-    metadata_source: NATIVE_INGESTION_SOURCE,
-  };
+function uploadsRoot() {
+  return path.resolve(__dirname, "..", "..", env.uploadsDir || "uploads");
 }
 
-function normalizeResolution(value) {
-  const normalized = collapseWhitespace(value).toLowerCase();
-  if (["merge", "replace", "skip"].includes(normalized)) {
-    return normalized;
+function toPublicUploadUrl(relativePath) {
+  return `/uploads/${String(relativePath || "").split(path.sep).join("/")}`;
+}
+
+function resolveLocalUploadPath(relativePath) {
+  const root = uploadsRoot();
+  const target = path.resolve(root, String(relativePath || ""));
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    throw new AppError(400, "Invalid local image storage path");
   }
-  return "";
+  return target;
+}
+
+function buildNativeFileInfo(context) {
+  return {
+    project_code: context.project_code || "",
+    project_name_display: context.project_name || context.project_code || "Native fixture workspace",
+    company_name: context.customer_name || "",
+    metadata_source: NATIVE_INGESTION_SOURCE,
+  };
 }
 
 function requireNativeSession(sessionRow) {
@@ -99,23 +119,41 @@ function requireNativeSession(sessionRow) {
   return snapshot;
 }
 
-async function getNativeDraftSession(user, sessionId, context = {}, client = pool) {
+function mergeNativeContextDepartment(context, departmentId) {
+  return {
+    ...context,
+    department_id: departmentId || "",
+  };
+}
+
+async function getNativeDraftSession(user, sessionId, context = {}, client = pool, options = {}) {
   const normalizedContext = normalizeNativeContext(context, user);
-  const departmentId = resolveNativeDepartmentId(user, normalizedContext.department_id);
   const sessionRow = await getDraftIngestionSessionForUser(
     sessionId,
-    departmentId,
+    null,
     user.employee_id,
     client,
   );
 
   const snapshot = requireNativeSession(sessionRow);
-  return { sessionRow, snapshot, departmentId };
+  const sessionDepartmentId = collapseWhitespace(sessionRow.department_id);
+  const requestedDepartmentId = collapseWhitespace(normalizedContext.department_id);
+  const candidateDepartmentId = requestedDepartmentId || sessionDepartmentId;
+  const departmentId = resolveNativeDepartmentId(user, candidateDepartmentId, options);
+
+  if (sessionDepartmentId && departmentId && sessionDepartmentId !== departmentId) {
+    throw new AppError(403, "Native ingestion session is already bound to another department");
+  }
+
+  return {
+    sessionRow,
+    snapshot,
+    departmentId,
+    context: mergeNativeContextDepartment(normalizedContext, departmentId),
+  };
 }
 
-async function persistNativeSnapshot(sessionId, context, rows, extra = {}) {
-  const existing = await getIngestionSessionById(sessionId, pool);
-  const previousSnapshot = parseJsonLike(existing?.snapshot, {});
+function mergeStagingPaths(previousSnapshot, extra = {}) {
   const stagingObjectPaths = [
     ...(Array.isArray(previousSnapshot.staging_object_paths) ? previousSnapshot.staging_object_paths : []),
     ...(Array.isArray(extra.staging_object_paths) ? extra.staging_object_paths : []),
@@ -123,24 +161,31 @@ async function persistNativeSnapshot(sessionId, context, rows, extra = {}) {
   const uniqueStaging = [];
   const seen = new Set();
   for (const entry of stagingObjectPaths) {
-    const key = `${entry?.bucket || ""}::${entry?.path || ""}`;
+    const key = `${entry?.adapter || entry?.bucket || ""}::${entry?.path || ""}`;
     if (!entry?.path || seen.has(key)) {
       continue;
     }
     seen.add(key);
     uniqueStaging.push(entry);
   }
+  return uniqueStaging;
+}
+
+async function persistNativeSnapshot(sessionId, context, rows, extra = {}, departmentId = null) {
+  const existing = await getIngestionSessionById(sessionId, pool);
+  const previousSnapshot = parseJsonLike(existing?.snapshot, {});
 
   await finalizeIngestionSessionPreview(sessionId, {
+    department_id: departmentId,
     file_info: buildNativeFileInfo(context),
     snapshot: {
       ...previousSnapshot,
       ...extra,
       subsystem: NATIVE_SUBSYSTEM,
-      version: 1,
+      version: 2,
       context,
       rows: Array.isArray(rows) ? rows : [],
-      staging_object_paths: uniqueStaging,
+      staging_object_paths: mergeStagingPaths(previousSnapshot, extra),
       updated_at: new Date().toISOString(),
     },
   }, pool);
@@ -148,15 +193,18 @@ async function persistNativeSnapshot(sessionId, context, rows, extra = {}) {
 
 async function createNativeIngestionSession(user, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
-  const departmentId = resolveNativeDepartmentId(user, context.department_id);
+  const departmentId = resolveNativeDepartmentId(user, context.department_id, {
+    requireDepartment: false,
+  });
+  const sessionContext = mergeNativeContextDepartment(context, departmentId);
   const session = await createIngestionSession({
     department_id: departmentId,
     created_by_employee_id: user.employee_id,
-    file_info: buildNativeFileInfo({ ...context, department_id: departmentId }),
+    file_info: buildNativeFileInfo(sessionContext),
     snapshot: {
       subsystem: NATIVE_SUBSYSTEM,
-      version: 1,
-      context: { ...context, department_id: departmentId },
+      version: 2,
+      context: sessionContext,
       rows: Array.isArray(payload.rows) ? payload.rows : [],
       source: "workspace_open",
       staging_object_paths: [],
@@ -166,18 +214,20 @@ async function createNativeIngestionSession(user, payload = {}) {
   return {
     session_id: session.id,
     expires_at: session.expires_at,
-    context: { ...context, department_id: departmentId },
+    context: sessionContext,
     rows: Array.isArray(payload.rows) ? payload.rows : [],
   };
 }
 
 async function saveNativeDraft(user, sessionId, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
-  await getNativeDraftSession(user, sessionId, context, pool);
-  const rows = Array.isArray(payload.rows) ? payload.rows : [];
-  await persistNativeSnapshot(sessionId, context, rows, {
-    source: payload.source || "save_draft",
+  const { context: resolvedContext, departmentId } = await getNativeDraftSession(user, sessionId, context, pool, {
+    requireDepartment: false,
   });
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  await persistNativeSnapshot(sessionId, resolvedContext, rows, {
+    source: payload.source || "save_draft",
+  }, departmentId);
 
   return {
     session_id: sessionId,
@@ -188,17 +238,19 @@ async function saveNativeDraft(user, sessionId, payload = {}) {
 
 async function importNativeExcel(user, sessionId, file, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
-  await getNativeDraftSession(user, sessionId, context, pool);
+  const { context: resolvedContext, departmentId } = await getNativeDraftSession(user, sessionId, context, pool, {
+    requireDepartment: false,
+  });
   const parsed = parseNativeWorkbook(file);
 
-  await persistNativeSnapshot(sessionId, context, parsed.rows, {
+  await persistNativeSnapshot(sessionId, resolvedContext, parsed.rows, {
     source: "excel_import",
     workbook: {
       file_name: file?.originalname || null,
       sheet_name: parsed.sheet_name,
       imported_at: new Date().toISOString(),
     },
-  });
+  }, departmentId);
 
   return {
     session_id: sessionId,
@@ -209,11 +261,13 @@ async function importNativeExcel(user, sessionId, file, payload = {}) {
 
 async function pasteNativeClipboardRows(user, sessionId, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
-  await getNativeDraftSession(user, sessionId, context, pool);
-  const rows = parseNativeClipboard(payload.text);
-  await persistNativeSnapshot(sessionId, context, rows, {
-    source: "clipboard_paste",
+  const { context: resolvedContext, departmentId } = await getNativeDraftSession(user, sessionId, context, pool, {
+    requireDepartment: false,
   });
+  const rows = parseNativeClipboard(payload.text);
+  await persistNativeSnapshot(sessionId, resolvedContext, rows, {
+    source: "clipboard_paste",
+  }, departmentId);
 
   return {
     session_id: sessionId,
@@ -223,14 +277,16 @@ async function pasteNativeClipboardRows(user, sessionId, payload = {}) {
 
 async function validateNativeSession(user, sessionId, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
-  await getNativeDraftSession(user, sessionId, context, pool);
+  const { context: resolvedContext } = await getNativeDraftSession(user, sessionId, context, pool, {
+    requireDepartment: true,
+  });
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
-  const validation = await validateNativeRows(user, { context, rows }, pool);
+  const validation = await validateNativeRows(user, { context: resolvedContext, rows }, pool);
 
   await persistNativeSnapshot(sessionId, validation.context, rows, {
     source: payload.source || "validate",
     validation,
-  });
+  }, validation.context.department_id);
 
   return {
     session_id: sessionId,
@@ -242,96 +298,153 @@ function collectStagingPaths(rows) {
   const paths = [];
   for (const row of rows || []) {
     const storage = row?.image_storage && typeof row.image_storage === "object" ? row.image_storage : {};
-    for (const slotName of ["image_1_url", "image_2_url"]) {
-      const meta = storage[slotName];
-      if (meta?.staging && meta?.path) {
-        paths.push({ bucket: meta.bucket, path: meta.path });
-      }
+    const meta = storage[REFERENCE_IMAGE_SLOT];
+    if (meta?.staging && meta?.path) {
+      paths.push({
+        adapter: meta.adapter || (meta.bucket ? SUPABASE_STORAGE_ADAPTER : LOCAL_STORAGE_ADAPTER),
+        bucket: meta.bucket || null,
+        path: meta.path,
+      });
     }
   }
   return paths;
 }
 
-async function promoteNativeStagedImages(row, context, productionPathsAccumulator) {
-  let next = { ...row };
-  const storage = next.image_storage && typeof next.image_storage === "object" ? next.image_storage : {};
-  for (const slotName of ["image_1_url", "image_2_url"]) {
-    const meta = storage[slotName];
-    if (!meta?.staging || !meta.bucket || !meta.path) {
-      continue;
-    }
+async function deleteNativeStorageObjects(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return;
+  }
+  const localEntries = entries.filter((entry) => entry?.adapter === LOCAL_STORAGE_ADAPTER && entry.path);
+  const supabaseEntries = entries.filter((entry) => entry?.adapter !== LOCAL_STORAGE_ADAPTER && entry?.path);
 
-    const promoted = await promoteStagedExtractedDesignImage({
-      sourceBucket: meta.bucket,
-      sourcePath: meta.path,
-      fileInfo: { project_code: context.project_no },
-      row: next,
-      slotName,
+  for (const entry of localEntries) {
+    const target = resolveLocalUploadPath(entry.path);
+    await fs.unlink(target).catch((error) => {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
     });
+  }
 
-    productionPathsAccumulator.push({ bucket: promoted.bucket, path: promoted.path });
-    next = {
-      ...next,
-      [slotName]: promoted.publicUrl,
+  if (supabaseEntries.length > 0) {
+    await deleteStorageObjects(supabaseEntries);
+  }
+}
+
+async function writeLocalStagedImage({ file, sessionId, context, rowId, fixtureNo }) {
+  if (!Buffer.isBuffer(file.buffer) || file.buffer.length === 0) {
+    throw new AppError(400, "Image upload payload is empty");
+  }
+  if (file.buffer.length > DEFAULT_DESIGN_IMAGE_MAX_SIZE_BYTES) {
+    throw new AppError(400, "Image file must be 10 MB or smaller");
+  }
+
+  const extension = normalizeExtension(String(file.originalname || "").split(".").pop(), file.mimetype);
+  const mimeType = normalizeMimeType(file.mimetype, extension);
+  const relativePath = path.join(
+    "design-native-staging",
+    sanitizeStorageSegment(sessionId, "session"),
+    sanitizeStorageSegment(context.project_code, "project"),
+    sanitizeStorageSegment(fixtureNo, rowId || "fixture"),
+    `reference-image-${sanitizeStorageSegment(rowId, "row")}-${generateUUID()}.${extension}`,
+  );
+  const target = resolveLocalUploadPath(relativePath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, file.buffer);
+
+  return {
+    adapter: LOCAL_STORAGE_ADAPTER,
+    path: relativePath,
+    publicUrl: toPublicUploadUrl(relativePath),
+    mimeType,
+  };
+}
+
+async function promoteLocalStagedImage({ meta, context, row }) {
+  const source = resolveLocalUploadPath(meta.path);
+  const extension = normalizeExtension(String(meta.path || "").split(".").pop(), null);
+  const relativePath = path.join(
+    "design-excel",
+    sanitizeStorageSegment(context.project_code, "project"),
+    sanitizeStorageSegment(row.fixture_no, `row-${row.row_number || "unknown"}`),
+    `reference-image-r${sanitizeStorageSegment(row.row_number, "row")}-${generateUUID()}.${extension}`,
+  );
+  const target = resolveLocalUploadPath(relativePath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.copyFile(source, target);
+
+  return {
+    adapter: LOCAL_STORAGE_ADAPTER,
+    path: relativePath,
+    publicUrl: toPublicUploadUrl(relativePath),
+  };
+}
+
+async function promoteNativeStagedImages(row, context, productionPathsAccumulator) {
+  const storage = row.image_storage && typeof row.image_storage === "object" ? row.image_storage : {};
+  const meta = storage[REFERENCE_IMAGE_SLOT];
+  if (!meta?.staging || !meta.path) {
+    return {
+      ...row,
+      image_1_url: row.reference_image_url || row.image_1_url || null,
+      image_2_url: null,
+    };
+  }
+
+  if (meta.adapter === LOCAL_STORAGE_ADAPTER) {
+    const promoted = await promoteLocalStagedImage({ meta, context, row });
+    productionPathsAccumulator.push({ adapter: LOCAL_STORAGE_ADAPTER, path: promoted.path });
+    return {
+      ...row,
+      reference_image_url: promoted.publicUrl,
+      image_1_url: promoted.publicUrl,
+      image_2_url: null,
       image_storage: {
-        ...(next.image_storage || {}),
-        [slotName]: {
-          bucket: promoted.bucket,
+        ...(row.image_storage || {}),
+        [REFERENCE_IMAGE_SLOT]: {
+          adapter: LOCAL_STORAGE_ADAPTER,
           path: promoted.path,
           staging: false,
         },
       },
     };
   }
-  return next;
-}
 
-function rowForMerge(validationRow) {
-  const incoming = validationRow.incoming;
-  const existing = validationRow.existing;
-  if (!existing) {
-    return incoming;
-  }
+  const promoted = await promoteStagedExtractedDesignImage({
+    sourceBucket: meta.bucket,
+    sourcePath: meta.path,
+    fileInfo: { project_code: context.project_code },
+    row,
+    slotName: DB_REFERENCE_IMAGE_SLOT,
+  });
 
+  productionPathsAccumulator.push({
+    adapter: SUPABASE_STORAGE_ADAPTER,
+    bucket: promoted.bucket,
+    path: promoted.path,
+  });
   return {
-    ...incoming,
-    part_name: existing.part_name,
-    fixture_type: existing.fixture_type,
-    image_1_url: incoming.image_1_url || existing.image_1_url || null,
-    image_2_url: incoming.image_2_url || existing.image_2_url || null,
+    ...row,
+    reference_image_url: promoted.publicUrl,
+    image_1_url: promoted.publicUrl,
+    image_2_url: null,
+    image_storage: {
+      ...(row.image_storage || {}),
+      [REFERENCE_IMAGE_SLOT]: {
+        adapter: SUPABASE_STORAGE_ADAPTER,
+        bucket: promoted.bucket,
+        path: promoted.path,
+        staging: false,
+      },
+    },
   };
 }
 
-function buildRowsForCommit(validationRows, resolutions) {
-  const rowsToPromote = [];
-  const skippedRows = [];
-  const unresolvedConflicts = [];
-
-  for (const row of validationRows) {
-    if (row.severity === "error") {
-      continue;
-    }
-
-    if (row.classification === "CONFLICT") {
-      const resolution = normalizeResolution(resolutions[row.row_id] || resolutions[row.incoming?.fixture_no]);
-      if (!resolution) {
-        unresolvedConflicts.push(row);
-        continue;
-      }
-      if (resolution === "skip") {
-        skippedRows.push(row);
-        continue;
-      }
-      rowsToPromote.push(resolution === "merge" ? rowForMerge(row) : row.incoming);
-      continue;
-    }
-
-    if (row.classification === "NEW" || row.classification === "UPDATED") {
-      rowsToPromote.push(row.incoming);
-    }
-  }
-
-  return { rowsToPromote, skippedRows, unresolvedConflicts };
+function buildRowsForCommit(validationRows) {
+  return validationRows
+    .filter((row) => row.severity !== "error")
+    .filter((row) => row.classification !== "DUPLICATE")
+    .map((row) => row.incoming);
 }
 
 async function assertNoHiddenFixtureConflicts(user, projectId, fixtureNos, client) {
@@ -362,10 +475,11 @@ async function assertNoHiddenFixtureConflicts(user, projectId, fixtureNos, clien
 
 async function commitNativeSession(user, sessionId, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
-  const { sessionRow, snapshot } = await getNativeDraftSession(user, sessionId, context, pool);
+  const { sessionRow, snapshot, context: resolvedContext } = await getNativeDraftSession(user, sessionId, context, pool, {
+    requireDepartment: true,
+  });
   const rows = Array.isArray(payload.rows) ? payload.rows : (Array.isArray(snapshot.rows) ? snapshot.rows : []);
-  const resolutions = payload.resolutions && typeof payload.resolutions === "object" ? payload.resolutions : {};
-  const validation = await validateNativeRows(user, { context, rows }, pool);
+  const validation = await validateNativeRows(user, { context: resolvedContext, rows }, pool);
   const invalidRows = validation.rows.filter((row) => row.severity === "error");
 
   if (invalidRows.length > 0) {
@@ -375,15 +489,9 @@ async function commitNativeSession(user, sessionId, payload = {}) {
     }, "NATIVE_INGESTION_VALIDATION_FAILED");
   }
 
-  const { rowsToPromote, skippedRows, unresolvedConflicts } = buildRowsForCommit(validation.rows, resolutions);
-  if (unresolvedConflicts.length > 0) {
-    throw new AppError(409, "Resolve every native ingestion conflict before commit.", {
-      conflicts: unresolvedConflicts,
-    }, "NATIVE_INGESTION_CONFLICTS_UNRESOLVED");
-  }
-
-  if (rowsToPromote.length === 0 && skippedRows.length === 0) {
-    throw new AppError(400, "No native ingestion rows are ready to commit.");
+  const rowsToPromote = buildRowsForCommit(validation.rows);
+  if (rowsToPromote.length === 0) {
+    throw new AppError(400, "No populated native ingestion rows are ready to commit.");
   }
 
   const allStagingPaths = [
@@ -402,8 +510,8 @@ async function commitNativeSession(user, sessionId, payload = {}) {
       promotedRows.push(await promoteNativeStagedImages(row, validation.context, productionPathsForCleanup));
     }
   } catch (error) {
-    await deleteStorageObjects(productionPathsForCleanup).catch(() => {});
-    await deleteStorageObjects(allStagingPaths).catch(() => {});
+    await deleteNativeStorageObjects(productionPathsForCleanup).catch(() => {});
+    await deleteNativeStorageObjects(allStagingPaths).catch(() => {});
     throw error;
   }
 
@@ -417,9 +525,9 @@ async function commitNativeSession(user, sessionId, payload = {}) {
     }
 
     const project = await upsertProjectByNumber({
-      project_no: validation.context.project_no,
-      project_name: validation.context.project_no,
-      customer_name: validation.context.customer,
+      project_no: validation.context.project_code,
+      project_name: validation.context.project_name,
+      customer_name: validation.context.customer_name,
       department_id: validation.context.department_id,
       uploaded_by: user.employee_id,
       created_by_user_id: user.employee_id,
@@ -432,27 +540,17 @@ async function commitNativeSession(user, sessionId, payload = {}) {
       client,
     );
 
-    const skippedErrorRows = skippedRows.map((row) => ({
-      row_number: row.row_number || 0,
-      excel_row: null,
-      row_reference: row.row_id,
-      error_message: "Conflict skipped in native ingestion workspace.",
-      raw_data: {
-        classification: row.classification,
-        issues: row.issues,
-        incoming: row.incoming,
-        existing: row.existing,
-      },
-    }));
-
-    const batchId = await createUploadBatch({
-      project_id: project.project_id,
-      uploaded_by: user.employee_id,
-      uploaded_by_user_id: user.employee_id,
-      total_rows: promotedRows.length + skippedErrorRows.length,
-      accepted_rows: promotedRows.length,
-      rejected_rows: skippedErrorRows.length,
-    }, client);
+    const projectWasCreated = project.was_created === true;
+    const batchId = projectWasCreated
+      ? await createUploadBatch({
+        project_id: project.project_id,
+        uploaded_by: user.employee_id,
+        uploaded_by_user_id: user.employee_id,
+        total_rows: promotedRows.length,
+        accepted_rows: promotedRows.length,
+        rejected_rows: 0,
+      }, client)
+      : await findActiveUploadBatchIdForProject(project.project_id, client);
 
     const syncAudit = await synchronizeDesignWorkflowTruthFromIngestion(client, {
       projectId: project.project_id,
@@ -462,52 +560,60 @@ async function commitNativeSession(user, sessionId, payload = {}) {
       ingestionSource: NATIVE_INGESTION_SOURCE,
       promotedFixtureRows: promotedRows,
       workflowStages: workflow.stages,
-      catalogMembershipMode: CATALOG_MEMBERSHIP_MODES.DELTA,
+      catalogMembershipMode: validation.context.upload_mode === "full_project_update"
+        ? CATALOG_MEMBERSHIP_MODES.FULL_REPLACE
+        : CATALOG_MEMBERSHIP_MODES.DELTA,
     });
-
-    if (skippedErrorRows.length > 0) {
-      await createUploadErrors(batchId, skippedErrorRows, client);
-    }
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
       actionType: "DESIGN_NATIVE_INGESTION_COMMITTED",
-      targetType: "design_upload_batch",
-      targetId: batchId,
+      targetType: batchId ? "design_upload_batch" : "design_project",
+      targetId: batchId || project.project_id,
       metadata: {
         session_id: sessionRow.id,
         project_id: project.project_id,
-        project_no: validation.context.project_no,
+        project_no: validation.context.project_code,
+        project_was_created: projectWasCreated,
+        upload_mode: validation.context.upload_mode,
         created_fixture_nos: syncAudit.created_fixture_nos,
         updated_fixture_nos: syncAudit.updated_fixture_nos,
-        skipped_conflicts: skippedRows.map((row) => row.incoming?.fixture_no),
+        archived_fixture_nos: syncAudit.archived_fixture_nos,
+        unchanged_fixture_nos: syncAudit.unchanged_fixture_nos,
         summary: validation.summary,
       },
     }, client);
 
     await client.query("COMMIT");
     await markIngestionSessionCommitted(sessionId, batchId, pool);
-    await deleteStorageObjects(allStagingPaths).catch(() => {});
+    await deleteNativeStorageObjects(allStagingPaths).catch(() => {});
 
+    const deletedFixtureNos = syncAudit.archived_fixture_nos || [];
+    const updatedFixtureNos = syncAudit.updated_fixture_nos || [];
+    const createdFixtureNos = syncAudit.created_fixture_nos || [];
     return {
       success: true,
       session_id: sessionId,
-      batch_id: batchId,
-      accepted_count: syncAudit.created_fixture_nos.length + syncAudit.updated_fixture_nos.length,
-      created_fixture_nos: syncAudit.created_fixture_nos,
-      updated_fixture_nos: syncAudit.updated_fixture_nos,
-      skipped_count: skippedRows.length,
+      batch_id: batchId || null,
+      project_id: project.project_id,
+      project_code: validation.context.project_code,
+      project_was_created: projectWasCreated,
+      accepted_count: createdFixtureNos.length + updatedFixtureNos.length + deletedFixtureNos.length,
+      created_fixture_nos: createdFixtureNos,
+      updated_fixture_nos: updatedFixtureNos,
+      deleted_fixture_nos: deletedFixtureNos,
+      unchanged_fixture_nos: syncAudit.unchanged_fixture_nos || [],
     };
   } catch (error) {
     await client.query("ROLLBACK");
-    await deleteStorageObjects(productionPathsForCleanup).catch(() => {});
-    await deleteStorageObjects(allStagingPaths).catch(() => {});
+    await deleteNativeStorageObjects(productionPathsForCleanup).catch(() => {});
+    await deleteNativeStorageObjects(allStagingPaths).catch(() => {});
     logger.error("Native ingestion commit failed", {
       session_id: sessionId,
       employee_id: user?.employee_id,
-      project_no: validation.context.project_no,
+      project_no: validation.context.project_code,
       errorMessage: error?.message || String(error),
-      code: error?.code || null,
+      code: error?.code || error?.errorCode || null,
       constraint: error?.constraint || null,
     });
     if (error instanceof AppError) {
@@ -529,34 +635,71 @@ async function stageNativeIngestionImage(user, sessionId, file, payload = {}) {
   }
 
   const context = normalizeNativeContext(payload.context || {}, user);
-  const { snapshot } = await getNativeDraftSession(user, sessionId, context, pool);
-  const imageSlot = payload.image_slot === "image_2_url" ? "image_2_url" : "image_1_url";
-  const extension = String(file.originalname || "").split(".").pop();
+  const { snapshot, context: resolvedContext, departmentId } = await getNativeDraftSession(user, sessionId, context, pool, {
+    requireDepartment: false,
+  });
   const rowId = sanitizeStorageSegment(payload.row_id, "row");
   const fixtureNo = sanitizeStorageSegment(payload.fixture_no, rowId);
+  const extension = String(file.originalname || "").split(".").pop();
+  const folder = `design-native-ingestion-staging/${sanitizeStorageSegment(sessionId, "session")}/${sanitizeStorageSegment(resolvedContext.project_code, "project")}/${fixtureNo}`;
+  let staged;
+  let warning = null;
 
-  const uploaded = await uploadBufferToSupabaseStorage({
-    buffer: file.buffer,
-    mimeType: file.mimetype,
-    extension,
-    folder: `design-native-ingestion-staging/${sanitizeStorageSegment(sessionId, "session")}/${sanitizeStorageSegment(context.project_no, "project")}/${fixtureNo}`,
-    fileStem: `${sanitizeStorageSegment(imageSlot.replace(/_url$/i, ""), "image")}-${rowId}`,
-  });
+  try {
+    const uploaded = await uploadBufferToSupabaseStorage({
+      buffer: file.buffer,
+      mimeType: file.mimetype,
+      extension,
+      folder,
+      fileStem: `reference-image-${rowId}`,
+    });
+    staged = {
+      publicUrl: uploaded.publicUrl,
+      storage: {
+        adapter: SUPABASE_STORAGE_ADAPTER,
+        bucket: uploaded.bucket,
+        path: uploaded.path,
+        staging: true,
+      },
+    };
+  } catch (error) {
+    const storageUnavailable = [
+      "SUPABASE_STORAGE_NOT_CONFIGURED",
+      "SUPABASE_STORAGE_UPLOAD_FAILED",
+    ].includes(error?.errorCode);
+    if (!storageUnavailable) {
+      throw error;
+    }
+    const local = await writeLocalStagedImage({
+      file,
+      sessionId,
+      context: resolvedContext,
+      rowId,
+      fixtureNo,
+    });
+    warning = "Supabase Storage is not configured; image staged locally for this transaction.";
+    staged = {
+      publicUrl: local.publicUrl,
+      storage: {
+        adapter: LOCAL_STORAGE_ADAPTER,
+        path: local.path,
+        staging: true,
+        warning,
+      },
+    };
+  }
 
   const rows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
-  await persistNativeSnapshot(sessionId, context, rows, {
+  await persistNativeSnapshot(sessionId, resolvedContext, rows, {
     source: "image_stage",
-    staging_object_paths: [{ bucket: uploaded.bucket, path: uploaded.path }],
-  });
+    staging_object_paths: [staged.storage],
+  }, departmentId);
 
   return {
-    public_url: uploaded.publicUrl,
-    image_slot: imageSlot,
-    storage: {
-      bucket: uploaded.bucket,
-      path: uploaded.path,
-      staging: true,
-    },
+    public_url: staged.publicUrl,
+    image_slot: REFERENCE_IMAGE_SLOT,
+    storage: staged.storage,
+    warning,
   };
 }
 

@@ -1,12 +1,18 @@
+import type { User } from "@/types";
 import type {
   NativeEditableColumn,
   NativeIngestionContext,
   NativeIngestionRow,
+  NativeUploadMode,
   NativeValidatedRow,
   NativeValidationResponse,
 } from "./NativeIngestionTypes";
 
 const EMPTY_ROWS = 24;
+
+function legacyReferenceImage(row: NativeIngestionRow & { image_1_url?: string }) {
+  return row.reference_image_url || row.image_1_url || "";
+}
 
 export function createEmptyNativeRow(index: number): NativeIngestionRow {
   return {
@@ -18,10 +24,10 @@ export function createEmptyNativeRow(index: number): NativeIngestionRow {
     fixture_type: "",
     remark: "",
     qty: "",
+    assigned_team: "",
     is_outsourced: false,
     vendor_name: "",
-    image_1_url: "",
-    image_2_url: "",
+    reference_image_url: "",
     validation_state: "",
     severity: "idle",
     cell_states: {},
@@ -39,9 +45,9 @@ export function padRows(rows: NativeIngestionRow[], minRows = EMPTY_ROWS): Nativ
     row_id: row.row_id || `native-row-${index + 1}`,
     row_number: Number(row.row_number) || index + 1,
     qty: row.qty === undefined || row.qty === null ? "" : String(row.qty),
+    assigned_team: row.assigned_team || row.existing?.assigned_team || "",
     vendor_name: row.vendor_name || "",
-    image_1_url: row.image_1_url || "",
-    image_2_url: row.image_2_url || "",
+    reference_image_url: legacyReferenceImage(row as NativeIngestionRow & { image_1_url?: string }),
   }));
 
   if (normalized.length >= minRows) {
@@ -62,8 +68,7 @@ export function nativeRowHasData(row: NativeIngestionRow) {
     || row.remark.trim()
     || String(row.qty || "").trim()
     || row.vendor_name.trim()
-    || row.image_1_url.trim()
-    || row.image_2_url.trim()
+    || row.reference_image_url.trim()
     || row.is_outsourced,
   );
 }
@@ -87,6 +92,7 @@ export function mergeValidationRows(
           cell_states: {},
           issues: [],
           existing: null,
+          assigned_team: "",
         };
     }
 
@@ -112,10 +118,10 @@ export function applyValidatedRow(row: NativeIngestionRow, validated: NativeVali
     qty: validated.incoming.qty === null || validated.incoming.qty === undefined
       ? row.qty
       : String(validated.incoming.qty),
+    assigned_team: validated.incoming.assigned_team || validated.existing?.assigned_team || row.assigned_team || "",
     is_outsourced: validated.incoming.is_outsourced,
     vendor_name: validated.incoming.vendor_name || "",
-    image_1_url: validated.incoming.image_1_url || row.image_1_url,
-    image_2_url: validated.incoming.image_2_url || row.image_2_url,
+    reference_image_url: validated.incoming.reference_image_url || row.reference_image_url,
     image_storage: validated.incoming.image_storage || row.image_storage,
   };
 }
@@ -143,6 +149,7 @@ export function patchRowCell(
       is_outsourced: isChecked,
       vendor_name: isChecked ? row.vendor_name : "",
       severity: row.severity === "idle" ? "idle" : "warning",
+      validation_state: "Changed since validation",
     };
   }
 
@@ -154,7 +161,7 @@ export function patchRowCell(
     ...row,
     [column]: String(value),
     severity: row.severity === "idle" ? "idle" : "warning",
-    validation_state: row.validation_state || "Draft changed, validate before commit",
+    validation_state: "Changed since validation",
   };
 }
 
@@ -169,22 +176,122 @@ export function parseClipboardMatrix(text: string): string[][] {
     .map((line) => line.split("\t").map((cell) => cell.replace(/\n+/g, " ").trim()));
 }
 
-export function defaultNativeContext(user: {
-  department_id?: string;
-  department?: { name?: string };
-} | null): NativeIngestionContext {
+function collapseIdentityWhitespace(value: unknown) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeProjectCode(value: unknown) {
+  return collapseIdentityWhitespace(value)
+    .replace(/\s+/g, "")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .toUpperCase();
+}
+
+function splitOnLastSeparator(value: string) {
+  const spacedSeparator = [...value.matchAll(/\s+[-_]\s+/g)].pop();
+  if (spacedSeparator?.index !== undefined) {
+    return [
+      value.slice(0, spacedSeparator.index),
+      value.slice(spacedSeparator.index + spacedSeparator[0].length),
+    ];
+  }
+
+  const multiSpace = [...value.matchAll(/\s{2,}/g)].pop();
+  if (multiSpace?.index !== undefined) {
+    return [
+      value.slice(0, multiSpace.index),
+      value.slice(multiSpace.index + multiSpace[0].length),
+    ];
+  }
+
+  const looseDash = value.lastIndexOf("-");
+  const looseUnderscore = value.lastIndexOf("_");
+  const index = Math.max(looseDash, looseUnderscore);
+  if (index > 0) {
+    return [value.slice(0, index), value.slice(index + 1)];
+  }
+
+  return [value, ""];
+}
+
+export function parseProjectIdentityInput(value: string) {
+  const rawIdentity = String(value || "").replace(/\r\n/g, "\n").replace(/\n+/g, " ").trim();
+  if (!rawIdentity) {
+    return { project_code: "", project_name: "", customer_name: "" };
+  }
+
+  const identity = collapseIdentityWhitespace(rawIdentity);
+  const firstSplit = rawIdentity.match(/^([^\s\-_]+)(?:\s*[-_]\s*|\s{2,})(.+)$/);
+  if (!firstSplit) {
+    return {
+      project_code: normalizeProjectCode(identity),
+      project_name: "",
+      customer_name: "",
+    };
+  }
+
+  const [projectName, customerName] = splitOnLastSeparator(firstSplit[2]).map(collapseIdentityWhitespace);
+
   return {
-    project_no: "",
-    customer: "",
-    department_id: user?.department_id || "",
-    department_name: user?.department?.name || user?.department_id || "",
-    vendor: "",
-    operational_batch: "",
-    revision: "0",
-    upload_source: "native_workspace",
+    project_code: normalizeProjectCode(firstSplit[1]),
+    project_name: projectName,
+    customer_name: customerName,
+  };
+}
+
+export function formatProjectIdentity(context: Partial<NativeIngestionContext>) {
+  return [
+    context.project_code,
+    context.project_name,
+    context.customer_name,
+  ].map(collapseIdentityWhitespace).filter(Boolean).join(" - ");
+}
+
+export function normalizeUploadMode(value: unknown): NativeUploadMode {
+  return value === "fixture_delta" ? "fixture_delta" : "full_project_update";
+}
+
+export function hydrateProjectIdentityContext(
+  context: NativeIngestionContext,
+  identityValue = context.project_identity,
+): NativeIngestionContext {
+  const parsed = parseProjectIdentityInput(identityValue);
+  const next = {
+    ...context,
+    project_identity: identityValue,
+    project_code: parsed.project_code,
+    project_name: parsed.project_name,
+    customer_name: parsed.customer_name,
+  };
+
+  return {
+    ...next,
+    project_identity: identityValue || formatProjectIdentity(next),
+  };
+}
+
+export function defaultNativeContext(user: User | null): NativeIngestionContext {
+  const departmentId = user?.department_id || "";
+  return {
+    project_identity: "",
+    project_code: "",
+    project_name: "",
+    customer_name: "",
+    department_id: departmentId,
+    department_name: departmentId ? user?.department?.name || departmentId : "",
+    upload_mode: "full_project_update",
   };
 }
 
 export function contextReady(context: NativeIngestionContext) {
-  return Boolean(context.project_no.trim() && context.customer.trim() && context.department_id.trim());
+  return Boolean(
+    context.project_code.trim()
+    && context.project_name.trim()
+    && context.customer_name.trim()
+    && context.department_id.trim(),
+  );
 }

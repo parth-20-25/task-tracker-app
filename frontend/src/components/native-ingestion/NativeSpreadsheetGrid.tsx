@@ -1,13 +1,33 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ImagePlus, Plus, Rows3, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  Eye,
+  ImagePlus,
+  PanelRightOpen,
+  Plus,
+  Redo2,
+  Rows3,
+  Trash2,
+  Undo2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type {
   NativeColumn,
   NativeEditableColumn,
+  NativeIngestionIssue,
   NativeIngestionRow,
 } from "./NativeIngestionTypes";
 import { NATIVE_EDITABLE_COLUMNS } from "./NativeIngestionTypes";
@@ -32,29 +52,35 @@ interface SelectionRange {
 interface NativeSpreadsheetGridProps {
   rows: NativeIngestionRow[];
   onRowsChange: (rows: NativeIngestionRow[]) => void;
-  onFocusConflict: (row: NativeIngestionRow | null) => void;
-  onStageImage: (row: NativeIngestionRow, imageSlot: "image_1_url" | "image_2_url", file: File) => Promise<void>;
+  onStageImage: (row: NativeIngestionRow, file: File) => Promise<void>;
   isBusy?: boolean;
 }
 
 const ROW_HEIGHT = 42;
+const ROW_NUMBER_WIDTH = 48;
+const MIN_GRID_WIDTH = 1180;
 
-const COLUMNS: Array<{
+const BASE_COLUMNS: Array<{
   key: NativeColumn;
   label: string;
-  width: string;
+  width: number;
+  editable?: boolean;
+  sticky?: boolean;
 }> = [
-  { key: "status", label: "Status", width: "w-[104px]" },
-  { key: "fixture_no", label: "Fixture No", width: "w-[148px]" },
-  { key: "part_name", label: "Part Name", width: "w-[220px]" },
-  { key: "fixture_type", label: "Fixture Type", width: "w-[190px]" },
-  { key: "remark", label: "Remark", width: "w-[210px]" },
-  { key: "qty", label: "Qty", width: "w-[82px]" },
-  { key: "is_outsourced", label: "Outsourced", width: "w-[112px]" },
-  { key: "vendor_name", label: "Vendor", width: "w-[176px]" },
-  { key: "image_1_url", label: "Image 1", width: "w-[190px]" },
-  { key: "image_2_url", label: "Image 2", width: "w-[190px]" },
-  { key: "validation_state", label: "Validation State", width: "w-[320px]" },
+  { key: "fixture_no", label: "Fixture No", width: 148, editable: true, sticky: true },
+  { key: "part_name", label: "Part Name", width: 230, editable: true },
+  { key: "fixture_type", label: "Fixture Type", width: 176, editable: true },
+  { key: "qty", label: "Qty", width: 72, editable: true },
+  { key: "status", label: "Status", width: 112 },
+  { key: "assigned_team", label: "Assigned Team", width: 150 },
+  { key: "reference_image_url", label: "Reference Image", width: 188, editable: true },
+  { key: "remark", label: "Remarks", width: 230, editable: true },
+];
+
+const DETAIL_COLUMNS: typeof BASE_COLUMNS = [
+  { key: "is_outsourced", label: "Outsourced", width: 112, editable: true },
+  { key: "vendor_name", label: "Vendor", width: 170, editable: true },
+  { key: "validation_state", label: "Row Errors", width: 300 },
 ];
 
 const EDITABLE_SET = new Set<NativeColumn>(NATIVE_EDITABLE_COLUMNS);
@@ -64,7 +90,6 @@ function isEditableColumn(column: NativeColumn): column is NativeEditableColumn 
 }
 
 function rowStatusClass(row: NativeIngestionRow) {
-  if (row.classification === "CONFLICT") return "border-orange-200 bg-orange-50 text-orange-800";
   if (row.classification === "DUPLICATE" || row.classification === "INVALID" || row.severity === "error") {
     return "border-red-200 bg-red-50 text-red-800";
   }
@@ -77,10 +102,8 @@ function rowStatusClass(row: NativeIngestionRow) {
 
 function cellStateClass(row: NativeIngestionRow, column: NativeColumn) {
   const state = row.cell_states?.[column as NativeEditableColumn];
-  if (state === "error") return "bg-red-50 ring-1 ring-red-300";
-  if (state === "conflict") return "bg-orange-50 ring-1 ring-orange-300";
+  if (state === "error") return "bg-red-50 ring-1 ring-red-400";
   if (state === "warning") return "bg-amber-50 ring-1 ring-amber-300";
-  if (row.severity === "safe" && isEditableColumn(column)) return "bg-emerald-50/50";
   return "";
 }
 
@@ -128,10 +151,28 @@ function nextCell(coord: CellCoord, key: string, rowCount: number): CellCoord {
   return coord;
 }
 
+function issuesForColumn(row: NativeIngestionRow, column: NativeColumn): NativeIngestionIssue[] {
+  return (row.issues || []).filter((issue) => issue.columns?.includes(column as NativeEditableColumn));
+}
+
+function issueTitle(issues: NativeIngestionIssue[]) {
+  return issues.map((issue) => issue.message).join("\n");
+}
+
+function fileFromClipboard(event: React.ClipboardEvent) {
+  const items = Array.from(event.clipboardData.items || []);
+  for (const item of items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+  }
+  return null;
+}
+
 export function NativeSpreadsheetGrid({
   rows,
   onRowsChange,
-  onFocusConflict,
   onStageImage,
   isBusy,
 }: NativeSpreadsheetGridProps) {
@@ -141,6 +182,16 @@ export function NativeSpreadsheetGrid({
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [fillTarget, setFillTarget] = useState<CellCoord | null>(null);
   const [fillSource, setFillSource] = useState<CellCoord | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [previewImage, setPreviewImage] = useState<{ url: string; label: string } | null>(null);
+  const [past, setPast] = useState<NativeIngestionRow[][]>([]);
+  const [future, setFuture] = useState<NativeIngestionRow[][]>([]);
+
+  const columns = useMemo(() => (showDetails ? [...BASE_COLUMNS, ...DETAIL_COLUMNS] : BASE_COLUMNS), [showDetails]);
+  const totalWidth = Math.max(
+    MIN_GRID_WIDTH,
+    ROW_NUMBER_WIDTH + columns.reduce((sum, column) => sum + column.width, 0),
+  );
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -150,6 +201,32 @@ export function NativeSpreadsheetGrid({
   });
 
   const selectedCount = selectedRows.size;
+
+  const commitRows = useCallback((nextRows: NativeIngestionRow[]) => {
+    setPast((current) => [...current.slice(-49), rows]);
+    setFuture([]);
+    onRowsChange(nextRows);
+  }, [onRowsChange, rows]);
+
+  const undo = useCallback(() => {
+    setPast((current) => {
+      const previous = current[current.length - 1];
+      if (!previous) return current;
+      setFuture((existing) => [rows, ...existing].slice(0, 50));
+      onRowsChange(previous);
+      return current.slice(0, -1);
+    });
+  }, [onRowsChange, rows]);
+
+  const redo = useCallback(() => {
+    setFuture((current) => {
+      const next = current[0];
+      if (!next) return current;
+      setPast((existing) => [...existing.slice(-49), rows]);
+      onRowsChange(next);
+      return current.slice(1);
+    });
+  }, [onRowsChange, rows]);
 
   const focusCell = useCallback((coord: CellCoord) => {
     setActiveCell(coord);
@@ -163,10 +240,10 @@ export function NativeSpreadsheetGrid({
   }, []);
 
   const setCell = useCallback((rowIndex: number, column: NativeEditableColumn, value: string | boolean) => {
-    onRowsChange(rows.map((row, index) => (
+    commitRows(rows.map((row, index) => (
       index === rowIndex ? patchRowCell(row, column, value) : row
     )));
-  }, [onRowsChange, rows]);
+  }, [commitRows, rows]);
 
   const applyPaste = useCallback((text: string) => {
     if (!activeCell) return;
@@ -189,8 +266,8 @@ export function NativeSpreadsheetGrid({
         patched[rowIndex] = patchRowCell(patched[rowIndex], column, cell);
       });
     });
-    onRowsChange(padRows(patched));
-  }, [activeCell, onRowsChange, rows]);
+    commitRows(padRows(patched));
+  }, [activeCell, commitRows, rows]);
 
   const serializeSelection = useCallback(() => {
     if (!activeCell) return "";
@@ -212,25 +289,54 @@ export function NativeSpreadsheetGrid({
     return lines.join("\n");
   }, [activeCell, rows, selection]);
 
+  const copySelection = useCallback(async () => {
+    const text = serializeSelection();
+    if (!text) return;
+    await navigator.clipboard?.writeText(text);
+  }, [serializeSelection]);
+
+  const pasteFromClipboard = useCallback(async () => {
+    const text = await navigator.clipboard?.readText();
+    applyPaste(text || "");
+  }, [applyPaste]);
+
   const deleteSelectedRows = () => {
     if (selectedRows.size === 0) return;
     const next = rows.filter((_, index) => !selectedRows.has(index));
     setSelectedRows(new Set());
-    onRowsChange(padRows(next));
+    commitRows(padRows(next));
   };
 
   const insertRowAbove = () => {
     const index = activeCell?.rowIndex ?? 0;
     const next = [...rows];
     next.splice(index, 0, createEmptyNativeRow(index));
-    onRowsChange(padRows(next, next.length));
+    commitRows(padRows(next, next.length));
     focusCell({ rowIndex: index, column: "fixture_no" });
   };
 
   const appendRows = () => {
     const next = padRows([...rows, createEmptyNativeRow(rows.length)], rows.length + 8);
-    onRowsChange(next);
+    commitRows(next);
     focusCell({ rowIndex: rows.length, column: "fixture_no" });
+  };
+
+  const reorderRows = (direction: "up" | "down") => {
+    if (selectedRows.size === 0) return;
+    const ordered = [...selectedRows].sort((a, b) => direction === "up" ? a - b : b - a);
+    const next = [...rows];
+    for (const index of ordered) {
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= next.length || selectedRows.has(target)) continue;
+      [next[index], next[target]] = [next[target], next[index]];
+    }
+    const shifted = new Set<number>();
+    selectedRows.forEach((index) => {
+      const target = direction === "up" ? Math.max(0, index - 1) : Math.min(next.length - 1, index + 1);
+      shifted.add(target);
+    });
+    setSelectedRows(shifted);
+    commitRows(padRows(next, next.length));
   };
 
   useEffect(() => {
@@ -252,27 +358,37 @@ export function NativeSpreadsheetGrid({
         if (index <= start || index > end) return row;
         return patchRowCell(row, fillSource.column, value);
       });
-      onRowsChange(patched);
+      commitRows(patched);
       setFillSource(null);
       setFillTarget(null);
     };
 
     window.addEventListener("mouseup", handleMouseUp);
     return () => window.removeEventListener("mouseup", handleMouseUp);
-  }, [fillSource, fillTarget, onRowsChange, rows]);
+  }, [commitRows, fillSource, fillTarget, rows]);
 
   const renderCell = (row: NativeIngestionRow, rowIndex: number, column: NativeColumn) => {
+    const columnDef = columns.find((item) => item.key === column);
     const active = activeCell?.rowIndex === rowIndex && activeCell.column === column;
     const selectableColumn = isEditableColumn(column);
     const inSelection = selectableColumn && coordInRange({ rowIndex, column }, selection);
+    const issues = issuesForColumn(row, column);
+    const sticky = columnDef?.sticky;
+    const stickyLeft = column === "fixture_no" ? ROW_NUMBER_WIDTH : undefined;
 
     const baseClass = cn(
       "relative flex h-10 shrink-0 items-center border-r border-slate-200 bg-white px-1",
-      COLUMNS.find((item) => item.key === column)?.width,
       cellStateClass(row, column),
       inSelection && "outline outline-1 outline-primary/60",
-      active && "z-[1] outline outline-2 outline-primary",
+      active && "z-[4] outline outline-2 outline-primary",
+      sticky && "sticky z-[3] shadow-[1px_0_0_#e2e8f0]",
     );
+
+    const style: React.CSSProperties = {
+      width: columnDef?.width,
+      minWidth: columnDef?.width,
+      left: stickyLeft,
+    };
 
     const activate = (event: React.MouseEvent) => {
       if (!selectableColumn) return;
@@ -286,18 +402,28 @@ export function NativeSpreadsheetGrid({
     };
 
     if (column === "status") {
+      const errorCount = row.issues?.filter((issue) => issue.severity === "error").length || 0;
       return (
-        <div key={column} className={baseClass}>
+        <div key={column} className={baseClass} style={style} title={issueTitle(row.issues || [])}>
           <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-bold", rowStatusClass(row))}>
-            {row.classification || row.status || "DRAFT"}
+            {row.classification || row.status || "EMPTY"}
+            {errorCount ? ` (${errorCount})` : ""}
           </span>
+        </div>
+      );
+    }
+
+    if (column === "assigned_team") {
+      return (
+        <div key={column} className={cn(baseClass, "text-xs text-slate-600")} style={style}>
+          <span className="truncate">{row.assigned_team || row.existing?.assigned_team || ""}</span>
         </div>
       );
     }
 
     if (column === "validation_state") {
       return (
-        <div key={column} className={cn(baseClass, "text-xs text-slate-600")} title={row.validation_state || ""}>
+        <div key={column} className={cn(baseClass, "text-xs text-slate-600")} style={style} title={row.validation_state || issueTitle(row.issues || [])}>
           <span className="truncate">{row.validation_state || ""}</span>
         </div>
       );
@@ -308,6 +434,8 @@ export function NativeSpreadsheetGrid({
         <div
           key={column}
           className={cn(baseClass, "justify-center")}
+          style={style}
+          title={issueTitle(issues)}
           onMouseDown={activate}
           onMouseEnter={() => fillSource?.column === column && setFillTarget({ rowIndex, column })}
         >
@@ -321,22 +449,47 @@ export function NativeSpreadsheetGrid({
       );
     }
 
-    if (column === "image_1_url" || column === "image_2_url") {
+    if (column === "reference_image_url") {
+      const imageUrl = row.reference_image_url;
       return (
         <div
           key={column}
           className={baseClass}
+          style={style}
+          title={issueTitle(issues) || row.storage_warning || ""}
           onMouseDown={activate}
           onMouseEnter={() => fillSource?.column === column && setFillTarget({ rowIndex, column })}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const file = Array.from(event.dataTransfer.files || []).find((item) => item.type.startsWith("image/"));
+            if (file) {
+              void onStageImage(row, file);
+            }
+          }}
         >
+          {imageUrl ? (
+            <button
+              type="button"
+              className="mr-1 flex h-8 w-9 shrink-0 items-center justify-center overflow-hidden rounded border bg-slate-50"
+              onClick={() => setPreviewImage({ url: imageUrl, label: row.fixture_no || `Row ${rowIndex + 1}` })}
+              aria-label="Open reference image"
+            >
+              <img src={imageUrl} alt="" className="h-full w-full object-cover" />
+            </button>
+          ) : (
+            <span className="mr-1 flex h-8 w-9 shrink-0 items-center justify-center rounded border border-dashed bg-slate-50 text-slate-400">
+              <Eye className="h-3.5 w-3.5" />
+            </span>
+          )}
           <Input
             data-native-cell={`${rowIndex}:${column}`}
-            value={String(row[column] || "")}
+            value={imageUrl || ""}
             disabled={isBusy}
-            onFocus={() => {
-              setActiveCell({ rowIndex, column });
-              onFocusConflict(row.classification === "CONFLICT" ? row : null);
-            }}
+            onFocus={() => setActiveCell({ rowIndex, column })}
             onChange={(event) => setCell(rowIndex, column, event.target.value)}
             onKeyDown={(event) => {
               if (["Tab", "Enter"].includes(event.key)) {
@@ -344,9 +497,9 @@ export function NativeSpreadsheetGrid({
                 focusCell(nextCell({ rowIndex, column }, event.key, rows.length));
               }
             }}
-            className="h-8 flex-1 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
+            className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
           />
-          <label className="ml-1 flex h-7 w-7 cursor-pointer items-center justify-center rounded border hover:bg-muted">
+          <label className="ml-1 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border hover:bg-muted">
             <ImagePlus className="h-3.5 w-3.5" />
             <input
               type="file"
@@ -356,7 +509,7 @@ export function NativeSpreadsheetGrid({
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) {
-                  void onStageImage(row, column, file);
+                  void onStageImage(row, file);
                 }
                 event.currentTarget.value = "";
               }}
@@ -372,19 +525,19 @@ export function NativeSpreadsheetGrid({
       <div
         key={column}
         className={baseClass}
+        style={style}
+        title={issueTitle(issues)}
         onMouseDown={activate}
-        onMouseEnter={() => fillSource?.column === column && setFillTarget({ rowIndex, column })}
+        onMouseEnter={() => selectableColumn && fillSource?.column === column && setFillTarget({ rowIndex, column })}
       >
         <Input
           data-native-cell={`${rowIndex}:${column}`}
-          value={String(row[column] || "")}
-          disabled={isBusy || disabled}
-          onFocus={() => {
-            setActiveCell({ rowIndex, column });
-            onFocusConflict(row.classification === "CONFLICT" ? row : null);
-          }}
-          onChange={(event) => setCell(rowIndex, column, event.target.value)}
+          value={String(row[column as NativeEditableColumn] || "")}
+          disabled={isBusy || disabled || !selectableColumn}
+          onFocus={() => selectableColumn && setActiveCell({ rowIndex, column: column as NativeEditableColumn })}
+          onChange={(event) => selectableColumn && setCell(rowIndex, column as NativeEditableColumn, event.target.value)}
           onKeyDown={(event) => {
+            if (!selectableColumn) return;
             if (["Tab", "Enter"].includes(event.key)) {
               event.preventDefault();
               focusCell(nextCell({ rowIndex, column }, event.key, rows.length));
@@ -395,7 +548,7 @@ export function NativeSpreadsheetGrid({
             disabled && "cursor-not-allowed text-slate-400",
           )}
         />
-        {active && (
+        {active && selectableColumn && (
           <button
             type="button"
             className="absolute bottom-0 right-0 h-2.5 w-2.5 cursor-crosshair bg-primary"
@@ -412,7 +565,6 @@ export function NativeSpreadsheetGrid({
   };
 
   const visibleRows = virtualizer.getVirtualItems();
-  const totalWidthClass = "min-w-[1960px]";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-t bg-white">
@@ -422,13 +574,31 @@ export function NativeSpreadsheetGrid({
           <span>{rows.length} rows</span>
           <span>{selectedCount} selected</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <Button type="button" size="sm" variant="outline" onClick={undo} disabled={isBusy || past.length === 0} title="Undo">
+            <Undo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={redo} disabled={isBusy || future.length === 0} title="Redo">
+            <Redo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => void copySelection()} disabled={isBusy || !activeCell} title="Copy">
+            <Copy className="h-3.5 w-3.5" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => void pasteFromClipboard()} disabled={isBusy || !activeCell}>
+            Paste
+          </Button>
           <Button type="button" size="sm" variant="outline" onClick={insertRowAbove} disabled={isBusy}>
             <Plus className="mr-1 h-3.5 w-3.5" />
             Insert
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={appendRows} disabled={isBusy}>
-            Add Rows
+            Add
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => reorderRows("up")} disabled={isBusy || selectedCount === 0} title="Move selected rows up">
+            <ArrowUp className="h-3.5 w-3.5" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => reorderRows("down")} disabled={isBusy || selectedCount === 0} title="Move selected rows down">
+            <ArrowDown className="h-3.5 w-3.5" />
           </Button>
           <Button
             type="button"
@@ -441,6 +611,10 @@ export function NativeSpreadsheetGrid({
             <Trash2 className="mr-1 h-3.5 w-3.5" />
             Delete
           </Button>
+          <Button type="button" size="sm" variant={showDetails ? "secondary" : "outline"} onClick={() => setShowDetails((value) => !value)}>
+            <PanelRightOpen className="mr-1 h-3.5 w-3.5" />
+            Details
+          </Button>
         </div>
       </div>
 
@@ -449,6 +623,14 @@ export function NativeSpreadsheetGrid({
         tabIndex={0}
         className="min-h-0 flex-1 overflow-auto outline-none"
         onPaste={(event) => {
+          const image = fileFromClipboard(event);
+          if (image && activeCell?.column === "reference_image_url") {
+            event.preventDefault();
+            const row = rows[activeCell.rowIndex];
+            if (row) void onStageImage(row, image);
+            return;
+          }
+
           event.preventDefault();
           applyPaste(event.clipboardData.getData("text/plain"));
         }}
@@ -460,6 +642,16 @@ export function NativeSpreadsheetGrid({
           }
         }}
         onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+            event.preventDefault();
+            undo();
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+            event.preventDefault();
+            redo();
+            return;
+          }
           if (!activeCell) return;
           if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
             event.preventDefault();
@@ -467,16 +659,26 @@ export function NativeSpreadsheetGrid({
           }
         }}
       >
-        <div className={cn("sticky top-0 z-10 flex border-b border-slate-300 bg-slate-100 text-[11px] font-semibold uppercase text-slate-600", totalWidthClass)}>
-          <div className="sticky left-0 z-20 flex h-9 w-12 shrink-0 items-center justify-center border-r bg-slate-100">#</div>
-          {COLUMNS.map((column) => (
-            <div key={column.key} className={cn("flex h-9 shrink-0 items-center border-r px-2", column.width)}>
+        <div
+          className="sticky top-0 z-10 flex border-b border-slate-300 bg-slate-100 text-[11px] font-semibold uppercase text-slate-600"
+          style={{ width: totalWidth, minWidth: totalWidth }}
+        >
+          <div className="sticky left-0 z-30 flex h-9 w-12 shrink-0 items-center justify-center border-r bg-slate-100">#</div>
+          {columns.map((column) => (
+            <div
+              key={column.key}
+              className={cn(
+                "flex h-9 shrink-0 items-center border-r bg-slate-100 px-2",
+                column.sticky && "sticky z-20 shadow-[1px_0_0_#cbd5e1]",
+              )}
+              style={{ width: column.width, minWidth: column.width, left: column.sticky ? ROW_NUMBER_WIDTH : undefined }}
+            >
               {column.label}
             </div>
           ))}
         </div>
 
-        <div className={cn("relative", totalWidthClass)} style={{ height: virtualizer.getTotalSize() }}>
+        <div className="relative" style={{ height: virtualizer.getTotalSize(), width: totalWidth, minWidth: totalWidth }}>
           {visibleRows.map((virtualRow) => {
             const row = rows[virtualRow.index];
             if (!row) return null;
@@ -486,18 +688,19 @@ export function NativeSpreadsheetGrid({
                 key={row.row_id}
                 className={cn(
                   "absolute left-0 top-0 flex border-b border-slate-200 text-xs",
-                  totalWidthClass,
                   rowSelected && "bg-primary/5",
                 )}
                 style={{
                   height: virtualRow.size,
                   transform: `translateY(${virtualRow.start}px)`,
+                  width: totalWidth,
+                  minWidth: totalWidth,
                 }}
               >
                 <button
                   type="button"
                   className={cn(
-                    "sticky left-0 z-[2] flex h-10 w-12 shrink-0 items-center justify-center border-r bg-slate-50 text-[11px] text-slate-500",
+                    "sticky left-0 z-[5] flex h-10 w-12 shrink-0 items-center justify-center border-r bg-slate-50 text-[11px] text-slate-500",
                     rowSelected && "bg-primary/10 text-primary",
                   )}
                   onClick={(event) => {
@@ -507,17 +710,30 @@ export function NativeSpreadsheetGrid({
                       else next.add(virtualRow.index);
                       return next;
                     });
-                    onFocusConflict(row.classification === "CONFLICT" ? row : null);
                   }}
                 >
                   {virtualRow.index + 1}
                 </button>
-                {COLUMNS.map((column) => renderCell(row, virtualRow.index, column.key))}
+                {columns.map((column) => renderCell(row, virtualRow.index, column.key))}
               </div>
             );
           })}
         </div>
       </div>
+
+      <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>{previewImage?.label || "Reference Image"}</DialogTitle>
+            <DialogDescription>Reference image attached to the fixture row.</DialogDescription>
+          </DialogHeader>
+          {previewImage ? (
+            <div className="max-h-[72vh] overflow-auto bg-slate-950 p-2">
+              <img src={previewImage.url} alt="" className="mx-auto max-h-[68vh] object-contain" />
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

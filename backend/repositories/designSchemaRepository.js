@@ -798,7 +798,7 @@ async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS design.ingestion_sessions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      department_id TEXT NOT NULL REFERENCES departments(id),
+      department_id TEXT REFERENCES departments(id),
       created_by_employee_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
       file_info JSONB NOT NULL DEFAULT '{}'::jsonb,
       snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -811,6 +811,11 @@ async function ensureDesignDepartmentSchema(client) {
         status IN ('draft', 'committed', 'abandoned')
       )
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE design.ingestion_sessions
+    ALTER COLUMN department_id DROP NOT NULL
   `);
 
   await client.query(`

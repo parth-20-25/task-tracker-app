@@ -1,5 +1,7 @@
 const DESIGN_REVISION_REASON_TYPES = Object.freeze([
   "CUSTOMER_CHANGE",
+  "CUSTOMER_TRIAL_CHANGE",
+  "CUSTOMER_REVISION",
   "INTERNAL_DESIGN_CHANGE",
   "MANUFACTURING_ISSUE",
   "QUALITY_CORRECTION",
@@ -12,6 +14,8 @@ const DESIGN_REVISION_REASON_TYPES = Object.freeze([
 
 const DESIGN_REVISION_REASON_LABELS = Object.freeze({
   CUSTOMER_CHANGE: "Customer Change",
+  CUSTOMER_TRIAL_CHANGE: "Customer Trial Change",
+  CUSTOMER_REVISION: "Customer Revision",
   INTERNAL_DESIGN_CHANGE: "Internal Design Change",
   MANUFACTURING_ISSUE: "Manufacturing Issue",
   QUALITY_CORRECTION: "Quality Correction",

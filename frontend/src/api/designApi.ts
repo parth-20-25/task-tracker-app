@@ -56,6 +56,8 @@ export interface FixtureProgressStage {
 
 export type FixtureRevisionType =
   | "CUSTOMER_CHANGE"
+  | "CUSTOMER_TRIAL_CHANGE"
+  | "CUSTOMER_REVISION"
   | "INTERNAL_DESIGN_CHANGE"
   | "MANUFACTURING_ISSUE"
   | "QUALITY_CORRECTION"

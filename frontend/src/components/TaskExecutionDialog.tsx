@@ -94,12 +94,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     || (access.canEditTasks && actorLevel < assigneeLevel)
   );
   const proofUrls = task.proof_url ?? [];
-  const isDesignWorkflowTask = task.task_type === "department_workflow"
-    && task.department_id?.toLowerCase() === "design"
-    && Boolean(task.fixture_id);
-  const canTransferTask = access.canTransferTasks
-    && isDesignWorkflowTask
-    && !["closed", "cancelled", "under_review"].includes(task.status);
+  const canTransferTask = false;
   const transferCompletion = Number(completionInput);
   const transferRemaining = Number.isInteger(transferCompletion) ? Math.max(0, 100 - transferCompletion) : 0;
   const transferCandidates = transferUsers.filter((candidate) => candidate.employee_id !== task.assigned_to);

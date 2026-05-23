@@ -19,6 +19,8 @@ import { formatDesignRevisionReasonLabel } from "@/lib/designRevisionDisplay";
 
 const REVISION_TYPES: Array<{ value: FixtureRevisionType; label: string }> = [
   { value: "CUSTOMER_CHANGE", label: "Customer change" },
+  { value: "CUSTOMER_TRIAL_CHANGE", label: "Customer trial change" },
+  { value: "CUSTOMER_REVISION", label: "Customer revision" },
   { value: "INTERNAL_DESIGN_CHANGE", label: "Internal design change" },
   { value: "MANUFACTURING_ISSUE", label: "Manufacturing issue" },
   { value: "QUALITY_CORRECTION", label: "Quality correction" },

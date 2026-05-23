@@ -535,6 +535,7 @@ export interface DesignProjectOption {
 export interface DesignFixtureOption {
   fixture_id: string;
   project_id: string | null;
+  department_id?: string | null;
   batch_id?: string | null;
   fixture_no: string;
   part_name: string;

@@ -29,7 +29,6 @@ export function AppSidebar() {
 
   const workItems = [
     access.canViewTeamTasks ? { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList } : null,
-    access.canViewVerifications ? { title: 'Verifications', url: '/verifications', icon: Shield } : null,
     access.canViewAnalytics ? { title: 'Analytics', url: '/analytics', icon: BarChart3 } : null,
     access.canViewReports ? { title: 'Reports', url: '/reports', icon: FileText } : null,
   ].filter(Boolean);

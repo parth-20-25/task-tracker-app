@@ -540,6 +540,8 @@ async function ensureDesignDepartmentSchema(client) {
       CONSTRAINT fixture_workflow_revisions_type_check CHECK (
         revision_type IN (
           'CUSTOMER_CHANGE',
+          'CUSTOMER_TRIAL_CHANGE',
+          'CUSTOMER_REVISION',
           'INTERNAL_DESIGN_CHANGE',
           'MANUFACTURING_ISSUE',
           'QUALITY_CORRECTION',
@@ -560,6 +562,30 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS stage_version INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS revision_code TEXT,
     ADD COLUMN IF NOT EXISTS reason_type TEXT
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_revisions
+    DROP CONSTRAINT IF EXISTS fixture_workflow_revisions_type_check
+  `);
+
+  await client.query(`
+    ALTER TABLE fixture_workflow_revisions
+    ADD CONSTRAINT fixture_workflow_revisions_type_check CHECK (
+      revision_type IN (
+        'CUSTOMER_CHANGE',
+        'CUSTOMER_TRIAL_CHANGE',
+        'CUSTOMER_REVISION',
+        'INTERNAL_DESIGN_CHANGE',
+        'MANUFACTURING_ISSUE',
+        'QUALITY_CORRECTION',
+        'COST_OPTIMIZATION',
+        'APPROVAL_REJECTION',
+        'PROCUREMENT_CONSTRAINT',
+        'MANUAL_OVERRIDE',
+        'OTHER'
+      )
+    )
   `);
 
   await client.query(`

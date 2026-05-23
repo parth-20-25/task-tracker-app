@@ -50,6 +50,16 @@ runTest("requires authoritative reason_type", () => {
   assert.equal(valid.ok, true);
   assert.equal(valid.value, "CUSTOMER_CHANGE");
   assert.equal(getDesignRevisionReasonLabel("CUSTOMER_CHANGE"), "Customer Change");
+
+  const trialChange = normalizeDesignRevisionReasonType("CUSTOMER_TRIAL_CHANGE", { required: true });
+  assert.equal(trialChange.ok, true);
+  assert.equal(trialChange.value, "CUSTOMER_TRIAL_CHANGE");
+  assert.equal(getDesignRevisionReasonLabel("CUSTOMER_TRIAL_CHANGE"), "Customer Trial Change");
+
+  const customerRevision = normalizeDesignRevisionReasonType("CUSTOMER_REVISION", { required: true });
+  assert.equal(customerRevision.ok, true);
+  assert.equal(customerRevision.value, "CUSTOMER_REVISION");
+  assert.equal(getDesignRevisionReasonLabel("CUSTOMER_REVISION"), "Customer Revision");
 });
 
 console.log("design revision checks passed");

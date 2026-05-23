@@ -36,6 +36,10 @@ export function formatDesignRevisionReasonLabel(reasonType: string | null | unde
   switch (String(reasonType || "").trim().toUpperCase()) {
     case "CUSTOMER_CHANGE":
       return "Customer Change";
+    case "CUSTOMER_TRIAL_CHANGE":
+      return "Customer Trial Change";
+    case "CUSTOMER_REVISION":
+      return "Customer Revision";
     case "INTERNAL_DESIGN_CHANGE":
       return "Internal Design Change";
     case "MANUFACTURING_ISSUE":

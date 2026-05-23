@@ -32,25 +32,26 @@ function formatStageLabel(fixture: DesignFixtureOption) {
 }
 
 function resolveWorkflowState(fixture: DesignFixtureOption) {
+  const operationalState = String(fixture.operational_state || "").toUpperCase();
   const status = String(fixture.workflow_status || "").toUpperCase();
 
-  if (fixture.is_workflow_complete || status === "APPROVED") {
+  if (operationalState === "WORKFLOW_COMPLETE" || fixture.is_workflow_complete) {
     return { label: "Completed", tone: "complete" };
   }
 
-  if (fixture.review_pending || status === "COMPLETED") {
-    return { label: "Under Review", tone: "review" };
+  if (operationalState === "VERIFICATION" || fixture.review_pending) {
+    return { label: "Verification", tone: "review" };
   }
 
   if (fixture.blocked || status === "REJECTED") {
     return { label: "Blocked", tone: "rework" };
   }
 
-  if (fixture.workflow_stage_active || status === "IN_PROGRESS") {
+  if (operationalState === "IN_PROGRESS" || fixture.workflow_stage_active || status === "IN_PROGRESS") {
     return { label: "In Progress", tone: "active" };
   }
 
-  if (fixture.workflow_assigned_to) {
+  if (operationalState === "ASSIGNED" || fixture.workflow_assigned_to) {
     return { label: "Assigned", tone: "assigned" };
   }
 

@@ -178,12 +178,6 @@ async function executeDesignStageRework({
     }
 
     const targetStatus = normalizeProgressStatus(lockedTargetStage.status);
-    if (targetStatus !== "APPROVED") {
-      throw new AppError(
-        409,
-        "Design rework requires the target stage to have been completed (approved) before a new revision can be created",
-      );
-    }
 
     const lockedFromStage = lockedProgress.find((stage) => stage.status !== "APPROVED")
       || lockedProgress.sort((a, b) => Number(b.stage_order) - Number(a.stage_order))[0];
@@ -192,16 +186,13 @@ async function executeDesignStageRework({
       throw new AppError(409, "Fixture workflow has no active stage context for rework");
     }
 
-    if (Number(lockedTargetStage.stage_order) > Number(lockedFromStage.stage_order)) {
-      throw new AppError(400, "Revision can only reopen the current or a previous stage");
-    }
-
     const previousRevisionCode = getProgressRevisionCode(lockedTargetStage)
       || (await getLatestStageRevisionForStage(fixtureId, lockedTargetStage.stage_name, client))?.revision_code
       || null;
 
     const previousStageVersion = normalizeStageVersion(lockedTargetStage.stage_version);
-    const nextStageVersion = previousStageVersion + 1;
+    const revisionIncremented = targetStatus === "APPROVED";
+    const nextStageVersion = revisionIncremented ? previousStageVersion + 1 : previousStageVersion;
     const nextRevisionNo = await incrementFixtureRevision(fixtureId, client);
 
     await applyDesignProgressReopenState({
@@ -250,7 +241,7 @@ async function executeDesignStageRework({
         from_stage_version: normalizeStageVersion(lockedFromStage.stage_version),
         to_stage_name: lockedTargetStage.stage_name,
         to_stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
-        revision_incremented: true,
+        revision_incremented: revisionIncremented,
         from_status: lockedFromStage.status,
         to_status: "PENDING",
       },

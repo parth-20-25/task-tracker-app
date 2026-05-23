@@ -7,22 +7,17 @@ import {
   Clock,
   Plus,
   Search,
-  Shield,
   Sparkles,
-  ThumbsDown,
-  ThumbsUp,
   X,
   XCircle,
 } from "lucide-react";
 import {
-  approveFixtureStage,
   assignFixtureStage,
   createDesignTask,
   fetchDesignFixtures,
   fetchDesignProjects,
   fetchFixtureCurrentStage,
   fetchFixtureFullProgress,
-  rejectFixtureStage,
   validateFixtureAssignment,
   type FixtureCurrentStage,
   type FixtureFullProgress,
@@ -190,90 +185,6 @@ function WorkflowTimeline({ progress }: { progress?: FixtureFullProgress }) {
   );
 }
 
-function SupervisorPanel({
-  fixtureId,
-  currentStatus,
-  onAction,
-}: {
-  fixtureId: string;
-  currentStatus: FixtureStageStatus;
-  onAction: () => void;
-}) {
-  const queryClient = useQueryClient();
-
-  const approveMutation = useMutation({
-    mutationFn: () => approveFixtureStage({ fixture_id: fixtureId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot });
-      toast({ title: "Stage approved", description: "The fixture has advanced to the next stage." });
-      onAction();
-    },
-    onError: (err) => {
-      toast({
-        title: "Approval failed",
-        description: err instanceof Error ? err.message : "Failed to approve stage",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const rejectMutation = useMutation({
-    mutationFn: () => rejectFixtureStage({ fixture_id: fixtureId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] });
-      queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] });
-      toast({ title: "Stage rejected", description: "The stage has been sent back for rework." });
-      onAction();
-    },
-    onError: (err) => {
-      toast({
-        title: "Rejection failed",
-        description: err instanceof Error ? err.message : "Failed to reject stage",
-        variant: "destructive",
-      });
-    },
-  });
-
-  if (!["COMPLETED", "IN_PROGRESS"].includes(currentStatus)) return null;
-
-  return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Shield className="h-4 w-4 text-amber-600" />
-          <div>
-            <p className="text-xs font-semibold text-amber-800">Supervisor Verification Required</p>
-            <p className="text-[10px] text-amber-600">This stage is completed and awaiting your review.</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 border-red-200 bg-white text-red-600 hover:bg-red-50 text-xs"
-            onClick={() => rejectMutation.mutate()}
-            disabled={rejectMutation.isPending || approveMutation.isPending}
-          >
-            <ThumbsDown className="mr-1 h-3 w-3" />
-            Reject
-          </Button>
-          <Button
-            size="sm"
-            className="h-7 bg-green-600 text-white hover:bg-green-700 text-xs"
-            onClick={() => approveMutation.mutate()}
-            disabled={rejectMutation.isPending || approveMutation.isPending}
-          >
-            <ThumbsUp className="mr-1 h-3 w-3" />
-            Approve
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function DesignDepartmentTaskAssignmentBar() {
   const queryClient = useQueryClient();
   const assignableUsersQuery = useAssignableUsersQuery();
@@ -396,9 +307,6 @@ export function DesignDepartmentTaskAssignmentBar() {
   const canAssign = hasWorkflow && (validation?.canAssign ?? false);
   const canSubmitAssignment = canAssign || isReassignmentBlocked;
   const workflowProgress = progressQuery.data;
-  const reviewStage = workflowProgress?.stages
-    ? [...workflowProgress.stages].reverse().find((stage) => ["COMPLETED", "IN_PROGRESS"].includes(stage.status)) || null
-    : null;
 
   useEffect(() => {
     console.info("[permissions][change_fixture_stage][frontend]", {
@@ -734,17 +642,6 @@ export function DesignDepartmentTaskAssignmentBar() {
                   <AlertCircle className="h-4 w-4 flex-shrink-0 text-destructive" />
                   <p className="text-xs font-medium text-destructive">{visibleBlockingReason}</p>
                 </div>
-              )}
-
-              {canChangeFixtureStage && hasWorkflow && reviewStage && (
-                <SupervisorPanel
-                  fixtureId={fixtureId}
-                  currentStatus={reviewStage.status}
-                  onAction={() => {
-                    refreshWorkflowState();
-                    queryClient.invalidateQueries({ queryKey: ["designFixtures", designDepartmentKey, projectId] });
-                  }}
-                />
               )}
             </div>
           )}

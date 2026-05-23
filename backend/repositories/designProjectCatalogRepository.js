@@ -13,6 +13,10 @@ const {
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("./projectVisibility");
+const {
+  activeTaskLateral,
+  operationalStateSqlCase,
+} = require("../services/operationalStateResolver");
 
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
@@ -40,6 +44,29 @@ const DEPARTMENT_PROJECT_SELECT = `
     ON fixture_stats.project_id = p.id
 `;
 
+function collapseProjectLabel(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripLegacyWbsPrefix(value) {
+  return collapseProjectLabel(value).replace(/^WBS\s*[-_]?\s*/i, "");
+}
+
+function normalizeProjectNo(value) {
+  return stripLegacyWbsPrefix(value)
+    .replace(/\s+/g, "")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .toUpperCase();
+}
+
+function normalizeProjectName(value) {
+  return stripLegacyWbsPrefix(value);
+}
+
 function mapDepartmentProjectRow(row) {
   if (!row) {
     return null;
@@ -47,8 +74,8 @@ function mapDepartmentProjectRow(row) {
 
   return {
     project_id: row.project_id || row.id || null,
-    project_code: row.project_no,
-    project_name: row.project_name,
+    project_code: normalizeProjectNo(row.project_no),
+    project_name: normalizeProjectName(row.project_name),
     company_name: row.customer_name,
     project_description: row.project_description,
     quantity_index: row.quantity_index,
@@ -72,14 +99,15 @@ function mapDesignProjectRow(row) {
 
   return {
     project_id: row.project_id || row.id,
-    project_code: row.project_no,
-    project_name: row.project_name,
+    project_code: normalizeProjectNo(row.project_no),
+    project_name: normalizeProjectName(row.project_name),
     company_name: row.customer_name,
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    was_created: row.was_created === true,
   };
 }
 
@@ -90,8 +118,8 @@ function mapProjectOptionRow(row) {
 
   return {
     project_id: row.project_id || row.id,
-    project_code: row.project_no,
-    project_name: row.project_name,
+    project_code: normalizeProjectNo(row.project_no),
+    project_name: normalizeProjectName(row.project_name),
     company_name: row.customer_name,
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
@@ -118,8 +146,8 @@ function mapProjectSummaryRow(row) {
 
   return {
     project_id: row.project_id,
-    project_no: row.project_no,
-    project_name: row.project_name,
+    project_no: normalizeProjectNo(row.project_no),
+    project_name: normalizeProjectName(row.project_name),
     customer_name: row.customer_name,
     department_id: row.department_id,
     department_name: row.department_name || null,
@@ -176,24 +204,14 @@ function mapFixtureOptionRow(row) {
     workflow_stage_version: stageVersion,
     workflow_revision_code: workflowRevisionCode,
     workflow_status: workflowStatus,
-    operational_state: row.operational_state || (
-      workflowStatus === "APPROVED"
-        ? "APPROVED"
-        : workflowStatus === "REJECTED"
-          ? "REJECTED"
-          : workflowStatus === "SUBMITTED_FOR_VERIFICATION"
-            ? "SUBMITTED_FOR_VERIFICATION"
-            : workflowStatus === "IN_PROGRESS"
-              ? (row.workflow_started_at ? "IN_PROGRESS" : "ASSIGNED_NOT_STARTED")
-              : "UNASSIGNED"
-    ),
+    operational_state: row.operational_state || "UNASSIGNED",
     workflow_assigned_to: row.workflow_assigned_to || null,
     workflow_assigned_to_name: row.workflow_assigned_to_name || null,
     workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
       ? null
       : Number(row.workflow_progress_percent),
-    workflow_stage_active: workflowStatus === "IN_PROGRESS",
-    review_pending: workflowStatus === "SUBMITTED_FOR_VERIFICATION",
+    workflow_stage_active: row.operational_state === "IN_PROGRESS",
+    review_pending: row.operational_state === "VERIFICATION",
     blocked: workflowStatus === "REJECTED",
   };
 }
@@ -213,41 +231,27 @@ function sqlRoleKey(expression) {
 }
 
 function fixtureOperationalStatsLateral(projectAlias = "p") {
+  const stateCase = operationalStateSqlCase({
+    fixtureAlias: "f",
+    projectAlias,
+    taskAlias: "operational_task",
+  });
+
   return `
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::integer AS total_fixtures,
-          COUNT(*) FILTER (WHERE fixture_state.is_completed)::integer AS completed_fixtures,
-          COUNT(*) FILTER (
-            WHERE NOT fixture_state.is_completed
-              AND fixture_state.is_active
-          )::integer AS active_fixtures,
-          COUNT(*) FILTER (
-            WHERE NOT fixture_state.is_completed
-              AND NOT fixture_state.is_active
-          )::integer AS pending_fixtures
+          COUNT(*) FILTER (WHERE fixture_state.operational_state = 'WORKFLOW_COMPLETE')::integer AS completed_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.operational_state IN ('VERIFICATION', 'IN_PROGRESS', 'ASSIGNED'))::integer AS active_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.operational_state = 'UNASSIGNED')::integer AS pending_fixtures
         FROM (
           SELECT
             f.id,
-            (
-              f.is_workflow_complete IS TRUE
-              OR (
-                COUNT(fwp.fixture_id) > 0
-                AND BOOL_AND(UPPER(COALESCE(fwp.status, '')) = 'APPROVED')
-              )
-            ) AS is_completed,
-            COALESCE(BOOL_OR(
-              UPPER(COALESCE(fwp.status, '')) IN ('IN_PROGRESS', 'COMPLETED', 'REJECTED')
-              OR fwp.assigned_to IS NOT NULL
-              OR fwp.started_at IS NOT NULL
-            ), FALSE) AS is_active
+            ${stateCase} AS operational_state
           FROM design.fixtures f
-          LEFT JOIN fixture_workflow_progress fwp
-            ON fwp.fixture_id = f.id
-           AND fwp.department_id = ${projectAlias}.department_id
+          ${activeTaskLateral("f", "operational_task")}
           WHERE f.project_id = ${projectAlias}.id
             AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
-          GROUP BY f.id, f.is_workflow_complete
         ) fixture_state
       ) fixture_stats ON TRUE
   `;
@@ -672,6 +676,9 @@ async function upsertProjectByNumber(project, client = pool) {
   if (!createdByUserId) {
     throw new AppError(400, "created_by_user_id is required for design project creation");
   }
+  const projectNo = normalizeProjectNo(project.project_no);
+  const projectName = normalizeProjectName(project.project_name);
+  const customerName = collapseProjectLabel(project.customer_name);
 
   const insertedProject = await client.query(
     `
@@ -717,9 +724,9 @@ async function upsertProjectByNumber(project, client = pool) {
       FROM upserted_project
     `,
     [
-      project.project_no,
-      project.project_name,
-      project.customer_name,
+      projectNo,
+      projectName,
+      customerName,
       project.department_id,
       project.uploaded_by || null,
       createdByUserId,
@@ -771,13 +778,19 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
         current_progress.status AS workflow_status,
-        current_progress.assigned_to AS workflow_assigned_to,
-        current_progress.started_at AS workflow_started_at,
-        current_progress.operational_state,
+        COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
+        COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
+        ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })} AS operational_state,
+        operational_task.id AS operational_task_id,
+        operational_task.status AS operational_task_status,
+        operational_task.completion_percent AS operational_task_completion_percent,
+        operational_task.deadline AS operational_task_deadline,
+        operational_task.submitted_at AS operational_task_submitted_at,
         workflow_assignee.name AS workflow_assigned_to_name
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      ${activeTaskLateral("di", "operational_task")}
       LEFT JOIN LATERAL (
         SELECT
           fwp.stage_name,
@@ -786,14 +799,6 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
           fwp.status,
           fwp.assigned_to,
           fwp.started_at,
-          CASE
-            WHEN fwp.status = 'APPROVED' THEN 'APPROVED'
-            WHEN fwp.status = 'REJECTED' THEN 'REJECTED'
-            WHEN fwp.status = 'SUBMITTED_FOR_VERIFICATION' THEN 'SUBMITTED_FOR_VERIFICATION'
-            WHEN fwp.status = 'IN_PROGRESS' AND fwp.started_at IS NULL THEN 'ASSIGNED_NOT_STARTED'
-            WHEN fwp.status = 'IN_PROGRESS' THEN 'IN_PROGRESS'
-            ELSE 'UNASSIGNED'
-          END AS operational_state,
           COUNT(*) OVER()::integer AS total_stages
         FROM fixture_workflow_progress fwp
         WHERE fwp.fixture_id = di.id
@@ -805,20 +810,19 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         LIMIT 1
       ) current_progress ON TRUE
       LEFT JOIN users workflow_assignee
-        ON workflow_assignee.employee_id = current_progress.assigned_to
+        ON workflow_assignee.employee_id = COALESCE(operational_task.assigned_to, current_progress.assigned_to)
      WHERE dp.id = $1
        AND dp.department_id = $2
        AND ($3::boolean = FALSE OR COALESCE(dp.status, $4) = $4)
-     ORDER BY
-       CASE COALESCE(current_progress.operational_state, 'UNASSIGNED')
-         WHEN 'SUBMITTED_FOR_VERIFICATION' THEN 1
-         WHEN 'REJECTED' THEN 2
-         WHEN 'UNASSIGNED' THEN 3
-         WHEN 'IN_PROGRESS' THEN 4
-         WHEN 'ASSIGNED_NOT_STARTED' THEN 5
-         WHEN 'APPROVED' THEN 6
-         ELSE 7
-       END ASC,
+      ORDER BY
+        CASE ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })}
+          WHEN 'VERIFICATION' THEN 1
+          WHEN 'UNASSIGNED' THEN 3
+          WHEN 'IN_PROGRESS' THEN 4
+          WHEN 'ASSIGNED' THEN 5
+          WHEN 'WORKFLOW_COMPLETE' THEN 6
+          ELSE 7
+        END ASC,
        di.fixture_no ASC,
        di.id ASC
     `,
@@ -854,13 +858,19 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
         current_progress.status AS workflow_status,
-        current_progress.assigned_to AS workflow_assigned_to,
-        current_progress.started_at AS workflow_started_at,
-        current_progress.operational_state,
+        COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
+        COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
+        ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })} AS operational_state,
+        operational_task.id AS operational_task_id,
+        operational_task.status AS operational_task_status,
+        operational_task.completion_percent AS operational_task_completion_percent,
+        operational_task.deadline AS operational_task_deadline,
+        operational_task.submitted_at AS operational_task_submitted_at,
         workflow_assignee.name AS workflow_assigned_to_name
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      ${activeTaskLateral("di", "operational_task")}
       LEFT JOIN LATERAL (
         SELECT
           fwp.stage_name,
@@ -869,14 +879,6 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
           fwp.status,
           fwp.assigned_to,
           fwp.started_at,
-          CASE
-            WHEN fwp.status = 'APPROVED' THEN 'APPROVED'
-            WHEN fwp.status = 'REJECTED' THEN 'REJECTED'
-            WHEN fwp.status = 'SUBMITTED_FOR_VERIFICATION' THEN 'SUBMITTED_FOR_VERIFICATION'
-            WHEN fwp.status = 'IN_PROGRESS' AND fwp.started_at IS NULL THEN 'ASSIGNED_NOT_STARTED'
-            WHEN fwp.status = 'IN_PROGRESS' THEN 'IN_PROGRESS'
-            ELSE 'UNASSIGNED'
-          END AS operational_state,
           COUNT(*) OVER()::integer AS total_stages
         FROM fixture_workflow_progress fwp
         WHERE fwp.fixture_id = di.id
@@ -888,19 +890,18 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         LIMIT 1
       ) current_progress ON TRUE
       LEFT JOIN users workflow_assignee
-        ON workflow_assignee.employee_id = current_progress.assigned_to
+        ON workflow_assignee.employee_id = COALESCE(operational_task.assigned_to, current_progress.assigned_to)
       WHERE dp.id = $2
         AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
         AND ($4::boolean = FALSE OR COALESCE(dp.status, $5) = $5)
       ORDER BY
-        CASE COALESCE(current_progress.operational_state, 'UNASSIGNED')
-          WHEN 'SUBMITTED_FOR_VERIFICATION' THEN 1
-          WHEN 'REJECTED' THEN 2
+        CASE ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })}
+          WHEN 'VERIFICATION' THEN 1
           WHEN 'UNASSIGNED' THEN 3
           WHEN 'IN_PROGRESS' THEN 4
-          WHEN 'ASSIGNED_NOT_STARTED' THEN 5
-          WHEN 'APPROVED' THEN 6
+          WHEN 'ASSIGNED' THEN 5
+          WHEN 'WORKFLOW_COMPLETE' THEN 6
           ELSE 7
         END ASC,
         di.fixture_no ASC,

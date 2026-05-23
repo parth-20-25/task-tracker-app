@@ -5,6 +5,7 @@ import {
   ArrowRightLeft,
   CalendarIcon,
   CheckSquare,
+  ChevronDown,
   Image as ImageIcon,
   Loader2,
   User,
@@ -26,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -91,14 +93,11 @@ function getCurrentProgressStage(progress: FixtureFullProgress | null | undefine
 }
 
 function getAssignableWorkflowOptions(progress: FixtureFullProgress | null | undefined) {
-  const currentStage = getCurrentProgressStage(progress);
-
   if (!progress?.stages) {
     return [];
   }
 
   return progress.stages
-    .filter((stage) => stage.status === "APPROVED" || stage.stage_name === currentStage?.stage_name)
     .sort((left, right) => Number(left.stage_order) - Number(right.stage_order));
 }
 
@@ -125,7 +124,8 @@ function formatDeadlineDate(dateValue: string) {
 }
 
 function isFixtureOperationallyAssigned(fixture: DesignFixtureOption, task: Task | null) {
-  return !["UNASSIGNED", "REJECTED"].includes(String(fixture.operational_state || "UNASSIGNED"));
+  void task;
+  return !["UNASSIGNED", "WORKFLOW_COMPLETE"].includes(String(fixture.operational_state || "UNASSIGNED"));
 }
 
 function fixtureStageStatusLabel(status: string | null | undefined) {
@@ -136,12 +136,14 @@ function fixtureStageStatusLabel(status: string | null | undefined) {
       return "Pending";
     case "APPROVED":
       return "Approved";
+    case "VERIFICATION":
+      return "Verification";
     case "REJECTED":
       return "Rejected";
-    case "SUBMITTED_FOR_VERIFICATION":
-      return "Submitted For Verification";
-    case "ASSIGNED_NOT_STARTED":
-      return "Assigned Not Started";
+    case "ASSIGNED":
+      return "Assigned";
+    case "WORKFLOW_COMPLETE":
+      return "Workflow Complete";
     case "UNASSIGNED":
       return "Unassigned";
     default:
@@ -157,9 +159,11 @@ function fixtureStageStatusColor(status: string | null | undefined) {
       return "border-amber-300 bg-amber-50 text-amber-800";
     case "APPROVED":
       return "border-emerald-300 bg-emerald-50 text-emerald-800";
+    case "WORKFLOW_COMPLETE":
+      return "border-emerald-300 bg-emerald-50 text-emerald-800";
     case "REJECTED":
       return "border-red-300 bg-red-50 text-red-800";
-    case "SUBMITTED_FOR_VERIFICATION":
+    case "VERIFICATION":
       return "border-violet-300 bg-violet-50 text-violet-800";
     case "UNASSIGNED":
       return "border-slate-300 bg-slate-50 text-slate-700";
@@ -224,7 +228,18 @@ function pickFixtureTask(fixture: DesignFixtureOption, tasks: Task[]) {
 
 function getProofImage(task: Task | null) {
   const proofUrls = task?.proof_url ?? [];
+  if (task?.latest_proof?.file_url) {
+    return task.latest_proof.file_url;
+  }
   return proofUrls.length > 0 ? proofUrls[proofUrls.length - 1] : null;
+}
+
+function getProofUploadedAt(task: Task | null) {
+  return task?.latest_proof?.uploaded_at || null;
+}
+
+function getProofUploadedBy(task: Task | null) {
+  return task?.latest_proof?.uploaded_by_name || task?.latest_proof?.uploaded_by || null;
 }
 
 function getAssigneeName(fixture: DesignFixtureOption, task: Task | null) {
@@ -245,6 +260,53 @@ interface ProjectFixtureOperationsGridProps {
   departmentId?: string | null;
 }
 
+const FIXTURE_SECTION_ORDER = [
+  { key: "VERIFICATION", label: "Verification" },
+  { key: "UNASSIGNED", label: "Unassigned" },
+  { key: "IN_PROGRESS", label: "In Progress" },
+  { key: "ASSIGNED", label: "Assigned" },
+  { key: "WORKFLOW_COMPLETE", label: "Workflow Complete" },
+] as const;
+
+function compareFixtureNo(left: DesignFixtureOption, right: DesignFixtureOption) {
+  return String(left.fixture_no || "").localeCompare(String(right.fixture_no || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function sortSectionFixtures(
+  state: string,
+  fixtures: DesignFixtureOption[],
+  fixtureTaskById: Map<string, Task | null>,
+) {
+  return [...fixtures].sort((left, right) => {
+    const leftTask = fixtureTaskById.get(left.fixture_id) || null;
+    const rightTask = fixtureTaskById.get(right.fixture_id) || null;
+
+    if (state === "VERIFICATION") {
+      return new Date(getSubmittedValue(leftTask) || 0).getTime() - new Date(getSubmittedValue(rightTask) || 0).getTime();
+    }
+
+    if (state === "IN_PROGRESS") {
+      return Number(rightTask?.completion_percent || 0) - Number(leftTask?.completion_percent || 0) || compareFixtureNo(left, right);
+    }
+
+    if (state === "ASSIGNED") {
+      return new Date(leftTask?.deadline || "9999-12-31").getTime() - new Date(rightTask?.deadline || "9999-12-31").getTime()
+        || compareFixtureNo(left, right);
+    }
+
+    if (state === "WORKFLOW_COMPLETE") {
+      return new Date(rightTask?.approved_at || rightTask?.closed_at || 0).getTime()
+        - new Date(leftTask?.approved_at || leftTask?.closed_at || 0).getTime()
+        || compareFixtureNo(left, right);
+    }
+
+    return compareFixtureNo(left, right);
+  });
+}
+
 export function ProjectFixtureOperationsGrid({
   fixtures,
   projectId,
@@ -256,6 +318,13 @@ export function ProjectFixtureOperationsGrid({
   const assignableUsersQuery = useAssignableUsersQuery();
   const [bulkPanelOpen, setBulkPanelOpen] = useState(false);
   const [selectedFixtureIds, setSelectedFixtureIds] = useState<string[]>([]);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    VERIFICATION: true,
+    UNASSIGNED: true,
+    IN_PROGRESS: true,
+    ASSIGNED: true,
+    WORKFLOW_COMPLETE: false,
+  });
 
   const verificationQuery = useQuery({
     queryKey: taskQueryKeys.verificationQueue,
@@ -285,9 +354,31 @@ export function ProjectFixtureOperationsGrid({
   }, [combinedTasks, fixtures]);
 
   const unassignedFixtures = useMemo(
-    () => fixtures.filter((fixture) => !isFixtureOperationallyAssigned(fixture, fixtureTaskById.get(fixture.fixture_id) || null)),
-    [fixtureTaskById, fixtures],
+    () => fixtures.filter((fixture) => String(fixture.operational_state || "UNASSIGNED") === "UNASSIGNED"),
+    [fixtures],
   );
+  const fixtureSections = useMemo(() => {
+    const seen = new Set<string>();
+
+    return FIXTURE_SECTION_ORDER.map((section) => {
+      const sectionFixtures = fixtures.filter((fixture) => {
+        if (seen.has(fixture.fixture_id)) {
+          return false;
+        }
+
+        const matches = String(fixture.operational_state || "UNASSIGNED") === section.key;
+        if (matches) {
+          seen.add(fixture.fixture_id);
+        }
+        return matches;
+      });
+
+      return {
+        ...section,
+        fixtures: sortSectionFixtures(section.key, sectionFixtures, fixtureTaskById),
+      };
+    });
+  }, [fixtureTaskById, fixtures]);
 
   const invalidateOperationalState = useCallback(async () => {
     await Promise.all([
@@ -340,21 +431,45 @@ export function ProjectFixtureOperationsGrid({
         />
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {fixtures.map((fixture) => (
-          <ProjectFixtureCard
-            key={fixture.fixture_id}
-            fixture={fixture}
-            task={fixtureTaskById.get(fixture.fixture_id) || null}
-            projectId={projectId}
-            departmentId={departmentId || undefined}
-            assignableUsers={assignableUsersQuery.data ?? []}
-            isLoadingUsers={assignableUsersQuery.isLoading}
-            invalidateOperationalState={invalidateOperationalState}
-            selectable={bulkPanelOpen && unassignedFixtures.some((item) => item.fixture_id === fixture.fixture_id)}
-            selected={selectedFixtureIds.includes(fixture.fixture_id)}
-            onSelectedChange={toggleSelectedFixture}
-          />
+      <div className="space-y-3">
+        {fixtureSections.map((section) => (
+          <Collapsible
+            key={section.key}
+            open={openSections[section.key] ?? true}
+            onOpenChange={(open) => setOpenSections((current) => ({ ...current, [section.key]: open }))}
+            className="rounded-lg border bg-background"
+          >
+            <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-left">
+              <span className="text-sm font-semibold">{section.label}</span>
+              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant="outline">{section.fixtures.length}</Badge>
+                <ChevronDown className={cn("h-4 w-4 transition-transform", openSections[section.key] ? "rotate-180" : "")} />
+              </span>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="border-t p-3">
+              {section.fixtures.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {section.fixtures.map((fixture) => (
+                    <ProjectFixtureCard
+                      key={fixture.fixture_id}
+                      fixture={fixture}
+                      task={fixtureTaskById.get(fixture.fixture_id) || null}
+                      projectId={projectId}
+                      departmentId={departmentId || undefined}
+                      assignableUsers={assignableUsersQuery.data ?? []}
+                      isLoadingUsers={assignableUsersQuery.isLoading}
+                      invalidateOperationalState={invalidateOperationalState}
+                      selectable={bulkPanelOpen && section.key === "UNASSIGNED"}
+                      selected={selectedFixtureIds.includes(fixture.fixture_id)}
+                      onSelectedChange={toggleSelectedFixture}
+                    />
+                  ))}
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
         ))}
       </div>
     </div>
@@ -758,12 +873,12 @@ function ProjectFixtureCard({
   const workflowChanged = Boolean(workflowTarget && workflowTarget !== currentProgressStage?.stage_name);
   const canAssignCurrent = validationQuery.data?.canAssign === true;
   const assignmentBlockedReason = validationQuery.data?.reason || null;
-  const workflowChangeAllowed = workflowChanged && selectedWorkflowStage?.status === "APPROVED";
+  const workflowChangeAllowed = workflowChanged && Boolean(selectedWorkflowStage);
   const canSubmitAssignment = workflowChanged ? workflowChangeAllowed : canAssignCurrent;
 
   const proofImage = getProofImage(task);
   const canonicalOperationalState = fixture.operational_state || "UNASSIGNED";
-  const isSubmittedForVerification = canonicalOperationalState === "SUBMITTED_FOR_VERIFICATION";
+  const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
   const isAssigned = isFixtureOperationallyAssigned(fixture, task);
   const workflowCode = getFixtureWorkflowCode(fixture);
   const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
@@ -995,13 +1110,20 @@ function ProjectFixtureCard({
         {isSubmittedForVerification ? (
           <div className="space-y-2">
             {proofImage ? (
-              <button
-                type="button"
-                className="block h-24 w-32 overflow-hidden rounded-md border bg-slate-50"
-                onClick={() => setPreviewImage(toProofUrl(proofImage))}
-              >
-                <img src={toProofUrl(proofImage)} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  className="block h-24 w-32 overflow-hidden rounded-md border bg-slate-50"
+                  onClick={() => setPreviewImage(toProofUrl(proofImage))}
+                >
+                  <img src={toProofUrl(proofImage)} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
+                </button>
+                <div className="min-w-0 text-xs text-muted-foreground">
+                  <p className="font-medium text-foreground">Work proof</p>
+                  <p>{formatSubmittedDate(getProofUploadedAt(task))}</p>
+                  <p className="truncate">{getProofUploadedBy(task) || "Unknown uploader"}</p>
+                </div>
+              </div>
             ) : (
               <div className="flex h-20 w-28 items-center justify-center rounded-md border border-dashed bg-slate-50 text-slate-400">
                 <ImageIcon className="h-5 w-5" />
@@ -1128,7 +1250,7 @@ function ProjectFixtureCard({
                 </SelectContent>
               </Select>
               {!workflowChangeAllowed ? (
-                <p className="text-xs text-amber-700">Workflow changes can only reopen an approved stage.</p>
+                <p className="text-xs text-amber-700">Choose a configured workflow stage.</p>
               ) : null}
             </div>
           ) : null}

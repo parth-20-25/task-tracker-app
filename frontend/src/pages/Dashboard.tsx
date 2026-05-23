@@ -140,8 +140,9 @@ export default function Dashboard() {
   const fixtures = fixtureQuery.data ?? [];
 
   const fixtureAssignmentSummary = useMemo(() => {
-    const assigned = fixtures.filter(f => Boolean(f.workflow_assigned_to)).length;
-    return { assigned, unassigned: fixtures.length - assigned, total: fixtures.length };
+    const assigned = fixtures.filter((fixture) => ["ASSIGNED", "IN_PROGRESS", "VERIFICATION"].includes(String(fixture.operational_state || ""))).length;
+    const complete = fixtures.filter((fixture) => fixture.operational_state === "WORKFLOW_COMPLETE").length;
+    return { assigned, unassigned: fixtures.length - assigned - complete, total: fixtures.length };
   }, [fixtures]);
 
   const teamLeaderGroups = useMemo(() => {

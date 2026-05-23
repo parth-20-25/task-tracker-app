@@ -112,11 +112,20 @@ export interface Task {
   current_stage_id?: string;
   workflow_stage?: string | null;
   workflow_status?: string | null;
+  operational_state?: "VERIFICATION" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
   workflow_stage_version?: number;
   fixture_revision_no?: number;
   workflow_contributor_names?: string | null;
   part_name?: string | null;
   activity_count?: number;
+  latest_proof?: {
+    file_url: string;
+    file_name?: string | null;
+    mime_type?: string | null;
+    uploaded_by?: string | null;
+    uploaded_by_name?: string | null;
+    uploaded_at?: string | null;
+  } | null;
   assignee?: User;
   assigner?: User;
 }
@@ -554,7 +563,7 @@ export interface DesignFixtureOption {
   workflow_stage_version?: number | null;
   workflow_revision_code?: string | null;
   workflow_status?: string | null;
-  operational_state?: "UNASSIGNED" | "ASSIGNED_NOT_STARTED" | "IN_PROGRESS" | "SUBMITTED_FOR_VERIFICATION" | "REJECTED" | "APPROVED" | string | null;
+  operational_state?: "VERIFICATION" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
   workflow_assigned_to?: string | null;
   workflow_assigned_to_name?: string | null;
   workflow_progress_percent?: number | null;

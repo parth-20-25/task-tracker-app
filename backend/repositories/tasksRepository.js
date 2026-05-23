@@ -42,6 +42,7 @@ function taskSelectQuery(whereClause = "") {
       COALESCE(project.customer_name, NULLIF(t.customer_name, '')) AS resolved_customer_name,
       COALESCE(fixture.fixture_no, NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, '')) AS resolved_fixture_no,
       fixture.part_name AS resolved_part_name,
+      fixture.is_workflow_complete AS resolved_fixture_workflow_complete,
       project.uploaded_by AS project_uploaded_by,
       project.created_by_user_id AS project_created_by_user_id,
       COALESCE(project.status, 'active') AS project_status,
@@ -50,11 +51,17 @@ function taskSelectQuery(whereClause = "") {
       t.workflow_id,
       t.current_stage_id,
       t.lifecycle_status,
-      COALESCE(stage.stage_name, stage.name) AS workflow_stage,
+      COALESCE(workflow_progress.stage_name, NULLIF(t.stage, ''), stage.stage_name, stage.name) AS workflow_stage,
       workflow_progress.status AS workflow_status,
       COALESCE(workflow_progress.stage_version, 0) AS workflow_stage_version,
       COALESCE(fixture.revision_no, 0) AS fixture_revision_no,
       template.template_name AS workflow_template_name,
+      latest_attachment.file_url AS latest_proof_file_url,
+      latest_attachment.file_name AS latest_proof_file_name,
+      latest_attachment.mime_type AS latest_proof_mime_type,
+      latest_attachment.uploaded_by AS latest_proof_uploaded_by,
+      proof_uploader.name AS latest_proof_uploaded_by_name,
+      latest_attachment.uploaded_at AS latest_proof_uploaded_at,
       (
         SELECT STRING_AGG(
           DISTINCT COALESCE(contributor.name, contribution.employee_id),
@@ -66,7 +73,7 @@ function taskSelectQuery(whereClause = "") {
           ON contributor.employee_id = contribution.employee_id
         WHERE contribution.fixture_id = t.fixture_id
           AND contribution.department_id = t.department_id
-          AND COALESCE(contribution.stage_name, '') = COALESCE(stage.stage_name, stage.name, '')
+          AND COALESCE(contribution.stage_name, '') = COALESCE(workflow_progress.stage_name, NULLIF(t.stage, ''), stage.stage_name, stage.name, '')
           AND contribution.superseded_by IS NULL
       ) AS workflow_contributor_names,
       (
@@ -82,7 +89,7 @@ function taskSelectQuery(whereClause = "") {
     LEFT JOIN fixture_workflow_progress workflow_progress
       ON workflow_progress.fixture_id = t.fixture_id
       AND workflow_progress.department_id = t.department_id
-      AND workflow_progress.stage_name = COALESCE(stage.stage_name, stage.name)
+      AND LOWER(workflow_progress.stage_name) = LOWER(COALESCE(NULLIF(t.stage, ''), stage.stage_name, stage.name))
     LEFT JOIN design.projects project
       ON (
         t.project_id IS NOT NULL
@@ -101,6 +108,14 @@ function taskSelectQuery(whereClause = "") {
       )
     LEFT JOIN design.upload_batches fixture_batch
       ON fixture_batch.id = fixture.batch_id
+    LEFT JOIN LATERAL (
+      SELECT file_url, file_name, mime_type, uploaded_by, uploaded_at
+      FROM task_attachments attachment
+      WHERE attachment.task_id = t.id
+      ORDER BY attachment.uploaded_at DESC, attachment.id DESC
+      LIMIT 1
+    ) latest_attachment ON TRUE
+    LEFT JOIN users proof_uploader ON proof_uploader.employee_id = latest_attachment.uploaded_by
     LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id

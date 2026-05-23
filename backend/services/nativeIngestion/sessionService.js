@@ -8,7 +8,6 @@ const { generateUUID } = require("../../lib/uuid");
 const { createAuditLog } = require("../../repositories/auditRepository");
 const {
   createUploadBatch,
-  findActiveUploadBatchIdForProject,
   upsertProjectByNumber,
 } = require("../../repositories/designProjectCatalogRepository");
 const { getActiveWorkflowForDepartment } = require("../../repositories/fixtureWorkflowRepository");
@@ -541,16 +540,14 @@ async function commitNativeSession(user, sessionId, payload = {}) {
     );
 
     const projectWasCreated = project.was_created === true;
-    const batchId = projectWasCreated
-      ? await createUploadBatch({
+    const batchId = await createUploadBatch({
         project_id: project.project_id,
         uploaded_by: user.employee_id,
         uploaded_by_user_id: user.employee_id,
         total_rows: promotedRows.length,
         accepted_rows: promotedRows.length,
         rejected_rows: 0,
-      }, client)
-      : await findActiveUploadBatchIdForProject(project.project_id, client);
+      }, client);
 
     const syncAudit = await synchronizeDesignWorkflowTruthFromIngestion(client, {
       projectId: project.project_id,

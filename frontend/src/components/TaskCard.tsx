@@ -38,8 +38,8 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
   const handleExecutionAction = async (action: "start" | "resume" | "hold" | "submit") => {
     if (action === 'submit' && proofUrls.length === 0) {
       toast({
-        title: 'Upload proof first',
-        description: 'Open Track -> Proof and upload an image before submitting this task.',
+        title: 'Work proof required',
+        description: 'Work proof image required before verification submission',
         variant: 'destructive',
       });
       return;

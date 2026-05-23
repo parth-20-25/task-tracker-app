@@ -184,8 +184,12 @@ function collapseIdentityWhitespace(value: unknown) {
     .trim();
 }
 
+function stripLegacyWbsPrefix(value: unknown) {
+  return collapseIdentityWhitespace(value).replace(/^WBS\s*[-_]?\s*/i, "");
+}
+
 function normalizeProjectCode(value: unknown) {
-  return collapseIdentityWhitespace(value)
+  return stripLegacyWbsPrefix(value)
     .replace(/\s+/g, "")
     .replace(/^[-_]+|[-_]+$/g, "")
     .toUpperCase();
@@ -219,7 +223,7 @@ function splitOnLastSeparator(value: string) {
 }
 
 export function parseProjectIdentityInput(value: string) {
-  const rawIdentity = String(value || "").replace(/\r\n/g, "\n").replace(/\n+/g, " ").trim();
+  const rawIdentity = stripLegacyWbsPrefix(value);
   if (!rawIdentity) {
     return { project_code: "", project_name: "", customer_name: "" };
   }
@@ -245,7 +249,7 @@ export function parseProjectIdentityInput(value: string) {
 
 export function formatProjectIdentity(context: Partial<NativeIngestionContext>) {
   return [
-    context.project_code,
+    normalizeProjectCode(context.project_code),
     context.project_name,
     context.customer_name,
   ].map(collapseIdentityWhitespace).filter(Boolean).join(" - ");
@@ -260,9 +264,10 @@ export function hydrateProjectIdentityContext(
   identityValue = context.project_identity,
 ): NativeIngestionContext {
   const parsed = parseProjectIdentityInput(identityValue);
+  const displayIdentity = stripLegacyWbsPrefix(identityValue);
   const next = {
     ...context,
-    project_identity: identityValue,
+    project_identity: displayIdentity,
     project_code: parsed.project_code,
     project_name: parsed.project_name,
     customer_name: parsed.customer_name,
@@ -270,7 +275,7 @@ export function hydrateProjectIdentityContext(
 
   return {
     ...next,
-    project_identity: identityValue || formatProjectIdentity(next),
+    project_identity: displayIdentity || formatProjectIdentity(next),
   };
 }
 

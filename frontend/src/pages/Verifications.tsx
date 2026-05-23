@@ -156,12 +156,15 @@ export default function Verifications() {
                     {task.requires_quality_approval && <span>Quality approval required</span>}
                   </div>
                   {task.proof_url?.length ? (
-                    <div className="flex flex-wrap gap-3 text-xs">
-                      {task.proof_url.map((url, i) => (
-                        <a key={i} href={toProofUrl(url)} target="_blank" rel="noopener noreferrer" className="text-primary underline">
-                          View Proof {i + 1}
-                        </a>
-                      ))}
+                    <div className="flex flex-wrap items-center gap-3 text-xs">
+                      <a href={toProofUrl(task.latest_proof?.file_url || task.proof_url[task.proof_url.length - 1])} target="_blank" rel="noopener noreferrer" className="block h-20 w-28 overflow-hidden rounded-md border bg-slate-50">
+                        <img src={toProofUrl(task.latest_proof?.file_url || task.proof_url[task.proof_url.length - 1])} alt="Work proof" className="h-full w-full object-cover" />
+                      </a>
+                      <div className="text-muted-foreground">
+                        <p className="font-medium text-foreground">Work proof</p>
+                        <p>{task.latest_proof?.uploaded_at ? new Date(task.latest_proof.uploaded_at).toLocaleString() : "Upload time unavailable"}</p>
+                        <p>{task.latest_proof?.uploaded_by_name || task.latest_proof?.uploaded_by || "Uploader unavailable"}</p>
+                      </div>
                     </div>
                   ) : null}
                   <Textarea

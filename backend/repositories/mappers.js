@@ -1,3 +1,5 @@
+const { resolveTaskOperationalState } = require("../services/operationalStateResolver");
+
 function parsePermissions(value) {
   if (!value) {
     return {};
@@ -194,6 +196,9 @@ function mapTaskRow(row) {
     current_stage_id: row.current_stage_id,
     workflow_stage: row.workflow_stage || null,
     workflow_status: row.workflow_status || null,
+    operational_state: resolveTaskOperationalState(row, {
+      workflowComplete: row.resolved_fixture_workflow_complete === true,
+    }),
     workflow_stage_version: Number(row.workflow_stage_version || 0),
     fixture_revision_no: Number(row.fixture_revision_no || 0),
     workflow_contributor_names: row.workflow_contributor_names || null,
@@ -204,6 +209,14 @@ function mapTaskRow(row) {
     source: row.source || "admin_manual",
     tags: parseJsonArray(row.tags),
     approved_by: row.approved_by || null,
+    latest_proof: row.latest_proof_file_url ? {
+      file_url: row.latest_proof_file_url,
+      file_name: row.latest_proof_file_name || null,
+      mime_type: row.latest_proof_mime_type || null,
+      uploaded_by: row.latest_proof_uploaded_by || null,
+      uploaded_by_name: row.latest_proof_uploaded_by_name || null,
+      uploaded_at: row.latest_proof_uploaded_at || null,
+    } : null,
     assignee: mapUserRow(row, "assignee_"),
     assigner: mapUserRow(row, "assigner_"),
   };

@@ -8,6 +8,7 @@ import {
   ImagePlus,
   PanelRightOpen,
   Plus,
+  RefreshCw,
   Redo2,
   Rows3,
   Trash2,
@@ -23,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { API_ROOT_URL } from "@/api/config";
 import { cn } from "@/lib/utils";
 import type {
   NativeColumn,
@@ -58,7 +60,7 @@ interface NativeSpreadsheetGridProps {
 
 const ROW_HEIGHT = 42;
 const ROW_NUMBER_WIDTH = 48;
-const MIN_GRID_WIDTH = 1180;
+const MIN_GRID_WIDTH = 1360;
 
 const BASE_COLUMNS: Array<{
   key: NativeColumn;
@@ -159,15 +161,81 @@ function issueTitle(issues: NativeIngestionIssue[]) {
   return issues.map((issue) => issue.message).join("\n");
 }
 
-function fileFromClipboard(event: React.ClipboardEvent) {
+function filesFromClipboard(event: React.ClipboardEvent) {
   const items = Array.from(event.clipboardData.items || []);
+  const files: File[] = [];
+
+  const directFiles = Array.from(event.clipboardData.files || [])
+    .filter((file) => file.type.startsWith("image/"));
+  files.push(...directFiles);
+
   for (const item of items) {
     if (item.kind === "file" && item.type.startsWith("image/")) {
       const file = item.getAsFile();
-      if (file) return file;
+      if (file && !files.some((candidate) => candidate.name === file.name && candidate.size === file.size)) {
+        files.push(file);
+      }
     }
   }
-  return null;
+  return files;
+}
+
+function resolveImageUrl(url: string | null | undefined) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^(blob:|data:|https?:\/\/)/i.test(value)) return value;
+  if (value.startsWith("/uploads/")) return `${API_ROOT_URL}${value}`;
+  return value;
+}
+
+interface ImageStatus {
+  loading?: boolean;
+  error?: string | null;
+  previewUrl?: string | null;
+}
+
+function NativeImageThumb({
+  imageUrl,
+  label,
+  status,
+  onOpen,
+}: {
+  imageUrl: string;
+  label: string;
+  status?: ImageStatus;
+  onOpen: () => void;
+}) {
+  const resolvedUrl = resolveImageUrl(status?.previewUrl || imageUrl);
+  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">(resolvedUrl ? "loading" : "error");
+
+  useEffect(() => {
+    setLoadState(resolvedUrl ? "loading" : "error");
+  }, [resolvedUrl]);
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "mr-1 flex h-8 w-9 shrink-0 items-center justify-center overflow-hidden rounded border bg-slate-50 text-slate-500",
+        (status?.error || loadState === "error") && "border-red-300 bg-red-50 text-red-600",
+      )}
+      onClick={onOpen}
+      aria-label={`Open reference image for ${label}`}
+      title={status?.error || (loadState === "error" ? "Image could not be loaded. Open for retry." : "Open reference image")}
+    >
+      {status?.loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
+      {!status?.loading && resolvedUrl ? (
+        <img
+          src={resolvedUrl}
+          alt=""
+          className={cn("h-full w-full object-cover", loadState !== "loaded" && "hidden")}
+          onLoad={() => setLoadState("loaded")}
+          onError={() => setLoadState("error")}
+        />
+      ) : null}
+      {!status?.loading && loadState !== "loaded" ? <Eye className="h-3.5 w-3.5" /> : null}
+    </button>
+  );
 }
 
 export function NativeSpreadsheetGrid({
@@ -183,7 +251,12 @@ export function NativeSpreadsheetGrid({
   const [fillTarget, setFillTarget] = useState<CellCoord | null>(null);
   const [fillSource, setFillSource] = useState<CellCoord | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  const [previewImage, setPreviewImage] = useState<{ url: string; label: string } | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ url: string; label: string; error?: string | null } | null>(null);
+  const [previewLoadState, setPreviewLoadState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [previewRetryKey, setPreviewRetryKey] = useState(0);
+  const [imageStatuses, setImageStatuses] = useState<Record<string, ImageStatus>>({});
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [maxScrollLeft, setMaxScrollLeft] = useState(0);
   const [past, setPast] = useState<NativeIngestionRow[][]>([]);
   const [future, setFuture] = useState<NativeIngestionRow[][]>([]);
 
@@ -201,6 +274,31 @@ export function NativeSpreadsheetGrid({
   });
 
   const selectedCount = selectedRows.size;
+
+  const updateScrollMetrics = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    setScrollLeft(element.scrollLeft);
+    setMaxScrollLeft(Math.max(0, element.scrollWidth - element.clientWidth));
+  }, []);
+
+  useEffect(() => {
+    updateScrollMetrics();
+    const element = scrollRef.current;
+    if (!element) return;
+    const resizeObserver = new ResizeObserver(updateScrollMetrics);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
+  }, [columns, rows.length, totalWidth, updateScrollMetrics]);
+
+  useEffect(() => {
+    if (!previewImage) {
+      setPreviewLoadState("idle");
+      return;
+    }
+    setPreviewLoadState(previewImage.url ? "loading" : "error");
+    setPreviewRetryKey(0);
+  }, [previewImage]);
 
   const commitRows = useCallback((nextRows: NativeIngestionRow[]) => {
     setPast((current) => [...current.slice(-49), rows]);
@@ -244,6 +342,57 @@ export function NativeSpreadsheetGrid({
       index === rowIndex ? patchRowCell(row, column, value) : row
     )));
   }, [commitRows, rows]);
+
+  const stageImageForRow = useCallback(async (row: NativeIngestionRow, file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setImageStatuses((current) => ({
+      ...current,
+      [row.row_id]: { loading: true, error: null, previewUrl },
+    }));
+
+    try {
+      await onStageImage(row, file);
+      setImageStatuses((current) => ({
+        ...current,
+        [row.row_id]: { loading: false, error: null, previewUrl },
+      }));
+    } catch (error) {
+      URL.revokeObjectURL(previewUrl);
+      setImageStatuses((current) => ({
+        ...current,
+        [row.row_id]: {
+          loading: false,
+          error: error instanceof Error ? error.message : "Image could not be staged",
+          previewUrl: null,
+        },
+      }));
+    }
+  }, [onStageImage]);
+
+  const stageImagesSequentially = useCallback(async (files: File[]) => {
+    if (!activeCell || activeCell.column !== "reference_image_url" || files.length === 0) return;
+    const targetRows = rows.slice(activeCell.rowIndex, activeCell.rowIndex + files.length);
+    if (targetRows.length === 0) return;
+
+    for (let index = 0; index < targetRows.length; index += 1) {
+      const row = targetRows[index];
+      const file = files[index];
+      if (!row || !file) continue;
+      await stageImageForRow(row, file);
+    }
+
+    if (files.length > targetRows.length) {
+      const lastRow = targetRows[targetRows.length - 1];
+      setImageStatuses((current) => ({
+        ...current,
+        [lastRow.row_id]: {
+          ...(current[lastRow.row_id] || {}),
+          loading: false,
+          error: `${files.length - targetRows.length} image(s) were not pasted because the sheet has no more rows.`,
+        },
+      }));
+    }
+  }, [activeCell, rows, stageImageForRow]);
 
   const applyPaste = useCallback((text: string) => {
     if (!activeCell) return;
@@ -451,6 +600,8 @@ export function NativeSpreadsheetGrid({
 
     if (column === "reference_image_url") {
       const imageUrl = row.reference_image_url;
+      const imageStatus = imageStatuses[row.row_id];
+      const displayImageUrl = imageStatus?.previewUrl || imageUrl;
       return (
         <div
           key={column}
@@ -467,22 +618,30 @@ export function NativeSpreadsheetGrid({
             event.preventDefault();
             const file = Array.from(event.dataTransfer.files || []).find((item) => item.type.startsWith("image/"));
             if (file) {
-              void onStageImage(row, file);
+              void stageImageForRow(row, file);
             }
           }}
         >
-          {imageUrl ? (
-            <button
-              type="button"
-              className="mr-1 flex h-8 w-9 shrink-0 items-center justify-center overflow-hidden rounded border bg-slate-50"
-              onClick={() => setPreviewImage({ url: imageUrl, label: row.fixture_no || `Row ${rowIndex + 1}` })}
-              aria-label="Open reference image"
-            >
-              <img src={imageUrl} alt="" className="h-full w-full object-cover" />
-            </button>
+          {displayImageUrl ? (
+            <NativeImageThumb
+              imageUrl={displayImageUrl}
+              label={row.fixture_no || `Row ${rowIndex + 1}`}
+              status={imageStatus}
+              onOpen={() => setPreviewImage({
+                url: resolveImageUrl(displayImageUrl),
+                label: row.fixture_no || `Row ${rowIndex + 1}`,
+                error: imageStatus?.error || null,
+              })}
+            />
           ) : (
-            <span className="mr-1 flex h-8 w-9 shrink-0 items-center justify-center rounded border border-dashed bg-slate-50 text-slate-400">
-              <Eye className="h-3.5 w-3.5" />
+            <span
+              className={cn(
+                "mr-1 flex h-8 w-9 shrink-0 items-center justify-center rounded border border-dashed bg-slate-50 text-slate-400",
+                imageStatus?.error && "border-red-300 bg-red-50 text-red-600",
+              )}
+              title={imageStatus?.error || "No image attached"}
+            >
+              {imageStatus?.loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
             </span>
           )}
           <Input
@@ -509,12 +668,25 @@ export function NativeSpreadsheetGrid({
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) {
-                  void onStageImage(row, file);
+                  void stageImageForRow(row, file);
                 }
                 event.currentTarget.value = "";
               }}
             />
           </label>
+          {imageStatus?.error ? (
+            <button
+              type="button"
+              className="ml-1 shrink-0 text-[10px] font-semibold text-red-600 hover:underline"
+              onClick={() => setPreviewImage({
+                url: resolveImageUrl(imageUrl),
+                label: row.fixture_no || `Row ${rowIndex + 1}`,
+                error: imageStatus.error,
+              })}
+            >
+              Error
+            </button>
+          ) : null}
         </div>
       );
     }
@@ -622,12 +794,12 @@ export function NativeSpreadsheetGrid({
         ref={scrollRef}
         tabIndex={0}
         className="min-h-0 flex-1 overflow-auto outline-none"
+        onScroll={updateScrollMetrics}
         onPaste={(event) => {
-          const image = fileFromClipboard(event);
-          if (image && activeCell?.column === "reference_image_url") {
+          const images = filesFromClipboard(event);
+          if (images.length > 0 && activeCell?.column === "reference_image_url") {
             event.preventDefault();
-            const row = rows[activeCell.rowIndex];
-            if (row) void onStageImage(row, image);
+            void stageImagesSequentially(images);
             return;
           }
 
@@ -721,17 +893,79 @@ export function NativeSpreadsheetGrid({
         </div>
       </div>
 
+      <div className="sticky bottom-0 z-20 flex h-9 shrink-0 items-center gap-3 border-t bg-slate-100 px-3 text-[11px] text-slate-600 shadow-[0_-1px_3px_rgba(15,23,42,0.08)]">
+        <span className="w-20 font-semibold uppercase">Horizontal</span>
+        <input
+          type="range"
+          min={0}
+          max={maxScrollLeft}
+          value={Math.min(scrollLeft, maxScrollLeft)}
+          disabled={maxScrollLeft <= 0}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (scrollRef.current) {
+              scrollRef.current.scrollTo({ left: next, behavior: "smooth" });
+            }
+            setScrollLeft(next);
+          }}
+          className="h-2 min-w-0 flex-1 accent-slate-700"
+          aria-label="Horizontal grid scroll"
+        />
+        <span className="w-24 text-right tabular-nums">
+          {Math.round(Math.min(scrollLeft, maxScrollLeft))} / {Math.round(maxScrollLeft)}
+        </span>
+      </div>
+
       <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>{previewImage?.label || "Reference Image"}</DialogTitle>
-            <DialogDescription>Reference image attached to the fixture row.</DialogDescription>
+            <DialogDescription>
+              {previewImage?.error || "Reference image attached to the fixture row."}
+            </DialogDescription>
           </DialogHeader>
-          {previewImage ? (
-            <div className="max-h-[72vh] overflow-auto bg-slate-950 p-2">
-              <img src={previewImage.url} alt="" className="mx-auto max-h-[68vh] object-contain" />
+          {previewImage?.url ? (
+            <div className="relative flex min-h-64 max-h-[72vh] items-center justify-center overflow-auto bg-slate-950 p-2">
+              {previewLoadState === "loading" ? (
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-white">
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Loading image
+                </div>
+              ) : null}
+              {previewLoadState === "error" ? (
+                <div className="max-w-sm rounded border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700">
+                  <p className="font-semibold">Image unavailable</p>
+                  <p className="mt-1">{previewImage.error || "The stored image URL could not be loaded."}</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-3"
+                    onClick={() => {
+                      setPreviewLoadState("loading");
+                      setPreviewRetryKey((current) => current + 1);
+                    }}
+                  >
+                    <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
+              <img
+                key={`${previewImage.url}:${previewRetryKey}`}
+                src={previewImage.url}
+                alt=""
+                className={cn("mx-auto max-h-[68vh] object-contain", previewLoadState !== "loaded" && "hidden")}
+                onLoad={() => setPreviewLoadState("loaded")}
+                onError={() => setPreviewLoadState("error")}
+              />
             </div>
-          ) : null}
+          ) : (
+            <div className="rounded border border-dashed bg-slate-50 p-8 text-center text-sm text-slate-600">
+              <p className="font-semibold">No image available</p>
+              <p className="mt-1">Upload or paste a reference image into this row, then try preview again.</p>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

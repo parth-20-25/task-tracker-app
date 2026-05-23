@@ -173,9 +173,8 @@ export function FixtureRevisionPanel({
     return null;
   }
 
-  const approvedStages = useMemo(() => getApprovedStages(stages), [stages]);
   const targetStageRow = stages.find((stage) => stage.stage_name === effectiveTargetStage) || null;
-  const canReworkTarget = targetStageRow?.status === "APPROVED";
+  const canReworkTarget = Boolean(targetStageRow);
   const actionDisabled =
     !effectiveTargetStage
     || !revisionType
@@ -248,7 +247,7 @@ export function FixtureRevisionPanel({
                 <SelectValue placeholder="Choose stage" />
               </SelectTrigger>
               <SelectContent>
-                {approvedStages.map((stage) => (
+                {stages.map((stage) => (
                   <SelectItem key={stage.stage_name} value={stage.stage_name}>
                     {stage.stage_order}. {stage.stage_label || stage.stage_name} ({stage.revision_code})
                   </SelectItem>
@@ -303,7 +302,7 @@ export function FixtureRevisionPanel({
 
           {!canReworkTarget && effectiveTargetStage ? (
             <p className="text-xs text-amber-700 md:col-span-2">
-              Rework requires a completed (approved) target stage. Choose an approved stage to create the next revision.
+              Choose a configured workflow stage.
             </p>
           ) : null}
 

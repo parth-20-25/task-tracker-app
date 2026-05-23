@@ -351,6 +351,7 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
         description: error instanceof Error ? error.message : "Image could not be staged",
         variant: "destructive",
       });
+      throw error;
     } finally {
       setBusy(null);
     }

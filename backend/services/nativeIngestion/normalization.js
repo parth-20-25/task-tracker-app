@@ -14,6 +14,10 @@ function collapseWhitespace(value) {
     .trim();
 }
 
+function stripLegacyWbsPrefix(value) {
+  return collapseWhitespace(value).replace(/^WBS\s*[-_]?\s*/i, "");
+}
+
 function normalizeFixtureNo(value) {
   return collapseWhitespace(value)
     .replace(/\s+/g, "")
@@ -23,7 +27,7 @@ function normalizeFixtureNo(value) {
 }
 
 function normalizeProjectCode(value) {
-  return collapseWhitespace(value)
+  return stripLegacyWbsPrefix(value)
     .replace(/\s+/g, "")
     .replace(/^[-_]+|[-_]+$/g, "")
     .toUpperCase();
@@ -116,10 +120,7 @@ function splitOnLastProjectSeparator(value) {
 }
 
 function parseProjectIdentity(value) {
-  const rawIdentity = String(value || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\n+/g, " ")
-    .trim();
+  const rawIdentity = stripLegacyWbsPrefix(value);
   if (!rawIdentity) {
     return { project_code: "", project_name: "", customer_name: "" };
   }
@@ -146,7 +147,7 @@ function parseProjectIdentity(value) {
 
 function formatProjectIdentity(context) {
   return [
-    context.project_code,
+    normalizeProjectCode(context.project_code),
     context.project_name,
     context.customer_name,
   ].map(collapseWhitespace).filter(Boolean).join(" - ");
@@ -181,7 +182,7 @@ function normalizeNativeContext(context = {}, user = {}) {
   };
 
   return {
-    project_identity: collapseWhitespace(context.project_identity || context.projectIdentity) || formatProjectIdentity(normalized),
+    project_identity: stripLegacyWbsPrefix(context.project_identity || context.projectIdentity) || formatProjectIdentity(normalized),
     project_code: projectCode,
     project_name: projectName,
     customer_name: customerName,

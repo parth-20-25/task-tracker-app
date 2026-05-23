@@ -482,10 +482,7 @@ async function getCurrentStageForFixture(fixtureId, departmentId = null) {
     return null;
   }
 
-  let progress = await getProgressForFixture(fixtureId, project.department_id);
-  if (progress.length === 0) {
-    progress = await ensureProgressInitialized(fixtureId, project.department_id, workflow);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, project.department_id, workflow);
 
   return buildCurrentStageResponse(progress, workflow);
 }
@@ -502,10 +499,7 @@ async function getCurrentStage(fixtureId, departmentId) {
 
   const workflow = await requireWorkflow(departmentId);
 
-  let progress = await getProgressForFixture(fixtureId, departmentId);
-  if (progress.length === 0) {
-    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
   return buildCurrentStageResponse(progress, workflow);
 }
@@ -531,10 +525,7 @@ async function validateAssignment(fixtureId, departmentId) {
     return { canAssign: false, reason: "No workflow configured for this department", currentStage: null };
   }
 
-  let progress = await getProgressForFixture(fixtureId, departmentId);
-  if (progress.length === 0) {
-    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
   const current = deriveCurrentStageByStatus(progress);
 
@@ -661,6 +652,12 @@ async function completeFixtureStage(fixtureId, departmentId) {
  * If it was the final stage, marks the fixture as fully complete.
  */
 async function approveFixtureStage(fixtureId, departmentId) {
+  void fixtureId;
+  void departmentId;
+  throw new AppError(409, "Workflow approval must be performed through task verification");
+}
+
+async function approveFixtureStageBypassDisabled(fixtureId, departmentId) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
   await assertFixtureProjectIsActive(fixtureId, departmentId);
 
@@ -688,6 +685,12 @@ async function approveFixtureStage(fixtureId, departmentId) {
  * Supervisor: rejects the current submitted stage.
  */
 async function rejectFixtureStage(fixtureId, departmentId) {
+  void fixtureId;
+  void departmentId;
+  throw new AppError(409, "Workflow rejection must be performed through task verification");
+}
+
+async function rejectFixtureStageBypassDisabled(fixtureId, departmentId) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
   await assertFixtureProjectIsActive(fixtureId, departmentId);
 
@@ -993,10 +996,7 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
   const workflow = await requireWorkflow(departmentId);
   const fixture = await getFixtureWorkflowContext(fixtureId);
 
-  let progress = await getProgressForFixture(fixtureId, departmentId);
-  if (progress.length === 0) {
-    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
   const [revisions, contributionRows] = await Promise.all([
     listFixtureRevisions(fixtureId, departmentId),
     listContributionsForFixtures([fixtureId]),
@@ -1060,10 +1060,7 @@ async function reopenFixtureStage({
   assertDesignDepartmentForRevision(departmentId);
 
   const workflow = await requireWorkflow(departmentId);
-  let progress = await getProgressForFixture(fixtureId, departmentId);
-  if (progress.length === 0) {
-    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
   const targetStage = resolveStageFromProgress(progress, { targetStageName, targetStageOrder });
   if (!targetStage) {
@@ -1112,10 +1109,7 @@ async function manipulateFixtureStage({
 
   const normalizedRevisionReason = normalizeOptionalReason(revisionReason);
   const workflow = await requireWorkflow(departmentId);
-  let progress = await getProgressForFixture(fixtureId, departmentId);
-  if (progress.length === 0) {
-    progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
   const targetStage = resolveStageFromProgress(progress, { targetStageName, targetStageOrder });
   if (!targetStage) {
@@ -1130,6 +1124,7 @@ async function manipulateFixtureStage({
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await initProgressForFixture(fixtureId, departmentId, workflow.stages, client);
     const lockedProgress = await getProgressForFixture(fixtureId, departmentId, client);
     const lockedTargetStage = resolveStageFromProgress(lockedProgress, { targetStageName, targetStageOrder });
     const lockedFromStage = deriveCurrentStageByStatus(lockedProgress) || getLastStage(lockedProgress);

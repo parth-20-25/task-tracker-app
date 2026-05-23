@@ -2,6 +2,10 @@ const { pool } = require("../db");
 const { PROJECT_STATUSES } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
 const { buildVisibleUsersCte, visibleProjectPredicate, GetAccessibleUserIds } = require("./projectVisibility");
+const {
+  activeTaskLateral,
+  operationalStateSqlCase,
+} = require("../services/operationalStateResolver");
 
 const BATCH_DELETE_BLOCK_REASON = "Cannot delete batch. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
@@ -31,41 +35,27 @@ function setCachedSchemaMetadata(cacheKey, value) {
 }
 
 function fixtureOperationalStatsLateral(projectAlias = "dp") {
+  const stateCase = operationalStateSqlCase({
+    fixtureAlias: "f",
+    projectAlias,
+    taskAlias: "operational_task",
+  });
+
   return `
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::integer AS total_fixtures,
-          COUNT(*) FILTER (WHERE fixture_state.is_completed)::integer AS completed_fixtures,
-          COUNT(*) FILTER (
-            WHERE NOT fixture_state.is_completed
-              AND fixture_state.is_active
-          )::integer AS active_fixtures,
-          COUNT(*) FILTER (
-            WHERE NOT fixture_state.is_completed
-              AND NOT fixture_state.is_active
-          )::integer AS pending_fixtures
+          COUNT(*) FILTER (WHERE fixture_state.operational_state = 'WORKFLOW_COMPLETE')::integer AS completed_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.operational_state IN ('VERIFICATION', 'IN_PROGRESS', 'ASSIGNED'))::integer AS active_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.operational_state = 'UNASSIGNED')::integer AS pending_fixtures
         FROM (
           SELECT
             f.id,
-            (
-              f.is_workflow_complete IS TRUE
-              OR (
-                COUNT(fwp.fixture_id) > 0
-                AND BOOL_AND(UPPER(COALESCE(fwp.status, '')) = 'APPROVED')
-              )
-            ) AS is_completed,
-            COALESCE(BOOL_OR(
-              UPPER(COALESCE(fwp.status, '')) IN ('IN_PROGRESS', 'COMPLETED', 'REJECTED')
-              OR fwp.assigned_to IS NOT NULL
-              OR fwp.started_at IS NOT NULL
-            ), FALSE) AS is_active
+            ${stateCase} AS operational_state
           FROM design.fixtures f
-          LEFT JOIN fixture_workflow_progress fwp
-            ON fwp.fixture_id = f.id
-           AND fwp.department_id = ${projectAlias}.department_id
+          ${activeTaskLateral("f", "operational_task")}
           WHERE f.project_id = ${projectAlias}.id
             AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
-          GROUP BY f.id, f.is_workflow_complete
         ) fixture_state
       ) fixture_stats ON TRUE
   `;

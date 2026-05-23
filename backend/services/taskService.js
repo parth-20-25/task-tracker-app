@@ -21,7 +21,6 @@ const { isDesignDepartment } = require("../lib/designDepartment");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const {
   formatStageRevisionCode,
-  formatStageVersionLabel,
   normalizeStageVersion,
 } = require("../lib/workflowStageVersioning");
 const { createAuditLog } = require("../repositories/auditRepository");
@@ -50,6 +49,7 @@ const { countProjectsByDepartment, getProjectStatusById } = require("../reposito
 const {
   getLatestStageAttempt,
   getProgressForFixture,
+  rejectStageAttempt,
   updateLatestStageAttemptAssignment,
   updateProgressRow,
 } = require("../repositories/fixtureWorkflowRepository");
@@ -244,6 +244,12 @@ function isApprovalRequired(task) {
 
 function isProofRequired(task) {
   return task?.proof_required === true;
+}
+
+function assertWorkProofUploaded(task) {
+  if (!taskHasProof(task)) {
+    throw new AppError(400, "Work proof image required before verification submission");
+  }
 }
 
 function ensureTaskProofUpdateAllowed(user, task) {
@@ -585,9 +591,8 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       if (task.status !== TASK_STATUSES.IN_PROGRESS) {
         throw new AppError(400, `Invalid action "${action}" for current task state "${task.status}"`);
       }
-      if (isProofRequired(task) && !taskHasProof(task)) {
-        throw new AppError(400, "Proof is required before completing the task");
-      }
+      assertWorkProofUploaded(task);
+      await submitFixtureStageForVerification({ task, actor: user });
       nextStatus = isApprovalRequired(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
       nextLifecycleStatus = nextStatus === TASK_STATUSES.CLOSED ? "completed" : TASK_STATUSES.IN_PROGRESS;
       nextVerificationStatus = nextStatus === TASK_STATUSES.CLOSED
@@ -707,7 +712,7 @@ async function resolveFixtureContextForTask({
       const row = canonicalFixtureContext.rows[0];
       return {
         ...row,
-        stage_name: formatStageVersionLabel(row.stage_base_name, row.stage_version),
+        stage_name: row.stage_base_name,
       };
     }
   }
@@ -741,7 +746,7 @@ async function resolveFixtureContextForTask({
       const row = legacyFixtureContext.rows[0];
       return {
         ...row,
-        stage_name: formatStageVersionLabel(row.stage_base_name, row.stage_version),
+        stage_name: row.stage_base_name,
       };
     }
 
@@ -857,7 +862,20 @@ async function createTaskForUser(user, payload = {}, options = {}) {
 
     if (legacyWorkflowManaged) {
       workflow = await resolveWorkflowForDepartment(resolvedDepartmentId);
-      resolvedCurrentStageId = String(currentStageId || workflow.first_stage_id || "").trim();
+      resolvedCurrentStageId = String(currentStageId || "").trim();
+
+      if (!resolvedCurrentStageId && payloadFixtureId) {
+        const fixtureProgressRows = await getProgressForFixture(payloadFixtureId, resolvedDepartmentId, db);
+        const activeProgressRow = fixtureProgressRows.find((row) => row.status !== "APPROVED") || null;
+        const configuredStage = workflow.stages.find(
+          (stage) => String(stage.name || "").trim().toLowerCase() === String(activeProgressRow?.stage_name || "").trim().toLowerCase(),
+        );
+        resolvedCurrentStageId = configuredStage?.id || "";
+      }
+
+      if (!resolvedCurrentStageId) {
+        resolvedCurrentStageId = String(workflow.first_stage_id || "").trim();
+      }
 
       if (!resolvedCurrentStageId) {
         throw new AppError(409, "A valid workflow stage is required to create this task");
@@ -1212,6 +1230,12 @@ async function updateTaskForUser(user, taskId, payload = {}) {
   if (isWorkflowManagedTask(taskForWorkflow)) {
     if (hasProofUpdate) {
       await applyTaskProofUpdate(user, existingTask, payload);
+      if (
+        taskForWorkflow.completion_percent === 100
+        && taskForWorkflow.status === TASK_STATUSES.IN_PROGRESS
+      ) {
+        await applyTaskCompletionPercentUpdate(user, taskForWorkflow, { completion_percent: 100 });
+      }
       handled = true;
     }
 
@@ -1702,8 +1726,8 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
     await ensureDependenciesClosed(task);
   }
 
-  if ((nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED) && isProofRequired(task) && !taskHasProof(task)) {
-    throw new AppError(400, "Proof is required before completing the task");
+  if (nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED) {
+    assertWorkProofUploaded(task);
   }
 
   const startedAt = nextStatus === TASK_STATUSES.IN_PROGRESS && !task.started_at ? new Date() : task.started_at;
@@ -1784,8 +1808,8 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
     if (!workflowProgressRow || workflowProgressRow.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
       throw new AppError(409, "Workflow approval is allowed only after submission for verification");
     }
-    if (verificationStatus === VERIFICATION_STATUSES.APPROVED && isProofRequired(task) && !taskHasProof(task)) {
-      throw new AppError(400, "Proof is required before approval");
+    if (verificationStatus === VERIFICATION_STATUSES.APPROVED) {
+      assertWorkProofUploaded(task);
     }
   }
 
@@ -1836,6 +1860,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
         status: WORKFLOW_STATUSES.REJECTED,
         completed_at: null,
       }, client);
+      await rejectStageAttempt(task.fixture_id, workflowProgressRow.stage_name, new Date(), client);
     }
 
     await appendTaskActivity(task.id, {
@@ -2084,9 +2109,7 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
     }
 
     if (completionPercent === 100 && isWorkflowManagedTask(lockedTask)) {
-      if (isProofRequired(lockedTask) && !taskHasProof(lockedTask)) {
-        throw new AppError(400, "Proof is required before submitting for verification");
-      }
+      assertWorkProofUploaded(lockedTask);
 
       await submitFixtureStageForVerification({ task: lockedTask, actor: user, client });
       await updateTaskCompletionPercent(lockedTask.id, completionPercent, client);

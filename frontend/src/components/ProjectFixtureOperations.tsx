@@ -470,10 +470,6 @@ export function ProjectFixtureOperationsGrid({
     return map;
   }, [fixtureTaskById, fixtures]);
 
-  const unassignedFixtures = useMemo(
-    () => fixtures.filter((fixture) => operationalResolutionByFixtureId.get(fixture.fixture_id)?.state === "UNASSIGNED"),
-    [fixtures, operationalResolutionByFixtureId],
-  );
   const assignableFixtures = useMemo(
     () => fixtures.filter((fixture) => operationalResolutionByFixtureId.get(fixture.fixture_id)?.assignable === true),
     [fixtures, operationalResolutionByFixtureId],
@@ -554,7 +550,6 @@ export function ProjectFixtureOperationsGrid({
 
       {bulkPanelOpen ? (
         <BulkFixtureAssignmentPanel
-          unassignedFixtures={unassignedFixtures}
           assignableFixtures={assignableFixtures}
           selectedFixtureIds={eligibleSelectedFixtureIds}
           projectId={projectId}
@@ -665,7 +660,6 @@ function DateOnlyDeadlinePicker({
 }
 
 interface BulkFixtureAssignmentPanelProps {
-  unassignedFixtures: DesignFixtureOption[];
   assignableFixtures: DesignFixtureOption[];
   selectedFixtureIds: string[];
   projectId: string;
@@ -677,7 +671,6 @@ interface BulkFixtureAssignmentPanelProps {
 }
 
 function BulkFixtureAssignmentPanel({
-  unassignedFixtures,
   assignableFixtures,
   selectedFixtureIds,
   projectId,
@@ -692,12 +685,13 @@ function BulkFixtureAssignmentPanel({
   const [priority, setPriority] = useState<Priority>("high");
   const [workflowTarget, setWorkflowTarget] = useState("");
   const [reasonType, setReasonType] = useState<FixtureRevisionType | "">("");
-  const [scope, setScope] = useState<"all_unassigned" | "selected">("all_unassigned");
+  const selectedFixtureCount = selectedFixtureIds.length;
+  const scope: "all_unassigned" | "selected" = selectedFixtureCount > 0 ? "selected" : "all_unassigned";
 
   const targetFixtures = useMemo(() => {
     if (scope === "selected") {
       const selected = new Set(selectedFixtureIds);
-      return unassignedFixtures.filter((fixture) => selected.has(fixture.fixture_id));
+      return assignableFixtures.filter((fixture) => selected.has(fixture.fixture_id));
     }
 
     return assignableFixtures;
@@ -747,7 +741,6 @@ function BulkFixtureAssignmentPanel({
     setPriority("high");
     setWorkflowTarget("");
     setReasonType("");
-    setScope("all_unassigned");
   };
 
   const bulkAssignMutation = useMutation({
@@ -928,14 +921,14 @@ function BulkFixtureAssignmentPanel({
       <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
           <Label className="text-xs">Assignment Scope</Label>
-          <RadioGroup value={scope} onValueChange={(value) => setScope(value as "all_unassigned" | "selected")} className="flex flex-wrap gap-4">
+          <RadioGroup value={scope} onValueChange={() => undefined} className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-xs">
-              <RadioGroupItem value="all_unassigned" />
+              <RadioGroupItem value="all_unassigned" disabled={selectedFixtureCount > 0} />
               All Assignable Fixtures ({assignableFixtures.length})
             </label>
             <label className="flex items-center gap-2 text-xs">
-              <RadioGroupItem value="selected" />
-              Selected Fixtures ({selectedFixtureIds.length})
+              <RadioGroupItem value="selected" disabled={selectedFixtureCount === 0} />
+              Selected Fixtures ({selectedFixtureCount})
             </label>
           </RadioGroup>
           {selectedScopeEmpty ? (

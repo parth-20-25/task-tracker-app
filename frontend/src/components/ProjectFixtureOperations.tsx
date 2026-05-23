@@ -22,8 +22,8 @@ import {
   type FixtureFullProgress,
   type FixtureRevisionType,
 } from "@/api/designApi";
-import { API_ROOT_URL } from "@/api/config";
 import { fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
+import { SafeImage } from "@/components/SafeImage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -42,6 +42,7 @@ import { useAssignableUsersQuery } from "@/hooks/queries/useAssignableUsersQuery
 import { toast } from "@/hooks/use-toast";
 import { analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
+import { resolveImageUrl } from "@/lib/imageUrl";
 import type { DesignFixtureOption, Priority, Task } from "@/types";
 
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
@@ -66,14 +67,6 @@ const revisionReasonOptions: Array<{ value: FixtureRevisionType; label: string }
   { value: "MANUAL_OVERRIDE", label: "Manual Override" },
   { value: "OTHER", label: "Other" },
 ];
-
-function toProofUrl(path: string) {
-  if (path.startsWith("http://") || path.startsWith("https://")) {
-    return path;
-  }
-
-  return `${API_ROOT_URL}${path}`;
-}
 
 function compactWorkflowCode(value: string | null | undefined) {
   const normalized = String(value || "").trim();
@@ -308,6 +301,18 @@ function sortSectionFixtures(
   });
 }
 
+function getFixtureSectionKey(fixture: DesignFixtureOption, task: Task | null) {
+  if (task?.status === "under_review" && task.verification_status === "pending") {
+    return "VERIFICATION";
+  }
+
+  if (String(fixture.operational_state || "") === "VERIFICATION") {
+    return task ? "IN_PROGRESS" : "UNASSIGNED";
+  }
+
+  return String(fixture.operational_state || "UNASSIGNED");
+}
+
 export function ProjectFixtureOperationsGrid({
   fixtures,
   projectId,
@@ -355,8 +360,8 @@ export function ProjectFixtureOperationsGrid({
   }, [combinedTasks, fixtures]);
 
   const unassignedFixtures = useMemo(
-    () => fixtures.filter((fixture) => String(fixture.operational_state || "UNASSIGNED") === "UNASSIGNED"),
-    [fixtures],
+    () => fixtures.filter((fixture) => getFixtureSectionKey(fixture, fixtureTaskById.get(fixture.fixture_id) || null) === "UNASSIGNED"),
+    [fixtureTaskById, fixtures],
   );
   const fixtureSections = useMemo(() => {
     const seen = new Set<string>();
@@ -367,7 +372,7 @@ export function ProjectFixtureOperationsGrid({
           return false;
         }
 
-        const matches = String(fixture.operational_state || "UNASSIGNED") === section.key;
+        const matches = getFixtureSectionKey(fixture, fixtureTaskById.get(fixture.fixture_id) || null) === section.key;
         if (matches) {
           seen.add(fixture.fixture_id);
         }
@@ -856,7 +861,8 @@ function ProjectFixtureCard({
   const canReviewTask = Boolean(
     task
     && task.status === "under_review"
-    && (task.verification_status === "quality_pending" ? access.canApproveQuality : access.canApproveCompletedTasks || access.canApproveQuality),
+    && task.verification_status === "pending"
+    && (access.canApproveCompletedTasks || access.canApproveQuality),
   );
 
   const progressQuery = useQuery({
@@ -891,8 +897,9 @@ function ProjectFixtureCard({
   const canSubmitAssignment = workflowChanged ? workflowChangeAllowed : canAssignCurrent;
 
   const proofImage = getProofImage(task);
-  const canonicalOperationalState = fixture.operational_state || "UNASSIGNED";
-  const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
+  const canonicalReviewTask = Boolean(task?.status === "under_review" && task?.verification_status === "pending");
+  const canonicalOperationalState = getFixtureSectionKey(fixture, task);
+  const isSubmittedForVerification = canonicalReviewTask;
   const isAssigned = isFixtureOperationallyAssigned(fixture, task);
   const workflowCode = getFixtureWorkflowCode(fixture);
   const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
@@ -1141,9 +1148,9 @@ function ProjectFixtureCard({
                 <button
                   type="button"
                   className="block h-24 w-32 overflow-hidden rounded-md border bg-slate-50"
-                  onClick={() => setPreviewImage(toProofUrl(proofImage))}
+                  onClick={() => setPreviewImage(resolveImageUrl(proofImage))}
                 >
-                  <img src={toProofUrl(proofImage)} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
+                  <SafeImage src={proofImage} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
                 </button>
                 <div className="min-w-0 text-xs text-muted-foreground">
                   <p className="font-medium text-foreground">Work proof</p>
@@ -1371,7 +1378,7 @@ function ProjectFixtureCard({
             <DialogTitle>{fixture.fixture_no} Work Image</DialogTitle>
           </DialogHeader>
           {previewImage ? (
-            <img src={previewImage} alt={`${fixture.fixture_no} proof preview`} className="max-h-[70vh] w-full rounded-md object-contain" />
+            <SafeImage src={previewImage} alt={`${fixture.fixture_no} proof preview`} className="max-h-[70vh] w-full rounded-md object-contain" />
           ) : null}
         </DialogContent>
       </Dialog>

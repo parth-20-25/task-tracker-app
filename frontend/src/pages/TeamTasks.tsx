@@ -20,7 +20,7 @@ const statusTabs: Array<{
 }> = [
   { value: 'active', label: 'Active', statuses: ['in_progress'] },
   { value: 'pending', label: 'Pending', statuses: ['created', 'assigned'] },
-  { value: 'review', label: 'Review', statuses: ['under_review'] },
+  { value: 'review', label: 'Review', statuses: ['under_review'], verificationStatuses: ['pending'] },
   { value: 'on_hold', label: 'Hold', statuses: ['on_hold'] },
   { value: 'rejected', label: 'Rejected', statuses: ['rework'], verificationStatuses: ['rejected'] },
   { value: 'closed', label: 'Completed', statuses: ['closed'] },
@@ -54,8 +54,9 @@ export default function TeamTasks() {
   const groupedTasks = useMemo(() => {
     return statusTabs.reduce((acc, tab) => {
       acc[tab.value] = filteredTasks.filter((task) =>
-        tab.statuses.includes(task.status)
-        || (tab.verificationStatuses?.includes(task.verification_status) ?? false),
+        tab.verificationStatuses
+          ? tab.statuses.includes(task.status) && tab.verificationStatuses.includes(task.verification_status)
+          : tab.statuses.includes(task.status),
       );
       return acc;
     }, {} as Record<string, typeof tasks>);

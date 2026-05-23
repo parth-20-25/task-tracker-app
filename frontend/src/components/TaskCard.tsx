@@ -11,19 +11,13 @@ import { formatDurationMinutes } from '@/lib/formatDuration';
 import { TaskExecutionDialog } from '@/components/TaskExecutionDialog';
 import { hasUserPermission } from '@/lib/permissions';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
-import { API_ROOT_URL } from '@/api/config';
+import { resolveImageUrl } from '@/lib/imageUrl';
 import { Progress } from '@/components/ui/progress';
 
 interface TaskCardProps {
   task: Task;
   showActions?: boolean;
   compact?: boolean;
-}
-
-function toProofUrl(path: string) {
-  return path.startsWith("http://") || path.startsWith("https://")
-    ? path
-    : `${API_ROOT_URL}${path}`;
 }
 
 export function TaskCard({ task, showActions = true, compact = false }: TaskCardProps) {
@@ -141,15 +135,17 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
         {!compact && proofUrls.length > 0 && (
           <div className="flex flex-wrap gap-3 text-xs">
             {proofUrls.map((url, i) => (
-              <a
-                key={i}
-                href={toProofUrl(url)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline"
-              >
-                View Proof {i + 1}
-              </a>
+              resolveImageUrl(url) ? (
+                <a
+                  key={i}
+                  href={resolveImageUrl(url) || "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline"
+                >
+                  View Proof {i + 1}
+                </a>
+              ) : null
             ))}
           </div>
         )}

@@ -8,6 +8,11 @@ const OPERATIONAL_STATES = {
 
 const ACTIVE_TASK_STATUSES = ["assigned", "in_progress", "on_hold", "under_review", "rework"];
 
+function isReviewPendingTask(task = null) {
+  return String(task?.status || "").toLowerCase() === "under_review"
+    && String(task?.verification_status || "").toLowerCase() === "pending";
+}
+
 function resolveTaskOperationalState(task = null, { workflowComplete = false } = {}) {
   if (workflowComplete) {
     return OPERATIONAL_STATES.WORKFLOW_COMPLETE;
@@ -17,7 +22,7 @@ function resolveTaskOperationalState(task = null, { workflowComplete = false } =
     return OPERATIONAL_STATES.UNASSIGNED;
   }
 
-  if (String(task.status || "").toLowerCase() === "under_review") {
+  if (isReviewPendingTask(task)) {
     return OPERATIONAL_STATES.VERIFICATION;
   }
 
@@ -57,6 +62,7 @@ function activeTaskLateral(fixtureAlias = "f", alias = "operational_task") {
         SELECT
           t.id,
           t.status,
+          t.verification_status,
           t.completion_percent,
           t.assigned_to,
           t.assigned_user_id,
@@ -70,7 +76,7 @@ function activeTaskLateral(fixtureAlias = "f", alias = "operational_task") {
           AND t.status = ANY(${activeTaskStatusSqlArray()})
         ORDER BY
           CASE
-            WHEN t.status = 'under_review' THEN 0
+            WHEN t.status = 'under_review' AND t.verification_status = 'pending' THEN 0
             WHEN t.status = 'rework' THEN 1
             WHEN t.status = 'in_progress' THEN 2
             WHEN t.status = 'on_hold' THEN 3
@@ -91,7 +97,7 @@ function operationalStateSqlCase({
 } = {}) {
   return `CASE
     WHEN ${fixtureWorkflowCompleteSql(fixtureAlias, projectAlias)} THEN '${OPERATIONAL_STATES.WORKFLOW_COMPLETE}'
-    WHEN ${taskAlias}.status = 'under_review' THEN '${OPERATIONAL_STATES.VERIFICATION}'
+    WHEN ${taskAlias}.status = 'under_review' AND ${taskAlias}.verification_status = 'pending' THEN '${OPERATIONAL_STATES.VERIFICATION}'
     WHEN ${taskAlias}.id IS NULL THEN '${OPERATIONAL_STATES.UNASSIGNED}'
     WHEN COALESCE(${taskAlias}.completion_percent, 0) = 0 THEN '${OPERATIONAL_STATES.ASSIGNED}'
     ELSE '${OPERATIONAL_STATES.IN_PROGRESS}'
@@ -103,6 +109,7 @@ module.exports = {
   OPERATIONAL_STATES,
   activeTaskLateral,
   fixtureWorkflowCompleteSql,
+  isReviewPendingTask,
   operationalStateSqlCase,
   resolveTaskOperationalState,
 };

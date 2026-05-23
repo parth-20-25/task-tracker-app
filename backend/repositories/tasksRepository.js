@@ -182,12 +182,12 @@ async function listTasksByAccess({ clause = "", params = [] }, client = pool) {
 async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool) {
   const nextParams = [...params, currentUserEmployeeId];
   const verificationClause = clause
-    ? `${clause} AND t.status = 'under_review' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+    ? `${clause} AND t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
         SELECT 1
         FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
         WHERE task_assignee.employee_id = $${nextParams.length}
       )`
-    : `WHERE t.status = 'under_review' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+    : `WHERE t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
         SELECT 1
         FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
         WHERE task_assignee.employee_id = $${nextParams.length}

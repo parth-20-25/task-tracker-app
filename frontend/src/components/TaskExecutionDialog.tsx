@@ -19,7 +19,7 @@ import { toast } from "@/hooks/use-toast";
 import { isProjectAuthorityUser } from "@/lib/permissions";
 import { batchQueryKeys } from "@/lib/queryKeys";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
-import { API_ROOT_URL } from "@/api/config";
+import { resolveImageUrl } from "@/lib/imageUrl";
 
 
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -38,14 +38,6 @@ const ALLOWED_TASK_PROOF_EXTENSIONS = [".bmp", ".gif", ".heic", ".heif", ".jfif"
 
 interface TaskExecutionDialogProps {
   task: Task;
-}
-
-function fileUrl(path: string) {
-  if (path.startsWith("http://") || path.startsWith("https://")) {
-    return path;
-  }
-
-  return `${API_ROOT_URL}${path}`;
 }
 
 function isAllowedTaskProofFile(file: File) {
@@ -631,8 +623,8 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 >
                   Open Camera
                 </Button>
-                {latestProof && (
-                  <a href={fileUrl(latestProof.file_url)} target="_blank" rel="noreferrer" className="text-sm text-primary underline">
+                {latestProof && resolveImageUrl(latestProof.file_url) && (
+                  <a href={resolveImageUrl(latestProof.file_url) || "#"} target="_blank" rel="noreferrer" className="text-sm text-primary underline">
                     Open latest proof
                   </a>
                 )}
@@ -648,9 +640,13 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                   {(attachments.length > 0 ? attachments : latestProof ? [latestProof] : []).map((attachment) => (
                     <div key={attachment.id} className="flex items-center justify-between gap-3 border rounded-lg p-3">
                       <div className="min-w-0">
-                        <a href={fileUrl(attachment.file_url)} target="_blank" rel="noreferrer" className="font-medium text-sm underline break-all">
-                          {attachment.file_name}
-                        </a>
+                        {resolveImageUrl(attachment.file_url) ? (
+                          <a href={resolveImageUrl(attachment.file_url) || "#"} target="_blank" rel="noreferrer" className="font-medium text-sm underline break-all">
+                            {attachment.file_name}
+                          </a>
+                        ) : (
+                          <span className="font-medium text-sm">{attachment.file_name}</span>
+                        )}
                         <p className="text-xs text-muted-foreground">
                           {new Date(attachment.uploaded_at).toLocaleString()}
                         </p>

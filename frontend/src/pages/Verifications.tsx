@@ -12,15 +12,10 @@ import { toast } from '@/hooks/use-toast';
 import { CheckCircle2, XCircle, Calendar, User, FileText, Layers3 } from 'lucide-react';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { taskQueryKeys } from '@/lib/queryKeys';
-import { API_ROOT_URL } from '@/api/config';
 import { cn } from '@/lib/utils';
+import { SafeImage } from '@/components/SafeImage';
+import { resolveImageUrl } from '@/lib/imageUrl';
 import type { Task } from '@/types';
-
-function toProofUrl(path: string) {
-  return path.startsWith("http://") || path.startsWith("https://")
-    ? path
-    : `${API_ROOT_URL}${path}`;
-}
 
 function formatRevisionCode(task: Task) {
   const stage = task.workflow_stage;
@@ -80,6 +75,8 @@ export default function Verifications() {
           {pending.map(task => {
             const taskDisplay = getTaskCardDisplay(task);
             const revisionCode = formatRevisionCode(task);
+            const proofUrl = task.latest_proof?.file_url || task.proof_url?.[task.proof_url.length - 1] || null;
+            const resolvedProofUrl = resolveImageUrl(proofUrl);
 
             const handleVerify = async (action: 'approve' | 'reject') => {
               try {
@@ -157,9 +154,13 @@ export default function Verifications() {
                   </div>
                   {task.proof_url?.length ? (
                     <div className="flex flex-wrap items-center gap-3 text-xs">
-                      <a href={toProofUrl(task.latest_proof?.file_url || task.proof_url[task.proof_url.length - 1])} target="_blank" rel="noopener noreferrer" className="block h-20 w-28 overflow-hidden rounded-md border bg-slate-50">
-                        <img src={toProofUrl(task.latest_proof?.file_url || task.proof_url[task.proof_url.length - 1])} alt="Work proof" className="h-full w-full object-cover" />
-                      </a>
+                      {resolvedProofUrl ? (
+                        <a href={resolvedProofUrl} target="_blank" rel="noopener noreferrer" className="block h-20 w-28 overflow-hidden rounded-md border bg-slate-50">
+                          <SafeImage src={proofUrl} alt="Work proof" className="h-full w-full object-cover" />
+                        </a>
+                      ) : (
+                        <SafeImage src={proofUrl} alt="Work proof" className="h-20 w-28" />
+                      )}
                       <div className="text-muted-foreground">
                         <p className="font-medium text-foreground">Work proof</p>
                         <p>{task.latest_proof?.uploaded_at ? new Date(task.latest_proof.uploaded_at).toLocaleString() : "Upload time unavailable"}</p>

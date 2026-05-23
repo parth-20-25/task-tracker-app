@@ -15,6 +15,7 @@ const {
   approveStageAttempt,
   getActiveWorkflowForDepartment,
   getProgressForFixture,
+  getLatestStageAttempt,
   getNextStageReentryVersion,
   initProgressForFixture,
   incrementFixtureRevision,

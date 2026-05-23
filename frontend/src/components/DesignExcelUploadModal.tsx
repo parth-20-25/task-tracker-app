@@ -19,6 +19,7 @@ import {
 } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
+import { SafeImage } from "@/components/SafeImage";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MorphLoader } from "@/components/ui/morph-loader";
@@ -34,6 +35,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { resolveImageUrl } from "@/lib/imageUrl";
 import { IngestionSpreadsheetWorkspace } from "@/components/ingestionSpreadsheet/IngestionSpreadsheetWorkspace";
 import { adminQueryKeys, analyticsQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import {
@@ -107,11 +109,10 @@ function ImagePreviewStrip({ row }: { row: DesignExcelPreviewRow }) {
     <div className="mt-3 grid grid-cols-2 gap-2">
       {images.map((imageUrl, index) => (
         <div key={`${imageUrl}-${index}`} className="overflow-hidden rounded-md border bg-background">
-          <img
+          <SafeImage
             src={imageUrl}
             alt={`${row.fixture_no} preview ${index + 1}`}
             className="h-24 w-full object-cover"
-            loading="lazy"
           />
         </div>
       ))}
@@ -505,11 +506,13 @@ function PreviewReferenceImageControls({
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{item.label}</div>
           {item.imageUrl ? (
             <div className="mt-2 space-y-2">
-              <img src={item.imageUrl} alt={`${row.fixture_no} ${item.label}`} className="h-20 w-full rounded border object-cover" />
+              <SafeImage src={item.imageUrl} alt={`${row.fixture_no} ${item.label}`} className="h-20 w-full rounded border object-cover" />
               <div className="flex gap-2">
-                <Button asChild size="sm" variant="outline">
-                  <a href={item.imageUrl} target="_blank" rel="noreferrer">View Image</a>
-                </Button>
+                {resolveImageUrl(item.imageUrl) ? (
+                  <Button asChild size="sm" variant="outline">
+                    <a href={resolveImageUrl(item.imageUrl) || "#"} target="_blank" rel="noreferrer">View Image</a>
+                  </Button>
+                ) : null}
                 <Button size="sm" variant="outline" onClick={() => onSelect(rowKey, item.imageType)}>
                   Change
                 </Button>
@@ -744,7 +747,7 @@ function PostConfirmReviewStage({
 
                   {fixture.image_1_url && (
                     <div className="mt-2 rounded-md border bg-muted/30 p-2">
-                      <img
+                      <SafeImage
                         src={fixture.image_1_url}
                         alt={`${fixture.fixture_no} part`}
                         className="h-20 w-full object-cover rounded"
@@ -753,7 +756,7 @@ function PostConfirmReviewStage({
                   )}
                   {fixture.image_2_url && (
                     <div className="mt-2 rounded-md border bg-muted/30 p-2">
-                      <img
+                      <SafeImage
                         src={fixture.image_2_url}
                         alt={`${fixture.fixture_no} fixture`}
                         className="h-20 w-full object-cover rounded"

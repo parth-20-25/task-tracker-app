@@ -28,6 +28,15 @@ function errorHandler(error, req, res, next) {
 
 
   if (error instanceof AppError) {
+    if (error.statusCode >= 500) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: "Unable to complete the request right now.",
+        error: "Unable to complete the request right now.",
+        details: error.errorCode ? { errorCode: error.errorCode } : null,
+      });
+    }
+
     return res.status(error.statusCode).json({
       success: false,
       message: error.message,
@@ -44,8 +53,6 @@ function errorHandler(error, req, res, next) {
       details: {
         code: error.code || null,
         constraint: error.constraint,
-        detail: actualDetail,
-        message: actualMessage,
       },
     });
   }
@@ -53,12 +60,11 @@ function errorHandler(error, req, res, next) {
   if (error?.code === "23505") {
     return res.status(409).json({
       success: false,
-      message: actualMessage,
-      error: actualMessage,
+      message: "Unable to save changes right now.",
+      error: "Unable to save changes right now.",
       details: {
         code: error.code,
         constraint: error.constraint || null,
-        detail: actualDetail,
       },
     });
   }
@@ -66,12 +72,11 @@ function errorHandler(error, req, res, next) {
   if (error?.code === "23503") {
     return res.status(409).json({
       success: false,
-      message: actualMessage,
-      error: actualMessage,
+      message: "Unable to save changes because related data is missing.",
+      error: "Unable to save changes because related data is missing.",
       details: {
         code: error.code,
         constraint: error.constraint || null,
-        detail: actualDetail,
       },
     });
   }
@@ -79,12 +84,11 @@ function errorHandler(error, req, res, next) {
   if (error?.code === "23502" || error?.code === "22P02") {
     return res.status(400).json({
       success: false,
-      message: actualMessage,
-      error: actualMessage,
+      message: "Unable to save changes. Please check the submitted values.",
+      error: "Unable to save changes. Please check the submitted values.",
       details: {
         code: error.code,
         constraint: error.constraint || null,
-        detail: actualDetail,
       },
     });
   }
@@ -92,22 +96,20 @@ function errorHandler(error, req, res, next) {
   if (error?.code && typeof error.code === "string") {
     return res.status(500).json({
       success: false,
-      message: actualMessage,
-      error: actualMessage,
+      message: "Unable to complete the request right now.",
+      error: "Unable to complete the request right now.",
       details: {
         code: error.code,
         constraint: error.constraint || null,
-        detail: actualDetail,
-        stack: actualStack,
       },
     });
   }
 
   return res.status(error?.statusCode || 500).json({
     success: false,
-    message: error?.statusCode ? actualMessage : actualMessage,
-    error: error?.statusCode ? actualMessage : actualMessage,
-    details: error?.details || actualDetail,
+    message: error?.statusCode ? actualMessage : "Unable to complete the request right now.",
+    error: error?.statusCode ? actualMessage : "Unable to complete the request right now.",
+    details: error?.statusCode ? (error?.details || null) : null,
   });
 }
 

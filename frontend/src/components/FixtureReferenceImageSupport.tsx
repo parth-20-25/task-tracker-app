@@ -2,8 +2,10 @@ import { useRef, useState, type ChangeEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Image as ImageIcon, UploadCloud } from "lucide-react";
 import { uploadFixtureReferenceImage } from "@/api/designApi";
+import { SafeImage } from "@/components/SafeImage";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
+import { resolveImageUrl } from "@/lib/imageUrl";
 import type { DesignFixtureOption } from "@/types";
 
 type ImageType = "part" | "fixture";
@@ -25,6 +27,8 @@ function ReferenceImageCard({
   isUploading: boolean;
   onUpload: () => void;
 }) {
+  const resolvedImageUrl = resolveImageUrl(imageUrl);
+
   return (
     <div className="rounded-xl border bg-background/70 p-3">
       <div className="flex items-start justify-between gap-3">
@@ -37,11 +41,13 @@ function ReferenceImageCard({
 
       {imageUrl ? (
         <div className="mt-3 space-y-3">
-          <img src={imageUrl} alt={label} className="h-28 w-full rounded-lg border object-cover" />
+          <SafeImage src={imageUrl} alt={label} className="h-28 w-full rounded-lg border object-cover" />
           <div className="flex gap-2">
-            <Button asChild size="sm" variant="outline">
-              <a href={imageUrl} target="_blank" rel="noreferrer">View Image</a>
-            </Button>
+            {resolvedImageUrl ? (
+              <Button asChild size="sm" variant="outline">
+                <a href={resolvedImageUrl} target="_blank" rel="noreferrer">View Image</a>
+              </Button>
+            ) : null}
             <Button size="sm" variant="outline" onClick={onUpload} disabled={isUploading}>
               Change
             </Button>

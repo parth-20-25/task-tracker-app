@@ -15,6 +15,7 @@ const {
 } = require("./projectVisibility");
 const {
   activeTaskLateral,
+  currentProgressLateral,
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
 
@@ -210,9 +211,9 @@ function mapFixtureOptionRow(row) {
     workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
       ? null
       : Number(row.workflow_progress_percent),
-    workflow_stage_active: row.operational_state === "IN_PROGRESS",
+    workflow_stage_active: row.operational_state === "IN_PROGRESS" || row.operational_state === "ASSIGNED",
     review_pending: row.operational_state === "VERIFICATION",
-    blocked: workflowStatus === "REJECTED",
+    blocked: workflowStatus === "REJECTED" || row.operational_state === "REWORK",
   };
 }
 
@@ -242,7 +243,7 @@ function fixtureOperationalStatsLateral(projectAlias = "p") {
         SELECT
           COUNT(*)::integer AS total_fixtures,
           COUNT(*) FILTER (WHERE fixture_state.operational_state = 'WORKFLOW_COMPLETE')::integer AS completed_fixtures,
-          COUNT(*) FILTER (WHERE fixture_state.operational_state IN ('VERIFICATION', 'IN_PROGRESS', 'ASSIGNED'))::integer AS active_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.operational_state IN ('VERIFICATION', 'REWORK', 'IN_PROGRESS', 'ASSIGNED'))::integer AS active_fixtures,
           COUNT(*) FILTER (WHERE fixture_state.operational_state = 'UNASSIGNED')::integer AS pending_fixtures
         FROM (
           SELECT
@@ -250,6 +251,7 @@ function fixtureOperationalStatsLateral(projectAlias = "p") {
             ${stateCase} AS operational_state
           FROM design.fixtures f
           ${activeTaskLateral("f", "operational_task")}
+          ${currentProgressLateral("f", projectAlias, "current_progress")}
           WHERE f.project_id = ${projectAlias}.id
             AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
         ) fixture_state
@@ -791,24 +793,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       JOIN design.projects dp
         ON dp.id = di.project_id
       ${activeTaskLateral("di", "operational_task")}
-      LEFT JOIN LATERAL (
-        SELECT
-          fwp.stage_name,
-          fwp.stage_order,
-          fwp.stage_version,
-          fwp.status,
-          fwp.assigned_to,
-          fwp.started_at,
-          COUNT(*) OVER()::integer AS total_stages
-        FROM fixture_workflow_progress fwp
-        WHERE fwp.fixture_id = di.id
-          AND fwp.department_id = dp.department_id
-        ORDER BY
-          CASE WHEN fwp.status <> 'APPROVED' THEN 0 ELSE 1 END ASC,
-          CASE WHEN fwp.status <> 'APPROVED' THEN fwp.stage_order END ASC NULLS LAST,
-          CASE WHEN fwp.status = 'APPROVED' THEN fwp.stage_order END DESC NULLS LAST
-        LIMIT 1
-      ) current_progress ON TRUE
+      ${currentProgressLateral("di", "dp", "current_progress")}
       LEFT JOIN users workflow_assignee
         ON workflow_assignee.employee_id = COALESCE(operational_task.assigned_to, current_progress.assigned_to)
      WHERE dp.id = $1
@@ -817,6 +802,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       ORDER BY
         CASE ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })}
           WHEN 'VERIFICATION' THEN 1
+          WHEN 'REWORK' THEN 2
           WHEN 'UNASSIGNED' THEN 3
           WHEN 'IN_PROGRESS' THEN 4
           WHEN 'ASSIGNED' THEN 5
@@ -871,24 +857,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       JOIN design.projects dp
         ON dp.id = di.project_id
       ${activeTaskLateral("di", "operational_task")}
-      LEFT JOIN LATERAL (
-        SELECT
-          fwp.stage_name,
-          fwp.stage_order,
-          fwp.stage_version,
-          fwp.status,
-          fwp.assigned_to,
-          fwp.started_at,
-          COUNT(*) OVER()::integer AS total_stages
-        FROM fixture_workflow_progress fwp
-        WHERE fwp.fixture_id = di.id
-          AND fwp.department_id = dp.department_id
-        ORDER BY
-          CASE WHEN fwp.status <> 'APPROVED' THEN 0 ELSE 1 END ASC,
-          CASE WHEN fwp.status <> 'APPROVED' THEN fwp.stage_order END ASC NULLS LAST,
-          CASE WHEN fwp.status = 'APPROVED' THEN fwp.stage_order END DESC NULLS LAST
-        LIMIT 1
-      ) current_progress ON TRUE
+      ${currentProgressLateral("di", "dp", "current_progress")}
       LEFT JOIN users workflow_assignee
         ON workflow_assignee.employee_id = COALESCE(operational_task.assigned_to, current_progress.assigned_to)
       WHERE dp.id = $2
@@ -898,6 +867,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       ORDER BY
         CASE ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })}
           WHEN 'VERIFICATION' THEN 1
+          WHEN 'REWORK' THEN 2
           WHEN 'UNASSIGNED' THEN 3
           WHEN 'IN_PROGRESS' THEN 4
           WHEN 'ASSIGNED' THEN 5

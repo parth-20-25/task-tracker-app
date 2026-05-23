@@ -62,6 +62,7 @@ export interface Task {
   due_date?: string | null;
   sla_due_date?: string | null;
   created_at: string;
+  updated_at?: string | null;
   submitted_at?: string | null;
   approved_at?: string | null;
   started_at?: string;
@@ -112,7 +113,7 @@ export interface Task {
   current_stage_id?: string;
   workflow_stage?: string | null;
   workflow_status?: string | null;
-  operational_state?: "VERIFICATION" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
+  operational_state?: "VERIFICATION" | "REWORK" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
   workflow_stage_version?: number;
   fixture_revision_no?: number;
   workflow_contributor_names?: string | null;
@@ -563,7 +564,7 @@ export interface DesignFixtureOption {
   workflow_stage_version?: number | null;
   workflow_revision_code?: string | null;
   workflow_status?: string | null;
-  operational_state?: "VERIFICATION" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
+  operational_state?: "VERIFICATION" | "REWORK" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
   workflow_assigned_to?: string | null;
   workflow_assigned_to_name?: string | null;
   workflow_progress_percent?: number | null;

@@ -4,6 +4,7 @@ const { instrumentModuleExports } = require("../lib/observability");
 const { buildVisibleUsersCte, visibleProjectPredicate, GetAccessibleUserIds } = require("./projectVisibility");
 const {
   activeTaskLateral,
+  currentProgressLateral,
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
 
@@ -46,7 +47,7 @@ function fixtureOperationalStatsLateral(projectAlias = "dp") {
         SELECT
           COUNT(*)::integer AS total_fixtures,
           COUNT(*) FILTER (WHERE fixture_state.operational_state = 'WORKFLOW_COMPLETE')::integer AS completed_fixtures,
-          COUNT(*) FILTER (WHERE fixture_state.operational_state IN ('VERIFICATION', 'IN_PROGRESS', 'ASSIGNED'))::integer AS active_fixtures,
+          COUNT(*) FILTER (WHERE fixture_state.operational_state IN ('VERIFICATION', 'REWORK', 'IN_PROGRESS', 'ASSIGNED'))::integer AS active_fixtures,
           COUNT(*) FILTER (WHERE fixture_state.operational_state = 'UNASSIGNED')::integer AS pending_fixtures
         FROM (
           SELECT
@@ -54,6 +55,7 @@ function fixtureOperationalStatsLateral(projectAlias = "dp") {
             ${stateCase} AS operational_state
           FROM design.fixtures f
           ${activeTaskLateral("f", "operational_task")}
+          ${currentProgressLateral("f", projectAlias, "current_progress")}
           WHERE f.project_id = ${projectAlias}.id
             AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
         ) fixture_state

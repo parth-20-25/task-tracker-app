@@ -1,5 +1,6 @@
 const OPERATIONAL_STATES = {
   VERIFICATION: "VERIFICATION",
+  REWORK: "REWORK",
   UNASSIGNED: "UNASSIGNED",
   IN_PROGRESS: "IN_PROGRESS",
   ASSIGNED: "ASSIGNED",
@@ -13,26 +14,54 @@ function isReviewPendingTask(task = null) {
     && String(task?.verification_status || "").toLowerCase() === "pending";
 }
 
-function resolveTaskOperationalState(task = null, { workflowComplete = false } = {}) {
+function isWorkflowVerificationPending(progress = null) {
+  return String(progress?.status || "").toUpperCase() === "SUBMITTED_FOR_VERIFICATION";
+}
+
+function isWorkflowRejected(progress = null) {
+  return String(progress?.status || "").toUpperCase() === "REJECTED";
+}
+
+function isActiveWorkflowAssignment(progress = null) {
+  const status = String(progress?.status || "").toUpperCase();
+  return status === "IN_PROGRESS" || status === "SUBMITTED_FOR_VERIFICATION";
+}
+
+function isCurrentStageClaimed(progress = null) {
+  return Boolean(String(progress?.assigned_to || "").trim()) || isActiveWorkflowAssignment(progress);
+}
+
+function resolveFixtureOperationalState({ task = null, progress = null, workflowComplete = false } = {}) {
+  if (isReviewPendingTask(task) || isWorkflowVerificationPending(progress)) {
+    return OPERATIONAL_STATES.VERIFICATION;
+  }
+
+  if (String(task?.status || "").toLowerCase() === "rework" || isWorkflowRejected(progress)) {
+    return OPERATIONAL_STATES.REWORK;
+  }
+
   if (workflowComplete) {
     return OPERATIONAL_STATES.WORKFLOW_COMPLETE;
   }
 
-  if (!task) {
-    return OPERATIONAL_STATES.UNASSIGNED;
+  if (task && String(task.status || "").toLowerCase() !== "cancelled") {
+    const completionPercent = Number(task.completion_percent || 0);
+    if (completionPercent > 0) {
+      return OPERATIONAL_STATES.IN_PROGRESS;
+    }
+
+    return OPERATIONAL_STATES.ASSIGNED;
   }
 
-  if (String(task.status || "").toLowerCase() === "cancelled") {
-    return OPERATIONAL_STATES.UNASSIGNED;
+  if (isCurrentStageClaimed(progress)) {
+    return OPERATIONAL_STATES.ASSIGNED;
   }
 
-  if (isReviewPendingTask(task)) {
-    return OPERATIONAL_STATES.VERIFICATION;
-  }
+  return OPERATIONAL_STATES.UNASSIGNED;
+}
 
-  return Number(task.completion_percent || 0) > 0
-    ? OPERATIONAL_STATES.IN_PROGRESS
-    : OPERATIONAL_STATES.ASSIGNED;
+function resolveTaskOperationalState(task = null, { workflowComplete = false, progress = null } = {}) {
+  return resolveFixtureOperationalState({ task, progress, workflowComplete });
 }
 
 function activeTaskStatusSqlArray() {
@@ -94,17 +123,48 @@ function activeTaskLateral(fixtureAlias = "f", alias = "operational_task") {
   `;
 }
 
+function currentProgressLateral(fixtureAlias = "f", projectAlias = "p", alias = "current_progress") {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT
+          fwp.stage_name,
+          fwp.stage_order,
+          fwp.stage_version,
+          fwp.status,
+          fwp.assigned_to,
+          fwp.assigned_at,
+          fwp.started_at,
+          fwp.completed_at,
+          fwp.updated_at,
+          COUNT(*) OVER()::integer AS total_stages
+        FROM fixture_workflow_progress fwp
+        WHERE fwp.fixture_id = ${fixtureAlias}.id
+          AND fwp.department_id = ${projectAlias}.department_id
+        ORDER BY
+          CASE WHEN fwp.status <> 'APPROVED' THEN 0 ELSE 1 END ASC,
+          CASE WHEN fwp.status <> 'APPROVED' THEN fwp.stage_order END ASC NULLS LAST,
+          CASE WHEN fwp.status = 'APPROVED' THEN fwp.stage_order END DESC NULLS LAST
+        LIMIT 1
+      ) ${alias} ON TRUE
+  `;
+}
+
 function operationalStateSqlCase({
   fixtureAlias = "f",
   projectAlias = "p",
   taskAlias = "operational_task",
+  progressAlias = "current_progress",
 } = {}) {
   return `CASE
-    WHEN ${fixtureWorkflowCompleteSql(fixtureAlias, projectAlias)} THEN '${OPERATIONAL_STATES.WORKFLOW_COMPLETE}'
     WHEN ${taskAlias}.status = 'under_review' AND ${taskAlias}.verification_status = 'pending' THEN '${OPERATIONAL_STATES.VERIFICATION}'
-    WHEN ${taskAlias}.id IS NULL THEN '${OPERATIONAL_STATES.UNASSIGNED}'
-    WHEN COALESCE(${taskAlias}.completion_percent, 0) = 0 THEN '${OPERATIONAL_STATES.ASSIGNED}'
-    ELSE '${OPERATIONAL_STATES.IN_PROGRESS}'
+    WHEN ${progressAlias}.status = 'SUBMITTED_FOR_VERIFICATION' THEN '${OPERATIONAL_STATES.VERIFICATION}'
+    WHEN ${taskAlias}.status = 'rework' THEN '${OPERATIONAL_STATES.REWORK}'
+    WHEN ${progressAlias}.status = 'REJECTED' THEN '${OPERATIONAL_STATES.REWORK}'
+    WHEN ${fixtureWorkflowCompleteSql(fixtureAlias, projectAlias)} THEN '${OPERATIONAL_STATES.WORKFLOW_COMPLETE}'
+    WHEN ${taskAlias}.id IS NOT NULL AND COALESCE(${taskAlias}.completion_percent, 0) > 0 THEN '${OPERATIONAL_STATES.IN_PROGRESS}'
+    WHEN ${taskAlias}.id IS NOT NULL THEN '${OPERATIONAL_STATES.ASSIGNED}'
+    WHEN ${progressAlias}.assigned_to IS NOT NULL OR ${progressAlias}.status IN ('IN_PROGRESS', 'SUBMITTED_FOR_VERIFICATION') THEN '${OPERATIONAL_STATES.ASSIGNED}'
+    ELSE '${OPERATIONAL_STATES.UNASSIGNED}'
   END`;
 }
 
@@ -112,8 +172,14 @@ module.exports = {
   ACTIVE_TASK_STATUSES,
   OPERATIONAL_STATES,
   activeTaskLateral,
+  currentProgressLateral,
   fixtureWorkflowCompleteSql,
+  isActiveWorkflowAssignment,
+  isCurrentStageClaimed,
   isReviewPendingTask,
+  isWorkflowRejected,
+  isWorkflowVerificationPending,
   operationalStateSqlCase,
+  resolveFixtureOperationalState,
   resolveTaskOperationalState,
 };

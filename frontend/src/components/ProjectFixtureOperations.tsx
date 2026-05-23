@@ -46,6 +46,21 @@ import { resolveImageUrl } from "@/lib/imageUrl";
 import type { DesignFixtureOption, Priority, Task } from "@/types";
 
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
+const ASSIGNMENT_BLOCKED_STATES = new Set(["VERIFICATION", "REWORK", "IN_PROGRESS", "ASSIGNED", "WORKFLOW_COMPLETE"]);
+
+type FixtureOperationalState = "VERIFICATION" | "REWORK" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE";
+
+interface FixtureOperationalResolution {
+  state: FixtureOperationalState;
+  assignable: boolean;
+  activeTask: Task | null;
+  activeAssignee: string | null;
+  activeAssigneeName: string | null;
+  hasActiveTask: boolean;
+  hasWorkflowOccupancy: boolean;
+  workflowLocked: boolean;
+  reason: string | null;
+}
 
 const priorityOptions: Array<{ value: Priority; label: string }> = [
   { value: "critical", label: "P1 - Critical" },
@@ -117,11 +132,6 @@ function formatDeadlineDate(dateValue: string) {
   return format(new Date(year, month - 1, day), "dd/MM/yyyy");
 }
 
-function isFixtureOperationallyAssigned(fixture: DesignFixtureOption, task: Task | null) {
-  void task;
-  return !["UNASSIGNED", "WORKFLOW_COMPLETE"].includes(String(fixture.operational_state || "UNASSIGNED"));
-}
-
 function fixtureStageStatusLabel(status: string | null | undefined) {
   switch (status?.toUpperCase()) {
     case "IN_PROGRESS":
@@ -134,6 +144,8 @@ function fixtureStageStatusLabel(status: string | null | undefined) {
       return "Verification";
     case "REJECTED":
       return "Rejected";
+    case "REWORK":
+      return "Rework";
     case "ASSIGNED":
       return "Assigned";
     case "WORKFLOW_COMPLETE":
@@ -156,6 +168,7 @@ function fixtureStageStatusColor(status: string | null | undefined) {
     case "WORKFLOW_COMPLETE":
       return "border-emerald-300 bg-emerald-50 text-emerald-800";
     case "REJECTED":
+    case "REWORK":
       return "border-red-300 bg-red-50 text-red-800";
     case "VERIFICATION":
       return "border-violet-300 bg-violet-50 text-violet-800";
@@ -244,6 +257,67 @@ function getAssigneeName(fixture: DesignFixtureOption, task: Task | null) {
     || "Unassigned";
 }
 
+function normalizeOperationalState(value: string | null | undefined): FixtureOperationalState {
+  const normalized = String(value || "UNASSIGNED").toUpperCase();
+  if (
+    normalized === "VERIFICATION"
+    || normalized === "REWORK"
+    || normalized === "IN_PROGRESS"
+    || normalized === "ASSIGNED"
+    || normalized === "WORKFLOW_COMPLETE"
+  ) {
+    return normalized;
+  }
+
+  return "UNASSIGNED";
+}
+
+function isActiveTask(task: Task | null) {
+  return Boolean(task && OPEN_TASK_STATUSES.has(task.status));
+}
+
+function resolveFixtureOperationalState(fixture: DesignFixtureOption, task: Task | null): FixtureOperationalResolution {
+  const activeTask = isActiveTask(task) ? task : null;
+  const state = normalizeOperationalState(fixture.operational_state);
+  const activeAssignee = activeTask?.assigned_to || fixture.workflow_assigned_to || null;
+  const activeAssigneeName = activeTask?.assignee?.name || fixture.workflow_assigned_to_name || activeAssignee;
+  const workflowStatus = String(fixture.workflow_status || "").toUpperCase();
+  const hasWorkflowOccupancy = Boolean(
+    fixture.workflow_assigned_to
+    || workflowStatus === "IN_PROGRESS"
+    || workflowStatus === "SUBMITTED_FOR_VERIFICATION",
+  );
+  const workflowLocked = workflowStatus === "SUBMITTED_FOR_VERIFICATION"
+    || (hasWorkflowOccupancy && !activeTask);
+  let reason: string | null = null;
+
+  if (state === "VERIFICATION") {
+    reason = "Already under verification";
+  } else if (state === "WORKFLOW_COMPLETE") {
+    reason = "Workflow complete";
+  } else if (state === "REWORK") {
+    reason = "Rejected for rework";
+  } else if (activeAssigneeName && ASSIGNMENT_BLOCKED_STATES.has(state)) {
+    reason = `Already assigned to ${activeAssigneeName}`;
+  } else if (workflowLocked) {
+    reason = "Workflow locked";
+  } else if (state !== "UNASSIGNED") {
+    reason = fixtureStageStatusLabel(state);
+  }
+
+  return {
+    state,
+    assignable: state === "UNASSIGNED" && !activeTask && !hasWorkflowOccupancy && !workflowLocked,
+    activeTask,
+    activeAssignee,
+    activeAssigneeName,
+    hasActiveTask: Boolean(activeTask),
+    hasWorkflowOccupancy,
+    workflowLocked,
+    reason,
+  };
+}
+
 function getSubmittedValue(task: Task | null) {
   return task?.submitted_at || task?.completed_at || null;
 }
@@ -256,6 +330,7 @@ interface ProjectFixtureOperationsGridProps {
 
 const FIXTURE_SECTION_ORDER = [
   { key: "VERIFICATION", label: "Verification" },
+  { key: "REWORK", label: "Rework" },
   { key: "UNASSIGNED", label: "Unassigned" },
   { key: "IN_PROGRESS", label: "In Progress" },
   { key: "ASSIGNED", label: "Assigned" },
@@ -286,6 +361,12 @@ function sortSectionFixtures(
       return Number(rightTask?.completion_percent || 0) - Number(leftTask?.completion_percent || 0) || compareFixtureNo(left, right);
     }
 
+    if (state === "REWORK") {
+      return new Date(rightTask?.updated_at || rightTask?.created_at || 0).getTime()
+        - new Date(leftTask?.updated_at || leftTask?.created_at || 0).getTime()
+        || compareFixtureNo(left, right);
+    }
+
     if (state === "ASSIGNED") {
       return new Date(leftTask?.deadline || "9999-12-31").getTime() - new Date(rightTask?.deadline || "9999-12-31").getTime()
         || compareFixtureNo(left, right);
@@ -301,18 +382,6 @@ function sortSectionFixtures(
   });
 }
 
-function getFixtureSectionKey(fixture: DesignFixtureOption, task: Task | null) {
-  if (task?.status === "under_review" && task.verification_status === "pending") {
-    return "VERIFICATION";
-  }
-
-  if (String(fixture.operational_state || "") === "VERIFICATION") {
-    return task ? "IN_PROGRESS" : "UNASSIGNED";
-  }
-
-  return String(fixture.operational_state || "UNASSIGNED");
-}
-
 export function ProjectFixtureOperationsGrid({
   fixtures,
   projectId,
@@ -326,6 +395,7 @@ export function ProjectFixtureOperationsGrid({
   const [selectedFixtureIds, setSelectedFixtureIds] = useState<string[]>([]);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     VERIFICATION: true,
+    REWORK: true,
     UNASSIGNED: true,
     IN_PROGRESS: true,
     ASSIGNED: true,
@@ -359,10 +429,35 @@ export function ProjectFixtureOperationsGrid({
     return map;
   }, [combinedTasks, fixtures]);
 
+  const operationalResolutionByFixtureId = useMemo(() => {
+    const map = new Map<string, FixtureOperationalResolution>();
+    fixtures.forEach((fixture) => {
+      map.set(fixture.fixture_id, resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null));
+    });
+    return map;
+  }, [fixtureTaskById, fixtures]);
+
   const unassignedFixtures = useMemo(
-    () => fixtures.filter((fixture) => getFixtureSectionKey(fixture, fixtureTaskById.get(fixture.fixture_id) || null) === "UNASSIGNED"),
-    [fixtureTaskById, fixtures],
+    () => fixtures.filter((fixture) => operationalResolutionByFixtureId.get(fixture.fixture_id)?.state === "UNASSIGNED"),
+    [fixtures, operationalResolutionByFixtureId],
   );
+  const assignableFixtures = useMemo(
+    () => fixtures.filter((fixture) => operationalResolutionByFixtureId.get(fixture.fixture_id)?.assignable === true),
+    [fixtures, operationalResolutionByFixtureId],
+  );
+  const assignableFixtureIds = useMemo(
+    () => new Set(assignableFixtures.map((fixture) => fixture.fixture_id)),
+    [assignableFixtures],
+  );
+  const eligibleSelectedFixtureIds = useMemo(
+    () => selectedFixtureIds.filter((fixtureId) => assignableFixtureIds.has(fixtureId)),
+    [assignableFixtureIds, selectedFixtureIds],
+  );
+
+  useEffect(() => {
+    setSelectedFixtureIds((current) => current.filter((fixtureId) => assignableFixtureIds.has(fixtureId)));
+  }, [assignableFixtureIds]);
+
   const fixtureSections = useMemo(() => {
     const seen = new Set<string>();
 
@@ -372,7 +467,7 @@ export function ProjectFixtureOperationsGrid({
           return false;
         }
 
-        const matches = getFixtureSectionKey(fixture, fixtureTaskById.get(fixture.fixture_id) || null) === section.key;
+        const matches = operationalResolutionByFixtureId.get(fixture.fixture_id)?.state === section.key;
         if (matches) {
           seen.add(fixture.fixture_id);
         }
@@ -384,7 +479,7 @@ export function ProjectFixtureOperationsGrid({
         fixtures: sortSectionFixtures(section.key, sectionFixtures, fixtureTaskById),
       };
     });
-  }, [fixtureTaskById, fixtures]);
+  }, [fixtureTaskById, fixtures, operationalResolutionByFixtureId]);
 
   const invalidateOperationalState = useCallback(async () => {
     await Promise.all([
@@ -417,7 +512,7 @@ export function ProjectFixtureOperationsGrid({
           variant={bulkPanelOpen ? "secondary" : "outline"}
           className="h-8 px-3 text-xs"
           onClick={() => setBulkPanelOpen((open) => !open)}
-          disabled={!unassignedFixtures.length}
+          disabled={!assignableFixtures.length}
         >
           <CheckSquare className="mr-1.5 h-3.5 w-3.5" />
           Assign All
@@ -427,7 +522,8 @@ export function ProjectFixtureOperationsGrid({
       {bulkPanelOpen ? (
         <BulkFixtureAssignmentPanel
           unassignedFixtures={unassignedFixtures}
-          selectedFixtureIds={selectedFixtureIds}
+          assignableFixtures={assignableFixtures}
+          selectedFixtureIds={eligibleSelectedFixtureIds}
           projectId={projectId}
           departmentId={departmentId || undefined}
           assignableUsers={assignableUsersQuery.data ?? []}
@@ -467,7 +563,8 @@ export function ProjectFixtureOperationsGrid({
                       assignableUsers={assignableUsersQuery.data ?? []}
                       isLoadingUsers={assignableUsersQuery.isLoading}
                       invalidateOperationalState={invalidateOperationalState}
-                      selectable={bulkPanelOpen && section.key === "UNASSIGNED"}
+                      operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
+                      selectable={bulkPanelOpen && section.key === "UNASSIGNED" && assignableFixtureIds.has(fixture.fixture_id)}
                       selected={selectedFixtureIds.includes(fixture.fixture_id)}
                       onSelectedChange={toggleSelectedFixture}
                     />
@@ -536,6 +633,7 @@ function DateOnlyDeadlinePicker({
 
 interface BulkFixtureAssignmentPanelProps {
   unassignedFixtures: DesignFixtureOption[];
+  assignableFixtures: DesignFixtureOption[];
   selectedFixtureIds: string[];
   projectId: string;
   departmentId?: string;
@@ -547,6 +645,7 @@ interface BulkFixtureAssignmentPanelProps {
 
 function BulkFixtureAssignmentPanel({
   unassignedFixtures,
+  assignableFixtures,
   selectedFixtureIds,
   projectId,
   departmentId,
@@ -568,8 +667,8 @@ function BulkFixtureAssignmentPanel({
       return unassignedFixtures.filter((fixture) => selected.has(fixture.fixture_id));
     }
 
-    return unassignedFixtures;
-  }, [scope, selectedFixtureIds, unassignedFixtures]);
+    return assignableFixtures;
+  }, [assignableFixtures, scope, selectedFixtureIds]);
 
   const progressQueries = useQueries({
     queries: targetFixtures.map((fixture) => ({
@@ -632,7 +731,16 @@ function BulkFixtureAssignmentPanel({
         throw new Error("Reason Type is required when workflow is changed");
       }
 
+      let assignedCount = 0;
+      let skippedCount = 0;
+
       for (const fixture of targetFixtures) {
+        const validation = await validateFixtureAssignment(fixture.fixture_id, departmentId);
+        if (validation.canAssign !== true) {
+          skippedCount += 1;
+          continue;
+        }
+
         const progress = progressByFixtureId.get(fixture.fixture_id) || await fetchFixtureFullProgress(fixture.fixture_id, departmentId);
         const fixtureCurrent = getCurrentProgressStage(progress);
         const fixtureWorkflowChanged = Boolean(workflowTarget && fixtureCurrent?.stage_name && workflowTarget !== fixtureCurrent.stage_name);
@@ -669,6 +777,11 @@ function BulkFixtureAssignmentPanel({
           priority,
           deadline: normalizeDeadlineToEndOfDayIso(deadline),
         });
+        assignedCount += 1;
+      }
+
+      if (assignedCount === 0) {
+        throw new Error(skippedCount > 0 ? "No selected fixtures are currently assignable" : "No fixtures were assigned");
       }
     },
     onSuccess: async () => {
@@ -785,7 +898,7 @@ function BulkFixtureAssignmentPanel({
           <RadioGroup value={scope} onValueChange={(value) => setScope(value as "all_unassigned" | "selected")} className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-xs">
               <RadioGroupItem value="all_unassigned" />
-              All Unassigned Fixtures ({unassignedFixtures.length})
+              All Assignable Fixtures ({assignableFixtures.length})
             </label>
             <label className="flex items-center gap-2 text-xs">
               <RadioGroupItem value="selected" />
@@ -819,6 +932,7 @@ interface ProjectFixtureCardProps {
   assignableUsers: Array<{ employee_id: string; name: string }>;
   isLoadingUsers: boolean;
   invalidateOperationalState: () => Promise<void>;
+  operationalResolution: FixtureOperationalResolution;
   selectable?: boolean;
   selected?: boolean;
   onSelectedChange?: (fixtureId: string, checked: boolean) => void;
@@ -832,6 +946,7 @@ function ProjectFixtureCard({
   assignableUsers,
   isLoadingUsers,
   invalidateOperationalState,
+  operationalResolution,
   selectable = false,
   selected = false,
   onSelectedChange,
@@ -848,6 +963,8 @@ function ProjectFixtureCard({
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [inlineOperationalReason, setInlineOperationalReason] = useState<string | null>(null);
+  const [openingAssign, setOpeningAssign] = useState(false);
 
   const canDeployDesignTask = access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
   const completedPercent = Math.max(0, Math.min(100, Number(task?.completion_percent ?? 0)));
@@ -874,7 +991,7 @@ function ProjectFixtureCard({
   const validationQuery = useQuery({
     queryKey: ["workflow", "validate", departmentId || "self", fixture.fixture_id],
     queryFn: () => validateFixtureAssignment(fixture.fixture_id, departmentId),
-    enabled: expanded === "assign",
+    enabled: false,
   });
 
   const progress = progressQuery.data;
@@ -897,10 +1014,9 @@ function ProjectFixtureCard({
   const canSubmitAssignment = workflowChanged ? workflowChangeAllowed : canAssignCurrent;
 
   const proofImage = getProofImage(task);
-  const canonicalReviewTask = Boolean(task?.status === "under_review" && task?.verification_status === "pending");
-  const canonicalOperationalState = getFixtureSectionKey(fixture, task);
-  const isSubmittedForVerification = canonicalReviewTask;
-  const isAssigned = isFixtureOperationallyAssigned(fixture, task);
+  const canonicalOperationalState = operationalResolution.state;
+  const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
+  const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
   const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
 
@@ -915,6 +1031,34 @@ function ProjectFixtureCard({
   const resetTransferForm = () => {
     setTransferTo("");
     setTransferReason("");
+  };
+
+  const openAssignExpansion = async () => {
+    setInlineOperationalReason(null);
+
+    if (!operationalResolution.assignable) {
+      setInlineOperationalReason(operationalResolution.reason || "Workflow locked");
+      setExpanded(null);
+      return;
+    }
+
+    setOpeningAssign(true);
+    try {
+      const validation = await validationQuery.refetch();
+      if (validation.data?.canAssign !== true) {
+        setInlineOperationalReason(validation.data?.reason || "Workflow locked");
+        setExpanded(null);
+        return;
+      }
+
+      setExpanded(expanded === "assign" ? null : "assign");
+      resetTransferForm();
+    } catch (error) {
+      setInlineOperationalReason(error instanceof Error ? error.message : "Workflow locked");
+      setExpanded(null);
+    } finally {
+      setOpeningAssign(false);
+    }
   };
 
   const assignMutation = useMutation({
@@ -1105,22 +1249,22 @@ function ProjectFixtureCard({
               onClick={() => {
                 setExpanded(expanded === "transfer" ? null : "transfer");
                 resetAssignForm();
+                setInlineOperationalReason(null);
               }}
             >
               <ArrowRightLeft className="mr-1 h-3 w-3" />
               Transfer
             </Button>
-          ) : !isAssigned && canDeployDesignTask ? (
+          ) : operationalResolution.assignable && canDeployDesignTask ? (
             <Button
               type="button"
               size="sm"
               variant="outline"
               className="h-7 px-2 text-[11px]"
-              onClick={() => {
-                setExpanded(expanded === "assign" ? null : "assign");
-                resetTransferForm();
-              }}
+              disabled={openingAssign}
+              onClick={() => void openAssignExpansion()}
             >
+              {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
               Assign Now
             </Button>
           ) : null}
@@ -1130,7 +1274,7 @@ function ProjectFixtureCard({
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <User className="h-3 w-3" />
-              {getAssigneeName(fixture, task)}
+              {operationalResolution.activeAssigneeName || getAssigneeName(fixture, task)}
             </span>
             {task ? (
               <div className="flex items-center gap-2">
@@ -1185,7 +1329,7 @@ function ProjectFixtureCard({
             )}
           >
             {isAssigned ? <UserCheck className="h-3 w-3" /> : <UserX className="h-3 w-3" />}
-            {isAssigned ? getAssigneeName(fixture, task) : "Unassigned"}
+            {isAssigned ? operationalResolution.activeAssigneeName || getAssigneeName(fixture, task) : "Unassigned"}
           </Badge>
         </div>
 
@@ -1193,6 +1337,9 @@ function ProjectFixtureCard({
           <p className="text-xs text-muted-foreground">
             Submitted: {formatSubmittedDate(getSubmittedValue(task))}
           </p>
+        ) : null}
+        {inlineOperationalReason ? (
+          <p className="text-xs font-medium text-amber-700">{inlineOperationalReason}</p>
         ) : null}
       </div>
 

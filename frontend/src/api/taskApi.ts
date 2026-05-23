@@ -152,8 +152,8 @@ export function transferTask(taskId: number, data: TransferTaskPayload) {
 }
 
 export function cancelTask(taskId: number, reason?: string) {
-  return apiRequest<Task>(`/tasks/${taskId}`, {
-    method: "DELETE",
+  return apiRequest<Task>(`/tasks/${taskId}/cancel`, {
+    method: "POST",
     body: JSON.stringify({ reason }),
   });
 }

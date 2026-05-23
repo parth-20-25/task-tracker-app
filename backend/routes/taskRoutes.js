@@ -175,12 +175,20 @@ router.post(
   }),
 );
 
-router.delete(
-  "/tasks/:taskId",
-  authorize("can_assign_tasks"),
+router.post(
+  "/tasks/:taskId/cancel",
   asyncHandler(async (req, res) => {
     const task = await cancelTaskForUser(req.user, req.params.taskId, req.body?.reason);
-    logger.info("Task deleted", { taskId: req.params.taskId, user: req.user.employee_id });
+    logger.info("Task cancelled", { taskId: req.params.taskId, user: req.user.employee_id });
+    return sendSuccess(res, task);
+  }),
+);
+
+router.delete(
+  "/tasks/:taskId",
+  asyncHandler(async (req, res) => {
+    const task = await cancelTaskForUser(req.user, req.params.taskId, req.body?.reason);
+    logger.info("Task cancelled", { taskId: req.params.taskId, user: req.user.employee_id });
     return sendSuccess(res, task);
   }),
 );

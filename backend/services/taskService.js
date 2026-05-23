@@ -71,6 +71,7 @@ const {
   getTaskAccess,
   hasPermission,
   isAdmin,
+  isOperationalControllerRole,
   isProjectAuthorityRole,
   isSupervisor,
   isTaskAssignee,
@@ -338,6 +339,25 @@ function canTransferDesignTask(actor, task) {
     || isSupervisor(actor)
     || isProjectAuthorityRole(actor)
     || isAdmin(actor);
+}
+
+function canCancelTask(actor, task) {
+  if (!actor || !task || !canAccessTask(actor, task)) {
+    return false;
+  }
+
+  if (isAdmin(actor) || isProjectAuthorityRole(actor) || isOperationalControllerRole(actor)) {
+    return true;
+  }
+
+  return Boolean(actor.employee_id && actor.employee_id === task.assigned_by);
+}
+
+function isTaskApprovedOrWorkflowComplete(task) {
+  return task?.status === TASK_STATUSES.CLOSED
+    || task?.verification_status === VERIFICATION_STATUSES.APPROVED
+    || Boolean(task?.approved_at)
+    || task?.operational_state === "WORKFLOW_COMPLETE";
 }
 
 function resolveProgressRowForTask(task, progressRows) {
@@ -1682,38 +1702,69 @@ async function cancelTaskForUser(user, taskId, reason) {
     throw new AppError(404, "Task not found");
   }
 
-  if (!canAccessTask(user, task)) {
+  if (!canCancelTask(user, task)) {
     throw new AppError(403, "You do not have permission to cancel this task");
   }
 
-  if (task.status === TASK_STATUSES.CLOSED) {
-    throw new AppError(409, "Closed tasks cannot be cancelled");
+  const cancellationReason = typeof reason === "string" ? reason.trim() : "";
+  if (!cancellationReason) {
+    throw new AppError(400, "Cancellation reason is required");
   }
 
-  const cancelledTaskId = await cancelTask(task.id, {
-    cancelledBy: user.employee_id,
-    reason: typeof reason === "string" ? reason.trim() || null : null,
-  });
-
-  if (!cancelledTaskId) {
-    throw new AppError(409, "Task is already cancelled");
+  if (isTaskApprovedOrWorkflowComplete(task)) {
+    throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
   }
 
-  if (task.fixture_id && task.department_id) {
-    await releaseFixtureStageAssignment(task.fixture_id, task.department_id);
-  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [task.id]);
+    const lockedTask = await findTaskById(task.id, client);
 
-  await createAuditLog({
-    userEmployeeId: user.employee_id,
-    actionType: "task_cancelled",
-    targetType: "task",
-    targetId: task.id,
-    metadata: {
-      reason: typeof reason === "string" ? reason.trim() || null : null,
-      previous_status: task.status,
-      previous_stage_id: task.current_stage_id,
-    },
-  });
+    if (!lockedTask) {
+      throw new AppError(404, "Task not found");
+    }
+
+    if (isTaskApprovedOrWorkflowComplete(lockedTask)) {
+      throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
+    }
+
+    const cancelledTaskId = await cancelTask(lockedTask.id, {
+      cancelledBy: user.employee_id,
+      reason: cancellationReason,
+    }, client);
+
+    if (!cancelledTaskId) {
+      throw new AppError(409, "Task is already cancelled or no longer cancellable");
+    }
+
+    if (lockedTask.fixture_id && lockedTask.department_id) {
+      await releaseFixtureStageAssignment(lockedTask.fixture_id, lockedTask.department_id, client);
+    }
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "task_cancelled",
+      targetType: "task",
+      targetId: lockedTask.id,
+      metadata: {
+        reason: cancellationReason,
+        cancelled_by: user.employee_id,
+        cancelled_at: new Date().toISOString(),
+        previous_status: lockedTask.status,
+        previous_verification_status: lockedTask.verification_status,
+        previous_stage_id: lockedTask.current_stage_id,
+        previous_workflow_status: lockedTask.workflow_status,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 
   const cancelledTask = await findTaskById(task.id);
   await refreshTaskPerformanceAnalytics(cancelledTask || task);

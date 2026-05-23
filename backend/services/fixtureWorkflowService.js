@@ -959,19 +959,19 @@ async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, depart
   });
 }
 
-async function releaseFixtureStageAssignment(fixtureId, departmentId) {
+async function releaseFixtureStageAssignment(fixtureId, departmentId, client = pool) {
   if (!fixtureId || !departmentId) {
     return { released: false, currentStage: null };
   }
 
-  const progress = await getProgressForFixture(fixtureId, departmentId);
+  const progress = await getProgressForFixture(fixtureId, departmentId, client);
   const current = deriveCurrentStageByStatus(progress);
 
   if (!current) {
     return { released: false, currentStage: null };
   }
 
-  if (current.status !== WORKFLOW_STATUSES.IN_PROGRESS) {
+  if (![WORKFLOW_STATUSES.IN_PROGRESS, WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION, WORKFLOW_STATUSES.REJECTED].includes(current.status)) {
     return { released: false, currentStage: current };
   }
 
@@ -982,7 +982,8 @@ async function releaseFixtureStageAssignment(fixtureId, departmentId) {
     started_at: null,
     completed_at: null,
     duration_minutes: null,
-  });
+  }, client);
+  await markFixtureIncomplete(fixtureId, client);
 
   return { released: true, currentStage: current };
 }

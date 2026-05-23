@@ -22,6 +22,10 @@ function resolveTaskOperationalState(task = null, { workflowComplete = false } =
     return OPERATIONAL_STATES.UNASSIGNED;
   }
 
+  if (String(task.status || "").toLowerCase() === "cancelled") {
+    return OPERATIONAL_STATES.UNASSIGNED;
+  }
+
   if (isReviewPendingTask(task)) {
     return OPERATIONAL_STATES.VERIFICATION;
   }

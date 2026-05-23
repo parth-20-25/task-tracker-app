@@ -456,8 +456,7 @@ function getTaskAccess(user) {
 
   return {
     clause: `
-      WHERE t.status <> 'cancelled'
-        AND ${accessPredicate}
+      WHERE ${accessPredicate}
     `,
     params,
   };

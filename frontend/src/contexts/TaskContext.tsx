@@ -6,7 +6,7 @@ import { NewTaskInput, TaskContext } from "@/contexts/useTasks";
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const tasksQuery = useTasksQuery();
   const { cancelTaskMutation, createTaskMutation, updateTaskMutation } = useTaskMutations();
-  const tasks = (tasksQuery.data ?? []).filter((task) => task.status !== "cancelled");
+  const tasks = tasksQuery.data ?? [];
 
   const executeTaskAction = useCallback(async (taskId: number, action: "start" | "resume" | "hold" | "submit") => {
     await updateTaskMutation.mutateAsync({ taskId, action });

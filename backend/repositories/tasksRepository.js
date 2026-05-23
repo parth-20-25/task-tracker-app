@@ -684,6 +684,7 @@ async function updateTaskAssignmentForTransfer(taskId, { assignedTo, completionP
 }
 
 async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
+  const cancelledAt = new Date();
   const result = await client.query(
     `
       UPDATE tasks
@@ -697,6 +698,9 @@ async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
           updated_at = NOW()
       WHERE id = $1
         AND status <> 'cancelled'
+        AND status <> 'closed'
+        AND approved_at IS NULL
+        AND COALESCE(verification_status, 'pending') <> 'approved'
       RETURNING id
     `,
     [taskId, reason || null],
@@ -710,7 +714,12 @@ async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
     userEmployeeId: cancelledBy,
     actionType: "task_cancelled",
     notes: reason || null,
-    metadata: { status: "cancelled" },
+    metadata: {
+      status: "cancelled",
+      cancelled_by: cancelledBy,
+      cancelled_at: cancelledAt.toISOString(),
+      reason: reason || null,
+    },
   }, client);
 
   return result.rows[0].id;

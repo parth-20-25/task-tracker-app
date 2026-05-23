@@ -16,6 +16,7 @@ import {
 import {
   createDesignTask,
   fetchFixtureFullProgress,
+  manipulateFixtureStage,
   reopenFixtureStage,
   validateFixtureAssignment,
   type FixtureFullProgress,
@@ -599,7 +600,7 @@ function BulkFixtureAssignmentPanel({
     return Boolean(workflowTarget && fixtureCurrent?.stage_name && workflowTarget !== fixtureCurrent.stage_name);
   });
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
-  const workflowChangeAllowed = !workflowChanged || selectedWorkflowStage?.status === "APPROVED";
+  const workflowChangeAllowed = !workflowChanged || reasonType === "MANUAL_OVERRIDE" || selectedWorkflowStage?.status === "APPROVED";
   const progressLoading = progressQueries.some((query) => query.isLoading);
   const selectedScopeEmpty = scope === "selected" && targetFixtures.length === 0;
 
@@ -632,12 +633,25 @@ function BulkFixtureAssignmentPanel({
         const fixtureWorkflowChanged = Boolean(workflowTarget && fixtureCurrent?.stage_name && workflowTarget !== fixtureCurrent.stage_name);
 
         if (fixtureWorkflowChanged) {
-          await reopenFixtureStage({
-            fixture_id: fixture.fixture_id,
-            department_id: departmentId,
-            target_stage_name: workflowTarget,
-            revision_type: reasonType as FixtureRevisionType,
-          });
+          if (reasonType === "MANUAL_OVERRIDE") {
+            await manipulateFixtureStage({
+              fixture_id: fixture.fixture_id,
+              department_id: departmentId,
+              target_stage_name: workflowTarget,
+              target_status: "PENDING",
+              reason_type: "MANUAL_OVERRIDE",
+              revision_type: "MANUAL_OVERRIDE",
+              revision_reason: "Manual override selected during assignment workflow change",
+              remarks: "Manual override selected during assignment workflow change",
+            });
+          } else {
+            await reopenFixtureStage({
+              fixture_id: fixture.fixture_id,
+              department_id: departmentId,
+              target_stage_name: workflowTarget,
+              revision_type: reasonType as FixtureRevisionType,
+            });
+          }
         }
 
         await createDesignTask({
@@ -755,7 +769,7 @@ function BulkFixtureAssignmentPanel({
             </SelectContent>
           </Select>
           {!workflowChangeAllowed ? (
-            <p className="text-xs text-amber-700">Workflow changes can only reopen an approved stage.</p>
+            <p className="text-xs text-amber-700">Previous stage must be approved before changing workflow.</p>
           ) : null}
         </div>
       ) : null}
@@ -907,12 +921,25 @@ function ProjectFixtureCard({
           throw new Error("Reason Type is required when workflow is changed");
         }
 
-        await reopenFixtureStage({
-          fixture_id: fixture.fixture_id,
-          department_id: departmentId,
-          target_stage_name: workflowTarget,
-          revision_type: reasonType,
-        });
+        if (reasonType === "MANUAL_OVERRIDE") {
+          await manipulateFixtureStage({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+            target_stage_name: workflowTarget,
+            target_status: "PENDING",
+            reason_type: "MANUAL_OVERRIDE",
+            revision_type: "MANUAL_OVERRIDE",
+            revision_reason: "Manual override selected during assignment workflow change",
+            remarks: "Manual override selected during assignment workflow change",
+          });
+        } else {
+          await reopenFixtureStage({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+            target_stage_name: workflowTarget,
+            revision_type: reasonType,
+          });
+        }
       }
 
       await createDesignTask({
@@ -992,8 +1019,8 @@ function ProjectFixtureCard({
     },
     onError: (error) => {
       toast({
-        title: "Review failed",
-        description: error instanceof Error ? error.message : "Could not review fixture",
+        title: "Review not saved",
+        description: error instanceof Error ? error.message : "Task is not in verification state.",
         variant: "destructive",
       });
     },

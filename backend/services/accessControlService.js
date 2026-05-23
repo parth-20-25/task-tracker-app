@@ -9,6 +9,45 @@ const {
 } = require("../repositories/projectVisibility");
 const { normalizePermissionIds, normalizePermissionId } = require("../repositories/permissionRepository");
 
+const OPERATIONAL_CONTROLLER_ROLE_KEYS = new Set([
+  "admin",
+  "ceo",
+  "director",
+  "director_ceo",
+  "ceo_director",
+  "general_manager",
+  "gm",
+  "plant_head",
+  "team_leader",
+  "line_manager",
+  "co_leader",
+  "team_co_leader",
+  "shift_incharge",
+]);
+
+const OPERATIONAL_CONTROLLER_ROLE_IDS = new Set([
+  "admin",
+  "ceo",
+  "director",
+  "director_ceo",
+  "general_manager",
+  "gm",
+  "team_leader",
+  "co_leader",
+  "r1",
+  "r2",
+  "r3",
+  "r4",
+]);
+
+function normalizeRoleKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function getRoleDetails(user) {
   if (user?.role && typeof user.role === "object") {
     return user.role;
@@ -45,6 +84,16 @@ function isProjectAuthorityRole(user) {
   return isAdmin(user)
     || isProjectAuthorityRoleIdentity(roleDetails?.name)
     || isProjectAuthorityRoleIdentity(getRoleId(user));
+}
+
+function isOperationalControllerRole(user) {
+  const roleDetails = getRoleDetails(user);
+  const roleNameKey = normalizeRoleKey(roleDetails?.name);
+  const roleIdKey = normalizeRoleKey(getRoleId(user));
+
+  return isProjectAuthorityRole(user)
+    || OPERATIONAL_CONTROLLER_ROLE_KEYS.has(roleNameKey)
+    || OPERATIONAL_CONTROLLER_ROLE_IDS.has(roleIdKey);
 }
 
 function getRolePermissionFlags(user) {
@@ -273,6 +322,10 @@ function canAssignTo(assigner, assignee) {
 }
 
 function canVerifyTask(actor, task) {
+  if (!isOperationalControllerRole(actor)) {
+    return false;
+  }
+
   const requiredPermission = task?.approval_stage === "quality"
     ? PERMISSIONS.APPROVE_QUALITY
     : PERMISSIONS.APPROVE_COMPLETED_TASK;
@@ -442,6 +495,7 @@ module.exports = {
   isTaskDirectAssignee,
   isTaskOwnedByUser,
   isAdmin,
+  isOperationalControllerRole,
   isProjectAuthorityRole,
   isSupervisor,
   isTaskAssignee,

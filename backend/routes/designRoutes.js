@@ -8,7 +8,7 @@ const { handleReferenceImageUpload } = require("../lib/designFixtureReferenceIma
 const { uploadFixtureReferenceImageFile } = require("../lib/supabaseStorage");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
-const { authorize } = require("../middleware/authorize");
+const { authorize, requireOperationalController } = require("../middleware/authorize");
 const { resolveWorkflowForDepartment } = require("../services/taskService");
 const { getStageById } = require("../services/workflowService");
 const {
@@ -127,6 +127,7 @@ function rejectRetiredNativePreviewFlow() {
 
 router.get(
   "/department-projects",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const projects = await listDepartmentProjectsForUser(req.user);
     return sendSuccess(res, projects);
@@ -144,6 +145,7 @@ router.post(
 
 router.get(
   "/design/projects",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const projects = await listDesignProjectsForUser(req.user, req.query.department_id, {
       activeOnly: req.query.active_only === "true",
@@ -154,6 +156,7 @@ router.get(
 
 router.get(
   "/design/fixtures",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const fixtures = await listDesignFixturesForUser(req.user, req.query.project_id, req.query.department_id, {
       activeOnly: req.query.active_only === "true",
@@ -164,6 +167,7 @@ router.get(
 
 router.get(
   "/projects/summary",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const projects = await listProjectDashboardForUser(req.user, req.query.department_id);
     return sendSuccess(res, projects);
@@ -172,6 +176,7 @@ router.get(
 
 router.get(
   "/visibility/explain/:projectId",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const { explainProjectVisibility } = require("../services/visibilityResolutionService");
     const explanation = await explainProjectVisibility(req.user, req.params.projectId);
@@ -181,6 +186,7 @@ router.get(
 
 router.get(
   "/design/completion/projects/:projectId",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const requestedDepartmentId = String(req.query.department_id || "").trim();
     const departmentId = requestedDepartmentId
@@ -203,6 +209,7 @@ router.get(
 
 router.get(
   "/design/completion/fixtures/:fixtureId",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const requestedDepartmentId = String(req.query.department_id || "").trim();
     const departmentId = requestedDepartmentId
@@ -226,6 +233,7 @@ router.get(
 
 router.get(
   "/design/workflow-preview",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const requestedDepartmentId = String(req.query.department_id || "").trim();
     let departmentId = requestedDepartmentId
@@ -348,6 +356,7 @@ router.post(
 
 router.post(
   "/design/tasks",
+  requireOperationalController,
   authorize(PERMISSIONS.CREATE_TASK),
   asyncHandler(async (req, res) => {
     const task = await createDesignTaskFromProject(req.user, req.body);

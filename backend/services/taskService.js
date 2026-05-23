@@ -362,6 +362,11 @@ function resolveProgressRowForTask(task, progressRows) {
   return progressRows.find((row) => row.status !== "APPROVED") || null;
 }
 
+function isCanonicalReviewTask(task) {
+  return task?.status === TASK_STATUSES.UNDER_REVIEW
+    && task?.verification_status === VERIFICATION_STATUSES.PENDING;
+}
+
 function normalizeTransferTarget(payload) {
   const transferTo = String(
     payload?.transfer_to
@@ -1582,7 +1587,7 @@ async function transitionTaskForUser(user, taskId, nextStageId) {
   const requestedStageId = String(nextStageId).trim();
 
   if (!allowedNextStage || allowedNextStage.id !== requestedStageId) {
-    throw new AppError(400, "Invalid workflow transition");
+    throw new AppError(400, "Previous stage must be approved before changing workflow");
   }
 
   const nextStage = allowedNextStage || await getStageById(requestedStageId);
@@ -1798,15 +1803,26 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
   }
 
   if (task.status !== TASK_STATUSES.UNDER_REVIEW) {
-    throw new AppError(400, "Only tasks under review can be reviewed");
+    throw new AppError(400, "Task is not in verification state");
+  }
+
+  if (task.verification_status !== VERIFICATION_STATUSES.PENDING) {
+    throw new AppError(400, "Task is not pending verification");
   }
 
   let workflowProgressRow = null;
   if (isWorkflowManagedTask(task)) {
     const progressRows = await getProgressForFixture(task.fixture_id, task.department_id);
     workflowProgressRow = resolveProgressRowForTask(task, progressRows);
-    if (!workflowProgressRow || workflowProgressRow.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
-      throw new AppError(409, "Workflow approval is allowed only after submission for verification");
+    if (!workflowProgressRow) {
+      throw new AppError(409, "Workflow stage is not ready for verification");
+    }
+
+    if (
+      workflowProgressRow.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
+      && !(isCanonicalReviewTask(task) && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS)
+    ) {
+      throw new AppError(409, "Task is not in verification state");
     }
     if (verificationStatus === VERIFICATION_STATUSES.APPROVED) {
       assertWorkProofUploaded(task);
@@ -1829,6 +1845,21 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
   try {
     await client.query("BEGIN");
     await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [task.id]);
+
+    if (
+      workflowProgressRow
+      && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS
+      && isCanonicalReviewTask(task)
+    ) {
+      await updateProgressRow(task.fixture_id, workflowProgressRow.stage_name, {
+        status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+        completed_at: task.completed_at || task.submitted_at || new Date(),
+      }, client);
+      workflowProgressRow = {
+        ...workflowProgressRow,
+        status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+      };
+    }
 
     await updateTaskVerification(task.id, {
       verification_status: next.verificationStatus,

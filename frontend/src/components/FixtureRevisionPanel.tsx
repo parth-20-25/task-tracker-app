@@ -121,11 +121,28 @@ export function FixtureRevisionPanel({
       if (!revisionType) {
         throw new Error("Reason type is required");
       }
+      if (revisionType === "MANUAL_OVERRIDE") {
+        const overrideReason = remarks.trim();
+        if (!overrideReason) {
+          throw new Error("Manual override reason is required");
+        }
+        return manipulateFixtureStage({
+          fixture_id: fixtureId,
+          department_id: departmentId,
+          target_stage_name: effectiveTargetStage,
+          target_status: manualStatus,
+          reason_type: "MANUAL_OVERRIDE",
+          revision_type: "MANUAL_OVERRIDE",
+          revision_reason: overrideReason,
+          remarks: overrideReason,
+        });
+      }
       return reopenFixtureStage({
         fixture_id: fixtureId,
         department_id: departmentId,
         target_stage_name: effectiveTargetStage,
         revision_type: revisionType,
+        revision_reason: remarks.trim() || undefined,
         remarks: remarks.trim() || undefined,
       });
     },
@@ -149,6 +166,9 @@ export function FixtureRevisionPanel({
       department_id: departmentId,
       target_stage_name: effectiveTargetStage,
       target_status: manualStatus,
+      reason_type: "MANUAL_OVERRIDE",
+      revision_type: "MANUAL_OVERRIDE",
+      revision_reason: remarks.trim() || undefined,
       remarks: remarks.trim() || undefined,
     }),
     onSuccess: () => {
@@ -273,6 +293,22 @@ export function FixtureRevisionPanel({
           </div>
 
           {progress.is_legacy_workflow ? (
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Manual target status</Label>
+              <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as FixtureStageStatus)}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MANUAL_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : revisionType === "MANUAL_OVERRIDE" ? (
             <div className="space-y-2">
               <Label className="text-xs font-semibold">Manual target status</Label>
               <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as FixtureStageStatus)}>

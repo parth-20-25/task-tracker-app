@@ -35,12 +35,14 @@ test("visible users CTE gives project authority roles all active uploaders", () 
   assert.doesNotMatch(sql, /child_role\.hierarchy_level[\s\S]*>\s*root\.hierarchy_level/);
 });
 
-test("visible users CTE gives co-leaders only direct parent Team Leader expansion", () => {
+test("visible users CTE gives co-leaders parent Team Leader team expansion", () => {
   const sql = buildVisibleUsersCte("$1");
 
   assert.match(sql, /direct_parent_team_leader/);
-  assert.match(sql, /root\.role_key = ANY\(ARRAY\['co_leader', 'team_co_leader'\]::text\[\]\)/);
+  assert.match(sql, /co_leader_team_tree/);
+  assert.match(sql, /root\.role_key = ANY\(ARRAY\['co_leader', 'team_co_leader', 'shift_incharge'\]::text\[\]\)/);
   assert.match(sql, /role_key = 'team_leader'|team_leader/);
+  assert.match(sql, /JOIN co_leader_team_tree/);
   assert.doesNotMatch(sql, /department_id\s*=/);
   assert.doesNotMatch(sql, /project_leader_id|team_lead_id/);
 });

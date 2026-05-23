@@ -936,9 +936,9 @@ async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, depart
     fixture_no,
     fixture_id,
     department_id,
-  });
+  }, client || pool);
 
-  const progress = await getProgressForFixture(resolvedIdentity.fixture_id, department_id);
+  const progress = await getProgressForFixture(resolvedIdentity.fixture_id, department_id, client || pool);
   const current = progress.find((s) => s.status !== "APPROVED");
 
   console.log("[WORKFLOW] advanceWorkflowAfterTaskApproval — resolving advancement", {
@@ -1090,6 +1090,7 @@ async function manipulateFixtureStage({
   targetStageName = null,
   targetStageOrder = null,
   targetStatus = "PENDING",
+  reasonType = "MANUAL_OVERRIDE",
   revisionReason,
   remarks = null,
 }) {
@@ -1098,8 +1099,9 @@ async function manipulateFixtureStage({
   assertDesignDepartmentForRevision(departmentId);
 
   const fixture = await getFixtureWorkflowContext(fixtureId);
-  if (!fixture?.is_legacy_workflow) {
-    throw new AppError(409, "Manual stage manipulation is restricted to legacy fixtures created before workflow launch");
+  const normalizedReasonType = normalizeRevisionType(reasonType, "MANUAL_OVERRIDE");
+  if (normalizedReasonType !== "MANUAL_OVERRIDE") {
+    throw new AppError(400, "Manual override reason type is required");
   }
 
   const normalizedTargetStatus = String(targetStatus || "PENDING").trim().toUpperCase();
@@ -1108,6 +1110,12 @@ async function manipulateFixtureStage({
   }
 
   const normalizedRevisionReason = normalizeOptionalReason(revisionReason);
+  const normalizedRemarks = String(remarks || "").trim() || null;
+  const overrideReason = normalizedRevisionReason || normalizedRemarks;
+  if (!overrideReason) {
+    throw new AppError(400, "Manual override reason is required");
+  }
+
   const workflow = await requireWorkflow(departmentId);
   const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
@@ -1164,10 +1172,10 @@ async function manipulateFixtureStage({
       stage_name: lockedTargetStage.stage_name,
       stage_version: normalizeStageVersion(versionedTargetStage.stage_version),
       revision_code: revisionCode,
-      reason_type: "MANUAL_OVERRIDE",
-      revision_type: "MANUAL_OVERRIDE",
-      revision_reason: normalizedRevisionReason,
-      revision_remarks: String(remarks || "").trim() || null,
+      reason_type: normalizedReasonType,
+      revision_type: normalizedReasonType,
+      revision_reason: overrideReason,
+      revision_remarks: normalizedRemarks,
       reverted_from_stage: fromStageLabel || lockedFromStage.stage_name,
       reverted_to_stage: toStageLabel || lockedTargetStage.stage_name,
       requested_by: actor.employee_id,
@@ -1184,7 +1192,9 @@ async function manipulateFixtureStage({
         revision_code: revisionCode,
         from_status: lockedFromStage.status,
         target_status: normalizedTargetStatus,
-        legacy_only: true,
+        manual_override: true,
+        actor_user_id: actor.employee_id,
+        timestamp: new Date().toISOString(),
       },
     }, client);
 

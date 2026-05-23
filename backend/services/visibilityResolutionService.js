@@ -125,20 +125,24 @@ async function resolveAccessibleUserIds(user, client = pool) {
     return [];
   }
 
-  // Explicit override via precomputed visible_user_ids still respected
-  if (Array.isArray(user?.visible_user_ids) && user.visible_user_ids.length > 0) {
-    const merged = new Set(user.visible_user_ids.filter(Boolean));
-    merged.add(employeeId);
-    return [...merged].sort();
+  // Base visible users are self + descendants. The repository CTE also grants
+  // Co-Leaders the full parent Team Leader operational tree.
+  const accessible = await GetAccessibleUserIds(employeeId, client);
+  const mergedVisibleUsers = new Set(accessible.filter(Boolean));
+
+  if (Array.isArray(user?.visible_user_ids)) {
+    user.visible_user_ids.filter(Boolean).forEach((visibleUserId) => {
+      mergedVisibleUsers.add(visibleUserId);
+    });
   }
 
-  // Base visible users are self + descendants
-  const accessible = await GetAccessibleUserIds(employeeId, client);
+  mergedVisibleUsers.add(employeeId);
 
-  // CO-LEADER rule: add direct parent Team Leader only
+  // Legacy fallback for stale deployments where the SQL CTE has not been
+  // refreshed yet: add the parent Team Leader and their descendants.
   try {
     const roleKey = normalizeRoleKey(user?.role_details?.name || user?.role || user?.role_id);
-    if (roleKey === "co_leader") {
+    if (["co_leader", "team_co_leader", "shift_incharge"].includes(roleKey)) {
       const parentRes = await client.query(
         `
           SELECT parent.employee_id, parent.role AS role_id, r.name AS role_name
@@ -154,10 +158,11 @@ async function resolveAccessibleUserIds(user, client = pool) {
       const parentRow = parentRes.rows[0];
       if (parentRow && parentRow.employee_id) {
         const parentRoleKey = normalizeRoleKey(parentRow.role_name || parentRow.role_id);
-        if (parentRoleKey === "team_leader") {
-          const merged = new Set(accessible.filter(Boolean));
-          merged.add(parentRow.employee_id);
-          return [...merged].sort();
+        if (["team_leader", "line_manager"].includes(parentRoleKey)) {
+          const parentVisible = await GetAccessibleUserIds(parentRow.employee_id, client);
+          parentVisible.filter(Boolean).forEach((visibleUserId) => {
+            mergedVisibleUsers.add(visibleUserId);
+          });
         }
       }
     }
@@ -166,7 +171,7 @@ async function resolveAccessibleUserIds(user, client = pool) {
     console.warn("[visibility] co-leader parent resolution failed", { error: err?.message });
   }
 
-  return accessible;
+  return [...mergedVisibleUsers].sort();
 }
 
 async function resolveAccessibleProjectIds(user, departmentId = null, client = pool) {

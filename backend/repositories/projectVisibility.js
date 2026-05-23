@@ -10,8 +10,8 @@ const PROJECT_AUTHORITY_ROLE_KEYS = [
 // Numeric hierarchy is not an authority contract. Kept only as a deprecated export.
 const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = null;
 const DEFAULT_PARENT_ROLE_NAMES = PROJECT_AUTHORITY_ROLE_KEYS;
-const CO_LEADER_ROLE_KEYS = ["co_leader", "team_co_leader"];
-const TEAM_LEADER_ROLE_KEYS = ["team_leader"];
+const CO_LEADER_ROLE_KEYS = ["co_leader", "team_co_leader", "shift_incharge"];
+const TEAM_LEADER_ROLE_KEYS = ["team_leader", "line_manager"];
 
 function normalizeRoleKey(value) {
   return String(value || "")
@@ -121,8 +121,34 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         AND root.role_key = ANY(${sqlTextArray(CO_LEADER_ROLE_KEYS)})
         AND ${roleKeySql("COALESCE(parent_role.name, parent.role)")} = ANY(${sqlTextArray(TEAM_LEADER_ROLE_KEYS)})
     ),
+    co_leader_team_tree AS (
+      SELECT
+        parent.user_uuid,
+        parent.employee_id,
+        parent.parent_id,
+        parent.department_id,
+        parent.root_employee_id,
+        parent.path
+      FROM direct_parent_team_leader parent
+
+      UNION ALL
+
+      SELECT
+        child.id::text AS user_uuid,
+        child.employee_id,
+        child.parent_id::text AS parent_id,
+        child.department_id,
+        co_leader_team_tree.root_employee_id,
+        co_leader_team_tree.path || child.id::text || child.employee_id
+      FROM users child
+      JOIN co_leader_team_tree
+        ON child.parent_id::text IN (co_leader_team_tree.user_uuid, co_leader_team_tree.employee_id)
+      WHERE COALESCE(child.is_active, TRUE) = TRUE
+        AND NOT child.id::text = ANY(co_leader_team_tree.path)
+        AND NOT child.employee_id = ANY(co_leader_team_tree.path)
+    ),
     ${cteName} AS (
-      -- visible_users = self + descendants, plus direct parent Team Leader for Co-Leaders only.
+      -- visible_users = self + descendants; Co-Leaders also inherit the full parent Team Leader team.
       SELECT
         user_uuid,
         employee_id,
@@ -137,7 +163,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         department_id,
         root_employee_id,
         path
-      FROM direct_parent_team_leader
+      FROM co_leader_team_tree
     )
   `;
 }

@@ -86,8 +86,8 @@ export default function Verifications() {
                 await verifyTask(task.id, action, remarks[task.id]);
               } catch (error) {
                 toast({
-                  title: 'Verification failed',
-                  description: error instanceof Error ? error.message : 'Could not update verification',
+                  title: 'Verification not saved',
+                  description: error instanceof Error ? error.message : 'Task is not in verification state.',
                   variant: 'destructive',
                 });
               }

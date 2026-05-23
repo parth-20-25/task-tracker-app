@@ -92,12 +92,13 @@ export default function Dashboard() {
   const canUploadDesignLegacy = access.canUploadLegacyDesignData;
   const canUploadDesignNative = access.canUploadNativeDesignData;
   const isProjectFirstRole = isProjectAuthorityUser(user);
+  const canAccessProjectFixtures = access.canAccessProjectFixtures;
 
   // ── Backend-authoritative project data ────────────────────────────────────
   const projectSummaryQuery = useQuery({
     queryKey: ["projects", "summary", user?.employee_id || "anonymous"],
     queryFn: () => fetchProjectDashboardSummary(),
-    enabled: !!user?.employee_id,
+    enabled: !!user?.employee_id && canAccessProjectFixtures,
     staleTime: 60_000,
   });
 
@@ -108,7 +109,7 @@ export default function Dashboard() {
   const fixtureQuery = useQuery({
     queryKey: ["dashboard", "fixtures", selectedProjectId, selectedProjectDepartmentId],
     queryFn: () => fetchDesignFixtures(selectedProjectId, selectedProjectDepartmentId),
-    enabled: !!selectedProjectId,
+    enabled: !!selectedProjectId && canAccessProjectFixtures,
     staleTime: 60_000,
   });
 
@@ -120,6 +121,15 @@ export default function Dashboard() {
 
   const myTasks = safeTasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
   const viewTasks = access.canViewAllTasks ? safeTasks : myTasks;
+  const recentAssignedTasks = [...myTasks]
+    .sort((a, b) => new Date(b.created_at || b.assigned_at || 0).getTime() - new Date(a.created_at || a.assigned_at || 0).getTime())
+    .slice(0, 5);
+  const activeAssignedTasks = myTasks.filter(t => ['assigned', 'in_progress', 'on_hold', 'rework'].includes(t.status));
+  const pendingAssignedVerification = myTasks.filter(t => t.status === 'under_review');
+  const upcomingDeadlines = [...myTasks]
+    .filter(t => t.deadline && t.status !== 'closed')
+    .sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime())
+    .slice(0, 5);
 
   const metrics = {
     total: viewTasks.length,
@@ -182,11 +192,11 @@ export default function Dashboard() {
       ) : (
         /* ── Operational users: project-aware compact summary ───────────── */
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          <MetricCard label="Projects" value={projectMetrics.total} icon={Layers3} color="text-primary" />
-          <MetricCard label="Active Projects" value={projectMetrics.active} icon={PlayCircle} color="text-info" />
+          {canAccessProjectFixtures && <MetricCard label="Projects" value={projectMetrics.total} icon={Layers3} color="text-primary" />}
+          {canAccessProjectFixtures && <MetricCard label="Active Projects" value={projectMetrics.active} icon={PlayCircle} color="text-info" />}
           <MetricCard label="My Tasks" value={myTasks.length} icon={ClipboardList} color="text-primary" />
-          <MetricCard label="In Progress" value={metrics.inProgress} icon={PlayCircle} color="text-info" />
-          {access.canViewVerifications && <MetricCard label="Pending Review" value={metrics.pendingVerification} icon={Clock} color="text-warning" />}
+          <MetricCard label="Active Tasks" value={activeAssignedTasks.length} icon={PlayCircle} color="text-info" />
+          <MetricCard label="Pending Verification" value={pendingAssignedVerification.length} icon={Clock} color="text-warning" />
         </div>
       )}
 
@@ -205,8 +215,46 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── Project-Centric Operational View — promoted to top for all users ── */}
-      <div className="space-y-3">
+      {!canAccessProjectFixtures ? (
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <h2 className="text-base font-semibold">Recent Assigned Tasks</h2>
+            </CardHeader>
+            <CardContent className="space-y-3 p-4 pt-0">
+              {recentAssignedTasks.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No assigned tasks.</p>
+              ) : recentAssignedTasks.map((task) => (
+                <div key={task.id} className="rounded-lg border p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{task.title}</span>
+                    <Badge variant="outline">{task.status.replace(/_/g, " ")}</Badge>
+                  </div>
+                  <Progress value={task.completion_percent ?? (task.status === "closed" ? 100 : 0)} className="mt-2 h-2" />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <h2 className="text-base font-semibold">Deadlines</h2>
+            </CardHeader>
+            <CardContent className="space-y-3 p-4 pt-0">
+              {upcomingDeadlines.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active deadlines.</p>
+              ) : upcomingDeadlines.map((task) => (
+                <div key={task.id} className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+                  <span className="font-medium">{task.title}</span>
+                  <span className="text-xs text-muted-foreground">{new Date(task.deadline).toLocaleDateString()}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {/* ── Project-Centric Operational View — controllers only ── */}
+      {canAccessProjectFixtures ? <div className="space-y-3">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <FolderOpen className="h-5 w-5 text-primary" />
@@ -269,7 +317,7 @@ export default function Dashboard() {
             />
           </div>
         )}
-      </div>
+      </div> : null}
 
       {/* ── Project Command Center — project-authority users only ───────── */}
       {isProjectFirstRole ? (

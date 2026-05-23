@@ -103,6 +103,7 @@ export interface UiAccess {
   canExportReports: boolean;
   canViewTeamTasks: boolean;
   canViewVerifications: boolean;
+  canAccessProjectFixtures: boolean;
   canAccessAdminPanel: boolean;
   canViewAuditLogs: boolean;
   canViewDepartmentAnalytics: boolean;
@@ -187,6 +188,33 @@ export function isProjectAuthorityUser(user: User | null | undefined) {
     || isAdminUser(user);
 }
 
+export function isOperationalControllerUser(user: User | null | undefined) {
+  const roleName = normalizeRoleKey(user?.role?.name);
+  const roleId = normalizeRoleKey(user?.role?.id || user?.role_id);
+
+  return isProjectAuthorityUser(user)
+    || [
+      "general_manager",
+      "gm",
+      "plant_head",
+      "team_leader",
+      "line_manager",
+      "co_leader",
+      "team_co_leader",
+      "shift_incharge",
+    ].includes(roleName)
+    || [
+      "general_manager",
+      "gm",
+      "team_leader",
+      "co_leader",
+      "r1",
+      "r2",
+      "r3",
+      "r4",
+    ].includes(roleId);
+}
+
 function normalizeRoleKey(value: unknown) {
   return String(value || "")
     .trim()
@@ -197,6 +225,7 @@ function normalizeRoleKey(value: unknown) {
 
 export function buildUiAccess(user: User | null | undefined): UiAccess {
   const projectAuthority = isProjectAuthorityUser(user);
+  const operationalController = isOperationalControllerUser(user);
   const canAssignTasks = hasUserPermission(user, PERMISSIONS.ASSIGN_TASK);
   const canTransferTasks = hasUserPermission(user, PERMISSIONS.TRANSFER_TASK);
   const canApproveCompletedTasks = hasUserPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK);
@@ -253,7 +282,8 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canViewReports,
     canExportReports,
     canViewTeamTasks: canViewAllTasks,
-    canViewVerifications: hasAnyUserPermission(user, [PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
+    canViewVerifications: operationalController && hasAnyUserPermission(user, [PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
+    canAccessProjectFixtures: operationalController,
     canAccessAdminPanel: isAdminUser(user) || hasAnyUserPermission(user, ADMIN_PANEL_PERMISSIONS),
     canViewAuditLogs: isAdminUser(user),
     canViewDepartmentAnalytics,

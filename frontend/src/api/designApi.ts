@@ -473,6 +473,7 @@ export function reopenFixtureStage(payload: {
   target_stage_name?: string;
   target_stage_order?: number;
   revision_type: FixtureRevisionType;
+  revision_reason?: string;
   remarks?: string;
 }) {
   return apiRequest<FixtureFullProgress>("/workflows/reopen-stage", {
@@ -487,6 +488,8 @@ export function manipulateFixtureStage(payload: {
   target_stage_name?: string;
   target_stage_order?: number;
   target_status?: FixtureStageStatus;
+  reason_type?: FixtureRevisionType | string;
+  revision_type?: FixtureRevisionType | string;
   revision_reason?: string;
   remarks?: string;
 }) {

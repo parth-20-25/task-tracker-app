@@ -1,6 +1,11 @@
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
-const { HasPermission, isAdmin, isProjectAuthorityRole } = require("../services/accessControlService");
+const {
+  HasPermission,
+  isAdmin,
+  isOperationalControllerRole,
+  isProjectAuthorityRole,
+} = require("../services/accessControlService");
 const { PERMISSIONS } = require("../config/constants");
 const { normalizePermissionIds } = require("../repositories/permissionRepository");
 
@@ -53,6 +58,18 @@ function requireAdmin(req, _res, next) {
   if (!isAdmin(req.user)) {
     return next(new AppError(403, "Admin access required"));
   }
+  return next();
+}
+
+function requireOperationalController(req, _res, next) {
+  if (!req.user) {
+    return next(new AppError(401, "Unauthorized: User not authenticated"));
+  }
+
+  if (!isOperationalControllerRole(req.user)) {
+    return next(new AppError(403, "Project fixture controls are limited to operational controllers"));
+  }
+
   return next();
 }
 
@@ -128,6 +145,7 @@ function authorize(requiredPermission) {
 
 module.exports = {
   requireAdmin,
+  requireOperationalController,
   authorize,
   loadPermissions,
 };

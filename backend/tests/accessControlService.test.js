@@ -8,6 +8,7 @@ const {
   buildTaskAccessPredicate,
   canAccessTask,
   canAccessDepartment,
+  isOperationalControllerRole,
   isProjectAuthorityRole,
 } = require("../services/accessControlService");
 
@@ -153,6 +154,21 @@ test("lower hierarchy roles do not receive org-wide project authority", () => {
   assert.equal(canAccessTask(lineManager, makeTask({
     department_id: "d1",
     project_uploaded_by: "EMP999",
+  })), false);
+});
+
+test("operational controller roles include General Manager, Team Leader, and Co-Leader but exclude lower workers", () => {
+  assert.equal(isOperationalControllerRole(makeUser({
+    role: { id: "general_manager", name: "General Manager", hierarchy_level: 3, permissions: {} },
+  })), true);
+  assert.equal(isOperationalControllerRole(makeUser({
+    role: { id: "team_leader", name: "Team Leader", hierarchy_level: 4, permissions: {} },
+  })), true);
+  assert.equal(isOperationalControllerRole(makeUser({
+    role: { id: "co_leader", name: "Co-Leader", hierarchy_level: 4, permissions: {} },
+  })), true);
+  assert.equal(isOperationalControllerRole(makeUser({
+    role: { id: "employee", name: "Employee", hierarchy_level: 6, permissions: {} },
   })), false);
 });
 

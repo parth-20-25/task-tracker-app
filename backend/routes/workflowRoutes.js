@@ -5,7 +5,7 @@ const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { PERMISSIONS } = require("../config/constants");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
-const { authorize } = require("../middleware/authorize");
+const { authorize, requireOperationalController } = require("../middleware/authorize");
 const { HasPermission } = require("../services/accessControlService");
 const { findFixtureByIdForUser } = require("../repositories/designProjectCatalogRepository");
 const {
@@ -57,6 +57,7 @@ async function logChangeFixtureStageTrace(req, context) {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/workflows/by-department",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -79,6 +80,7 @@ router.get(
 // ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/workflows/current-stage",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const fixtureId = String(req.query.fixture_id || "").trim();
     if (!fixtureId) {
@@ -99,6 +101,7 @@ router.get(
 // ─────────────────────────────────────────────────────────────────────────────
 router.get(
   "/workflows/progress",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -123,6 +126,7 @@ router.get(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/validate-assignment",
+  requireOperationalController,
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
       req.user,
@@ -147,6 +151,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/assign",
+  requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
@@ -173,6 +178,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/complete",
+  requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
@@ -196,6 +202,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/approve",
+  requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
@@ -219,6 +226,7 @@ router.post(
 // ─────────────────────────────────────────────────────────────────────────────
 router.post(
   "/workflows/reject",
+  requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
@@ -238,6 +246,7 @@ router.post(
 
 router.post(
   "/workflows/reopen-stage",
+  requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
@@ -275,6 +284,7 @@ router.post(
 
 router.post(
   "/workflows/manual-stage",
+  requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(async (req, res) => {
     const departmentId = resolveAccessibleDepartmentId(
@@ -302,6 +312,7 @@ router.post(
       targetStageName: req.body?.target_stage_name,
       targetStageOrder: req.body?.target_stage_order,
       targetStatus: req.body?.target_status,
+      reasonType: req.body?.reason_type || req.body?.revision_type,
       revisionReason: req.body?.revision_reason,
       remarks: req.body?.remarks,
     });

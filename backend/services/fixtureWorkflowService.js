@@ -36,6 +36,7 @@ const {
   listContributionsForFixtures,
   listStageContributions,
   markRemainingContributionActual,
+  supersedeContribution,
 } = require("../repositories/designStageContributionRepository");
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
 const { canAssignTo } = require("./accessControlService");
@@ -971,8 +972,37 @@ async function releaseFixtureStageAssignment(fixtureId, departmentId, client = p
     return { released: false, currentStage: null };
   }
 
-  if (![WORKFLOW_STATUSES.IN_PROGRESS, WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION, WORKFLOW_STATUSES.REJECTED].includes(current.status)) {
+  if (
+    current.status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
+    || ![WORKFLOW_STATUSES.PENDING, WORKFLOW_STATUSES.IN_PROGRESS, WORKFLOW_STATUSES.REJECTED].includes(current.status)
+  ) {
     return { released: false, currentStage: current };
+  }
+
+  const revisionCode = getProgressRevisionCode(current);
+  if (revisionCode) {
+    const contributions = await listStageContributions(fixtureId, current.stage_name, revisionCode, client);
+    for (const contribution of contributions) {
+      await supersedeContribution(contribution.id, null, client);
+    }
+  }
+
+  const latestAttempt = await getLatestStageAttempt(fixtureId, current.stage_name, client);
+  if (latestAttempt && !["APPROVED", "REJECTED"].includes(latestAttempt.status)) {
+    await client.query(
+      `
+        UPDATE fixture_workflow_stage_attempts
+        SET assigned_to = NULL,
+            assigned_at = NULL,
+            started_at = NULL,
+            completed_at = NULL,
+            duration_minutes = NULL,
+            approved_at = NULL,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+      `,
+      [latestAttempt.id],
+    );
   }
 
   await updateProgressRow(fixtureId, current.stage_name, {

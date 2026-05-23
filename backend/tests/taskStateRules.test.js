@@ -4,6 +4,7 @@ const test = require("node:test");
 const { OPERATIONAL_STATES, resolveFixtureOperationalState } = require("../services/operationalStateResolver");
 const {
   canCancelAssignedTask,
+  canCancelOperationalTask,
   shouldAutoStartTask,
   shouldSubmitForVerification,
 } = require("../services/taskStateRules");
@@ -81,13 +82,20 @@ test("case 6: explicit submit after proof enters Verification", () => {
 
 test("case 7: cancel before work is allowed and released fixture resolves Unassigned", () => {
   assert.equal(canCancelAssignedTask(task({ status: "assigned", completion_percent: 0 })), true);
+  assert.equal(canCancelOperationalTask(task({ status: "assigned", completion_percent: 0 })), true);
   assert.equal(
     resolveFixtureOperationalState({ task: null, progress: { status: "PENDING", assigned_to: null } }),
     OPERATIONAL_STATES.UNASSIGNED,
   );
 });
 
-test("case 8: cancel after progress is blocked", () => {
+test("case 8: operational cancellation after start is allowed before verification", () => {
   assert.equal(canCancelAssignedTask(task({ status: "assigned", completion_percent: 1 })), false);
-  assert.equal(canCancelAssignedTask(task({ status: "in_progress", completion_percent: 1 })), false);
+  assert.equal(canCancelOperationalTask(task({ status: "assigned", completion_percent: 1 })), true);
+  assert.equal(canCancelOperationalTask(task({ status: "in_progress", completion_percent: 1 })), true);
+});
+
+test("case 9: operational cancellation is blocked for verification and approved work", () => {
+  assert.equal(canCancelOperationalTask(task({ status: "under_review", completion_percent: 100 })), false);
+  assert.equal(canCancelOperationalTask(task({ status: "closed", verification_status: "approved", approved_at: new Date() })), false);
 });

@@ -34,8 +34,16 @@ function canCancelAssignedTask(task) {
     && !task?.approved_at;
 }
 
+function canCancelOperationalTask(task) {
+  const status = normalizeStatus(task?.status);
+  return ["assigned", "in_progress"].includes(status)
+    && normalizeStatus(task?.verification_status || "pending") !== "approved"
+    && !task?.approved_at;
+}
+
 module.exports = {
   canCancelAssignedTask,
+  canCancelOperationalTask,
   hasTaskProofForState,
   shouldAutoStartTask,
   shouldSubmitForVerification,

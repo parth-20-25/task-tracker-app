@@ -81,7 +81,7 @@ const { getEscalationSchedule } = require("./escalationService");
 const { refreshPerformanceAnalyticsForDepartment } = require("./performanceAnalyticsService");
 const { ensureDepartmentWorkflow } = require("./workflowRecoveryService");
 const {
-  canCancelAssignedTask,
+  canCancelOperationalTask,
   shouldAutoStartTask,
   shouldSubmitForVerification,
 } = require("./taskStateRules");
@@ -1735,12 +1735,12 @@ async function cancelTaskForUser(user, taskId, reason) {
       throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
     }
 
-    if (lockedTask.status !== TASK_STATUSES.ASSIGNED) {
-      throw new AppError(409, "Only assigned tasks can be cancelled before work starts");
+    if (lockedTask.workflow_status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION || lockedTask.operational_state === "VERIFICATION") {
+      throw new AppError(409, "Tasks in verification cannot be cancelled");
     }
 
-    if (!canCancelAssignedTask(lockedTask)) {
-      throw new AppError(409, "Task cannot be cancelled after work has started");
+    if (!canCancelOperationalTask(lockedTask)) {
+      throw new AppError(409, "Task cannot be cancelled in its current operational state");
     }
 
     const cancelledTaskId = await cancelTask(lockedTask.id, {

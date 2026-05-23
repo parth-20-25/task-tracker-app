@@ -22,14 +22,14 @@ import {
   type FixtureFullProgress,
   type FixtureRevisionType,
 } from "@/api/designApi";
-import { fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
+import { cancelTask as cancelTaskRequest, fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
 import { SafeImage } from "@/components/SafeImage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
@@ -43,7 +43,7 @@ import { toast } from "@/hooks/use-toast";
 import { analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import { resolveImageUrl } from "@/lib/imageUrl";
-import type { DesignFixtureOption, Priority, Task } from "@/types";
+import type { DesignFixtureOption, Priority, Task, User as AppUser } from "@/types";
 
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
 const ASSIGNMENT_BLOCKED_STATES = new Set(["VERIFICATION", "REWORK", "IN_PROGRESS", "ASSIGNED", "WORKFLOW_COMPLETE"]);
@@ -320,6 +320,39 @@ function resolveFixtureOperationalState(fixture: DesignFixtureOption, task: Task
 
 function getSubmittedValue(task: Task | null) {
   return task?.submitted_at || task?.completed_at || null;
+}
+
+function canCancelFixtureOperationalTask(
+  task: Task | null,
+  state: FixtureOperationalState,
+  user: AppUser | null | undefined,
+  access: ReturnType<typeof useAuth>["access"],
+) {
+  if (!task || task.approved_at || task.verification_status === "approved") {
+    return false;
+  }
+
+  if (state !== "ASSIGNED" && state !== "IN_PROGRESS") {
+    return false;
+  }
+
+  if (["cancelled", "closed", "under_review", "rework"].includes(task.status)) {
+    return false;
+  }
+
+  const hasCancellationAccess = access.canAccessProjectFixtures
+    || access.canAssignTasks
+    || task.assigned_by === user?.employee_id;
+
+  if (!hasCancellationAccess) {
+    return false;
+  }
+
+  if (state === "ASSIGNED") {
+    return task.status === "assigned" || task.status === "in_progress";
+  }
+
+  return task.status === "assigned" || task.status === "in_progress";
 }
 
 interface ProjectFixtureOperationsGridProps {
@@ -951,7 +984,7 @@ function ProjectFixtureCard({
   selected = false,
   onSelectedChange,
 }: ProjectFixtureCardProps) {
-  const { access } = useAuth();
+  const { access, user } = useAuth();
   const [expanded, setExpanded] = useState<"assign" | "transfer" | null>(null);
   const [assignedTo, setAssignedTo] = useState("");
   const [deadline, setDeadline] = useState("");
@@ -962,6 +995,7 @@ function ProjectFixtureCard({
   const [transferReason, setTransferReason] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
+  const [cancellingTask, setCancellingTask] = useState<Task | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [inlineOperationalReason, setInlineOperationalReason] = useState<string | null>(null);
   const [openingAssign, setOpeningAssign] = useState(false);
@@ -1019,6 +1053,7 @@ function ProjectFixtureCard({
   const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
   const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
+  const canCancelTask = canCancelFixtureOperationalTask(task, canonicalOperationalState, user, access);
 
   const resetAssignForm = () => {
     setAssignedTo("");
@@ -1177,6 +1212,33 @@ function ProjectFixtureCard({
     },
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: async (cancelTask: Task) => {
+      await cancelTaskRequest(
+        cancelTask.id,
+        "Cancel this assigned task and return fixture to Unassigned state?",
+      );
+    },
+    onSuccess: async () => {
+      await invalidateOperationalState();
+      setCancellingTask(null);
+      setExpanded(null);
+      resetAssignForm();
+      resetTransferForm();
+      toast({
+        title: "Fixture returned to Unassigned",
+        description: "The task was cancelled and the workflow stage is assignable again.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Cancellation failed",
+        description: error instanceof Error ? error.message : "Could not cancel fixture assignment",
+        variant: "destructive",
+      });
+    },
+  });
+
   const assignmentDisabled = !canDeployDesignTask
     || !assignedTo
     || !deadline
@@ -1240,21 +1302,42 @@ function ProjectFixtureCard({
                 REJECT
               </Button>
             </div>
-          ) : isAssigned && canTransferTask ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => {
-                setExpanded(expanded === "transfer" ? null : "transfer");
-                resetAssignForm();
-                setInlineOperationalReason(null);
-              }}
-            >
-              <ArrowRightLeft className="mr-1 h-3 w-3" />
-              Transfer
-            </Button>
+          ) : isAssigned && (canTransferTask || canCancelTask) ? (
+            <div className="flex shrink-0 gap-1.5">
+              {canTransferTask ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => {
+                    setExpanded(expanded === "transfer" ? null : "transfer");
+                    resetAssignForm();
+                    setInlineOperationalReason(null);
+                  }}
+                >
+                  <ArrowRightLeft className="mr-1 h-3 w-3" />
+                  Transfer
+                </Button>
+              ) : null}
+              {canCancelTask ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
+                  disabled={cancelMutation.isPending}
+                  onClick={() => {
+                    if (task) {
+                      setCancellingTask(task);
+                    }
+                  }}
+                >
+                  <XCircle className="mr-1 h-3 w-3" />
+                  Cancel Task
+                </Button>
+              ) : null}
+            </div>
           ) : operationalResolution.assignable && canDeployDesignTask ? (
             <Button
               type="button"
@@ -1578,6 +1661,44 @@ function ProjectFixtureCard({
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(cancellingTask)} onOpenChange={(open) => {
+        if (!open && !cancelMutation.isPending) {
+          setCancellingTask(null);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel Task</DialogTitle>
+            <DialogDescription>
+              Cancel this assigned task and return fixture to Unassigned state?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCancellingTask(null)}
+              disabled={cancelMutation.isPending}
+            >
+              Keep Assignment
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!cancellingTask || cancelMutation.isPending}
+              onClick={() => {
+                if (cancellingTask) {
+                  cancelMutation.mutate(cancellingTask);
+                }
+              }}
+            >
+              {cancelMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <XCircle className="mr-1.5 h-4 w-4" />}
+              Cancel Task
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

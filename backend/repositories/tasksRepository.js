@@ -689,6 +689,9 @@ async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
     `
       UPDATE tasks
       SET status = 'cancelled',
+          assigned_to = NULL,
+          assignee_ids = '[]'::jsonb,
+          assigned_user_id = NULL,
           verification_status = 'rejected',
           approval_stage = 'cancelled',
           remarks = COALESCE($2, remarks),

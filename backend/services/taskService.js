@@ -50,6 +50,7 @@ const {
   getLatestStageAttempt,
   getProgressForFixture,
   rejectStageAttempt,
+  startStageAttempt,
   updateLatestStageAttemptAssignment,
   updateProgressRow,
 } = require("../repositories/fixtureWorkflowRepository");
@@ -79,6 +80,11 @@ const {
 const { getEscalationSchedule } = require("./escalationService");
 const { refreshPerformanceAnalyticsForDepartment } = require("./performanceAnalyticsService");
 const { ensureDepartmentWorkflow } = require("./workflowRecoveryService");
+const {
+  canCancelAssignedTask,
+  shouldAutoStartTask,
+  shouldSubmitForVerification,
+} = require("./taskStateRules");
 
 async function listTasksForUser(user) {
   return listTasksByAccess(getTaskAccess(user));
@@ -1257,7 +1263,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
       await applyTaskProofUpdate(user, existingTask, payload);
       if (
         taskForWorkflow.completion_percent === 100
-        && taskForWorkflow.status === TASK_STATUSES.IN_PROGRESS
+        && ![TASK_STATUSES.UNDER_REVIEW, TASK_STATUSES.CLOSED, TASK_STATUSES.CANCELLED].includes(taskForWorkflow.status)
       ) {
         await applyTaskCompletionPercentUpdate(user, taskForWorkflow, { completion_percent: 100 });
       }
@@ -1729,6 +1735,14 @@ async function cancelTaskForUser(user, taskId, reason) {
       throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
     }
 
+    if (lockedTask.status !== TASK_STATUSES.ASSIGNED) {
+      throw new AppError(409, "Only assigned tasks can be cancelled before work starts");
+    }
+
+    if (!canCancelAssignedTask(lockedTask)) {
+      throw new AppError(409, "Task cannot be cancelled after work has started");
+    }
+
     const cancelledTaskId = await cancelTask(lockedTask.id, {
       cancelledBy: user.employee_id,
       reason: cancellationReason,
@@ -2181,6 +2195,7 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
   const completionPercent = normalizeCompletionPercent(payload.completion_percent);
   const client = await pool.connect();
   let submittedForVerification = false;
+  let autoStarted = false;
 
   try {
     await client.query("BEGIN");
@@ -2190,9 +2205,50 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
       throw new AppError(404, "Task not found");
     }
 
-    if (completionPercent === 100 && isWorkflowManagedTask(lockedTask)) {
-      assertWorkProofUploaded(lockedTask);
+    if (shouldAutoStartTask(lockedTask, completionPercent)) {
+      const startedAt = lockedTask.started_at || new Date();
+      let currentWorkflowStage = null;
 
+      if (isWorkflowManagedTask(lockedTask)) {
+        const progressRows = await getProgressForFixture(lockedTask.fixture_id, lockedTask.department_id, client);
+        currentWorkflowStage = resolveProgressRowForTask(lockedTask, progressRows);
+        if (currentWorkflowStage) {
+          await updateProgressRow(lockedTask.fixture_id, currentWorkflowStage.stage_name, {
+            status: WORKFLOW_STATUSES.IN_PROGRESS,
+            assigned_to: lockedTask.assigned_to,
+            assigned_at: currentWorkflowStage.assigned_at || lockedTask.assigned_at || startedAt,
+            started_at: currentWorkflowStage.started_at || startedAt,
+            completed_at: null,
+            duration_minutes: null,
+          }, client);
+          await startStageAttempt(
+            lockedTask.fixture_id,
+            lockedTask.department_id,
+            currentWorkflowStage.stage_name,
+            lockedTask.assigned_to,
+            startedAt,
+            client,
+          );
+        }
+      }
+
+      await updateTaskStatus(lockedTask.id, {
+        status: TASK_STATUSES.IN_PROGRESS,
+        started_at: startedAt,
+        completed_at: null,
+        verification_status: VERIFICATION_STATUSES.PENDING,
+        actual_minutes: lockedTask.actual_minutes || 0,
+        approval_stage: "execution",
+        closed_at: null,
+        current_stage_id: lockedTask.current_stage_id,
+        lifecycle_status: TASK_STATUSES.IN_PROGRESS,
+      }, client);
+      lockedTask.status = TASK_STATUSES.IN_PROGRESS;
+      lockedTask.started_at = startedAt;
+      autoStarted = true;
+    }
+
+    if (isWorkflowManagedTask(lockedTask) && shouldSubmitForVerification(lockedTask, completionPercent)) {
       await submitFixtureStageForVerification({ task: lockedTask, actor: user, client });
       await updateTaskCompletionPercent(lockedTask.id, completionPercent, client);
       await updateTaskStatus(lockedTask.id, {
@@ -2214,17 +2270,29 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
 
     await appendTaskActivity(lockedTask.id, {
       userEmployeeId: user.employee_id,
-      actionType: submittedForVerification ? "task_submitted_for_verification" : "task_completion_percent_updated",
+      actionType: submittedForVerification
+        ? "task_submitted_for_verification"
+        : autoStarted
+          ? "task_auto_started"
+          : "task_completion_percent_updated",
       metadata: {
         from: lockedTask.completion_percent ?? 0,
         to: completionPercent,
-        workflow_status: submittedForVerification ? WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION : null,
+        workflow_status: submittedForVerification
+          ? WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
+          : autoStarted
+            ? WORKFLOW_STATUSES.IN_PROGRESS
+            : null,
       },
     }, client);
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
-      actionType: submittedForVerification ? "task_submitted_for_verification" : "task_completion_percent_updated",
+      actionType: submittedForVerification
+        ? "task_submitted_for_verification"
+        : autoStarted
+          ? "task_auto_started"
+          : "task_completion_percent_updated",
       targetType: "task",
       targetId: lockedTask.id,
       metadata: {

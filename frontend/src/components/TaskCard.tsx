@@ -34,8 +34,10 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
   const isOverdue = new Date(task.deadline) < new Date() && !['closed', 'cancelled'].includes(task.status);
   const isOwnTask = user ? task.assigned_to === user.employee_id || task.assignee_ids?.includes(user.employee_id) : false;
   const isOriginalAssigner = Boolean(user?.employee_id && user.employee_id === task.assigned_by);
+  const taskCompletion = Number(task.completion_percent ?? 0);
   const canCancel = Boolean(user)
-    && !['closed', 'cancelled'].includes(task.status)
+    && task.status === 'assigned'
+    && taskCompletion === 0
     && task.verification_status !== 'approved'
     && !task.approved_at
     && task.operational_state !== 'WORKFLOW_COMPLETE'

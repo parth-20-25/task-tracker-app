@@ -554,6 +554,7 @@ export interface DesignFixtureOption {
   workflow_stage_version?: number | null;
   workflow_revision_code?: string | null;
   workflow_status?: string | null;
+  operational_state?: "UNASSIGNED" | "ASSIGNED_NOT_STARTED" | "IN_PROGRESS" | "SUBMITTED_FOR_VERIFICATION" | "REJECTED" | "APPROVED" | string | null;
   workflow_assigned_to?: string | null;
   workflow_assigned_to_name?: string | null;
   workflow_progress_percent?: number | null;

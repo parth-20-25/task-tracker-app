@@ -17,8 +17,8 @@ const REPORT_STAGES = [
   { key: "two_d_finish", label: "2D FINISH" },
 ];
 
-const VALID_WORKFLOW_STATUSES = new Set(["PENDING", "IN_PROGRESS", "COMPLETED", "APPROVED", "REJECTED"]);
-const ACTIVE_CONTRIBUTION_STATUSES = new Set(["IN_PROGRESS", "COMPLETED", "APPROVED"]);
+const VALID_WORKFLOW_STATUSES = new Set(["PENDING", "IN_PROGRESS", "SUBMITTED_FOR_VERIFICATION", "COMPLETED", "APPROVED", "REJECTED"]);
+const ACTIVE_CONTRIBUTION_STATUSES = new Set(["IN_PROGRESS", "SUBMITTED_FOR_VERIFICATION", "COMPLETED", "APPROVED"]);
 
 function normalizeStatus(value) {
   return String(value || "").trim().toUpperCase();

@@ -115,7 +115,7 @@ async function runMigrations() {
         completed_at TIMESTAMPTZ,
         duration_minutes INTEGER,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT fwp_status_check CHECK (status IN ('PENDING','IN_PROGRESS','APPROVED','REJECTED')),
+        CONSTRAINT fwp_status_check CHECK (status IN ('PENDING','IN_PROGRESS','SUBMITTED_FOR_VERIFICATION','APPROVED','REJECTED')),
         CONSTRAINT fwp_unique_fixture_stage UNIQUE (fixture_id, stage_name)
       )
     `);
@@ -350,7 +350,7 @@ async function runMigrations() {
     await client.query(`
       ALTER TABLE fixture_workflow_progress
       ADD CONSTRAINT fwp_status_check
-      CHECK (status IN ('PENDING','IN_PROGRESS','APPROVED','REJECTED'))
+      CHECK (status IN ('PENDING','IN_PROGRESS','SUBMITTED_FOR_VERIFICATION','APPROVED','REJECTED'))
     `);
 
     await client.query(`

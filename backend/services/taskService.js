@@ -10,7 +10,12 @@ const {
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
 const { getAdjacentWorkflowStage, getWorkflow, getStageById } = require("./workflowService");
-const { releaseFixtureStageAssignment, advanceWorkflowAfterTaskApproval } = require("./fixtureWorkflowService");
+const {
+  releaseFixtureStageAssignment,
+  advanceWorkflowAfterTaskApproval,
+  submitFixtureStageForVerification,
+  WORKFLOW_STATUSES,
+} = require("./fixtureWorkflowService");
 const { AppError } = require("../lib/AppError");
 const { isDesignDepartment } = require("../lib/designDepartment");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
@@ -746,7 +751,8 @@ async function resolveFixtureContextForTask({
   return null;
 }
 
-async function createTaskForUser(user, payload = {}) {
+async function createTaskForUser(user, payload = {}, options = {}) {
+  const db = options.client || pool;
   const {
     title,
     description,
@@ -915,7 +921,7 @@ async function createTaskForUser(user, payload = {}) {
   await assertProjectIsActive(resolvedProjectId);
 
   if (fixtureId && stage) {
-    const dupCheck = await pool.query(`
+    const dupCheck = await db.query(`
       SELECT 1 FROM tasks
       WHERE fixture_id = $1
         AND LOWER(stage) = LOWER($2)
@@ -986,7 +992,7 @@ async function createTaskForUser(user, payload = {}) {
       instance_count: instanceCount,
       rework_date: reworkDate,
       stage: stage,
-    });
+    }, db);
   } catch (error) {
     if (error?.code === "ACTIVE_TASK_STAGE_CONFLICT" || error?.constraint === "uniq_active_task_per_stage") {
       throw new AppError(409, "Stage already assigned");
@@ -998,7 +1004,7 @@ async function createTaskForUser(user, payload = {}) {
     userEmployeeId: user.employee_id,
     actionType: "task_created",
     metadata: { assignee_ids: assigneeIds, internal_identifier: internalIdentifier },
-  });
+  }, db);
 
   await createAuditLog({
     userEmployeeId: user.employee_id,
@@ -1016,10 +1022,12 @@ async function createTaskForUser(user, payload = {}) {
       internal_identifier: internalIdentifier,
       assignee_ids: assigneeIds,
     },
-  });
+  }, db);
 
-  const task = await findTaskById(taskId);
-  await refreshTaskPerformanceAnalytics(task);
+  const task = await findTaskById(taskId, db);
+  if (!options.skipAnalyticsRefresh) {
+    await refreshTaskPerformanceAnalytics(task);
+  }
   return task;
 }
 
@@ -1769,6 +1777,18 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
     throw new AppError(400, "Only tasks under review can be reviewed");
   }
 
+  let workflowProgressRow = null;
+  if (isWorkflowManagedTask(task)) {
+    const progressRows = await getProgressForFixture(task.fixture_id, task.department_id);
+    workflowProgressRow = resolveProgressRowForTask(task, progressRows);
+    if (!workflowProgressRow || workflowProgressRow.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
+      throw new AppError(409, "Workflow approval is allowed only after submission for verification");
+    }
+    if (verificationStatus === VERIFICATION_STATUSES.APPROVED && isProofRequired(task) && !taskHasProof(task)) {
+      throw new AppError(400, "Proof is required before approval");
+    }
+  }
+
   if (verificationStatus === VERIFICATION_STATUSES.REJECTED && !String(remarks || "").trim()) {
     throw new AppError(400, "Remarks are required when rejecting a task");
   }
@@ -1781,79 +1801,78 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
 
   ensureTaskTransitionAllowed(task.status, next.status, { allowSameStatus: true });
 
-  await updateTaskVerification(task.id, {
-    verification_status: next.verificationStatus,
-    remarks: remarks || null,
-    verified_at: closedAt,
-    status: next.status,
-    approval_stage: next.approvalStage,
-    closed_at: closedAt,
-    actual_minutes: completionMetrics.actual_minutes,
-    kpi_target: completionMetrics.kpi_target,
-    kpi_status: completionMetrics.kpi_status,
-    approved_at: next.status === TASK_STATUSES.CLOSED ? closedAt : null,
-    approved_by: next.status === TASK_STATUSES.CLOSED ? user.employee_id : null,
-    submitted_at: task.submitted_at || task.completed_at || closedAt || new Date(),
-    rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
-  });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [task.id]);
 
-  // ── WORKFLOW ADVANCEMENT ──────────────────────────────────────────────────────
-  // Only triggers when the task is fully approved (CLOSED) and linked to a fixture.
-  // advanceWorkflowAfterTaskApproval is the SINGLE source of truth for progression.
-  // It resolves the fixture_id from composite identity if task.fixture_id is absent.
-  if (next.status === TASK_STATUSES.CLOSED) {
-    try {
-      console.log("[task-approval] Triggering workflow advancement", {
-        task_id: task.id,
-        fixture_id: task.fixture_id,
-        project_id: task.project_id,
-        fixture_no: task.fixture_no,
-        department_id: task.department_id,
-      });
+    await updateTaskVerification(task.id, {
+      verification_status: next.verificationStatus,
+      remarks: remarks || null,
+      verified_at: closedAt,
+      status: next.status,
+      approval_stage: next.approvalStage,
+      closed_at: closedAt,
+      actual_minutes: completionMetrics.actual_minutes,
+      kpi_target: completionMetrics.kpi_target,
+      kpi_status: completionMetrics.kpi_status,
+      approved_at: next.status === TASK_STATUSES.CLOSED ? closedAt : null,
+      approved_by: next.status === TASK_STATUSES.CLOSED ? user.employee_id : null,
+      submitted_at: task.submitted_at || task.completed_at || closedAt || new Date(),
+      rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
+    }, client);
 
+    if (next.status === TASK_STATUSES.CLOSED) {
       await advanceWorkflowAfterTaskApproval({
         project_id: task.project_id,
         fixture_no: task.fixture_no,
         department_id: task.department_id,
         fixture_id: task.fixture_id,
         task_id: task.id,
+        client,
       });
-
-      console.log("[task-approval] Workflow advancement completed", {
-        task_id: task.id,
-      });
-    } catch (err) {
-      // Task is already closed/approved — log but don't surface to caller
-      console.error("[task-approval] Failed to advance workflow", {
-        task_id: task.id,
-        fixture_id: task.fixture_id,
-        error: err.message,
-      });
+    } else if (workflowProgressRow && next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
+      await updateProgressRow(task.fixture_id, workflowProgressRow.stage_name, {
+        status: WORKFLOW_STATUSES.REJECTED,
+        completed_at: null,
+      }, client);
     }
+
+    await appendTaskActivity(task.id, {
+      userEmployeeId: user.employee_id,
+      actionType: next.activityType,
+      notes: remarks || null,
+      metadata: {
+        verification_status: next.verificationStatus,
+        workflow_status: next.status === TASK_STATUSES.CLOSED
+          ? WORKFLOW_STATUSES.APPROVED
+          : next.verificationStatus === VERIFICATION_STATUSES.REJECTED
+            ? WORKFLOW_STATUSES.REJECTED
+            : WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+        workflow_id: task.workflow_id || null,
+        current_stage_id: task.current_stage_id || null,
+        current_stage_name: task.workflow_stage || null,
+      },
+    }, client);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: next.activityType,
+      targetType: "task",
+      targetId: task.id,
+      metadata: {
+        verification_status: verificationStatus,
+        remarks: remarks || null,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-
-  await appendTaskActivity(task.id, {
-    userEmployeeId: user.employee_id,
-    actionType: next.activityType,
-    notes: remarks || null,
-    metadata: {
-      verification_status: next.verificationStatus,
-      workflow_id: task.workflow_id || null,
-      current_stage_id: task.current_stage_id || null,
-      current_stage_name: task.workflow_stage || null,
-    },
-  });
-
-  await createAuditLog({
-    userEmployeeId: user.employee_id,
-    actionType: next.activityType,
-    targetType: "task",
-    targetId: task.id,
-    metadata: {
-      verification_status: verificationStatus,
-      remarks: remarks || null,
-    },
-  });
 
 }
 
@@ -2053,27 +2072,70 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
   }
 
   const completionPercent = normalizeCompletionPercent(payload.completion_percent);
-  await updateTaskCompletionPercent(task.id, completionPercent);
+  const client = await pool.connect();
+  let submittedForVerification = false;
 
-  await appendTaskActivity(task.id, {
-    userEmployeeId: user.employee_id,
-    actionType: "task_completion_percent_updated",
-    metadata: {
-      from: task.completion_percent ?? 0,
-      to: completionPercent,
-    },
-  });
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [task.id]);
+    const lockedTask = await findTaskById(task.id, client);
+    if (!lockedTask) {
+      throw new AppError(404, "Task not found");
+    }
 
-  await createAuditLog({
-    userEmployeeId: user.employee_id,
-    actionType: "task_completion_percent_updated",
-    targetType: "task",
-    targetId: task.id,
-    metadata: {
-      from: task.completion_percent ?? 0,
-      to: completionPercent,
-    },
-  });
+    if (completionPercent === 100 && isWorkflowManagedTask(lockedTask)) {
+      if (isProofRequired(lockedTask) && !taskHasProof(lockedTask)) {
+        throw new AppError(400, "Proof is required before submitting for verification");
+      }
+
+      await submitFixtureStageForVerification({ task: lockedTask, actor: user, client });
+      await updateTaskCompletionPercent(lockedTask.id, completionPercent, client);
+      await updateTaskStatus(lockedTask.id, {
+        status: TASK_STATUSES.UNDER_REVIEW,
+        started_at: lockedTask.started_at || new Date(),
+        completed_at: new Date(),
+        verification_status: VERIFICATION_STATUSES.PENDING,
+        actual_minutes: lockedTask.actual_minutes || 0,
+        approval_stage: "manager",
+        closed_at: null,
+        current_stage_id: lockedTask.current_stage_id,
+        lifecycle_status: TASK_STATUSES.IN_PROGRESS,
+        submitted_at: new Date(),
+      }, client);
+      submittedForVerification = true;
+    } else {
+      await updateTaskCompletionPercent(lockedTask.id, completionPercent, client);
+    }
+
+    await appendTaskActivity(lockedTask.id, {
+      userEmployeeId: user.employee_id,
+      actionType: submittedForVerification ? "task_submitted_for_verification" : "task_completion_percent_updated",
+      metadata: {
+        from: lockedTask.completion_percent ?? 0,
+        to: completionPercent,
+        workflow_status: submittedForVerification ? WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION : null,
+      },
+    }, client);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: submittedForVerification ? "task_submitted_for_verification" : "task_completion_percent_updated",
+      targetType: "task",
+      targetId: lockedTask.id,
+      metadata: {
+        from: lockedTask.completion_percent ?? 0,
+        to: completionPercent,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
 }
 
 async function applyTaskDetailUpdate(user, task, payload) {

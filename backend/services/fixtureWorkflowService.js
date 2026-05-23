@@ -59,7 +59,30 @@ const FIXTURE_REVISION_TYPES = new Set([
   "OTHER",
 ]);
 
-const MANUAL_STAGE_STATUSES = new Set(["PENDING", "IN_PROGRESS", "APPROVED", "REJECTED"]);
+const WORKFLOW_STATUSES = {
+  PENDING: "PENDING",
+  IN_PROGRESS: "IN_PROGRESS",
+  SUBMITTED_FOR_VERIFICATION: "SUBMITTED_FOR_VERIFICATION",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+};
+
+const OPERATIONAL_STATES = {
+  UNASSIGNED: "UNASSIGNED",
+  ASSIGNED_NOT_STARTED: "ASSIGNED_NOT_STARTED",
+  IN_PROGRESS: "IN_PROGRESS",
+  SUBMITTED_FOR_VERIFICATION: "SUBMITTED_FOR_VERIFICATION",
+  REJECTED: "REJECTED",
+  APPROVED: "APPROVED",
+};
+
+const MANUAL_STAGE_STATUSES = new Set([
+  WORKFLOW_STATUSES.PENDING,
+  WORKFLOW_STATUSES.IN_PROGRESS,
+  WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+  WORKFLOW_STATUSES.APPROVED,
+  WORKFLOW_STATUSES.REJECTED,
+]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -298,6 +321,30 @@ function buildCurrentStageResponse(progressRows, workflow) {
   };
 }
 
+function resolveOperationalState(progressRow) {
+  const status = String(progressRow?.status || WORKFLOW_STATUSES.PENDING).trim().toUpperCase();
+
+  if (status === WORKFLOW_STATUSES.APPROVED) {
+    return OPERATIONAL_STATES.APPROVED;
+  }
+
+  if (status === WORKFLOW_STATUSES.REJECTED) {
+    return OPERATIONAL_STATES.REJECTED;
+  }
+
+  if (status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
+    return OPERATIONAL_STATES.SUBMITTED_FOR_VERIFICATION;
+  }
+
+  if (status === WORKFLOW_STATUSES.IN_PROGRESS) {
+    return progressRow?.started_at
+      ? OPERATIONAL_STATES.IN_PROGRESS
+      : OPERATIONAL_STATES.ASSIGNED_NOT_STARTED;
+  }
+
+  return OPERATIONAL_STATES.UNASSIGNED;
+}
+
 function calculateStageDurationMinutes(startValue, endValue) {
   if (!startValue || !endValue) {
     return null;
@@ -505,8 +552,12 @@ async function validateAssignment(fixtureId, departmentId) {
   }
 
   // If the current stage is already active in workflow progress, only a reassignment attempt should surface it.
-  if (current.status === "IN_PROGRESS") {
+  if (current.status === WORKFLOW_STATUSES.IN_PROGRESS) {
     return { canAssign: false, reason: "Stage already assigned", currentStage: current };
+  }
+
+  if (current.status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
+    return { canAssign: false, reason: "Stage is locked for verification", currentStage: current };
   }
 
   if (!["PENDING", "REJECTED"].includes(current.status)) {
@@ -557,6 +608,44 @@ async function assignFixtureStage(fixtureId, departmentId, assignedTo, actor = n
   return getCurrentStage(fixtureId, departmentId);
 }
 
+async function submitFixtureStageForVerification({ task, actor, client = pool }) {
+  if (!task?.fixture_id || !task?.department_id) {
+    throw new AppError(400, "Workflow task is missing fixture execution identity");
+  }
+
+  const progress = await getProgressForFixture(task.fixture_id, task.department_id, client);
+  const current = deriveCurrentStageByStatus(progress);
+
+  if (!current) {
+    throw new AppError(409, "Fixture workflow is already approved");
+  }
+
+  if (current.status !== WORKFLOW_STATUSES.IN_PROGRESS) {
+    throw new AppError(409, `Stage must be IN_PROGRESS before submission. Current status: ${current.status}`);
+  }
+
+  if (!current.assigned_to || current.assigned_to !== task.assigned_to) {
+    throw new AppError(409, "Active workflow assignment does not match the task assignee");
+  }
+
+  const stageName = current.stage_name;
+  const stageRevisionNo = normalizeStageVersion(current.stage_version);
+  const revisionCode = formatStageRevisionCode(stageName, stageRevisionNo);
+  const contributions = await listStageContributions(task.fixture_id, stageName, revisionCode, client);
+  const total = sumContributionPercent(contributions);
+
+  if (total > 100.001) {
+    throw new AppError(409, "Stage contribution total exceeds 100%");
+  }
+
+  await updateProgressRow(task.fixture_id, stageName, {
+    status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+    completed_at: new Date(),
+  }, client);
+
+  return current;
+}
+
 /**
  * POST /api/workflows/complete
  * Deprecated: task approval now advances workflow stages directly.
@@ -596,7 +685,7 @@ async function approveFixtureStage(fixtureId, departmentId) {
 
 /**
  * POST /api/workflows/reject
- * Supervisor: rejects the current IN_PROGRESS stage.
+ * Supervisor: rejects the current submitted stage.
  */
 async function rejectFixtureStage(fixtureId, departmentId) {
   await assertFixtureBelongsToDepartment(fixtureId, departmentId);
@@ -609,17 +698,17 @@ async function rejectFixtureStage(fixtureId, departmentId) {
     throw new AppError(409, "Fixture is already fully completed");
   }
 
-  if (current.status !== "IN_PROGRESS") {
-    throw new AppError(409, `Stage must be IN_PROGRESS before it can be rejected. Current status: ${current.status}`);
+  if (current.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
+    throw new AppError(409, `Stage must be SUBMITTED_FOR_VERIFICATION before it can be rejected. Current status: ${current.status}`);
   }
 
   const timestamp = new Date();
 
   await updateProgressRow(fixtureId, current.stage_name, {
     status: "REJECTED",
-    assigned_to: null,
-    assigned_at: null,
-    started_at: null,
+    assigned_to: current.assigned_to,
+    assigned_at: current.assigned_at,
+    started_at: current.started_at,
     completed_at: null,
     duration_minutes: null,
   });
@@ -690,11 +779,14 @@ async function advanceFixtureWorkflowStage(identity) {
   const departmentId = String(identity?.department_id || "").trim();
   if (!departmentId) return null;
 
-  const client = await pool.connect();
+  const externalClient = identity?.client || null;
+  const client = externalClient || await pool.connect();
   let fixtureId = String(identity?.fixture_id || "").trim() || null;
 
   try {
-    await client.query("BEGIN");
+    if (!externalClient) {
+      await client.query("BEGIN");
+    }
 
     const resolvedIdentity = await resolveFixtureIdentityForAdvancement(identity, client);
     fixtureId = resolvedIdentity.fixture_id;
@@ -706,15 +798,17 @@ async function advanceFixtureWorkflowStage(identity) {
     if (!current) {
       // All stages already approved → fixture is complete
       await markFixtureComplete(fixtureId, client);
-      await client.query("COMMIT");
+      if (!externalClient) {
+        await client.query("COMMIT");
+      }
       console.log("[workflow] advanceFixtureWorkflowStage — fixture already complete", { fixture_id: fixtureId });
       return null;
     }
 
     // STEP 2 — VALIDATE STATE
-    if (current.status !== "IN_PROGRESS") {
+    if (current.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
       throw new Error(
-        `[workflow] Cannot advance stage "${current.stage_name}" — expected IN_PROGRESS, got ${current.status}`
+        `[workflow] Cannot advance stage "${current.stage_name}" — expected SUBMITTED_FOR_VERIFICATION, got ${current.status}`
       );
     }
 
@@ -745,7 +839,9 @@ async function advanceFixtureWorkflowStage(identity) {
     if (!next) {
       // Final stage approved → mark fixture complete
       await markFixtureComplete(fixtureId, client);
-      await client.query("COMMIT");
+      if (!externalClient) {
+        await client.query("COMMIT");
+      }
       console.log("[workflow] advanceFixtureWorkflowStage — all stages complete", {
         fixture_id: fixtureId,
         final_stage: current.stage_name,
@@ -769,7 +865,9 @@ async function advanceFixtureWorkflowStage(identity) {
       client
     );
 
-    await client.query("COMMIT");
+    if (!externalClient) {
+      await client.query("COMMIT");
+    }
 
     console.log("[workflow] advanceFixtureWorkflowStage — stage advanced", {
       fixture_id: fixtureId,
@@ -780,7 +878,9 @@ async function advanceFixtureWorkflowStage(identity) {
     return next;
 
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (!externalClient) {
+      await client.query("ROLLBACK");
+    }
     console.error("[workflow] advanceFixtureWorkflowStage — error", {
       fixture_id: fixtureId,
       department_id: departmentId,
@@ -788,7 +888,9 @@ async function advanceFixtureWorkflowStage(identity) {
     });
     throw err;
   } finally {
-    client.release();
+    if (!externalClient) {
+      client.release();
+    }
   }
 }
 
@@ -806,7 +908,7 @@ async function advanceFixtureWorkflowStage(identity) {
  * ❌ Never advance workflow from taskService directly.
  * ❌ Never use task.current_stage_id to drive workflow logic.
  */
-async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, department_id, fixture_id, task_id = null }) {
+async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, department_id, fixture_id, task_id = null, client = null }) {
   if ((!project_id || !fixture_no) && !fixture_id) {
     console.warn("[WORKFLOW] advanceWorkflowAfterTaskApproval — canonical fixture identity missing, skipping", {
       project_id,
@@ -849,6 +951,7 @@ async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, depart
   await advanceFixtureWorkflowStage({
     ...resolvedIdentity,
     task_id,
+    client,
   });
 }
 
@@ -864,7 +967,7 @@ async function releaseFixtureStageAssignment(fixtureId, departmentId) {
     return { released: false, currentStage: null };
   }
 
-  if (current.status !== "IN_PROGRESS") {
+  if (current.status !== WORKFLOW_STATUSES.IN_PROGRESS) {
     return { released: false, currentStage: current };
   }
 
@@ -917,6 +1020,7 @@ async function getFullProgressForFixture(fixtureId, departmentId) {
       revision_code: getProgressRevisionCode(row),
       stage_order: row.stage_order,
       status: row.status,
+      operational_state: resolveOperationalState(row),
       assigned_to: row.assigned_to,
       assigned_at: row.assigned_at,
       started_at: row.started_at,
@@ -1116,4 +1220,8 @@ module.exports = instrumentModuleExports("service.fixtureWorkflowService", {
   releaseFixtureStageAssignment,
   advanceFixtureWorkflowStage,
   advanceWorkflowAfterTaskApproval,
+  submitFixtureStageForVerification,
+  resolveOperationalState,
+  WORKFLOW_STATUSES,
+  OPERATIONAL_STATES,
 });

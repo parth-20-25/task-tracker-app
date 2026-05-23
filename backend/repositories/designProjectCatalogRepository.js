@@ -176,13 +176,24 @@ function mapFixtureOptionRow(row) {
     workflow_stage_version: stageVersion,
     workflow_revision_code: workflowRevisionCode,
     workflow_status: workflowStatus,
+    operational_state: row.operational_state || (
+      workflowStatus === "APPROVED"
+        ? "APPROVED"
+        : workflowStatus === "REJECTED"
+          ? "REJECTED"
+          : workflowStatus === "SUBMITTED_FOR_VERIFICATION"
+            ? "SUBMITTED_FOR_VERIFICATION"
+            : workflowStatus === "IN_PROGRESS"
+              ? (row.workflow_started_at ? "IN_PROGRESS" : "ASSIGNED_NOT_STARTED")
+              : "UNASSIGNED"
+    ),
     workflow_assigned_to: row.workflow_assigned_to || null,
     workflow_assigned_to_name: row.workflow_assigned_to_name || null,
     workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
       ? null
       : Number(row.workflow_progress_percent),
     workflow_stage_active: workflowStatus === "IN_PROGRESS",
-    review_pending: workflowStatus === "COMPLETED",
+    review_pending: workflowStatus === "SUBMITTED_FOR_VERIFICATION",
     blocked: workflowStatus === "REJECTED",
   };
 }
@@ -761,6 +772,8 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         current_progress.stage_version AS workflow_stage_version,
         current_progress.status AS workflow_status,
         current_progress.assigned_to AS workflow_assigned_to,
+        current_progress.started_at AS workflow_started_at,
+        current_progress.operational_state,
         workflow_assignee.name AS workflow_assigned_to_name
       FROM design.fixtures di
       JOIN design.projects dp
@@ -772,6 +785,15 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
           fwp.stage_version,
           fwp.status,
           fwp.assigned_to,
+          fwp.started_at,
+          CASE
+            WHEN fwp.status = 'APPROVED' THEN 'APPROVED'
+            WHEN fwp.status = 'REJECTED' THEN 'REJECTED'
+            WHEN fwp.status = 'SUBMITTED_FOR_VERIFICATION' THEN 'SUBMITTED_FOR_VERIFICATION'
+            WHEN fwp.status = 'IN_PROGRESS' AND fwp.started_at IS NULL THEN 'ASSIGNED_NOT_STARTED'
+            WHEN fwp.status = 'IN_PROGRESS' THEN 'IN_PROGRESS'
+            ELSE 'UNASSIGNED'
+          END AS operational_state,
           COUNT(*) OVER()::integer AS total_stages
         FROM fixture_workflow_progress fwp
         WHERE fwp.fixture_id = di.id
@@ -787,7 +809,18 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
      WHERE dp.id = $1
        AND dp.department_id = $2
        AND ($3::boolean = FALSE OR COALESCE(dp.status, $4) = $4)
-     ORDER BY di.fixture_no ASC, di.id ASC
+     ORDER BY
+       CASE COALESCE(current_progress.operational_state, 'UNASSIGNED')
+         WHEN 'SUBMITTED_FOR_VERIFICATION' THEN 1
+         WHEN 'REJECTED' THEN 2
+         WHEN 'UNASSIGNED' THEN 3
+         WHEN 'IN_PROGRESS' THEN 4
+         WHEN 'ASSIGNED_NOT_STARTED' THEN 5
+         WHEN 'APPROVED' THEN 6
+         ELSE 7
+       END ASC,
+       di.fixture_no ASC,
+       di.id ASC
     `,
     [projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
   );
@@ -822,6 +855,8 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         current_progress.stage_version AS workflow_stage_version,
         current_progress.status AS workflow_status,
         current_progress.assigned_to AS workflow_assigned_to,
+        current_progress.started_at AS workflow_started_at,
+        current_progress.operational_state,
         workflow_assignee.name AS workflow_assigned_to_name
       FROM design.fixtures di
       JOIN design.projects dp
@@ -833,6 +868,15 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
           fwp.stage_version,
           fwp.status,
           fwp.assigned_to,
+          fwp.started_at,
+          CASE
+            WHEN fwp.status = 'APPROVED' THEN 'APPROVED'
+            WHEN fwp.status = 'REJECTED' THEN 'REJECTED'
+            WHEN fwp.status = 'SUBMITTED_FOR_VERIFICATION' THEN 'SUBMITTED_FOR_VERIFICATION'
+            WHEN fwp.status = 'IN_PROGRESS' AND fwp.started_at IS NULL THEN 'ASSIGNED_NOT_STARTED'
+            WHEN fwp.status = 'IN_PROGRESS' THEN 'IN_PROGRESS'
+            ELSE 'UNASSIGNED'
+          END AS operational_state,
           COUNT(*) OVER()::integer AS total_stages
         FROM fixture_workflow_progress fwp
         WHERE fwp.fixture_id = di.id
@@ -849,7 +893,18 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
         AND ($4::boolean = FALSE OR COALESCE(dp.status, $5) = $5)
-      ORDER BY di.fixture_no ASC, di.id ASC
+      ORDER BY
+        CASE COALESCE(current_progress.operational_state, 'UNASSIGNED')
+          WHEN 'SUBMITTED_FOR_VERIFICATION' THEN 1
+          WHEN 'REJECTED' THEN 2
+          WHEN 'UNASSIGNED' THEN 3
+          WHEN 'IN_PROGRESS' THEN 4
+          WHEN 'ASSIGNED_NOT_STARTED' THEN 5
+          WHEN 'APPROVED' THEN 6
+          ELSE 7
+        END ASC,
+        di.fixture_no ASC,
+        di.id ASC
     `,
     [user.employee_id, projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
   );

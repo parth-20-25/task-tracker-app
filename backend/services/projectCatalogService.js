@@ -18,7 +18,14 @@ const {
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
 const { createAuditLog } = require("../repositories/auditRepository");
-const { getConfiguredWorkflowForDepartment } = require("../repositories/fixtureWorkflowRepository");
+const {
+  getConfiguredWorkflowForDepartment,
+  getProgressForFixture,
+  startStageAttempt,
+  updateProgressRow,
+} = require("../repositories/fixtureWorkflowRepository");
+const { insertStageContribution, listStageContributions } = require("../repositories/designStageContributionRepository");
+const { formatStageRevisionCode, normalizeStageVersion } = require("../lib/workflowStageVersioning");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
 
@@ -288,20 +295,94 @@ async function createDesignTaskFromProject(user, payload = {}) {
     throw new AppError(409, "Current workflow stage could not be resolved for this fixture");
   }
 
-  return createTaskForUser(user, {
-    ...payload,
-    project_id: project.project_id,
-    fixture_id: fixture.fixture_id,
-    fixture_no: fixture.fixture_no,
-    project_no: project.project_code,
-    project_name: project.project_name,
-    customer_name: project.company_name,
-    project_description: project.project_name,
-    quantity_index: fixture.fixture_no,
-    instance_count: fixture.qty,
-    current_stage_id: currentWorkflowStage.id,
-    rework_date: null,
-  });
+  const client = await pool.connect();
+  let task = null;
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT id FROM fixture_workflow_progress WHERE fixture_id = $1::uuid AND department_id = $2 FOR UPDATE",
+      [fixture.fixture_id, departmentId],
+    );
+
+    const lockedProgress = await getProgressForFixture(fixture.fixture_id, departmentId, client);
+    const lockedCurrentStage = lockedProgress.find((stage) => stage.status !== "APPROVED") || null;
+    if (!lockedCurrentStage) {
+      throw new AppError(409, "Fixture is fully completed");
+    }
+
+    if (!["PENDING", "REJECTED"].includes(lockedCurrentStage.status)) {
+      throw new AppError(409, `Stage is not assignable in status ${lockedCurrentStage.status}`);
+    }
+
+    const assignedTo = String(payload.assigned_to || "").trim();
+    const timestamp = new Date();
+    await updateProgressRow(fixture.fixture_id, lockedCurrentStage.stage_name, {
+      status: "IN_PROGRESS",
+      assigned_to: assignedTo,
+      assigned_at: timestamp,
+      started_at: timestamp,
+      completed_at: null,
+      duration_minutes: null,
+    }, client);
+    await startStageAttempt(fixture.fixture_id, departmentId, lockedCurrentStage.stage_name, assignedTo, timestamp, client);
+
+    const revisionNo = normalizeStageVersion(lockedCurrentStage.stage_version);
+    const revisionCode = formatStageRevisionCode(lockedCurrentStage.stage_name, revisionNo);
+    const contributions = await listStageContributions(fixture.fixture_id, lockedCurrentStage.stage_name, revisionCode, client);
+    if (contributions.length === 0) {
+      await insertStageContribution({
+        fixture_id: fixture.fixture_id,
+        department_id: departmentId,
+        stage_name: lockedCurrentStage.stage_name,
+        revision_code: revisionCode,
+        stage_revision_no: revisionNo,
+        employee_id: assignedTo,
+        contribution_percent: 100,
+        contribution_kind: "REMAINING",
+        changed_by: user.employee_id,
+        previous_stage: lockedCurrentStage.stage_name,
+        metadata: { source: "assignment_transaction" },
+      }, client);
+    }
+
+    task = await createTaskForUser(user, {
+      ...payload,
+      project_id: project.project_id,
+      fixture_id: fixture.fixture_id,
+      fixture_no: fixture.fixture_no,
+      project_no: project.project_code,
+      project_name: project.project_name,
+      customer_name: project.company_name,
+      project_description: project.project_name,
+      quantity_index: fixture.fixture_no,
+      instance_count: fixture.qty,
+      current_stage_id: currentWorkflowStage.id,
+      rework_date: null,
+    }, { client, skipAnalyticsRefresh: true });
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "design_fixture_assigned_transaction",
+      targetType: "design_fixture",
+      targetId: fixture.fixture_id,
+      metadata: {
+        task_id: task.id,
+        assigned_to: assignedTo,
+        stage_name: lockedCurrentStage.stage_name,
+        workflow_status: "IN_PROGRESS",
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return task;
 }
 
 module.exports = instrumentModuleExports("service.projectCatalogService", {

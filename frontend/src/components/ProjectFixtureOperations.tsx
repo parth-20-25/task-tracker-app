@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRightLeft,
+  CalendarIcon,
+  CheckSquare,
   Image as ImageIcon,
   Loader2,
   User,
@@ -10,7 +13,6 @@ import {
   XCircle,
 } from "lucide-react";
 import {
-  assignFixtureStage,
   createDesignTask,
   fetchFixtureFullProgress,
   reopenFixtureStage,
@@ -22,10 +24,13 @@ import { API_ROOT_URL } from "@/api/config";
 import { fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
@@ -81,6 +86,48 @@ function getStageWorkflowCode(stage: FixtureFullProgress["stages"][number] | nul
     || (stage ? `Stage${stage.stage_order}` : "Workflow");
 }
 
+function getCurrentProgressStage(progress: FixtureFullProgress | null | undefined) {
+  return progress?.stages?.find((stage) => stage.status !== "APPROVED") || null;
+}
+
+function getAssignableWorkflowOptions(progress: FixtureFullProgress | null | undefined) {
+  const currentStage = getCurrentProgressStage(progress);
+
+  if (!progress?.stages) {
+    return [];
+  }
+
+  return progress.stages
+    .filter((stage) => stage.status === "APPROVED" || stage.stage_name === currentStage?.stage_name)
+    .sort((left, right) => Number(left.stage_order) - Number(right.stage_order));
+}
+
+function normalizeDeadlineToEndOfDayIso(dateValue: string) {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  if (!year || !month || !day) {
+    throw new Error("Deadline date is invalid");
+  }
+
+  return new Date(year, month - 1, day, 23, 59, 59, 999).toISOString();
+}
+
+function formatDeadlineDate(dateValue: string) {
+  if (!dateValue) {
+    return "Deadline";
+  }
+
+  const [year, month, day] = dateValue.split("-").map(Number);
+  if (!year || !month || !day) {
+    return "Deadline";
+  }
+
+  return format(new Date(year, month - 1, day), "dd/MM/yyyy");
+}
+
+function isFixtureOperationallyAssigned(fixture: DesignFixtureOption, task: Task | null) {
+  return !["UNASSIGNED", "REJECTED"].includes(String(fixture.operational_state || "UNASSIGNED"));
+}
+
 function fixtureStageStatusLabel(status: string | null | undefined) {
   switch (status?.toUpperCase()) {
     case "IN_PROGRESS":
@@ -91,8 +138,12 @@ function fixtureStageStatusLabel(status: string | null | undefined) {
       return "Approved";
     case "REJECTED":
       return "Rejected";
-    case "COMPLETED":
-      return "Completed";
+    case "SUBMITTED_FOR_VERIFICATION":
+      return "Submitted For Verification";
+    case "ASSIGNED_NOT_STARTED":
+      return "Assigned Not Started";
+    case "UNASSIGNED":
+      return "Unassigned";
     default:
       return status || "Pending";
   }
@@ -108,8 +159,10 @@ function fixtureStageStatusColor(status: string | null | undefined) {
       return "border-emerald-300 bg-emerald-50 text-emerald-800";
     case "REJECTED":
       return "border-red-300 bg-red-50 text-red-800";
-    case "COMPLETED":
+    case "SUBMITTED_FOR_VERIFICATION":
       return "border-violet-300 bg-violet-50 text-violet-800";
+    case "UNASSIGNED":
+      return "border-slate-300 bg-slate-50 text-slate-700";
     default:
       return "border-slate-300 bg-slate-50 text-slate-700";
   }
@@ -201,6 +254,8 @@ export function ProjectFixtureOperationsGrid({
   const { tasks, refreshTasks } = useTasks();
   const queryClient = useQueryClient();
   const assignableUsersQuery = useAssignableUsersQuery();
+  const [bulkPanelOpen, setBulkPanelOpen] = useState(false);
+  const [selectedFixtureIds, setSelectedFixtureIds] = useState<string[]>([]);
 
   const verificationQuery = useQuery({
     queryKey: taskQueryKeys.verificationQueue,
@@ -221,6 +276,19 @@ export function ProjectFixtureOperationsGrid({
     return [...taskById.values()];
   }, [fixtures, tasks, verificationQuery.data]);
 
+  const fixtureTaskById = useMemo(() => {
+    const map = new Map<string, Task | null>();
+    fixtures.forEach((fixture) => {
+      map.set(fixture.fixture_id, pickFixtureTask(fixture, combinedTasks));
+    });
+    return map;
+  }, [combinedTasks, fixtures]);
+
+  const unassignedFixtures = useMemo(
+    () => fixtures.filter((fixture) => !isFixtureOperationallyAssigned(fixture, fixtureTaskById.get(fixture.fixture_id) || null)),
+    [fixtureTaskById, fixtures],
+  );
+
   const invalidateOperationalState = useCallback(async () => {
     await Promise.all([
       refreshTasks(),
@@ -235,20 +303,376 @@ export function ProjectFixtureOperationsGrid({
     ]);
   }, [departmentId, projectId, queryClient, refreshTasks]);
 
+  const toggleSelectedFixture = useCallback((fixtureId: string, checked: boolean) => {
+    setSelectedFixtureIds((current) => (
+      checked
+        ? Array.from(new Set([...current, fixtureId]))
+        : current.filter((id) => id !== fixtureId)
+    ));
+  }, []);
+
   return (
-    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-      {fixtures.map((fixture) => (
-        <ProjectFixtureCard
-          key={fixture.fixture_id}
-          fixture={fixture}
-          task={pickFixtureTask(fixture, combinedTasks)}
+    <div className="space-y-2">
+      <div className="flex items-center justify-end">
+        <Button
+          type="button"
+          size="sm"
+          variant={bulkPanelOpen ? "secondary" : "outline"}
+          className="h-8 px-3 text-xs"
+          onClick={() => setBulkPanelOpen((open) => !open)}
+          disabled={!unassignedFixtures.length}
+        >
+          <CheckSquare className="mr-1.5 h-3.5 w-3.5" />
+          Assign All
+        </Button>
+      </div>
+
+      {bulkPanelOpen ? (
+        <BulkFixtureAssignmentPanel
+          unassignedFixtures={unassignedFixtures}
+          selectedFixtureIds={selectedFixtureIds}
           projectId={projectId}
           departmentId={departmentId || undefined}
           assignableUsers={assignableUsersQuery.data ?? []}
           isLoadingUsers={assignableUsersQuery.isLoading}
           invalidateOperationalState={invalidateOperationalState}
+          onCancel={() => setBulkPanelOpen(false)}
         />
-      ))}
+      ) : null}
+
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        {fixtures.map((fixture) => (
+          <ProjectFixtureCard
+            key={fixture.fixture_id}
+            fixture={fixture}
+            task={fixtureTaskById.get(fixture.fixture_id) || null}
+            projectId={projectId}
+            departmentId={departmentId || undefined}
+            assignableUsers={assignableUsersQuery.data ?? []}
+            isLoadingUsers={assignableUsersQuery.isLoading}
+            invalidateOperationalState={invalidateOperationalState}
+            selectable={bulkPanelOpen && unassignedFixtures.some((item) => item.fixture_id === fixture.fixture_id)}
+            selected={selectedFixtureIds.includes(fixture.fixture_id)}
+            onSelectedChange={toggleSelectedFixture}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DateOnlyDeadlinePicker({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const selectedDate = useMemo(() => {
+    if (!value) {
+      return undefined;
+    }
+
+    const [year, month, day] = value.split("-").map(Number);
+    if (!year || !month || !day) {
+      return undefined;
+    }
+
+    return new Date(year, month - 1, day);
+  }, [value]);
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className={cn("h-9 w-full justify-start px-3 text-left text-xs font-normal", !value && "text-muted-foreground")}
+          disabled={disabled}
+        >
+          <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+          {formatDeadlineDate(value)}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          selected={selectedDate}
+          defaultMonth={selectedDate || new Date()}
+          onSelect={(date) => {
+            if (date) {
+              onChange(format(date, "yyyy-MM-dd"));
+            }
+          }}
+          initialFocus
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+interface BulkFixtureAssignmentPanelProps {
+  unassignedFixtures: DesignFixtureOption[];
+  selectedFixtureIds: string[];
+  projectId: string;
+  departmentId?: string;
+  assignableUsers: Array<{ employee_id: string; name: string }>;
+  isLoadingUsers: boolean;
+  invalidateOperationalState: () => Promise<void>;
+  onCancel: () => void;
+}
+
+function BulkFixtureAssignmentPanel({
+  unassignedFixtures,
+  selectedFixtureIds,
+  projectId,
+  departmentId,
+  assignableUsers,
+  isLoadingUsers,
+  invalidateOperationalState,
+  onCancel,
+}: BulkFixtureAssignmentPanelProps) {
+  const [assignedTo, setAssignedTo] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [priority, setPriority] = useState<Priority>("high");
+  const [workflowTarget, setWorkflowTarget] = useState("");
+  const [reasonType, setReasonType] = useState<FixtureRevisionType | "">("");
+  const [scope, setScope] = useState<"all_unassigned" | "selected">("all_unassigned");
+
+  const targetFixtures = useMemo(() => {
+    if (scope === "selected") {
+      const selected = new Set(selectedFixtureIds);
+      return unassignedFixtures.filter((fixture) => selected.has(fixture.fixture_id));
+    }
+
+    return unassignedFixtures;
+  }, [scope, selectedFixtureIds, unassignedFixtures]);
+
+  const progressQueries = useQueries({
+    queries: targetFixtures.map((fixture) => ({
+      queryKey: ["workflow", "progress", departmentId || "self", fixture.fixture_id],
+      queryFn: () => fetchFixtureFullProgress(fixture.fixture_id, departmentId),
+      enabled: targetFixtures.length > 0,
+    })),
+  });
+
+  const progressByFixtureId = useMemo(() => {
+    const map = new Map<string, FixtureFullProgress>();
+    targetFixtures.forEach((fixture, index) => {
+      const progress = progressQueries[index]?.data;
+      if (progress) {
+        map.set(fixture.fixture_id, progress);
+      }
+    });
+    return map;
+  }, [progressQueries, targetFixtures]);
+
+  const referenceProgress = progressQueries.find((query) => query.data)?.data;
+  const currentStage = getCurrentProgressStage(referenceProgress);
+  const workflowOptions = getAssignableWorkflowOptions(referenceProgress);
+
+  useEffect(() => {
+    if (!workflowTarget && currentStage?.stage_name) {
+      setWorkflowTarget(currentStage.stage_name);
+    }
+  }, [currentStage?.stage_name, workflowTarget]);
+
+  const workflowChanged = targetFixtures.some((fixture) => {
+    const fixtureCurrent = getCurrentProgressStage(progressByFixtureId.get(fixture.fixture_id));
+    return Boolean(workflowTarget && fixtureCurrent?.stage_name && workflowTarget !== fixtureCurrent.stage_name);
+  });
+  const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
+  const workflowChangeAllowed = !workflowChanged || selectedWorkflowStage?.status === "APPROVED";
+  const progressLoading = progressQueries.some((query) => query.isLoading);
+  const selectedScopeEmpty = scope === "selected" && targetFixtures.length === 0;
+
+  const resetForm = () => {
+    setAssignedTo("");
+    setDeadline("");
+    setPriority("high");
+    setWorkflowTarget("");
+    setReasonType("");
+    setScope("all_unassigned");
+  };
+
+  const bulkAssignMutation = useMutation({
+    mutationFn: async () => {
+      if (!targetFixtures.length) {
+        throw new Error(scope === "selected" ? "Select fixtures before assigning" : "No unassigned fixtures are available");
+      }
+
+      if (!assignedTo || !deadline || !workflowTarget) {
+        throw new Error("Employee, deadline, priority, and workflow are required");
+      }
+
+      if (workflowChanged && !reasonType) {
+        throw new Error("Reason Type is required when workflow is changed");
+      }
+
+      for (const fixture of targetFixtures) {
+        const progress = progressByFixtureId.get(fixture.fixture_id) || await fetchFixtureFullProgress(fixture.fixture_id, departmentId);
+        const fixtureCurrent = getCurrentProgressStage(progress);
+        const fixtureWorkflowChanged = Boolean(workflowTarget && fixtureCurrent?.stage_name && workflowTarget !== fixtureCurrent.stage_name);
+
+        if (fixtureWorkflowChanged) {
+          await reopenFixtureStage({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+            target_stage_name: workflowTarget,
+            revision_type: reasonType as FixtureRevisionType,
+          });
+        }
+
+        await createDesignTask({
+          department_id: departmentId,
+          project_id: projectId,
+          fixture_id: fixture.fixture_id,
+          description: fixture.part_name || fixture.fixture_no,
+          assigned_to: assignedTo,
+          assignee_ids: [assignedTo],
+          priority,
+          deadline: normalizeDeadlineToEndOfDayIso(deadline),
+        });
+      }
+    },
+    onSuccess: async () => {
+      await invalidateOperationalState();
+      resetForm();
+      onCancel();
+      toast({ title: "Fixtures assigned", description: "Assign All reused the existing assignment flow for each fixture." });
+    },
+    onError: (error) => {
+      toast({
+        title: "Assign All failed",
+        description: error instanceof Error ? error.message : "Could not assign fixtures",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const disabled = !assignedTo
+    || !deadline
+    || !workflowTarget
+    || progressLoading
+    || selectedScopeEmpty
+    || !workflowChangeAllowed
+    || (workflowChanged && !reasonType)
+    || bulkAssignMutation.isPending;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+      <div className="grid gap-2 lg:grid-cols-4">
+        <div className="space-y-1">
+          <Label className="text-xs">Employee</Label>
+          <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
+            <SelectTrigger className="h-9 bg-white text-xs" disabled={isLoadingUsers || bulkAssignMutation.isPending}>
+              <SelectValue placeholder={isLoadingUsers ? "Loading..." : "Employee"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Employee</SelectItem>
+              {assignableUsers.map((employee) => (
+                <SelectItem key={employee.employee_id} value={employee.employee_id}>
+                  {employee.name} ({employee.employee_id})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Deadline</Label>
+          <DateOnlyDeadlinePicker value={deadline} onChange={setDeadline} disabled={bulkAssignMutation.isPending} />
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Priority</Label>
+          <Select value={priority} onValueChange={(value) => setPriority(value as Priority)}>
+            <SelectTrigger className="h-9 bg-white text-xs" disabled={bulkAssignMutation.isPending}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {priorityOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Workflow</Label>
+          <Select
+            value={workflowTarget || "__none__"}
+            onValueChange={(value) => {
+              setWorkflowTarget(value === "__none__" ? "" : value);
+              setReasonType("");
+            }}
+            disabled={progressLoading || bulkAssignMutation.isPending}
+          >
+            <SelectTrigger className="h-9 bg-white text-xs">
+              <SelectValue placeholder={progressLoading ? "Loading workflow..." : "Workflow"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Workflow</SelectItem>
+              {workflowOptions.map((stage) => (
+                <SelectItem key={`${stage.stage_name}-${stage.stage_version}`} value={stage.stage_name}>
+                  {getStageWorkflowCode(stage)} - {fixtureStageStatusLabel(stage.status)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {workflowChanged ? (
+        <div className="mt-2 max-w-sm space-y-1">
+          <Label className="text-xs">Reason Type</Label>
+          <Select value={reasonType || "__none__"} onValueChange={(value) => setReasonType(value === "__none__" ? "" : value as FixtureRevisionType)}>
+            <SelectTrigger className="h-9 bg-white text-xs" disabled={bulkAssignMutation.isPending}>
+              <SelectValue placeholder="Reason Type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Reason Type</SelectItem>
+              {revisionReasonOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {!workflowChangeAllowed ? (
+            <p className="text-xs text-amber-700">Workflow changes can only reopen an approved stage.</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div className="space-y-1">
+          <Label className="text-xs">Assignment Scope</Label>
+          <RadioGroup value={scope} onValueChange={(value) => setScope(value as "all_unassigned" | "selected")} className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-2 text-xs">
+              <RadioGroupItem value="all_unassigned" />
+              All Unassigned Fixtures ({unassignedFixtures.length})
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <RadioGroupItem value="selected" />
+              Selected Fixtures ({selectedFixtureIds.length})
+            </label>
+          </RadioGroup>
+          {selectedScopeEmpty ? (
+            <p className="text-xs text-amber-700">Select fixtures in the grid before using selected scope.</p>
+          ) : null}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={bulkAssignMutation.isPending}>
+            Cancel
+          </Button>
+          <Button type="button" size="sm" onClick={() => bulkAssignMutation.mutate()} disabled={disabled}>
+            {bulkAssignMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+            Assign All
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -261,6 +685,9 @@ interface ProjectFixtureCardProps {
   assignableUsers: Array<{ employee_id: string; name: string }>;
   isLoadingUsers: boolean;
   invalidateOperationalState: () => Promise<void>;
+  selectable?: boolean;
+  selected?: boolean;
+  onSelectedChange?: (fixtureId: string, checked: boolean) => void;
 }
 
 function ProjectFixtureCard({
@@ -271,6 +698,9 @@ function ProjectFixtureCard({
   assignableUsers,
   isLoadingUsers,
   invalidateOperationalState,
+  selectable = false,
+  selected = false,
+  onSelectedChange,
 }: ProjectFixtureCardProps) {
   const { access } = useAuth();
   const [expanded, setExpanded] = useState<"assign" | "transfer" | null>(null);
@@ -313,23 +743,8 @@ function ProjectFixtureCard({
   });
 
   const progress = progressQuery.data;
-  const currentProgressStage = useMemo(() => {
-    if (!progress?.stages) {
-      return null;
-    }
-
-    return progress.stages.find((stage) => stage.status !== "APPROVED") || null;
-  }, [progress]);
-
-  const workflowOptions = useMemo(() => {
-    if (!progress?.stages) {
-      return [];
-    }
-
-    return progress.stages
-      .filter((stage) => stage.status === "APPROVED" || stage.stage_name === currentProgressStage?.stage_name)
-      .sort((left, right) => Number(left.stage_order) - Number(right.stage_order));
-  }, [currentProgressStage?.stage_name, progress]);
+  const currentProgressStage = useMemo(() => getCurrentProgressStage(progress), [progress]);
+  const workflowOptions = useMemo(() => getAssignableWorkflowOptions(progress), [progress]);
 
   useEffect(() => {
     if (expanded !== "assign" || workflowTarget || !currentProgressStage?.stage_name) {
@@ -347,14 +762,11 @@ function ProjectFixtureCard({
   const canSubmitAssignment = workflowChanged ? workflowChangeAllowed : canAssignCurrent;
 
   const proofImage = getProofImage(task);
-  const isSubmittedForVerification = task?.status === "under_review";
-  const isAssigned = Boolean(task && OPEN_TASK_STATUSES.has(task.status)) || Boolean(fixture.workflow_assigned_to);
+  const canonicalOperationalState = fixture.operational_state || "UNASSIGNED";
+  const isSubmittedForVerification = canonicalOperationalState === "SUBMITTED_FOR_VERIFICATION";
+  const isAssigned = isFixtureOperationallyAssigned(fixture, task);
   const workflowCode = getFixtureWorkflowCode(fixture);
-  const operationalStatus = isSubmittedForVerification
-    ? "Completed"
-    : isAssigned
-      ? "In Progress"
-      : fixtureStageStatusLabel(fixture.workflow_status || "PENDING");
+  const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
 
   const resetAssignForm = () => {
     setAssignedTo("");
@@ -388,12 +800,6 @@ function ProjectFixtureCard({
         });
       }
 
-      await assignFixtureStage({
-        fixture_id: fixture.fixture_id,
-        assigned_to: assignedTo,
-        department_id: departmentId,
-      });
-
       await createDesignTask({
         department_id: departmentId,
         project_id: projectId,
@@ -402,7 +808,7 @@ function ProjectFixtureCard({
         assigned_to: assignedTo,
         assignee_ids: [assignedTo],
         priority,
-        deadline: new Date(deadline).toISOString(),
+        deadline: normalizeDeadlineToEndOfDayIso(deadline),
       });
     },
     onSuccess: async () => {
@@ -494,12 +900,22 @@ function ProjectFixtureCard({
     || transferMutation.isPending;
 
   return (
-    <div className="rounded-lg border border-slate-200 p-3">
+    <div className={cn("rounded-lg border border-slate-200 p-2.5", selected && "border-primary bg-primary/5")}>
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 space-y-0.5">
-            <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
-            <p className="text-xs text-muted-foreground">{fixture.part_name}</p>
+          <div className="flex min-w-0 items-start gap-2">
+            {selectable ? (
+              <Checkbox
+                className="mt-0.5"
+                checked={selected}
+                onCheckedChange={(checked) => onSelectedChange?.(fixture.fixture_id, checked === true)}
+                aria-label={`Select ${fixture.fixture_no}`}
+              />
+            ) : null}
+            <div className="min-w-0 space-y-0.5">
+              <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
+              <p className="truncate text-xs text-muted-foreground">{fixture.part_name}</p>
+            </div>
           </div>
 
           {isSubmittedForVerification && canReviewTask ? (
@@ -600,7 +1016,7 @@ function ProjectFixtureCard({
               {workflowCode}
             </Badge>
           ) : null}
-          <Badge variant="outline" className={cn("text-xs font-medium", fixtureStageStatusColor(isSubmittedForVerification ? "COMPLETED" : fixture.workflow_status))}>
+          <Badge variant="outline" className={cn("text-xs font-medium", fixtureStageStatusColor(canonicalOperationalState))}>
             {operationalStatus}
           </Badge>
           <Badge
@@ -625,14 +1041,14 @@ function ProjectFixtureCard({
       </div>
 
       {expanded === "assign" ? (
-        <div className="mt-3 space-y-3 border-t pt-3">
+        <div className="mt-2 space-y-2 border-t pt-2">
           <div>
             <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
-            <p className="text-xs text-muted-foreground">{fixture.part_name}</p>
+            <p className="truncate text-xs text-muted-foreground">{fixture.part_name}</p>
           </div>
 
           <div className="grid gap-2 md:grid-cols-3">
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <Label className="text-xs">Assignee</Label>
               <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
                 <SelectTrigger className="h-9 text-xs" disabled={isLoadingUsers || assignMutation.isPending}>
@@ -649,18 +1065,16 @@ function ProjectFixtureCard({
               </Select>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <Label className="text-xs">Deadline</Label>
-              <Input
-                type="datetime-local"
+              <DateOnlyDeadlinePicker
                 value={deadline}
-                onChange={(event) => setDeadline(event.target.value)}
-                className="h-9 text-xs"
+                onChange={setDeadline}
                 disabled={assignMutation.isPending}
               />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <Label className="text-xs">Priority</Label>
               <Select value={priority} onValueChange={(value) => setPriority(value as Priority)}>
                 <SelectTrigger className="h-9 text-xs" disabled={assignMutation.isPending}>
@@ -675,7 +1089,7 @@ function ProjectFixtureCard({
             </div>
           </div>
 
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <Label className="text-xs">Workflow</Label>
             <Select
               value={workflowTarget || "__none__"}
@@ -700,7 +1114,7 @@ function ProjectFixtureCard({
           </div>
 
           {workflowChanged ? (
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <Label className="text-xs">Reason Type</Label>
               <Select value={reasonType || "__none__"} onValueChange={(value) => setReasonType(value === "__none__" ? "" : value as FixtureRevisionType)}>
                 <SelectTrigger className="h-9 text-xs" disabled={assignMutation.isPending}>

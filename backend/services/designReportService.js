@@ -127,7 +127,7 @@ const STAGES = [
 ];
 
 const STAGE_KEYS = new Set(STAGES.map((stage) => stage.key));
-const VALID_WORKFLOW_STATUSES = new Set(["PENDING", "IN_PROGRESS", "COMPLETED", "APPROVED", "REJECTED"]);
+const VALID_WORKFLOW_STATUSES = new Set(["PENDING", "IN_PROGRESS", "SUBMITTED_FOR_VERIFICATION", "COMPLETED", "APPROVED", "REJECTED"]);
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
 const MAX_STAGE_DURATION_MINUTES = 1000 * 60;
 const TABLE_COLUMNS = [

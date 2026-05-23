@@ -14,7 +14,7 @@ import {
 
 // ── Fixture Workflow Types ────────────────────────────────────────────────────
 
-export type FixtureStageStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED" | "REJECTED";
+export type FixtureStageStatus = "PENDING" | "IN_PROGRESS" | "SUBMITTED_FOR_VERIFICATION" | "APPROVED" | "REJECTED";
 
 export interface FixtureCurrentStage {
   stage: string | null;

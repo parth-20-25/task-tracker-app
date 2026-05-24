@@ -24,6 +24,16 @@ export interface Department {
   name: string;
   parent_department?: string;
   is_active?: boolean;
+  subdivisions?: DepartmentSubdivision[];
+}
+
+export interface DepartmentSubdivision {
+  id: string;
+  department_id: string;
+  subdivision_name: string;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface User {
@@ -35,6 +45,8 @@ export interface User {
   role?: Role;
   department_id: string | null;
   department?: Department;
+  subdivision_id?: string | null;
+  subdivision?: DepartmentSubdivision | null;
   is_active: boolean;
   created_at: string;
   avatar?: string;
@@ -199,6 +211,7 @@ export interface UploadBatch {
   status_summary: string;
   deletion_blocked: boolean;
   delete_blocked_reason?: string | null;
+  can_manage_2d_routing?: boolean;
 }
 
 export interface ProjectDashboardSummary {

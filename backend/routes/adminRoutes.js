@@ -10,11 +10,13 @@ const {
   getAdminReferenceData,
   listUsersForScope,
   saveDepartment,
+  saveDepartmentSubdivision,
   saveEscalationRule,
   saveKpiDefinition,
   saveRole,
   saveUser,
   deleteDepartment,
+  deleteDepartmentSubdivision,
   deleteRole,
   deleteUser,
   saveShift,
@@ -24,6 +26,8 @@ const {
   toggleEscalationRule,
   deleteEscalationRule,
   updateUserStatus,
+  listDepartmentSubdivisions,
+  updateDepartmentSubdivisionStatus,
   saveWorkflowTemplate,
   deleteWorkflowTemplate,
 } = require("../services/adminService");
@@ -264,6 +268,33 @@ router.get(
     const workflow = await getWorkflow(workflowId);
     return sendSuccess(res, workflow);
   }),
+);
+
+router.get(
+  "/departments/:departmentId/subdivisions",
+  authorize(PERMISSIONS.MANAGE_DEPARTMENTS),
+  asyncHandler(async (req, res) => sendSuccess(res, await listDepartmentSubdivisions(req.user, req.params.departmentId))),
+);
+
+router.put(
+  "/departments/:departmentId/subdivisions/:subdivisionId",
+  authorize(PERMISSIONS.MANAGE_DEPARTMENTS),
+  asyncHandler(async (req, res) => sendSuccess(res, await saveDepartmentSubdivision(req.user, req.params.departmentId, {
+    ...req.body,
+    id: req.params.subdivisionId === "new" ? null : req.params.subdivisionId,
+  }))),
+);
+
+router.patch(
+  "/departments/:departmentId/subdivisions/:subdivisionId/status",
+  authorize(PERMISSIONS.MANAGE_DEPARTMENTS),
+  asyncHandler(async (req, res) => sendSuccess(res, await updateDepartmentSubdivisionStatus(req.user, req.params.subdivisionId, req.body.is_active === true))),
+);
+
+router.delete(
+  "/departments/:departmentId/subdivisions/:subdivisionId",
+  authorize(PERMISSIONS.MANAGE_DEPARTMENTS),
+  asyncHandler(async (req, res) => sendSuccess(res, await deleteDepartmentSubdivision(req.user, req.params.subdivisionId))),
 );
 
 router.put(

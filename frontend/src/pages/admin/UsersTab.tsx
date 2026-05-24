@@ -18,6 +18,7 @@ interface UsersTabProps {
     password?: string;
     role_id: string;
     department_id?: string;
+    subdivision_id?: string;
     is_active: boolean;
   }) => Promise<void>;
   onToggleStatus: (employeeId: string, isActive: boolean) => Promise<void>;
@@ -30,6 +31,7 @@ const EMPTY_FORM = {
   password: "",
   role_id: "",
   department_id: "",
+  subdivision_id: "",
   is_active: true,
 };
 
@@ -40,6 +42,8 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
   const availableDepartments = departments.filter(
     (department) => department.id === form.department_id || department.is_active !== false,
   );
+  const selectedDepartment = departments.find((department) => department.id === form.department_id);
+  const availableSubdivisions = selectedDepartment?.subdivisions ?? [];
 
   useEffect(() => {
     if (!isEditing) {
@@ -96,7 +100,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
             </div>
             <div className="space-y-2">
               <Label>Department</Label>
-              <Select value={form.department_id || "__none__"} onValueChange={(value) => setForm((current) => ({ ...current, department_id: value === "__none__" ? "" : value }))}>
+              <Select value={form.department_id || "__none__"} onValueChange={(value) => setForm((current) => ({ ...current, department_id: value === "__none__" ? "" : value, subdivision_id: "" }))}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select department" />
                 </SelectTrigger>
@@ -105,6 +109,26 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                   {availableDepartments.map((department) => (
                     <SelectItem key={department.id} value={department.id}>
                       {department.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Subdivision</Label>
+              <Select
+                value={form.subdivision_id || "__none__"}
+                onValueChange={(value) => setForm((current) => ({ ...current, subdivision_id: value === "__none__" ? "" : value }))}
+                disabled={!form.department_id || availableSubdivisions.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select subdivision" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No subdivision</SelectItem>
+                  {availableSubdivisions.map((subdivision) => (
+                    <SelectItem key={subdivision.id} value={subdivision.id}>
+                      {subdivision.subdivision_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -135,6 +159,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                   name: form.name.trim(),
                   role_id: form.role_id,
                   department_id: form.department_id || undefined,
+                  subdivision_id: form.subdivision_id || undefined,
                   is_active: form.is_active,
                   ...(!isEditing && { password: form.password.trim() || undefined }),
                 }).then(() => {
@@ -199,6 +224,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                             password: "",
                             role_id: user.role_id,
                             department_id: user.department_id || "",
+                            subdivision_id: user.subdivision_id || "",
                             is_active: user.is_active,
                           });
                         }}

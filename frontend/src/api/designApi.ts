@@ -158,6 +158,35 @@ export interface UploadDepartmentProjectsResponse {
   }>;
 }
 
+export interface Project2DLeader {
+  employee_id: string;
+  name: string;
+  department_id: string;
+  subdivision_id: string;
+  subdivision_name: string;
+  role_id: string;
+  role_name?: string | null;
+}
+
+export interface ProjectSubdivisionAssignment {
+  id: string;
+  project_id: string;
+  subdivision_id: string;
+  subdivision_name: string;
+  assigned_leader_id: string;
+  assigned_leader_name?: string | null;
+  assigned_by?: string | null;
+  assigned_by_name?: string | null;
+  created_at: string;
+  is_active: boolean;
+}
+
+export interface Project2DRouting {
+  project_id: string;
+  eligible_leaders: Project2DLeader[];
+  assignments: ProjectSubdivisionAssignment[];
+}
+
 function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => value !== undefined),
@@ -196,6 +225,27 @@ export function fetchDesignFixtures(projectId: string, departmentId?: string, op
   }
 
   return apiRequest<DesignFixtureOption[]>(`/design/fixtures?${params.toString()}`);
+}
+
+export function fetchProject2DRouting(projectId: string) {
+  return apiRequest<Project2DRouting>(`/design/projects/${encodeURIComponent(projectId)}/2d-routing`);
+}
+
+export function assignProjectTo2D(projectId: string, assignedLeaderId: string) {
+  return apiRequest<ProjectSubdivisionAssignment>(`/design/projects/${encodeURIComponent(projectId)}/2d-routing`, {
+    method: "POST",
+    body: JSON.stringify({ assigned_leader_id: assignedLeaderId }),
+  });
+}
+
+export function updateProject2DAssignment(projectId: string, assignmentId: string, isActive: boolean) {
+  return apiRequest<Project2DRouting>(
+    `/design/projects/${encodeURIComponent(projectId)}/2d-routing/${encodeURIComponent(assignmentId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: isActive }),
+    },
+  );
 }
 
 export function fetchProjectDashboardSummary(departmentId?: string) {

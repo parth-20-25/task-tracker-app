@@ -1,6 +1,13 @@
 import { useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
-import { Department } from "@/types";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Pencil, Plus, Power, Trash2 } from "lucide-react";
+import {
+  deleteDepartmentSubdivision,
+  fetchDepartmentSubdivisions,
+  saveDepartmentSubdivision,
+  updateDepartmentSubdivisionStatus,
+} from "@/api/adminApi";
+import { Department, DepartmentSubdivision } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,9 +30,46 @@ const EMPTY_FORM: Department = {
 export default function DepartmentsTab({ departments, onSave, onDelete }: DepartmentsTabProps) {
   const [form, setForm] = useState<Department>(EMPTY_FORM);
   const [isEditing, setIsEditing] = useState(false);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
+  const [subdivisionForm, setSubdivisionForm] = useState<Partial<DepartmentSubdivision>>({ subdivision_name: "", is_active: true });
+  const queryClient = useQueryClient();
   const availableParentDepartments = departments.filter(
     (department) => department.id !== form.id && (department.is_active !== false || department.id === form.parent_department),
   );
+  const selectedDepartment = departments.find((department) => department.id === selectedDepartmentId) || departments[0] || null;
+  const activeSubdivisionDepartmentId = selectedDepartment?.id || "";
+  const subdivisionsQuery = useQuery({
+    queryKey: ["admin", "department-subdivisions", activeSubdivisionDepartmentId],
+    queryFn: () => fetchDepartmentSubdivisions(activeSubdivisionDepartmentId),
+    enabled: Boolean(activeSubdivisionDepartmentId),
+  });
+  const saveSubdivisionMutation = useMutation({
+    mutationFn: () => saveDepartmentSubdivision(
+      activeSubdivisionDepartmentId,
+      subdivisionForm.id || null,
+      {
+        subdivision_name: subdivisionForm.subdivision_name,
+        is_active: subdivisionForm.is_active !== false,
+      },
+    ),
+    onSuccess: async () => {
+      setSubdivisionForm({ subdivision_name: "", is_active: true });
+      await queryClient.invalidateQueries({ queryKey: ["admin", "department-subdivisions", activeSubdivisionDepartmentId] });
+    },
+  });
+  const toggleSubdivisionMutation = useMutation({
+    mutationFn: ({ subdivision, isActive }: { subdivision: DepartmentSubdivision; isActive: boolean }) =>
+      updateDepartmentSubdivisionStatus(activeSubdivisionDepartmentId, subdivision.id, isActive),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin", "department-subdivisions", activeSubdivisionDepartmentId] });
+    },
+  });
+  const deleteSubdivisionMutation = useMutation({
+    mutationFn: (subdivision: DepartmentSubdivision) => deleteDepartmentSubdivision(activeSubdivisionDepartmentId, subdivision.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin", "department-subdivisions", activeSubdivisionDepartmentId] });
+    },
+  });
 
   return (
     <div className="space-y-4">
@@ -156,6 +200,97 @@ export default function DepartmentsTab({ departments, onSave, onDelete }: Depart
           );
         })}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Subdivisions</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Department</Label>
+              <Select value={activeSubdivisionDepartmentId} onValueChange={setSelectedDepartmentId}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments.map((department) => (
+                    <SelectItem key={department.id} value={department.id}>
+                      {department.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Subdivision Name</Label>
+              <Input
+                value={subdivisionForm.subdivision_name || ""}
+                onChange={(event) => setSubdivisionForm((current) => ({ ...current, subdivision_name: event.target.value }))}
+              />
+            </div>
+            <div className="flex items-end gap-2">
+              <Button
+                onClick={() => saveSubdivisionMutation.mutate()}
+                disabled={!activeSubdivisionDepartmentId || !subdivisionForm.subdivision_name || saveSubdivisionMutation.isPending}
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                {subdivisionForm.id ? "Update" : "Create"}
+              </Button>
+              {subdivisionForm.id ? (
+                <Button variant="outline" onClick={() => setSubdivisionForm({ subdivision_name: "", is_active: true })}>
+                  Cancel
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(subdivisionsQuery.data ?? []).map((subdivision) => (
+              <Card key={subdivision.id}>
+                <CardContent className="p-4 space-y-3">
+                  <div>
+                    <h4 className="font-medium">{subdivision.subdivision_name}</h4>
+                    <p className="text-xs text-muted-foreground">
+                      {subdivision.is_active ? "Active" : "Inactive"}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSubdivisionForm(subdivision)}
+                    >
+                      <Pencil className="h-3.5 w-3.5 mr-1" />
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => toggleSubdivisionMutation.mutate({ subdivision, isActive: !subdivision.is_active })}
+                    >
+                      <Power className="h-3.5 w-3.5 mr-1" />
+                      {subdivision.is_active ? "Deactivate" : "Activate"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => {
+                        if (confirm(`Delete subdivision ${subdivision.subdivision_name}?`)) {
+                          deleteSubdivisionMutation.mutate(subdivision);
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                      Delete
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

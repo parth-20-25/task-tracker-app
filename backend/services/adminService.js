@@ -5,8 +5,12 @@ const { USER_SCOPES } = require("../config/constants");
 const { listAuditLogs } = require("../repositories/auditRepository");
 const {
   deleteDepartment: deleteDepartmentRecord,
+  deleteSubdivision: deleteSubdivisionRecord,
   listAllDepartments,
+  listSubdivisionsByDepartment,
+  setSubdivisionActive,
   upsertDepartment,
+  upsertSubdivision,
 } = require("../repositories/departmentsRepository");
 const {
   deleteRole: deleteRoleRecord,
@@ -117,6 +121,7 @@ async function saveUser(actor, payload) {
     role: (payload.role ?? payload.role_id)?.trim(),
     parent_id: hasParentId ? (payload.parent_id?.trim() || null) : undefined,
     department_id: payload.department_id?.trim() || null,
+    subdivision_id: payload.subdivision_id?.trim() || null,
     password: payload.password?.trim(),
     is_active: payload.is_active !== false,
   };
@@ -141,6 +146,7 @@ async function saveUser(actor, payload) {
       role: normalizedPayload.role,
       parent_id: resolvedParentId ?? null,
       department_id: normalizedPayload.department_id,
+      subdivision_id: normalizedPayload.subdivision_id,
       password_hash: await bcrypt.hash(normalizedPayload.password, 10),
       is_active: normalizedPayload.is_active,
     });
@@ -154,6 +160,7 @@ async function saveUser(actor, payload) {
       role: normalizedPayload.role,
       ...(hasParentId ? { parent_id: resolvedParentId } : {}),
       department_id: normalizedPayload.department_id,
+      subdivision_id: normalizedPayload.subdivision_id,
       is_active: normalizedPayload.is_active,
     });
   }
@@ -167,6 +174,7 @@ async function saveUser(actor, payload) {
       role: normalizedPayload.role,
       ...(hasParentId ? { parent_id: resolvedParentId } : {}),
       department_id: normalizedPayload.department_id,
+      subdivision_id: normalizedPayload.subdivision_id,
       is_active: normalizedPayload.is_active,
     },
   });
@@ -337,6 +345,64 @@ async function deleteDepartment(actor, departmentId) {
   return true;
 }
 
+async function listDepartmentSubdivisions(_actor, departmentId) {
+  if (!departmentId) {
+    throw new AppError(400, "department_id is required");
+  }
+
+  return listSubdivisionsByDepartment(departmentId);
+}
+
+async function saveDepartmentSubdivision(actor, departmentId, payload = {}) {
+  const subdivisionName = String(payload.subdivision_name || payload.name || "").trim();
+  requireFields({ department_id: departmentId, subdivision_name: subdivisionName }, ["department_id", "subdivision_name"]);
+
+  const subdivision = await upsertSubdivision({
+    id: payload.id || null,
+    department_id: departmentId,
+    subdivision_name: subdivisionName,
+    is_active: payload.is_active !== false,
+  });
+
+  await createAuditLog({
+    userEmployeeId: actor.employee_id,
+    actionType: "department_subdivision_saved",
+    targetType: "department_subdivision",
+    targetId: subdivision.id,
+    metadata: subdivision,
+  });
+
+  return subdivision;
+}
+
+async function updateDepartmentSubdivisionStatus(actor, subdivisionId, isActive) {
+  const subdivision = await setSubdivisionActive(subdivisionId, isActive === true);
+
+  await createAuditLog({
+    userEmployeeId: actor.employee_id,
+    actionType: isActive === true ? "department_subdivision_activated" : "department_subdivision_deactivated",
+    targetType: "department_subdivision",
+    targetId: subdivisionId,
+    metadata: subdivision,
+  });
+
+  return subdivision;
+}
+
+async function deleteDepartmentSubdivision(actor, subdivisionId) {
+  await deleteSubdivisionRecord(subdivisionId);
+
+  await createAuditLog({
+    userEmployeeId: actor.employee_id,
+    actionType: "department_subdivision_deleted",
+    targetType: "department_subdivision",
+    targetId: subdivisionId,
+    metadata: {},
+  });
+
+  return true;
+}
+
 async function deleteRole(actor, roleId) {
   await deleteRoleRecord(roleId);
   await createAuditLog({
@@ -470,6 +536,7 @@ async function deleteEscalationRule(actor, ruleId) {
 
 module.exports = {
   deleteDepartment,
+  deleteDepartmentSubdivision,
   deleteEscalationRule,
   deleteMachine,
   deleteRole,
@@ -477,8 +544,10 @@ module.exports = {
   deleteUser,
   deleteWorkflowTemplate,
   getAdminReferenceData,
+  listDepartmentSubdivisions,
   listUsersForScope,
   saveDepartment,
+  saveDepartmentSubdivision,
   saveEscalationRule,
   saveKpiDefinition,
   saveMachine,
@@ -487,5 +556,6 @@ module.exports = {
   saveUser,
   saveWorkflowTemplate,
   toggleEscalationRule,
+  updateDepartmentSubdivisionStatus,
   updateUserStatus,
 };

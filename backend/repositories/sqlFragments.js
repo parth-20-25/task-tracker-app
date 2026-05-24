@@ -1,4 +1,4 @@
-function buildUserColumns({ userAlias, roleAlias, departmentAlias, prefix = "" }) {
+function buildUserColumns({ userAlias, roleAlias, departmentAlias, subdivisionAlias = "subdivision", prefix = "" }) {
   return `
     ${userAlias}.id AS ${prefix}id,
     ${userAlias}.employee_id AS ${prefix}employee_id,
@@ -7,6 +7,7 @@ function buildUserColumns({ userAlias, roleAlias, departmentAlias, prefix = "" }
     ${userAlias}.role AS ${prefix}role,
     ${userAlias}.parent_id AS ${prefix}parent_id,
     ${userAlias}.department_id AS ${prefix}department_id,
+    ${userAlias}.subdivision_id AS ${prefix}subdivision_id,
     COALESCE(${userAlias}.is_active, TRUE) AS ${prefix}is_active,
     ${userAlias}.created_at AS ${prefix}created_at,
     ${roleAlias}.id AS ${prefix}role_id,
@@ -17,7 +18,10 @@ function buildUserColumns({ userAlias, roleAlias, departmentAlias, prefix = "" }
     ${roleAlias}.parent_role AS ${prefix}role_parent_role,
     ${departmentAlias}.id AS ${prefix}department_record_id,
     ${departmentAlias}.name AS ${prefix}department_name,
-    ${departmentAlias}.parent_department AS ${prefix}department_parent_department
+    ${departmentAlias}.parent_department AS ${prefix}department_parent_department,
+    ${subdivisionAlias}.id AS ${prefix}subdivision_record_id,
+    ${subdivisionAlias}.subdivision_name AS ${prefix}subdivision_name,
+    COALESCE(${subdivisionAlias}.is_active, TRUE) AS ${prefix}subdivision_is_active
   `;
 }
 

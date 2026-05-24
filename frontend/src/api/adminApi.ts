@@ -3,6 +3,7 @@ import { setCachedDepartments } from "@/lib/referenceDataCache";
 import {
   AuditLog,
   Department,
+  DepartmentSubdivision,
   EscalationRule,
   KpiDefinition,
   Machine,
@@ -81,6 +82,41 @@ export function deleteDepartment(departmentId: string) {
   return apiRequest<{ success?: boolean }>(`/departments/${departmentId}`, {
     method: "DELETE",
   });
+}
+
+export function fetchDepartmentSubdivisions(departmentId: string) {
+  return apiRequest<DepartmentSubdivision[]>(`/departments/${encodeURIComponent(departmentId)}/subdivisions`);
+}
+
+export function saveDepartmentSubdivision(
+  departmentId: string,
+  subdivisionId: string | null,
+  payload: Partial<DepartmentSubdivision>,
+) {
+  return apiRequest<DepartmentSubdivision>(
+    `/departments/${encodeURIComponent(departmentId)}/subdivisions/${encodeURIComponent(subdivisionId || "new")}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function updateDepartmentSubdivisionStatus(departmentId: string, subdivisionId: string, isActive: boolean) {
+  return apiRequest<DepartmentSubdivision>(
+    `/departments/${encodeURIComponent(departmentId)}/subdivisions/${encodeURIComponent(subdivisionId)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: isActive }),
+    },
+  );
+}
+
+export function deleteDepartmentSubdivision(departmentId: string, subdivisionId: string) {
+  return apiRequest<{ success?: boolean }>(
+    `/departments/${encodeURIComponent(departmentId)}/subdivisions/${encodeURIComponent(subdivisionId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export function fetchShifts() {

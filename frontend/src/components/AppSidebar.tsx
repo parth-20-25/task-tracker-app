@@ -24,7 +24,7 @@ export function AppSidebar() {
     { title: 'Dashboard', url: '/', icon: LayoutDashboard },
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
     { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
-    { title: 'Batches', url: '/batches', icon: PackageCheck },
+    { title: 'Projects', url: '/batches', icon: PackageCheck },
   ];
 
   const workItems = [

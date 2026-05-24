@@ -28,6 +28,7 @@ async function findUserByEmployeeId(employeeId, client = pool) {
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       WHERE u.employee_id = $1 OR u.email = $1
       LIMIT 1
     `,
@@ -49,6 +50,7 @@ async function findUserByIdOrEmployeeId(identifier, client = pool) {
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       WHERE u.id::text = $1 OR u.employee_id = $1 OR u.email = $1
       LIMIT 1
     `,
@@ -70,6 +72,7 @@ async function listUsers(client = pool) {
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       ORDER BY u.employee_id
     `,
   );
@@ -85,6 +88,7 @@ async function listUsersByRoleAndDepartment(roleId, departmentId, client = pool)
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       WHERE u.role = $1
         AND (
           u.department_id = $2
@@ -113,12 +117,13 @@ async function createUser(user, client = pool) {
           role,
           parent_id,
           department_id,
+          subdivision_id,
           password_hash,
           is_active,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
       `,
       [
         user.name,
@@ -127,6 +132,7 @@ async function createUser(user, client = pool) {
         user.role,
         user.parent_id || null,
         user.department_id || null,
+        user.subdivision_id || null,
         user.password_hash,
         user.is_active,
       ],
@@ -150,8 +156,9 @@ async function updateUser(employeeId, user, client = pool) {
       SET name = $2,
           role = $3,
           department_id = $4,
-          is_active = $5,
-          parent_id = CASE WHEN $6::boolean THEN $7 ELSE parent_id END,
+          subdivision_id = $5,
+          is_active = $6,
+          parent_id = CASE WHEN $7::boolean THEN $8 ELSE parent_id END,
           updated_at = NOW()
       WHERE employee_id = $1
       RETURNING employee_id
@@ -161,6 +168,7 @@ async function updateUser(employeeId, user, client = pool) {
       user.name,
       user.role,
       user.department_id || null,
+      user.subdivision_id || null,
       user.is_active,
       hasParentId,
       user.parent_id || null,

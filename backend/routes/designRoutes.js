@@ -36,6 +36,11 @@ const {
   listProjectDashboardForUser,
   uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
+const {
+  assignProject2DLeader,
+  getProject2DRouting,
+  updateProject2DAssignmentStatus,
+} = require("../services/projectSubdivisionRoutingService");
 
 const router = express.Router();
 
@@ -275,6 +280,43 @@ router.post(
       catalogMembershipMode: req.body?.catalog_membership_mode,
     });
     return sendSuccess(res, result, 200);
+  }),
+);
+
+router.get(
+  "/design/projects/:projectId/2d-routing",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const routing = await getProject2DRouting(req.user, req.params.projectId);
+    return sendSuccess(res, routing);
+  }),
+);
+
+router.post(
+  "/design/projects/:projectId/2d-routing",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const assignedLeaderId = String(req.body?.assigned_leader_id || "").trim();
+    if (!assignedLeaderId) {
+      throw new AppError(400, "assigned_leader_id is required");
+    }
+
+    const assignment = await assignProject2DLeader(req.user, req.params.projectId, assignedLeaderId);
+    return sendSuccess(res, assignment, 201);
+  }),
+);
+
+router.patch(
+  "/design/projects/:projectId/2d-routing/:assignmentId",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const routing = await updateProject2DAssignmentStatus(
+      req.user,
+      req.params.projectId,
+      req.params.assignmentId,
+      req.body?.is_active === true,
+    );
+    return sendSuccess(res, routing);
   }),
 );
 

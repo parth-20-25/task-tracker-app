@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, PauseCircle, RefreshCw, Rocket, Trash2 } from "lucide-react";
+import { Eye, PauseCircle, RefreshCw, Rocket, Route, Trash2 } from "lucide-react";
 import { deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
+import { assignProjectTo2D, fetchProject2DRouting, updateProject2DAssignment } from "@/api/designApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -15,6 +16,8 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { isAdminUser, isProjectAuthorityUser } from "@/lib/permissions";
@@ -112,12 +115,46 @@ export default function Batches() {
   const queryClient = useQueryClient();
   const { access, user } = useAuth();
   const isAdmin = isAdminUser(user);
-  const isProjectAuthority = isProjectAuthorityUser(user);
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
+  const [routingBatch, setRoutingBatch] = useState<UploadBatch | null>(null);
+  const [selected2DLeader, setSelected2DLeader] = useState("");
 
   const batchesQuery = useQuery({
     queryKey: batchQueryKeys.all,
     queryFn: fetchBatches,
+  });
+
+  const routingQuery = useQuery({
+    queryKey: ["project-2d-routing", routingBatch?.project_id || ""],
+    queryFn: () => fetchProject2DRouting(routingBatch?.project_id || ""),
+    enabled: Boolean(routingBatch?.project_id),
+  });
+
+  const assign2DMutation = useMutation({
+    mutationFn: () => assignProjectTo2D(routingBatch?.project_id || "", selected2DLeader),
+    onSuccess: async () => {
+      setSelected2DLeader("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project-2d-routing", routingBatch?.project_id || ""] }),
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+      ]);
+      toast({ title: "Project assigned to 2D" });
+    },
+    onError: (error) => {
+      toast({
+        title: "2D routing failed",
+        description: error instanceof Error ? error.message : "Could not assign this project to 2D.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const toggle2DMutation = useMutation({
+    mutationFn: ({ assignmentId, isActive }: { assignmentId: string; isActive: boolean }) =>
+      updateProject2DAssignment(routingBatch?.project_id || "", assignmentId, isActive),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["project-2d-routing", routingBatch?.project_id || ""] });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -212,8 +249,8 @@ export default function Batches() {
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Upload Batches</h1>
-          <p className="text-sm text-muted-foreground">Review uploaded fixture batches and safely remove only inactive work.</p>
+          <h1 className="text-2xl font-bold">Projects</h1>
+          <p className="text-sm text-muted-foreground">Review operational projects and safely remove only inactive work.</p>
         </div>
         <Button
           type="button"
@@ -228,7 +265,7 @@ export default function Batches() {
 
       <Card>
         <CardHeader className="p-4 pb-2">
-          <h2 className="font-semibold">Batch List</h2>
+          <h2 className="font-semibold">Project List</h2>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
@@ -247,7 +284,7 @@ export default function Batches() {
               {batchesQuery.isLoading ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    Loading batches...
+                    Loading projects...
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -259,7 +296,8 @@ export default function Batches() {
                   && ((batch.uploaded_by_user_id || batch.uploaded_by) === user.employee_id),
                 );
                 const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
-                const canManageProject = isProjectAuthority || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
+                const canManageProject = isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
+                const canManage2DRouting = batch.can_manage_2d_routing === true;
                 const projectCompleted = batch.project_status === "completed";
                 const projectOnHold = batch.project_status === "on_hold";
                 const lifecyclePending = holdMutation.isPending || releaseMutation.isPending;
@@ -304,6 +342,21 @@ export default function Batches() {
                           <Eye className="h-4 w-4 mr-2" />
                           View
                         </Button>
+                        {canManage2DRouting ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={projectCompleted}
+                            onClick={() => {
+                              setRoutingBatch(batch);
+                              setSelected2DLeader("");
+                            }}
+                          >
+                            <Route className="h-4 w-4 mr-2" />
+                            Assign to 2D
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           variant="outline"
@@ -340,7 +393,7 @@ export default function Batches() {
               {!batchesQuery.isLoading && batchesQuery.data?.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    No upload batches found.
+                    No projects found.
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -352,7 +405,7 @@ export default function Batches() {
       <Dialog open={Boolean(selectedBatch)} onOpenChange={(open) => !open && setSelectedBatch(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Batch Details</DialogTitle>
+            <DialogTitle>Project Details</DialogTitle>
           </DialogHeader>
           {selectedBatch ? (
             <div className="grid gap-3 text-sm">
@@ -394,6 +447,73 @@ export default function Batches() {
               </div>
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(routingBatch)} onOpenChange={(open) => !open && setRoutingBatch(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Assign to 2D</DialogTitle>
+            <DialogDescription>
+              {routingBatch ? `${routingBatch.project_no} · ${routingBatch.project_name}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>2D Leader</Label>
+              <Select value={selected2DLeader || "__none__"} onValueChange={(value) => setSelected2DLeader(value === "__none__" ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder={routingQuery.isLoading ? "Loading 2D leaders..." : "Select 2D leader"} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Select 2D leader</SelectItem>
+                  {(routingQuery.data?.eligible_leaders ?? []).map((leader) => (
+                    <SelectItem key={leader.employee_id} value={leader.employee_id}>
+                      {leader.name} ({leader.employee_id})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                disabled={!selected2DLeader || assign2DMutation.isPending}
+                onClick={() => assign2DMutation.mutate()}
+              >
+                Assign
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">Active routing</p>
+              {(routingQuery.data?.assignments ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">No 2D leaders assigned.</p>
+              ) : (
+                <div className="space-y-2">
+                  {(routingQuery.data?.assignments ?? []).map((assignment) => (
+                    <div key={assignment.id} className="flex items-center justify-between rounded-md border p-2 text-sm">
+                      <span>
+                        {assignment.assigned_leader_name || assignment.assigned_leader_id}
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {assignment.is_active ? "Active" : "Inactive"}
+                        </span>
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={toggle2DMutation.isPending}
+                        onClick={() => toggle2DMutation.mutate({ assignmentId: assignment.id, isActive: !assignment.is_active })}
+                      >
+                        {assignment.is_active ? "Deactivate" : "Activate"}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

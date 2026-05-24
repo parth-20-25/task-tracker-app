@@ -81,8 +81,8 @@ function taskSelectQuery(whereClause = "") {
         FROM task_activity_logs activity
         WHERE activity.task_id = t.id
       ) AS activity_count,
-      ${buildUserColumns({ userAlias: "assignee", roleAlias: "assignee_role", departmentAlias: "assignee_department", prefix: "assignee_" })},
-      ${buildUserColumns({ userAlias: "assigner", roleAlias: "assigner_role", departmentAlias: "assigner_department", prefix: "assigner_" })}
+      ${buildUserColumns({ userAlias: "assignee", roleAlias: "assignee_role", departmentAlias: "assignee_department", subdivisionAlias: "assignee_subdivision", prefix: "assignee_" })},
+      ${buildUserColumns({ userAlias: "assigner", roleAlias: "assigner_role", departmentAlias: "assigner_department", subdivisionAlias: "assigner_subdivision", prefix: "assigner_" })}
     FROM tasks t
     LEFT JOIN workflow_stages stage ON stage.id = t.current_stage_id
     LEFT JOIN workflow_templates template ON template.id = t.workflow_template_id
@@ -119,9 +119,11 @@ function taskSelectQuery(whereClause = "") {
     LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id
+    LEFT JOIN department_subdivisions assignee_subdivision ON assignee_subdivision.id = assignee.subdivision_id
     LEFT JOIN users assigner ON assigner.employee_id = t.assigned_by
     LEFT JOIN roles assigner_role ON assigner_role.id = assigner.role
     LEFT JOIN departments assigner_department ON assigner_department.id = assigner.department_id
+    LEFT JOIN department_subdivisions assigner_subdivision ON assigner_subdivision.id = assigner.subdivision_id
     ${whereClause}
   `;
 }

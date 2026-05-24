@@ -28,6 +28,12 @@ const { insertStageContribution, listStageContributions } = require("../reposito
 const { formatStageRevisionCode, normalizeStageVersion } = require("../lib/workflowStageVersioning");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
+const {
+  DESIGN_2D_SUBDIVISION_NAME,
+  is2DLeaderUser,
+  isProjectAssignedTo2DLeader,
+  projectHasActive2DRouting,
+} = require("../repositories/projectSubdivisionRoutingRepository");
 
 function requireDepartment(user) {
   requireUserDepartment(user, "A department is required for project data access");
@@ -70,6 +76,40 @@ function validateResolvedDesignTaskContext({ projectId, fixtureId, currentStage,
 async function listDepartmentProjectsForUser(user) {
   requireDesignDepartment(user);
   return listDepartmentProjectsByUserVisibility(user, null);
+}
+
+function is2DStage(stageName) {
+  return normalizeDesignStageName(stageName) === "2d";
+}
+
+async function assertSubdivisionRoutingAssignmentAllowed({
+  actor,
+  assigneeEmployeeId,
+  projectId,
+  currentStageName,
+  client,
+}) {
+  if (!is2DStage(currentStageName)) {
+    return;
+  }
+
+  const has2DRouting = await projectHasActive2DRouting(projectId, client);
+  const assignee = await require("../repositories/usersRepository").findUserByEmployeeId(assigneeEmployeeId, client);
+
+  if (has2DRouting) {
+    if (!is2DLeaderUser(actor)) {
+      const { isAdmin, isProjectAuthorityRole } = require("./accessControlService");
+      if (!isAdmin(actor) && !isProjectAuthorityRole(actor)) {
+        throw new AppError(403, "Only assigned 2D routing leaders can assign routed 2D-stage fixtures");
+      }
+    } else if (!(await isProjectAssignedTo2DLeader(projectId, actor.employee_id, client))) {
+      throw new AppError(403, "Only assigned 2D routing leaders can assign routed 2D-stage fixtures");
+    }
+
+    if (String(assignee?.subdivision?.subdivision_name || "").trim().toLowerCase() !== DESIGN_2D_SUBDIVISION_NAME.toLowerCase()) {
+      throw new AppError(400, "Routed 2D-stage fixtures can only be assigned to Design 2D subdivision users");
+    }
+  }
 }
 
 async function listDesignProjectsForUser(user, requestedDepartmentId, options = {}) {
@@ -316,6 +356,14 @@ async function createDesignTaskFromProject(user, payload = {}) {
     }
 
     const assignedTo = String(payload.assigned_to || "").trim();
+    await assertSubdivisionRoutingAssignmentAllowed({
+      actor: user,
+      assigneeEmployeeId: assignedTo,
+      projectId: project.project_id,
+      currentStageName: lockedCurrentStage.stage_name,
+      client,
+    });
+
     const timestamp = new Date();
     await updateProgressRow(fixture.fixture_id, lockedCurrentStage.stage_name, {
       status: "IN_PROGRESS",

@@ -91,6 +91,20 @@ function mapDepartmentRow(row, prefix = "") {
   };
 }
 
+function mapSubdivisionRow(row, prefix = "") {
+  const id = row[`${prefix}subdivision_record_id`] ?? row[`${prefix}subdivision_id`];
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    subdivision_name: row[`${prefix}subdivision_name`],
+    is_active: row[`${prefix}subdivision_is_active`] !== false,
+  };
+}
+
 function mapUserRow(row, prefix = "") {
   const employeeId = row[`${prefix}employee_id`];
 
@@ -108,10 +122,12 @@ function mapUserRow(row, prefix = "") {
     role_id: role,
     parent_id: row[`${prefix}parent_id`] || null,
     department_id: row[`${prefix}department_id`] || null,
+    subdivision_id: row[`${prefix}subdivision_id`] || null,
     is_active: row[`${prefix}is_active`],
     created_at: row[`${prefix}created_at`],
     role: mapRoleRow(row, prefix),
     department: mapDepartmentRow(row, prefix),
+    subdivision: mapSubdivisionRow(row, prefix),
   };
 }
 
@@ -239,6 +255,7 @@ module.exports = {
   mapAuditLogRow,
   mapDepartmentRow,
   mapRoleRow,
+  mapSubdivisionRow,
   mapTaskRow,
   mapUserRow,
   parseJsonArray,

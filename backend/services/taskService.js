@@ -85,6 +85,12 @@ const {
   shouldAutoStartTask,
   shouldSubmitForVerification,
 } = require("./taskStateRules");
+const {
+  DESIGN_2D_SUBDIVISION_NAME,
+  is2DLeaderUser,
+  isProjectAssignedTo2DLeader,
+  projectHasActive2DRouting,
+} = require("../repositories/projectSubdivisionRoutingRepository");
 
 async function listTasksForUser(user) {
   return listTasksByAccess(getTaskAccess(user));
@@ -315,6 +321,38 @@ function normalizeCompletionPercent(value) {
 
 function roundContributionPercent(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function is2DStageName(stageName) {
+  return normalizeDesignStageName(stageName) === "2d";
+}
+
+async function assert2DRoutingTaskAssignmentAllowed({ actor, assignees, projectId, stageName, client = pool }) {
+  if (!projectId || !is2DStageName(stageName)) {
+    return;
+  }
+
+  if (!(await projectHasActive2DRouting(projectId, client))) {
+    return;
+  }
+
+  if (is2DLeaderUser(actor)) {
+    const assignedToProject = await isProjectAssignedTo2DLeader(projectId, actor.employee_id, client);
+    if (!assignedToProject) {
+      throw new AppError(403, "Only assigned 2D routing leaders can assign routed 2D-stage fixtures");
+    }
+  } else if (!isAdmin(actor) && !isProjectAuthorityRole(actor)) {
+    throw new AppError(403, "Only assigned 2D routing leaders can assign routed 2D-stage fixtures");
+  }
+
+  const invalidAssignee = assignees.find((assignee) => (
+    String(assignee?.subdivision?.subdivision_name || "").trim().toLowerCase()
+    !== DESIGN_2D_SUBDIVISION_NAME.toLowerCase()
+  ));
+
+  if (invalidAssignee) {
+    throw new AppError(400, "Routed 2D-stage fixtures can only be assigned to Design 2D subdivision users");
+  }
 }
 
 function sumContributionPercent(contributions) {
@@ -968,6 +1006,13 @@ async function createTaskForUser(user, payload = {}, options = {}) {
   const stage = fixtureContext?.stage_name || null;
 
   await assertProjectIsActive(resolvedProjectId);
+  await assert2DRoutingTaskAssignmentAllowed({
+    actor: user,
+    assignees,
+    projectId: resolvedProjectId,
+    stageName: stage,
+    client: db,
+  });
 
   if (fixtureId && stage) {
     const dupCheck = await db.query(`

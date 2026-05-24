@@ -251,6 +251,85 @@ async function ensureDesignIntegrityDiagnostics(client) {
   `);
 }
 
+async function ensureDesignSubdivisionRoutingSchema(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS department_subdivisions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+      subdivision_name TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT department_subdivisions_unique_name UNIQUE (department_id, subdivision_name)
+    )
+  `);
+
+  await client.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS subdivision_id UUID NULL
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'users_subdivision_id_fkey'
+      ) THEN
+        ALTER TABLE users
+        ADD CONSTRAINT users_subdivision_id_fkey
+        FOREIGN KEY (subdivision_id) REFERENCES department_subdivisions(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.project_subdivision_assignments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      project_id UUID NOT NULL REFERENCES design.projects(id) ON DELETE CASCADE,
+      subdivision_id UUID NOT NULL REFERENCES department_subdivisions(id),
+      assigned_leader_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      assigned_by VARCHAR(50) REFERENCES users(employee_id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_department_subdivisions_department
+    ON department_subdivisions (department_id, is_active)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_users_subdivision
+    ON users (subdivision_id)
+    WHERE subdivision_id IS NOT NULL
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_design_project_subdivision_assignments_active
+    ON design.project_subdivision_assignments (project_id, subdivision_id, assigned_leader_id)
+    WHERE is_active = TRUE
+  `);
+
+  await client.query(`
+    WITH design_department AS (
+      SELECT id
+      FROM departments
+      WHERE LOWER(BTRIM(id)) = 'design'
+         OR LOWER(BTRIM(name)) = 'design'
+      ORDER BY CASE WHEN LOWER(BTRIM(id)) = 'design' THEN 0 ELSE 1 END
+      LIMIT 1
+    )
+    INSERT INTO department_subdivisions (department_id, subdivision_name, is_active)
+    SELECT design_department.id, seed.subdivision_name, TRUE
+    FROM design_department
+    CROSS JOIN (VALUES ('3D'), ('2D')) AS seed(subdivision_name)
+    ON CONFLICT (department_id, subdivision_name) DO NOTHING
+  `);
+}
+
 async function ensureDesignDepartmentSchema(client) {
   await client.query(`
     CREATE SCHEMA IF NOT EXISTS design
@@ -909,10 +988,12 @@ async function ensureDesignDepartmentSchema(client) {
   await ensureColumnNotNull(client, "design.fixtures", "project_id");
 
   await ensureDesignIntegrityDiagnostics(client);
+  await ensureDesignSubdivisionRoutingSchema(client);
 }
 
 module.exports = {
   backfillDesignIntegrity,
   backfillDesignProjectRelations,
   ensureDesignDepartmentSchema,
+  ensureDesignSubdivisionRoutingSchema,
 };

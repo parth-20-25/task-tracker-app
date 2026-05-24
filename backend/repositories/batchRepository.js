@@ -183,6 +183,7 @@ function mapBatchSummary(row) {
     status_summary: `${activeCount} active / ${pendingFixtures} pending / ${completedFixtures} complete`,
     deletion_blocked: activeCount > 0,
     delete_blocked_reason: activeCount > 0 ? BATCH_DELETE_BLOCK_REASON : null,
+    can_manage_2d_routing: row.can_manage_2d_routing === true,
   };
 }
 
@@ -217,7 +218,8 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
         COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
-        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
+        TRUE AS can_manage_2d_routing
       FROM (
         SELECT DISTINCT ON (project_id)
           id,
@@ -269,7 +271,21 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
         COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
-        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
+        (
+          EXISTS (
+            SELECT 1
+            FROM root_user root
+            WHERE root.role_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
+               OR root.role_id_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
+          )
+          OR dp.created_by_user_id = $1
+          OR ub.uploaded_by_user_id = $1
+          OR ub.uploaded_by = $1
+          OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
+          OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
+          OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
+        ) AS can_manage_2d_routing
       FROM (
         SELECT DISTINCT ON (project_id)
           id,
@@ -350,7 +366,8 @@ async function getBatchById(batchId, client = pool) {
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
         COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
-        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
+        TRUE AS can_manage_2d_routing
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
       ${fixtureOperationalStatsLateral("dp")}
@@ -388,7 +405,21 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
         COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
-        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count
+        COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
+        (
+          EXISTS (
+            SELECT 1
+            FROM root_user root
+            WHERE root.role_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
+               OR root.role_id_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
+          )
+          OR dp.created_by_user_id = $1
+          OR ub.uploaded_by_user_id = $1
+          OR ub.uploaded_by = $1
+          OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
+          OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
+          OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
+        ) AS can_manage_2d_routing
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
       ${fixtureOperationalStatsLateral("dp")}

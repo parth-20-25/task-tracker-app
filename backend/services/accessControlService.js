@@ -361,6 +361,40 @@ function buildTaskAssigneePredicate(employeeIdParam, taskAlias = "t") {
   `;
 }
 
+function is2DSubdivisionUserForAccess(user) {
+  const { is2DSubdivisionUser } = require("../repositories/projectSubdivisionRoutingRepository");
+  return is2DSubdivisionUser(user);
+}
+
+function is2DLeaderUserForAccess(user) {
+  const { is2DLeaderUser } = require("../repositories/projectSubdivisionRoutingRepository");
+  return is2DLeaderUser(user);
+}
+
+function build2DCurrentStageTaskPredicate(employeeIdParam, {
+  projectAlias = "project",
+  fixtureAlias = "fixture",
+  requireLeaderAssignment = false,
+} = {}) {
+  const {
+    assignedTo2DLeaderProjectSql,
+    current2DWorkflowStageFixtureSql,
+  } = require("../repositories/projectSubdivisionRoutingRepository");
+
+  const projectAssignmentPredicate = requireLeaderAssignment
+    ? assignedTo2DLeaderProjectSql(projectAlias, employeeIdParam)
+    : "TRUE";
+
+  return `
+    (
+      ${projectAlias}.id IS NOT NULL
+      AND ${fixtureAlias}.id IS NOT NULL
+      AND ${projectAssignmentPredicate}
+      AND ${current2DWorkflowStageFixtureSql(fixtureAlias, projectAlias)}
+    )
+  `;
+}
+
 function buildTaskSelfScopePredicate(params, user, {
   taskAlias = "t",
   projectAlias = "project",
@@ -420,6 +454,28 @@ function buildTaskAccessPredicate(user, params, options = {}) {
 
   if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return "1 = 1";
+  }
+
+  if (is2DSubdivisionUserForAccess(user)) {
+    params.push(user.employee_id);
+    const employeeIdParam = `$${params.length}`;
+    const is2DLeader = is2DLeaderUserForAccess(user);
+    const current2DStagePredicate = build2DCurrentStageTaskPredicate(employeeIdParam, {
+      projectAlias,
+      fixtureAlias,
+      requireLeaderAssignment: is2DLeader,
+    });
+
+    if (is2DLeader) {
+      return current2DStagePredicate;
+    }
+
+    return `
+      (
+        ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
+        AND ${current2DStagePredicate}
+      )
+    `;
   }
 
   const selfScopePredicate = buildTaskSelfScopePredicate(params, user, { taskAlias, projectAlias });

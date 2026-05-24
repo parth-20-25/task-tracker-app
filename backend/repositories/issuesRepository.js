@@ -36,16 +36,18 @@ function issueSelect(whereClause = "") {
       i.*,
       d.name AS department_name,
       d.parent_department AS department_parent_department,
-      ${buildUserColumns({ userAlias: "creator", roleAlias: "creator_role", departmentAlias: "creator_department", prefix: "creator_" })},
-      ${buildUserColumns({ userAlias: "assignee", roleAlias: "assignee_role", departmentAlias: "assignee_department", prefix: "assignee_" })}
+      ${buildUserColumns({ userAlias: "creator", roleAlias: "creator_role", departmentAlias: "creator_department", subdivisionAlias: "creator_subdivision", prefix: "creator_" })},
+      ${buildUserColumns({ userAlias: "assignee", roleAlias: "assignee_role", departmentAlias: "assignee_department", subdivisionAlias: "assignee_subdivision", prefix: "assignee_" })}
     FROM issues i
     LEFT JOIN departments d ON d.id = i.department_id
     LEFT JOIN users creator ON creator.employee_id = i.created_by
     LEFT JOIN roles creator_role ON creator_role.id = creator.role
     LEFT JOIN departments creator_department ON creator_department.id = creator.department_id
+    LEFT JOIN department_subdivisions creator_subdivision ON creator_subdivision.id = creator.subdivision_id
     LEFT JOIN users assignee ON assignee.employee_id = i.assigned_to
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id
+    LEFT JOIN department_subdivisions assignee_subdivision ON assignee_subdivision.id = assignee.subdivision_id
     ${whereClause}
   `;
 }
@@ -135,6 +137,7 @@ async function listHigherUpsInDepartment(user, roleLevel, client = pool) {
       FROM users u
       JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       WHERE u.department_id = $1
         AND u.employee_id <> $2
         AND COALESCE(u.is_active, TRUE) = TRUE
@@ -155,6 +158,7 @@ async function listAdminUsers(client = pool) {
       FROM users u
       JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       WHERE COALESCE(u.is_active, TRUE) = TRUE
         AND r.hierarchy_level = 1
       ORDER BY u.employee_id ASC

@@ -66,6 +66,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         u.employee_id,
         u.parent_id::text AS parent_id,
         u.department_id,
+        u.subdivision_id,
         COALESCE(r.hierarchy_level, 2147483647)::integer AS hierarchy_level,
         LOWER(BTRIM(COALESCE(r.name, u.role, ''))) AS role_name,
         LOWER(BTRIM(COALESCE(u.role, ''))) AS role_id,
@@ -83,6 +84,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         root.employee_id,
         root.parent_id,
         root.department_id,
+        root.subdivision_id,
         root.employee_id AS root_employee_id,
         ARRAY[root.user_uuid, root.employee_id]::text[] AS path
       FROM root_user root
@@ -94,6 +96,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         child.employee_id,
         child.parent_id::text AS parent_id,
         child.department_id,
+        child.subdivision_id,
         parent_tree.root_employee_id,
         parent_tree.path || child.id::text || child.employee_id
       FROM users child
@@ -109,6 +112,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         parent.employee_id,
         parent.parent_id::text AS parent_id,
         parent.department_id,
+        parent.subdivision_id,
         root.employee_id AS root_employee_id,
         ARRAY[root.user_uuid, root.employee_id, parent.id::text, parent.employee_id]::text[] AS path
       FROM root_user root
@@ -127,6 +131,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         parent.employee_id,
         parent.parent_id,
         parent.department_id,
+        parent.subdivision_id,
         parent.root_employee_id,
         parent.path
       FROM direct_parent_team_leader parent
@@ -138,6 +143,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         child.employee_id,
         child.parent_id::text AS parent_id,
         child.department_id,
+        child.subdivision_id,
         co_leader_team_tree.root_employee_id,
         co_leader_team_tree.path || child.id::text || child.employee_id
       FROM users child
@@ -153,6 +159,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         user_uuid,
         employee_id,
         department_id,
+        subdivision_id,
         root_employee_id,
         path
       FROM parent_tree
@@ -161,6 +168,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         user_uuid,
         employee_id,
         department_id,
+        subdivision_id,
         root_employee_id,
         path
       FROM co_leader_team_tree
@@ -192,7 +200,109 @@ function projectAssignmentInVisibleUsersSql(projectAlias = "p", cteName = "visib
   `;
 }
 
+function current2DWorkflowStageFixtureSql(fixtureAlias = "f", projectAlias = "p") {
+  const {
+    current2DWorkflowStageFixtureSql: current2DWorkflowStageFixturePredicate,
+  } = require("./projectSubdivisionRoutingRepository");
+
+  return current2DWorkflowStageFixturePredicate(fixtureAlias, projectAlias);
+}
+
+function twoDLeaderProjectVisibilitySql(projectAlias = "p") {
+  const {
+    assignedTo2DLeaderProjectSql,
+    userIs2DLeaderSql,
+  } = require("./projectSubdivisionRoutingRepository");
+
+  return `
+    EXISTS (
+      SELECT 1
+      FROM root_user root
+      WHERE ${userIs2DLeaderSql("root")}
+        AND ${assignedTo2DLeaderProjectSql(projectAlias, "root.employee_id")}
+    )
+  `;
+}
+
+function twoDLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p") {
+  const {
+    assignedTo2DLeaderProjectSql,
+    userIs2DLeaderSql,
+  } = require("./projectSubdivisionRoutingRepository");
+
+  return `
+    EXISTS (
+      SELECT 1
+      FROM root_user root
+      WHERE ${userIs2DLeaderSql("root")}
+        AND ${assignedTo2DLeaderProjectSql(projectAlias, "root.employee_id")}
+        AND ${current2DWorkflowStageFixtureSql(fixtureAlias, projectAlias)}
+    )
+  `;
+}
+
+function twoDNonLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p") {
+  const {
+    userIs2DNonLeaderSql,
+  } = require("./projectSubdivisionRoutingRepository");
+
+  return `
+    EXISTS (
+      SELECT 1
+      FROM root_user root
+      WHERE ${userIs2DNonLeaderSql("root")}
+        AND EXISTS (
+          SELECT 1
+          FROM fixture_workflow_progress current_assignee_progress
+          WHERE current_assignee_progress.fixture_id = ${fixtureAlias}.id
+            AND current_assignee_progress.department_id = ${projectAlias}.department_id
+            AND current_assignee_progress.status <> 'APPROVED'
+            AND ${roleKeySql("current_assignee_progress.stage_name")} = '2d'
+            AND current_assignee_progress.assigned_to = root.employee_id
+            AND current_assignee_progress.stage_order = (
+              SELECT MIN(active_assignee_progress.stage_order)
+              FROM fixture_workflow_progress active_assignee_progress
+              WHERE active_assignee_progress.fixture_id = ${fixtureAlias}.id
+                AND active_assignee_progress.department_id = ${projectAlias}.department_id
+                AND active_assignee_progress.status <> 'APPROVED'
+            )
+        )
+    )
+  `;
+}
+
+function rootUserIsSubdivisionRoutedSql() {
+  const {
+    userIs2DSubdivisionSql,
+  } = require("./projectSubdivisionRoutingRepository");
+
+  return `EXISTS (SELECT 1 FROM root_user root WHERE ${userIs2DSubdivisionSql("root")})`;
+}
+
 function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") {
+  return `
+    (
+      EXISTS (
+        SELECT 1
+        FROM root_user root
+          WHERE ${projectAuthoritySqlPredicate("root")}
+      )
+      OR (
+        ${rootUserIsSubdivisionRoutedSql()}
+        AND (${twoDLeaderProjectVisibilitySql(projectAlias)})
+      )
+      OR (
+        NOT ${rootUserIsSubdivisionRoutedSql()}
+        AND (
+          ${projectOwnershipInVisibleUsersSql(projectAlias, cteName)}
+          OR ${projectAssignmentInVisibleUsersSql(projectAlias, cteName)}
+        )
+      )
+    )
+  `;
+}
+
+function visibleFixturePredicate(fixtureAlias = "f", projectAlias = "p", cteName = "visible_users") {
   return `
     (
       EXISTS (
@@ -200,16 +310,18 @@ function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") 
         FROM root_user root
         WHERE ${projectAuthoritySqlPredicate("root")}
       )
-      OR (${projectOwnershipInVisibleUsersSql(projectAlias, cteName)})
-      OR (${projectAssignmentInVisibleUsersSql(projectAlias, cteName)})
+      OR (
+        ${rootUserIsSubdivisionRoutedSql()}
+        AND (
+          ${twoDLeaderFixtureVisibilitySql(fixtureAlias, projectAlias)}
+          OR ${twoDNonLeaderFixtureVisibilitySql(fixtureAlias, projectAlias)}
+        )
+      )
+      OR (
+        NOT ${rootUserIsSubdivisionRoutedSql()}
+        AND ${visibleProjectPredicate(projectAlias, cteName)}
+      )
     )
-  `;
-}
-
-function visibleFixturePredicate(fixtureAlias = "f", projectAlias = "p", cteName = "visible_users") {
-  void fixtureAlias;
-  return `
-    ${visibleProjectPredicate(projectAlias, cteName)}
   `;
 }
 

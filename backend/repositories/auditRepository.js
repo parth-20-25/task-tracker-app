@@ -30,6 +30,7 @@ async function listAuditLogs(client = pool) {
       LEFT JOIN users u ON u.employee_id = a.user_employee_id
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
       ORDER BY a.timestamp DESC
       LIMIT 200
     `,

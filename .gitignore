@@ -22,3 +22,39 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+PROJECT_INTELLIGENCE_DOCUMENT.md
+
+# local env
+.env
+.env.local
+.env.*.local
+
+# uploads/runtime files
+backend/uploads/
+uploads/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+venv-*/
+
+# node/build
+node_modules/
+frontend/dist/
+
+# logs/temp
+*.log
+backend_output.log
+.sixth/
+coverage/
+.nyc_output/
+exports/
+screenshots/
+*.tmp
+*.bak
+*.backup
+
+# local project notes
+PROJECT_INTELLIGENCE_DOCUMENT.md

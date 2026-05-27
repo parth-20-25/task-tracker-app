@@ -580,7 +580,7 @@ export function ProjectFixtureOperationsGrid({
               {section.fixtures.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
               ) : (
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-2">
                   {section.fixtures.map((fixture) => (
                     <ProjectFixtureCard
                       key={fixture.fixture_id}
@@ -1248,9 +1248,14 @@ function ProjectFixtureCard({
     || transferMutation.isPending;
 
   return (
-    <div className={cn("rounded-lg border border-slate-200 p-2.5", selected && "border-primary bg-primary/5")}>
+    <div
+      className={cn(
+        "rounded-md border border-slate-200 bg-background px-3 py-2 transition-colors hover:bg-slate-50/70",
+        selected && "border-primary bg-primary/5 hover:bg-primary/5",
+      )}
+    >
       <div className="space-y-2">
-        <div className="flex items-start justify-between gap-3">
+        <div className="grid gap-2 lg:grid-cols-[minmax(220px,1.5fr)_auto_minmax(140px,auto)_minmax(150px,auto)_auto] lg:items-center">
           <div className="flex min-w-0 items-start gap-2">
             {selectable ? (
               <Checkbox
@@ -1262,112 +1267,142 @@ function ProjectFixtureCard({
             ) : null}
             <div className="min-w-0 space-y-0.5">
               <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
-              <p className="truncate text-xs text-muted-foreground">{fixture.part_name}</p>
+              <p className="break-words text-xs leading-snug text-muted-foreground">{fixture.part_name}</p>
             </div>
           </div>
 
-          {isSubmittedForVerification && canReviewTask ? (
-            <div className="flex shrink-0 gap-1.5">
-              <Button
-                type="button"
-                size="sm"
-                className="h-7 bg-emerald-600 px-2 text-[11px] hover:bg-emerald-700"
-                disabled={reviewMutation.isPending}
-                onClick={() => {
-                  if (task) {
-                    reviewMutation.mutate({ reviewTask: task, action: "approve" });
-                  }
-                }}
-              >
-                APPROVE
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                className="h-7 px-2 text-[11px]"
-                disabled={reviewMutation.isPending}
-                onClick={() => {
-                  setRejectingTask(task);
-                  setRejectionReason("");
-                }}
-              >
-                REJECT
-              </Button>
-            </div>
-          ) : isAssigned && (canTransferTask || canCancelTask) ? (
-            <div className="flex shrink-0 gap-1.5">
-              {canTransferTask ? (
+          <div className="flex flex-wrap items-center gap-1.5 lg:justify-center">
+            {workflowCode ? (
+              <Badge variant="outline" className="border-indigo-300 bg-indigo-50 text-xs font-semibold text-indigo-800">
+                {workflowCode}
+              </Badge>
+            ) : null}
+            <Badge variant="outline" className={cn("text-xs font-medium", fixtureStageStatusColor(canonicalOperationalState))}>
+              {operationalStatus}
+            </Badge>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge
+              variant="outline"
+              className={cn(
+                "max-w-full gap-0.5 text-xs font-medium",
+                isAssigned
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : "border-slate-300 bg-slate-50 text-slate-500",
+              )}
+            >
+              {isAssigned ? <UserCheck className="h-3 w-3 shrink-0" /> : <UserX className="h-3 w-3 shrink-0" />}
+              <span className="break-words">{isAssigned ? operationalResolution.activeAssigneeName || getAssigneeName(fixture, task) : "Unassigned"}</span>
+            </Badge>
+          </div>
+
+          <div className="min-w-0 text-xs text-muted-foreground">
+            {isAssigned && !isSubmittedForVerification ? (
+              <div className="space-y-1">
+                {task ? (
+                  <div className="flex items-center gap-2">
+                    <User className="h-3 w-3 shrink-0" />
+                    <Progress value={completedPercent} className="h-1.5 w-16 shrink-0" />
+                    <span className="font-semibold text-foreground">{completedPercent}%</span>
+                  </div>
+                ) : null}
+                <p>Submitted: {formatSubmittedDate(getSubmittedValue(task))}</p>
+              </div>
+            ) : isAssigned ? (
+              <span>Submitted: {formatSubmittedDate(getSubmittedValue(task))}</span>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
+            {isSubmittedForVerification && canReviewTask ? (
+              <>
                 <Button
                   type="button"
                   size="sm"
-                  variant="outline"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={() => {
-                    setExpanded(expanded === "transfer" ? null : "transfer");
-                    resetAssignForm();
-                    setInlineOperationalReason(null);
-                  }}
-                >
-                  <ArrowRightLeft className="mr-1 h-3 w-3" />
-                  Transfer
-                </Button>
-              ) : null}
-              {canCancelTask ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
-                  disabled={cancelMutation.isPending}
+                  className="h-7 bg-emerald-600 px-2 text-[11px] hover:bg-emerald-700"
+                  disabled={reviewMutation.isPending}
                   onClick={() => {
                     if (task) {
-                      setCancellingTask(task);
+                      reviewMutation.mutate({ reviewTask: task, action: "approve" });
                     }
                   }}
                 >
-                  <XCircle className="mr-1 h-3 w-3" />
-                  Cancel Task
+                  APPROVE
                 </Button>
-              ) : null}
-            </div>
-          ) : operationalResolution.assignable && canDeployDesignTask ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-[11px]"
-              disabled={openingAssign}
-              onClick={() => void openAssignExpansion()}
-            >
-              {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-              Assign Now
-            </Button>
-          ) : null}
-        </div>
-
-        {isAssigned && !isSubmittedForVerification ? (
-          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <User className="h-3 w-3" />
-              {operationalResolution.activeAssigneeName || getAssigneeName(fixture, task)}
-            </span>
-            {task ? (
-              <div className="flex items-center gap-2">
-                <Progress value={completedPercent} className="h-1.5 w-16" />
-                <span className="font-semibold text-foreground">{completedPercent}%</span>
-              </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={reviewMutation.isPending}
+                  onClick={() => {
+                    setRejectingTask(task);
+                    setRejectionReason("");
+                  }}
+                >
+                  REJECT
+                </Button>
+              </>
+            ) : isAssigned && (canTransferTask || canCancelTask) ? (
+              <>
+                {canTransferTask ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => {
+                      setExpanded(expanded === "transfer" ? null : "transfer");
+                      resetAssignForm();
+                      setInlineOperationalReason(null);
+                    }}
+                  >
+                    <ArrowRightLeft className="mr-1 h-3 w-3" />
+                    Transfer
+                  </Button>
+                ) : null}
+                {canCancelTask ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
+                    disabled={cancelMutation.isPending}
+                    onClick={() => {
+                      if (task) {
+                        setCancellingTask(task);
+                      }
+                    }}
+                  >
+                    <XCircle className="mr-1 h-3 w-3" />
+                    Cancel Task
+                  </Button>
+                ) : null}
+              </>
+            ) : operationalResolution.assignable && canDeployDesignTask ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                disabled={openingAssign}
+                onClick={() => void openAssignExpansion()}
+              >
+                {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                Assign Now
+              </Button>
             ) : null}
           </div>
-        ) : null}
+        </div>
 
         {isSubmittedForVerification ? (
-          <div className="space-y-2">
+          <div className="space-y-2 rounded-md bg-slate-50/70 p-2">
             {proofImage ? (
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  className="block h-24 w-32 overflow-hidden rounded-md border bg-slate-50"
+                  className="block h-20 w-28 overflow-hidden rounded-md border bg-slate-50"
                   onClick={() => setPreviewImage(resolveImageUrl(proofImage))}
                 >
                   <SafeImage src={proofImage} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
@@ -1375,45 +1410,17 @@ function ProjectFixtureCard({
                 <div className="min-w-0 text-xs text-muted-foreground">
                   <p className="font-medium text-foreground">Work proof</p>
                   <p>{formatSubmittedDate(getProofUploadedAt(task))}</p>
-                  <p className="truncate">{getProofUploadedBy(task) || "Unknown uploader"}</p>
+                  <p className="break-words">{getProofUploadedBy(task) || "Unknown uploader"}</p>
                 </div>
               </div>
             ) : (
-              <div className="flex h-20 w-28 items-center justify-center rounded-md border border-dashed bg-slate-50 text-slate-400">
+              <div className="flex h-16 w-24 items-center justify-center rounded-md border border-dashed bg-slate-50 text-slate-400">
                 <ImageIcon className="h-5 w-5" />
               </div>
             )}
           </div>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {workflowCode ? (
-            <Badge variant="outline" className="border-indigo-300 bg-indigo-50 text-xs font-semibold text-indigo-800">
-              {workflowCode}
-            </Badge>
-          ) : null}
-          <Badge variant="outline" className={cn("text-xs font-medium", fixtureStageStatusColor(canonicalOperationalState))}>
-            {operationalStatus}
-          </Badge>
-          <Badge
-            variant="outline"
-            className={cn(
-              "gap-0.5 text-xs font-medium",
-              isAssigned
-                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                : "border-slate-300 bg-slate-50 text-slate-500",
-            )}
-          >
-            {isAssigned ? <UserCheck className="h-3 w-3" /> : <UserX className="h-3 w-3" />}
-            {isAssigned ? operationalResolution.activeAssigneeName || getAssigneeName(fixture, task) : "Unassigned"}
-          </Badge>
-        </div>
-
-        {isAssigned ? (
-          <p className="text-xs text-muted-foreground">
-            Submitted: {formatSubmittedDate(getSubmittedValue(task))}
-          </p>
-        ) : null}
         {inlineOperationalReason ? (
           <p className="text-xs font-medium text-amber-700">{inlineOperationalReason}</p>
         ) : null}
@@ -1423,7 +1430,7 @@ function ProjectFixtureCard({
         <div className="mt-2 space-y-2 border-t pt-2">
           <div>
             <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
-            <p className="truncate text-xs text-muted-foreground">{fixture.part_name}</p>
+            <p className="break-words text-xs text-muted-foreground">{fixture.part_name}</p>
           </div>
 
           <div className="grid gap-2 md:grid-cols-3">

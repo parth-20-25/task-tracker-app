@@ -1,4 +1,5 @@
 const ORDERED_DESIGN_STAGE_KEYS = ["concept", "dap", "3d_finish", "2d_finish", "release"];
+const TWO_D_DESIGN_STAGE_KEY = "2d_finish";
 
 const DESIGN_STAGE_DISPLAY_NAMES = {
   concept: "Concept",
@@ -37,7 +38,7 @@ function normalizeDesignStageName(stageName) {
   }
 
   if (["2d", "2d_finish", "two_d", "two_d_finish"].includes(sanitized)) {
-    return "2d_finish";
+    return TWO_D_DESIGN_STAGE_KEY;
   }
 
   if (["detailing", "detail", "det"].includes(sanitized)) {
@@ -124,6 +125,7 @@ function getCurrentDesignStage(progressRows = [], workflowStages = []) {
 module.exports = {
   getOrderedDesignStageKeys,
   ORDERED_DESIGN_STAGE_KEYS,
+  TWO_D_DESIGN_STAGE_KEY,
   getCurrentDesignStage,
   getDesignStageDisplayName,
   normalizeDesignStageName,

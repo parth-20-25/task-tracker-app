@@ -1,4 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { cn } from "@/lib/utils";
 import type { DesignFixtureOption } from "@/types";
 
@@ -63,12 +64,8 @@ function getOwnerLabel(fixture: DesignFixtureOption) {
     return "Complete";
   }
 
-  if (fixture.workflow_assigned_to_name) {
-    return `Assigned to ${fixture.workflow_assigned_to_name}`;
-  }
-
-  if (fixture.workflow_assigned_to) {
-    return `Assigned to ${fixture.workflow_assigned_to}`;
+  if (fixture.workflow_assigned_to || fixture.workflow_assigned_to_name) {
+    return `Assigned to ${formatEmployeeDisplay(fixture.workflow_assigned_to || null, fixture.workflow_assigned_to_name)}`;
   }
 
   return "Unassigned";

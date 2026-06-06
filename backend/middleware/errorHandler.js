@@ -5,7 +5,7 @@ const { getExecutionMetadata, safeSerialize } = require("../lib/observability");
 function errorHandler(error, req, res, next) {
   const actualMessage = error?.message || "Unknown error";
   const actualDetail = error?.detail || null;
-  const actualStack = error?.stack || null;
+  const actualStack = process.env.NODE_ENV === "production" ? null : (error?.stack || null);
 
   // Use logger.error which now internally uses safeSerialize for all objects
   logger.error("Request failed", getExecutionMetadata({

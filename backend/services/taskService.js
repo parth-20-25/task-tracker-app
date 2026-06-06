@@ -31,7 +31,7 @@ const {
   findTaskById,
   insertTask,
   listTaskActivity,
-  listTasksByAccess,
+  listActiveProjectTasksByAccess,
   listVerificationTasksByAccess,
   updateTaskAssignmentForTransfer,
   updateTaskCompletionPercent,
@@ -93,7 +93,7 @@ const {
 } = require("../repositories/projectSubdivisionRoutingRepository");
 
 async function listTasksForUser(user) {
-  return listTasksByAccess(getTaskAccess(user));
+  return listActiveProjectTasksByAccess(getTaskAccess(user));
 }
 
 async function listVerificationTasksForUser(user) {
@@ -266,6 +266,8 @@ function assertWorkProofUploaded(task) {
 }
 
 function ensureTaskProofUpdateAllowed(user, task) {
+  assertTaskProjectIsActive(task);
+
   if (task.assigned_to !== user.employee_id) {
     throw new AppError(403, "Only assignee can upload proof");
   }
@@ -324,7 +326,7 @@ function roundContributionPercent(value) {
 }
 
 function is2DStageName(stageName) {
-  return normalizeDesignStageName(stageName) === "2d";
+  return normalizeDesignStageName(stageName) === "2d_finish";
 }
 
 async function assert2DRoutingTaskAssignmentAllowed({ actor, assignees, projectId, stageName, client = pool }) {
@@ -2109,7 +2111,7 @@ function assertTaskProjectIsActive(task) {
     409,
     projectStatus === PROJECT_STATUSES.ON_HOLD
       ? "Project is on hold and cannot continue active task workflow"
-      : "Project is completed and cannot continue active task workflow",
+      : "Project is released or completed and cannot continue active task workflow",
   );
 }
 
@@ -2128,7 +2130,7 @@ async function assertProjectIsActive(projectId) {
       409,
       projectStatus === PROJECT_STATUSES.ON_HOLD
         ? "Project is on hold and cannot be assigned"
-        : "Project is completed and cannot be assigned",
+        : "Project is released or completed and cannot be assigned",
     );
   }
 }
@@ -2364,6 +2366,7 @@ async function applyTaskDetailUpdate(user, task, payload) {
   const normalizedPayload = { ...payload };
   const hasReassignment = hasOwn(payload, "assigned_to") || hasOwn(payload, "assignee_ids");
   const hasDepartmentUpdate = hasOwn(payload, "department_id");
+  let reassignmentContributionMetadata = null;
 
   if (hasReassignment) {
     assertTaskProjectIsActive(task);
@@ -2453,6 +2456,35 @@ async function applyTaskDetailUpdate(user, task, payload) {
     normalizedPayload.assignee_ids = requestedAssigneeIds;
     normalizedPayload.assigned_to = assignees[0].employee_id;
     normalizedPayload.assigned_user_id = assignees[0].employee_id;
+
+    if (
+      task.task_type === TASK_TYPES.DEPARTMENT_WORKFLOW
+      && task.fixture_id
+      && task.assigned_to
+      && assignees[0].employee_id !== task.assigned_to
+    ) {
+      const completionPercent = Number(task.completion_percent);
+      const hasRecordedCompletionPercent = Number.isFinite(completionPercent);
+      const stageName = task.workflow_stage || task.stage || null;
+      const stageRevisionNo = normalizeStageVersion(task.workflow_stage_version);
+      reassignmentContributionMetadata = {
+        source: "task_reassignment",
+        fixture_id: task.fixture_id,
+        task_id: task.id,
+        stage_name: stageName,
+        stage_revision_no: stageRevisionNo,
+        revision_code: stageName ? formatStageRevisionCode(stageName, stageRevisionNo) : null,
+        previous_assigned_to: task.assigned_to,
+        previous_assigned_to_name: task.assignee?.name || null,
+        next_assigned_to: assignees[0].employee_id,
+        next_assigned_to_name: assignees[0].name || null,
+        contribution_percent_recorded: hasRecordedCompletionPercent,
+        previous_contribution_percent: hasRecordedCompletionPercent ? completionPercent : null,
+        remaining_contribution_percent: hasRecordedCompletionPercent
+          ? Math.max(0, Math.min(100, 100 - completionPercent))
+          : null,
+      };
+    }
   }
 
   if (payload.deadline || payload.priority) {
@@ -2479,7 +2511,9 @@ async function applyTaskDetailUpdate(user, task, payload) {
   await appendTaskActivity(task.id, {
     userEmployeeId: user.employee_id,
     actionType: "task_updated",
-    metadata: normalizedPayload,
+    metadata: reassignmentContributionMetadata
+      ? { ...normalizedPayload, reassignment_contribution: reassignmentContributionMetadata }
+      : normalizedPayload,
   });
 
   await createAuditLog({
@@ -2487,7 +2521,9 @@ async function applyTaskDetailUpdate(user, task, payload) {
     actionType: "task_updated",
     targetType: "task",
     targetId: task.id,
-    metadata: normalizedPayload,
+    metadata: reassignmentContributionMetadata
+      ? { ...normalizedPayload, reassignment_contribution: reassignmentContributionMetadata }
+      : normalizedPayload,
   });
 
   if (hasReassignment) {

@@ -227,6 +227,16 @@ export function fetchDesignFixtures(projectId: string, departmentId?: string, op
   return apiRequest<DesignFixtureOption[]>(`/design/fixtures?${params.toString()}`);
 }
 
+export function updateFixtureOutsourcing(
+  fixtureId: string,
+  payload: { is_outsourced: boolean; department_id?: string; vendor_name?: string },
+) {
+  return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/outsourcing`, {
+    method: "PATCH",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
 export function fetchProject2DRouting(projectId: string) {
   return apiRequest<Project2DRouting>(`/design/projects/${encodeURIComponent(projectId)}/2d-routing`);
 }
@@ -246,6 +256,13 @@ export function updateProject2DAssignment(projectId: string, assignmentId: strin
       body: JSON.stringify({ is_active: isActive }),
     },
   );
+}
+
+export function updateProjectModification(projectId: string, isModified: boolean) {
+  return apiRequest<DesignProjectOption>(`/design/projects/${encodeURIComponent(projectId)}/modification`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_modified: isModified }),
+  });
 }
 
 export function fetchProjectDashboardSummary(departmentId?: string) {

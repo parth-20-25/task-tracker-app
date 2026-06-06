@@ -1,13 +1,15 @@
-require("dotenv").config();
+const { loadBackendEnv } = require("./config/loadEnv");
+
+loadBackendEnv();
 const express = require("express");
 const app = express();
 
 const cors = require("cors");
-const path = require("path");
 
 const { env, validateBackendEnv } = require("./config/env");
 const { buildCorsOptions } = require("./config/cors");
 const { registerProcessErrorHandlers } = require("./lib/observability");
+const { ensureRuntimeDirectoriesWritable, getUploadsRoot } = require("./lib/runtimePaths");
 
 // Routes
 const { adminRoutes } = require("./routes/adminRoutes");
@@ -46,7 +48,7 @@ app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 app.use(requestLogger);
-app.use("/uploads", express.static(path.join(__dirname, env.uploadsDir)));
+app.use("/uploads", express.static(getUploadsRoot()));
 
 app.get("/api/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
@@ -78,6 +80,7 @@ app.use(errorHandler);
 
 async function startServer() {
   validateBackendEnv();
+  await ensureRuntimeDirectoriesWritable();
   await initDatabase();
 
   return new Promise((resolve) => {

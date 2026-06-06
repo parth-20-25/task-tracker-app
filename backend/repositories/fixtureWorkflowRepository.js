@@ -209,16 +209,19 @@ async function listStageAttemptsForFixtures(fixtureIds, client = pool) {
        attempt_no,
        stage_version,
        status,
-       assigned_to,
+       attempts.assigned_to,
+       assignee.name AS assigned_to_name,
        assigned_at,
        started_at,
        completed_at,
        duration_minutes,
        approved_at,
-       updated_at
-     FROM fixture_workflow_stage_attempts
-     WHERE fixture_id = ANY($1::uuid[])
-     ORDER BY fixture_id ASC, stage_name ASC, attempt_no ASC`,
+       attempts.updated_at
+     FROM fixture_workflow_stage_attempts attempts
+     LEFT JOIN users assignee
+       ON assignee.employee_id = attempts.assigned_to
+     WHERE attempts.fixture_id = ANY($1::uuid[])
+     ORDER BY attempts.fixture_id ASC, attempts.stage_name ASC, attempts.attempt_no ASC`,
     [fixtureIds],
   );
 
@@ -235,17 +238,20 @@ async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
        attempt_no,
        stage_version,
        status,
-       assigned_to,
+       attempts.assigned_to,
+       assignee.name AS assigned_to_name,
        assigned_at,
        started_at,
        completed_at,
        duration_minutes,
        approved_at,
-       updated_at
-     FROM fixture_workflow_stage_attempts
-     WHERE fixture_id = $1
-       AND stage_name = $2
-     ORDER BY attempt_no DESC
+       attempts.updated_at
+     FROM fixture_workflow_stage_attempts attempts
+     LEFT JOIN users assignee
+       ON assignee.employee_id = attempts.assigned_to
+     WHERE attempts.fixture_id = $1
+       AND attempts.stage_name = $2
+     ORDER BY attempts.attempt_no DESC
      LIMIT 1`,
     [fixtureId, stageName],
   );

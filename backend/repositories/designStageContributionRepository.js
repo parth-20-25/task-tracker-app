@@ -15,7 +15,9 @@ function mapContributionRow(row) {
     stage_revision_no: Number(row.stage_revision_no || 0),
     employee_id: row.employee_id,
     employee_name: row.employee_name || row.employee_id,
-    contribution_percent: Number(row.contribution_percent || 0),
+    contribution_percent: row.contribution_percent === null || row.contribution_percent === undefined
+      ? null
+      : Number(row.contribution_percent),
     contribution_kind: row.contribution_kind || "ACTUAL",
     transfer_reason: row.transfer_reason || null,
     transferred_by: row.transferred_by || null,
@@ -137,7 +139,9 @@ async function insertStageContribution(contribution, client = pool) {
       contribution.revision_code,
       Number(contribution.stage_revision_no || 0),
       contribution.employee_id,
-      Number(contribution.contribution_percent || 0),
+      contribution.contribution_percent === null || contribution.contribution_percent === undefined
+        ? null
+        : Number(contribution.contribution_percent),
       contribution.contribution_kind || "ACTUAL",
       contribution.transfer_reason || null,
       contribution.transferred_by || null,

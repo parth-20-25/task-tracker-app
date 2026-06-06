@@ -285,12 +285,21 @@ function collectDesignReportTruthLayerErrors({
         const contributionRows = contributionLookup.get(contributionKey) || [];
 
         if (contributionRows.length === 0) {
-          errors.push(`${fixtureLabel}: ${stage.label} is missing contributor execution truth`);
           return;
         }
 
-        const totalPercent = contributionRows.reduce(
-          (sum, row) => sum + Number(row.contribution_percent || 0),
+        const recordedContributionRows = contributionRows.filter((row) => (
+          row.contribution_percent !== null
+          && row.contribution_percent !== undefined
+          && row.contribution_percent !== ""
+        ));
+
+        if (recordedContributionRows.length !== contributionRows.length) {
+          return;
+        }
+
+        const totalPercent = recordedContributionRows.reduce(
+          (sum, row) => sum + Number(row.contribution_percent),
           0,
         );
 

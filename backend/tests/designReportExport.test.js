@@ -90,7 +90,30 @@ async function run() {
       { employee_name: "Person C", contribution_percent: 30 },
     ]);
 
-    assert.equal(contributors, "Person A - 30%\nPerson B - 40%\nPerson C - 30%");
+    assert.equal(contributors, "Person A: 30%\nPerson B: 40%\nPerson C: 30%");
+  }
+
+  {
+    const contributors = formatStageContributors([
+      { employee_name: "Person A", contribution_percent: null },
+    ]);
+
+    assert.equal(contributors, "Person A: Contribution % Not Recorded");
+  }
+
+  {
+    const kpiResult = resolveReportKpisFromCompletionTruth(
+      {
+        truth_status: COMPLETION_TRUTH_STATUSES.COMPLETE,
+        completion_percent: 1400,
+        strict_complete: false,
+        fixtures: [{ fixture_id: "fixture-1" }],
+      },
+      [{ fixture_id: "fixture-1" }],
+    );
+
+    assert.equal(kpiResult.ok, true);
+    assert.equal(kpiResult.kpis.overallProgress, "100%");
   }
 
   {
@@ -165,7 +188,43 @@ async function run() {
     });
 
     assert.ok(errors.some((error) => error.includes("missing revision history truth")));
-    assert.ok(errors.some((error) => error.includes("missing contributor execution truth")));
+    assert.ok(!errors.some((error) => error.includes("missing contributor execution truth")));
+  }
+
+  {
+    const fixtures = [{ fixture_id: "fixture-1", fixture_no: "FX-01" }];
+    const progressRows = buildFixtureProgress("fixture-1", "FX-01");
+    const revisions = [
+      {
+        fixture_id: "fixture-1",
+        stage_name: "concept",
+        stage_version: 2,
+        revision_code: "CON 02",
+        reason_type: "CUSTOMER_CHANGE",
+      },
+    ];
+    const contributions = [
+      {
+        fixture_id: "fixture-1",
+        stage_name: "concept",
+        revision_code: "CON 02",
+        stage_revision_no: 2,
+        employee_id: "E1",
+        employee_name: "Person A",
+        contribution_percent: 60,
+      },
+    ];
+
+    const errors = collectDesignReportTruthLayerErrors({
+      fixtures,
+      progressRows,
+      attemptRows: [],
+      revisions,
+      contributions,
+      projectTruth: buildCompleteProjectTruth(fixtures),
+    });
+
+    assert.ok(errors.some((error) => error.includes("contributor percentages must total 100%")));
   }
 
   {

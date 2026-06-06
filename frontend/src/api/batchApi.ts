@@ -18,6 +18,12 @@ export function holdBatchProject(batchId: string) {
   });
 }
 
+export function activateBatchProject(batchId: string) {
+  return apiRequest<{ project_id: string; batch_id: string; status: string; message: string }>(`/batches/${batchId}/activate`, {
+    method: "POST",
+  });
+}
+
 export function releaseBatchProject(batchId: string) {
   return apiRequest<{ project_id: string; batch_id: string; status: string; message: string }>(`/batches/${batchId}/release`, {
     method: "POST",

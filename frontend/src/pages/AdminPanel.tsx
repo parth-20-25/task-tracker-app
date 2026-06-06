@@ -23,6 +23,7 @@ import { AuditLog, Department, Machine, Role, Shift, User } from "@/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { RouteContentSkeleton } from "@/components/LoadingSkeletons";
 import { Building2, FileText, Settings, Shield, Users, Wrench, Clock3 } from "lucide-react";
 
@@ -125,7 +126,7 @@ export default function AdminPanel() {
                   await saveUser(payload.employee_id, payload);
                   setUsers(await fetchUsers("accessible"));
                   await refreshSession();
-                  toast({ title: `User ${payload.employee_id} saved` });
+                  toast({ title: `User ${formatEmployeeDisplay(payload.employee_id, payload.name)} saved` });
                 } catch (error) {
                   toast({ title: "User save failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
                   throw error;
@@ -147,7 +148,7 @@ export default function AdminPanel() {
                   await deleteUser(employeeId);
                   setUsers(await fetchUsers("accessible"));
                   await refreshSession();
-                  toast({ title: `User ${employeeId} deleted` });
+                  toast({ title: `User ${formatEmployeeDisplay(users.find((candidate) => candidate.employee_id === employeeId) || employeeId)} deleted` });
                 } catch (error) {
                   toast({ title: "User delete failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
                   throw error;

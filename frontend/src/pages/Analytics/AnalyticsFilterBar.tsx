@@ -6,6 +6,7 @@ import { fetchUsers } from "@/api/adminApi";
 import { fetchAnalyticsContext } from "@/api/analytics/contextApi";
 import { analyticsQueryKeys } from "@/lib/queryKeys";
 import { adminQueryKeys } from "@/lib/queryKeys";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { useAuth } from "@/contexts/useAuth";
 import {
   Select,
@@ -128,7 +129,7 @@ export default function AnalyticsFilterBar({ onFilterChange }: AnalyticsFilterBa
               <SelectItem value="self">Only me</SelectItem>
               {filteredUsers.map((candidate) => (
                 <SelectItem key={candidate.employee_id} value={candidate.employee_id}>
-                  {candidate.name}
+                  {formatEmployeeDisplay(candidate)}
                 </SelectItem>
               ))}
             </SelectContent>

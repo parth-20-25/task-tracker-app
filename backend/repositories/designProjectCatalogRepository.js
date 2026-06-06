@@ -19,6 +19,20 @@ const {
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
 
+const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
+const MODIFICATION_AUTHORITY_ROLE_IDS = ["admin", "director", "director_ceo", "r1", "r2"];
+const MODIFICATION_UPLOADER_LEADER_ROLE_KEYS = [
+  "team_leader",
+  "line_manager",
+  "co_leader",
+  "team_co_leader",
+  "shift_incharge",
+  "uploader_leader",
+  "uploader_co_leader",
+  "project_uploader_leader",
+  "project_uploader_co_leader",
+];
+
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
     p.id AS project_id,
@@ -27,6 +41,7 @@ const DEPARTMENT_PROJECT_SELECT = `
     p.customer_name,
     p.project_name AS project_description,
     COALESCE(p.status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
+    COALESCE(p.is_modified, FALSE) AS is_modified,
     COALESCE(fixture_stats.fixture_count, 0)::integer AS instance_count,
     NULL::text AS quantity_index,
     NULL::date AS rework_date,
@@ -86,6 +101,7 @@ function mapDepartmentProjectRow(row) {
     rework_date: row.rework_date || null,
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+    is_modified: row.is_modified === true,
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -105,6 +121,7 @@ function mapDesignProjectRow(row) {
     company_name: row.customer_name,
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+    is_modified: row.is_modified === true,
     uploaded_by: row.uploaded_by || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -124,6 +141,7 @@ function mapProjectOptionRow(row) {
     company_name: row.customer_name,
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+    is_modified: row.is_modified === true,
   };
 }
 
@@ -153,6 +171,7 @@ function mapProjectSummaryRow(row) {
     department_id: row.department_id,
     department_name: row.department_name || null,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+    is_modified: row.is_modified === true,
     completion_percent: normalizeProjectCompletionPercent(row),
     completion_truth_status: row.completion_truth_status || null,
     completion_strict_complete: row.completion_strict_complete === true,
@@ -166,6 +185,7 @@ function mapProjectSummaryRow(row) {
     team_lead_id: row.team_lead_id || null,
     team_lead_name: row.team_lead_name || null,
     uploaded_by_name: row.uploaded_by_name || null,
+    can_toggle_modification: row.can_toggle_modification === true,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -187,6 +207,7 @@ function mapFixtureOptionRow(row) {
     department_id: row.department_id || null,
     batch_id: row.batch_id || null,
     fixture_no: row.fixture_no,
+    op_no: row.op_no || null,
     part_name: row.part_name,
     fixture_type: row.fixture_type,
     remark: row.remark || null,
@@ -194,6 +215,10 @@ function mapFixtureOptionRow(row) {
     image_1_url: row.image_1_url || null,
     image_2_url: row.image_2_url || null,
     ingestion_source: row.ingestion_source || null,
+    is_outsourced: row.is_outsourced === true,
+    vendor_name: row.vendor_name || null,
+    outsourced_at: row.outsourced_at || null,
+    outsourced_by: row.outsourced_by || null,
     revision_no: Number(row.revision_no || 0),
     is_legacy_workflow: row.is_legacy_workflow === true,
     is_workflow_complete: row.is_workflow_complete === true,
@@ -229,6 +254,41 @@ function requireRow(result, errorMessage) {
 
 function sqlRoleKey(expression) {
   return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function sqlTextArray(values) {
+  return `ARRAY[${values.map(sqlLiteral).join(", ")}]::text[]`;
+}
+
+function projectModificationPermissionSql(projectAlias = "p", employeeExpression = "$1") {
+  return `
+    (
+      EXISTS (
+        SELECT 1
+        FROM root_user root
+        WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_KEYS)})
+           OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_IDS)})
+      )
+      OR COALESCE(${projectAlias}.created_by_user_id = ${employeeExpression}, FALSE)
+      OR COALESCE(${projectAlias}.uploaded_by = ${employeeExpression}, FALSE)
+      OR (
+        EXISTS (
+          SELECT 1
+          FROM root_user root
+          WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
+             OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
+        )
+        AND (
+          COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM visible_users), FALSE)
+          OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM visible_users), FALSE)
+        )
+      )
+    )
+  `;
 }
 
 function fixtureOperationalStatsLateral(projectAlias = "p") {
@@ -407,7 +467,8 @@ async function listProjectOptionsByDepartment(departmentId, { activeOnly = false
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
         p.department_id,
-        COALESCE(p.status, $2) AS project_status
+        COALESCE(p.status, $2) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified
       FROM design.projects p
       WHERE p.department_id = $1
         AND ($3::boolean = FALSE OR COALESCE(p.status, $2) = $2)
@@ -429,7 +490,8 @@ async function listProjectOptionsForUser(user, departmentId, { activeOnly = fals
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
         p.department_id,
-        COALESCE(p.status, $4) AS project_status
+        COALESCE(p.status, $4) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified
       FROM design.projects p
       WHERE ($2::text IS NULL OR p.department_id = $2)
         AND ${visibleProjectPredicate("p")}
@@ -470,6 +532,58 @@ async function getProjectStatusById(projectId, client = pool) {
   return result.rows[0]?.status || null;
 }
 
+async function getProjectModificationContextForUser(projectId, user, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        p.customer_name,
+        p.department_id,
+        p.uploaded_by,
+        p.created_by_user_id,
+        COALESCE(p.status, $3) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified,
+        ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification
+      FROM design.projects p
+      WHERE p.id = $2
+        AND ${visibleProjectPredicate("p")}
+      LIMIT 1
+    `,
+    [user.employee_id, projectId, PROJECT_STATUSES.ACTIVE],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function updateProjectModificationFlag(projectId, isModified, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE design.projects
+      SET is_modified = $2,
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING
+        id AS project_id,
+        project_no,
+        COALESCE(NULLIF(BTRIM(project_name), ''), project_no) AS project_name,
+        customer_name,
+        department_id,
+        COALESCE(status, $3) AS project_status,
+        COALESCE(is_modified, FALSE) AS is_modified,
+        uploaded_by,
+        created_by_user_id,
+        created_at,
+        updated_at
+    `,
+    [projectId, isModified === true, PROJECT_STATUSES.ACTIVE],
+  );
+
+  return mapDesignProjectRow(result.rows[0]);
+}
+
 async function listProjectSummariesForUser(user, { departmentId = null } = {}, client = pool) {
   const result = await client.query(
     `
@@ -482,10 +596,12 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         p.department_id,
         d.name AS department_name,
         COALESCE(p.status, $3) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified,
         p.uploaded_by,
         hierarchy_team_lead.employee_id AS team_lead_id,
         hierarchy_team_lead.name AS team_lead_name,
         uploader.name AS uploaded_by_name,
+        ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification,
         p.created_at,
         p.updated_at,
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,
@@ -540,7 +656,8 @@ async function findProjectByIdForDepartment(projectId, departmentId, { activeOnl
         COALESCE(NULLIF(BTRIM(project_name), ''), project_no) AS project_name,
         customer_name,
         department_id,
-        COALESCE(status, $3) AS project_status
+        COALESCE(status, $3) AS project_status,
+        COALESCE(is_modified, FALSE) AS is_modified
       FROM design.projects
       WHERE id = $1
         AND department_id = $2
@@ -563,7 +680,8 @@ async function findProjectByIdForUser(projectId, user, departmentId, { activeOnl
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
         p.department_id,
-        COALESCE(p.status, $4) AS project_status
+        COALESCE(p.status, $4) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified
       FROM design.projects p
       WHERE p.id = $2
         AND ($3::text IS NULL OR p.department_id = $3)
@@ -598,6 +716,7 @@ async function findProjectByNumberForDepartment(projectNo, departmentId, client 
         customer_name,
         department_id,
         COALESCE(status, $3) AS project_status,
+        COALESCE(is_modified, FALSE) AS is_modified,
         uploaded_by,
         created_at,
         updated_at
@@ -636,6 +755,7 @@ async function listDepartmentProjectsForUser(user, departmentId, client = pool) 
         p.customer_name,
         p.project_name AS project_description,
         COALESCE(p.status, $3) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified,
         (
           SELECT COUNT(*)::integer
           FROM design.fixtures visible_fixture
@@ -715,6 +835,7 @@ async function upsertProjectByNumber(project, client = pool) {
           customer_name,
           department_id,
           COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
+          COALESCE(is_modified, FALSE) AS is_modified,
           uploaded_by,
           created_by_user_id,
           created_at,
@@ -771,6 +892,10 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
+        di.is_outsourced,
+        di.vendor_name,
+        di.outsourced_at,
+        di.outsourced_by,
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete,
@@ -835,6 +960,10 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
+        di.is_outsourced,
+        di.vendor_name,
+        di.outsourced_at,
+        di.outsourced_by,
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete,
@@ -898,7 +1027,11 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
         di.qty,
         di.image_1_url,
         di.image_2_url,
-        di.ingestion_source
+        di.ingestion_source,
+        di.is_outsourced,
+        di.vendor_name,
+        di.outsourced_at,
+        di.outsourced_by
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
@@ -928,7 +1061,11 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
         di.qty,
         di.image_1_url,
         di.image_2_url,
-        di.ingestion_source
+        di.ingestion_source,
+        di.is_outsourced,
+        di.vendor_name,
+        di.outsourced_at,
+        di.outsourced_by
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
@@ -1262,12 +1399,71 @@ async function updateFixtureReferenceImageForDepartment({
   };
 }
 
+async function updateFixtureOutsourcingState({
+  fixtureId,
+  isOutsourced,
+  vendorName,
+  changedBy,
+}, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE design.fixtures AS di
+      SET is_outsourced = $2,
+          vendor_name = CASE
+            WHEN $2::boolean THEN COALESCE(NULLIF(BTRIM($3::text), ''), NULLIF(BTRIM(di.vendor_name), ''), 'Manual Outsource')
+            ELSE NULL
+          END,
+          outsourced_at = CASE
+            WHEN $2::boolean THEN COALESCE(di.outsourced_at, NOW())
+            ELSE NULL
+          END,
+          outsourced_by = CASE
+            WHEN $2::boolean THEN COALESCE(di.outsourced_by, NULLIF(BTRIM($4::text), ''))
+            ELSE NULL
+          END,
+          updated_at = NOW()
+      FROM design.projects dp
+      WHERE di.id = $1
+        AND dp.id = di.project_id
+      RETURNING
+        di.id AS fixture_id,
+        di.project_id,
+        dp.department_id,
+        di.batch_id,
+        di.fixture_no,
+        di.part_name,
+        di.fixture_type,
+        di.remark,
+        di.qty,
+        di.image_1_url,
+        di.image_2_url,
+        di.ingestion_source,
+        di.is_outsourced,
+        di.vendor_name,
+        di.outsourced_at,
+        di.outsourced_by,
+        di.revision_no,
+        di.is_legacy_workflow,
+        di.is_workflow_complete
+    `,
+    [
+      fixtureId,
+      isOutsourced === true,
+      vendorName || null,
+      changedBy || null,
+    ],
+  );
+
+  return mapFixtureOptionRow(result.rows[0]);
+}
+
 async function upsertFixture(fixtureData, client = pool) {
   const result = await client.query(
     `
       INSERT INTO design.fixtures (
         project_id,
         fixture_no,
+        op_no,
         part_name,
         fixture_type,
         remark,
@@ -1277,10 +1473,11 @@ async function upsertFixture(fixtureData, client = pool) {
         ingestion_source,
         batch_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (project_id, fixture_no) DO UPDATE
       SET
         project_id = EXCLUDED.project_id,
+        op_no = COALESCE(EXCLUDED.op_no, design.fixtures.op_no),
         part_name = EXCLUDED.part_name,
         fixture_type = EXCLUDED.fixture_type,
         remark = EXCLUDED.remark,
@@ -1295,6 +1492,7 @@ async function upsertFixture(fixtureData, client = pool) {
         project_id,
         batch_id,
         fixture_no,
+        op_no,
         part_name,
         fixture_type,
         remark,
@@ -1308,6 +1506,7 @@ async function upsertFixture(fixtureData, client = pool) {
     [
       fixtureData.project_id,
       fixtureData.fixture_no,
+      fixtureData.op_no || null,
       fixtureData.part_name,
       fixtureData.fixture_type,
       fixtureData.remark || null,
@@ -1336,6 +1535,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   findProjectByIdForUser,
   findProjectByNumberForDepartment,
   getProjectStatusById,
+  getProjectModificationContextForUser,
   listDepartmentProjectsByDepartment,
   listDepartmentProjectsForUser,
   listFixturesByProjectForDepartment,
@@ -1346,7 +1546,9 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   listProjectOptionsByDepartment,
   listProjectOptionsForUser,
   touchProject,
+  updateProjectModificationFlag,
   updateFixtureReferenceImageForDepartment,
+  updateFixtureOutsourcingState,
   upsertFixture,
   upsertProjectByNumber,
 });

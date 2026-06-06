@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 
 interface UsersTabProps {
   users: User[];
@@ -185,7 +186,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Employee ID</TableHead>
+                <TableHead>Employee</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Department</TableHead>
@@ -196,7 +197,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
             <TableBody>
               {users.map((user) => (
                 <TableRow key={user.employee_id}>
-                  <TableCell className="font-mono text-xs">{user.employee_id}</TableCell>
+                  <TableCell className="font-mono text-xs">{formatEmployeeDisplay(user)}</TableCell>
                   <TableCell className="font-medium">{user.name}</TableCell>
                   <TableCell>{user.role?.name || user.role_id}</TableCell>
                   <TableCell>{user.department?.name || "—"}</TableCell>
@@ -245,7 +246,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                         variant="destructive"
                         size="sm"
                         onClick={() => {
-                          if (confirm(`Delete user ${user.employee_id}? This is only allowed when there are no task dependencies.`)) {
+                          if (confirm(`Delete user ${formatEmployeeDisplay(user)}? This is only allowed when there are no task dependencies.`)) {
                             onDelete(user.employee_id).catch(() => undefined);
                           }
                         }}

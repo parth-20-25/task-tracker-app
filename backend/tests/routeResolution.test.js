@@ -25,3 +25,31 @@ test("task detail API route resolves before auth instead of returning Express 40
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("native ingestion API routes are mounted by createApp before auth", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/design/native-ingestion/template`);
+
+    assert.equal(response.status, 401);
+    assert.match(await response.text(), /No token provided/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("analytics overview API route is mounted by createApp before auth", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/analytics/overview`);
+
+    assert.equal(response.status, 401);
+    assert.match(await response.text(), /No token provided/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

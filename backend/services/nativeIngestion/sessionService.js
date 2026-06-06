@@ -3,7 +3,7 @@ const path = require("path");
 const { AppError } = require("../../lib/AppError");
 const { logger } = require("../../lib/logger");
 const { pool } = require("../../db");
-const { env } = require("../../config/env");
+const { getUploadsRoot } = require("../../lib/runtimePaths");
 const { generateUUID } = require("../../lib/uuid");
 const { createAuditLog } = require("../../repositories/auditRepository");
 const {
@@ -80,7 +80,7 @@ function sanitizeStorageSegment(value, fallback) {
 }
 
 function uploadsRoot() {
-  return path.resolve(__dirname, "..", "..", env.uploadsDir || "uploads");
+  return getUploadsRoot();
 }
 
 function toPublicUploadUrl(relativePath) {

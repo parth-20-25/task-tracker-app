@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "NODE_ENV=development node server.js",
+    "dev": "node server.js",
     "test": "node tests/designIngestionDiffer.test.js && node --test tests/nativeIngestionValidation.test.js && node tests/designCompletionEngine.test.js",
     "test:completion": "node tests/designCompletionEngine.test.js"
   },

@@ -74,7 +74,7 @@ function ensureActiveProjectTaskWrite(task) {
       409,
       projectStatus === PROJECT_STATUSES.ON_HOLD
         ? "Project is on hold and cannot continue active task workflow"
-        : "Project is completed and cannot continue active task workflow",
+        : "Project is released or completed and cannot continue active task workflow",
     );
   }
 }

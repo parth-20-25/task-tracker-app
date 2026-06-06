@@ -1,44 +1,75 @@
 import { useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
-import { useQuery } from '@tanstack/react-query';
-import { fetchProjectDashboardSummary, fetchDesignFixtures } from '@/api/designApi';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchProjectDashboardSummary, fetchDesignFixtures, updateProjectModification } from '@/api/designApi';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
 import { NativeFixtureIngestionLauncher } from '@/components/native-ingestion/NativeIngestionWorkspace';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
-import { ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, User, UserCheck, UserX } from 'lucide-react';
+import { ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, User, UserCheck, UserX, Wrench } from 'lucide-react';
 import { isProjectAuthorityUser } from '@/lib/permissions';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
+import { formatProjectNumber } from '@/lib/projectDisplay';
 import { ProjectDashboardSummary, ProjectStatus } from '@/types';
 
 function statusLabel(status: ProjectStatus) {
   if (status === "on_hold") return "On Hold";
   if (status === "completed") return "Completed";
+  if (status === "released") return "Released";
   return "Active";
 }
 
 function statusClass(status: ProjectStatus) {
   if (status === "on_hold") return "border-amber-200 bg-amber-50 text-amber-900";
-  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "completed" || status === "released") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   return "border-sky-200 bg-sky-50 text-sky-800";
 }
 
-function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
+function ProjectCard({
+  project,
+  onToggleModification,
+  isToggling,
+}: {
+  project: ProjectDashboardSummary;
+  onToggleModification: (project: ProjectDashboardSummary) => void;
+  isToggling: boolean;
+}) {
   const hasCompletionTruth = typeof project.completion_percent === "number";
+  const projectTerminal = project.project_status === "completed" || project.project_status === "released";
+  const canToggleModification = project.can_toggle_modification === true && !projectTerminal;
 
   return (
-    <Card className="overflow-hidden border-slate-200 shadow-sm">
-      <CardHeader className="space-y-2 p-4 pb-3">
+    <Card className="relative overflow-hidden border-slate-200 shadow-sm">
+      <div className="absolute left-2 top-2 z-10">
+        {canToggleModification ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            disabled={isToggling}
+            onClick={() => onToggleModification(project)}
+            title={project.is_modified ? "Clear modification marker" : "Mark project modified"}
+          >
+            <Wrench className={cn("h-4 w-4", project.is_modified ? "text-primary" : "text-muted-foreground")} />
+          </Button>
+        ) : (
+          <Wrench className={cn("m-1.5 h-4 w-4", project.is_modified ? "text-primary" : "text-muted-foreground/50")} />
+        )}
+      </div>
+      <CardHeader className="space-y-2 p-4 pb-3 pl-10">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="font-semibold leading-tight">{project.project_name}</p>
-            <p className="text-xs text-muted-foreground">{project.project_no}</p>
+            <p className="text-xs text-muted-foreground">{formatProjectNumber(project)}</p>
           </div>
           <Badge variant="outline" className={cn(statusClass(project.project_status))}>
             {statusLabel(project.project_status)}
@@ -86,6 +117,7 @@ function ProjectCard({ project }: { project: ProjectDashboardSummary }) {
 }
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
   const { user, role, access } = useAuth();
   const [selectedProjectId, setSelectedProjectId] = useState("");
 
@@ -105,13 +137,34 @@ export default function Dashboard() {
   const projectSummaries = projectSummaryQuery.data ?? [];
   const selectedProject = projectSummaries.find((project) => project.project_id === selectedProjectId);
   const selectedProjectDepartmentId = selectedProject?.department_id || user?.department_id;
+  const selectedProjectActive = selectedProject?.project_status === "active";
 
   const fixtureQuery = useQuery({
     queryKey: ["dashboard", "fixtures", selectedProjectId, selectedProjectDepartmentId],
-    queryFn: () => fetchDesignFixtures(selectedProjectId, selectedProjectDepartmentId),
-    enabled: !!selectedProjectId && canAccessProjectFixtures,
+    queryFn: () => fetchDesignFixtures(selectedProjectId, selectedProjectDepartmentId, { activeOnly: true }),
+    enabled: !!selectedProjectId && selectedProjectActive && canAccessProjectFixtures,
     staleTime: 60_000,
   });
+
+  const modificationMutation = useMutation({
+    mutationFn: ({ projectId, isModified }: { projectId: string; isModified: boolean }) =>
+      updateProjectModification(projectId, isModified),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+      ]);
+    },
+  });
+
+  const handleToggleProjectModification = (project: ProjectDashboardSummary) => {
+    modificationMutation.mutate({
+      projectId: project.project_id,
+      isModified: !project.is_modified,
+    });
+  };
 
   // ── Task data — only for project-authority users who need task-level metrics ─
   const taskContext = isProjectFirstRole ? null : undefined;
@@ -271,7 +324,7 @@ export default function Dashboard() {
               <SelectItem value="__none__">Select a project…</SelectItem>
               {projectSummaries.map((p) => (
                 <SelectItem key={p.project_id} value={p.project_id}>
-                  {p.project_no} — {p.project_name}
+                  {formatProjectNumber(p)} — {p.project_name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -283,6 +336,16 @@ export default function Dashboard() {
             <CardContent className="p-8 text-center text-muted-foreground">
               <FolderOpen className="h-10 w-10 mx-auto mb-3 opacity-30" />
               <p className="text-sm">Select a project above to view fixture-level operational status.</p>
+            </CardContent>
+          </Card>
+        ) : selectedProject && !selectedProjectActive ? (
+          <Card>
+            <CardContent className="p-8 text-center text-muted-foreground">
+              <p className="text-sm">
+                {selectedProject.project_status === "on_hold"
+                  ? "This project is on hold. Fixtures are hidden from active workflows until it is activated."
+                  : "This project is released or completed. Fixtures are hidden from active workflows."}
+              </p>
             </CardContent>
           </Card>
         ) : fixtureQuery.isLoading ? (
@@ -339,7 +402,12 @@ export default function Dashboard() {
                   </h3>
                   <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
                     {group.projects.map((project) => (
-                      <ProjectCard key={project.project_id} project={project} />
+                      <ProjectCard
+                        key={project.project_id}
+                        project={project}
+                        onToggleModification={handleToggleProjectModification}
+                        isToggling={modificationMutation.isPending}
+                      />
                     ))}
                   </div>
                 </div>

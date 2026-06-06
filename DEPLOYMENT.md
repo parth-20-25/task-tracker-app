@@ -1,8 +1,22 @@
-# TaskTracker Deployment Guide
+# PARC Task Tracking Deployment Guide
 
 ## Overview
 
-This guide covers deploying TaskTracker to Render with proper separation of concerns between the backend (Node.js), Python service (FastAPI), and frontend (React/Vite).
+This guide covers deploying the PARC Task Tracking System with proper separation of concerns between the backend (Node.js), Python service (FastAPI), and frontend (React/Vite). Render/Vercel examples remain below, but the target deployment is an Ubuntu Server 24.04 VM without Docker, Nginx, PM2, Redis, queues, or cloud services.
+
+## Ubuntu VM Prerequisites
+
+Target versions:
+- Ubuntu Server 24.04
+- Node.js 22 LTS
+- npm 10 or newer
+- Python 3.12
+- PostgreSQL 16
+
+Service ports:
+- Backend API: `5000`
+- Python extraction service: `8000`
+- Frontend Vite preview: `8080`
 
 ## Project Structure
 
@@ -36,10 +50,16 @@ TaskTrackerApp/
 - `DATABASE_URL` - PostgreSQL connection string
 - `JWT_SECRET` - Secret key for JWT tokens
 - `CORS_ORIGIN` - Allowed CORS origin (e.g., `https://your-frontend.onrender.com`)
+- `UPLOADS_DIR` - Persistent writable upload directory
+
+**Local PostgreSQL SSL:**
+- Set `DATABASE_SSL=false` for a local VM PostgreSQL server that does not support SSL.
+- Leave `DATABASE_SSL` unset, set `DATABASE_SSL=true`, or add `sslmode=require` for managed PostgreSQL hosts that require SSL.
 
 **Optional:**
 - `NODE_ENV` - Set to `production` for deployments
-- `PORT` - Port to run on (Render provides this automatically)
+- `PORT` - Backend port, defaults to `5000`
+- `REPORT_TEMP_DIR` - Writable temp directory for report exports
 - `ENABLE_TASK_SEED` - Set to "false" for production
 - `DESIGN_EXTRACTION_SERVICE_URL` - URL to extraction service
 - `DESIGN_EXTRACTION_SERVICE_TOKEN` - Token for extraction service
@@ -103,6 +123,51 @@ npm run dev
 ```
 
 App runs on `http://localhost:8080`
+
+## Local VM Production Setup
+
+Use the same three processes as local development, but set production env vars explicitly before starting them.
+
+Backend required env:
+```bash
+NODE_ENV=production
+PORT=5000
+DATABASE_URL=postgresql://...
+DATABASE_SSL=false
+JWT_SECRET=<strong-random-secret>
+CORS_ORIGIN=http://<frontend-host>:8080
+UPLOADS_DIR=/srv/tasktracker/uploads
+```
+
+Frontend build required env:
+```bash
+VITE_API_URL=http://<backend-host>:5000
+npm run build
+npm run preview
+```
+
+Python extraction service env:
+```bash
+PORT=8000
+EXTRACTION_SERVICE_TOKEN=<same-token-used-by-backend>
+BACKEND_API_URL=http://<backend-host>:5000/api
+EXTRACTED_IMAGE_DIR=/srv/tasktracker/uploads/design-excel
+```
+
+Optional report temp env:
+```bash
+REPORT_TEMP_DIR=/srv/tasktracker/report-tmp
+```
+
+Runtime filesystem requirements:
+- `UPLOADS_DIR` must be writable by the backend process and must be persistent across restarts.
+- `REPORT_TEMP_DIR`, if set, must be writable by the backend process.
+- The Python extraction image directory must point at the same persistent upload tree when local image URLs are expected.
+
+Known production risks to manage:
+- Backend startup still performs runtime schema bootstrap (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, index creation, permission alignment, and repair/sync routines). Keep database backups and treat startup as a migration event until this is replaced with reviewed migrations.
+- `/uploads` is a static public file mount. Uploaded task proofs and reference images are reachable by URL if the path is known; add route-level authorization before storing sensitive files.
+- Do not use `CORS_ORIGIN=*` in production. Production startup rejects wildcard CORS.
 
 ## Render Deployment
 
@@ -188,7 +253,7 @@ Create a static site service with:
 - Ensure both services are running and accessible
 
 ### Database migrations fail
-- Check `DATABASE_URL` has proper SSL settings (`?sslmode=require`)
+- Check `DATABASE_URL` and `DATABASE_SSL` have proper SSL settings (`DATABASE_SSL=false` for local PostgreSQL, `?sslmode=require` or `DATABASE_SSL=true` for SSL-only managed PostgreSQL)
 - Verify database user has necessary permissions
 - Check network/firewall rules allow database access
 

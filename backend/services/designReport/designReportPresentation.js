@@ -105,7 +105,12 @@ function formatStageContributors(contributions) {
   }
 
   return contributions
-    .map((contribution) => `${contribution.employee_name || contribution.employee_id} - ${Number(contribution.contribution_percent || 0)}%`)
+    .map((contribution) => {
+      const percent = contribution.contribution_percent === null || contribution.contribution_percent === undefined
+        ? "Contribution % Not Recorded"
+        : `${Number(contribution.contribution_percent)}%`;
+      return `${contribution.employee_name || contribution.employee_id}: ${percent}`;
+    })
     .join("\n");
 }
 

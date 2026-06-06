@@ -1,5 +1,4 @@
 const fs = require("fs/promises");
-const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const ExcelJS = require("exceljs");
@@ -7,6 +6,7 @@ const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
 const { requireDepartmentContext } = require("../lib/departmentContext");
 const { logger } = require("../lib/logger");
+const { getReportTempRoot } = require("../lib/runtimePaths");
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
@@ -21,6 +21,12 @@ const { loadDesignReportExportData } = require("./designReport/designReportDataC
 const {
   generateDesignProjectExecutionTemplateExcel: generateTemplateExport,
 } = require("./designReport/designReportTemplateExport");
+const {
+  buildDesignManagementReportModel,
+} = require("./designReport/designReportManagementModel");
+const {
+  generateDesignManagementPdf,
+} = require("./designReport/designReportManagementPdf");
 const {
   assertDesignReportExportIntegrity,
   assertDesignReportTruthLayerComplete: assertWorkflowTruthLayerComplete,
@@ -894,10 +900,10 @@ function buildReportTitle(context) {
   return `WBS-${context.project_no}-${middleSegment}-${context.customer_name}`;
 }
 
-function buildReportFileName(context) {
+function buildReportFileName(context, extension = "xlsx") {
   const targetName = context.project_name;
-  const suffix = "Project_Wise_Design_Report";
-  return `${sanitizeFileNamePart(context.project_no)}_${sanitizeFileNamePart(targetName)}_${suffix}.xlsx`;
+  const suffix = "Project_Wise_Design_Report_v2";
+  return `${sanitizeFileNamePart(context.project_no)}_${sanitizeFileNamePart(targetName)}_${suffix}.${extension}`;
 }
 
 function applyLinkCell(cell, url) {
@@ -1520,12 +1526,28 @@ async function getProjectContext(user, projectId, departmentId) {
         p.project_name,
         p.customer_name,
         p.department_id,
+        departments.name AS department_name,
+        p.status,
+        p.status_changed_at,
+        p.completed_at,
+        p.created_at,
+        p.updated_at,
+        p.uploaded_by,
+        uploader.name AS uploaded_by_name,
+        p.created_by_user_id,
+        creator.name AS created_by_name,
         p.plant,
         p.project_leader_id,
         project_leader.name AS project_leader_name,
         hierarchy_team_lead.employee_id AS team_lead_id,
         hierarchy_team_lead.name AS team_lead_name
       FROM design.projects p
+      LEFT JOIN departments
+        ON departments.id = p.department_id
+      LEFT JOIN users uploader
+        ON uploader.employee_id = p.uploaded_by
+      LEFT JOIN users creator
+        ON creator.employee_id = p.created_by_user_id
       LEFT JOIN users project_leader
         ON project_leader.employee_id = p.project_leader_id
       ${hierarchyTeamLeaderLateral("p")}
@@ -1568,11 +1590,24 @@ async function getFixturesForProject(projectId, user) {
         linked_task.status AS task_status,
         linked_task.priority AS task_priority,
         linked_task.deadline AS task_deadline,
+        linked_task.due_date AS task_due_date,
+        linked_task.sla_due_date AS task_sla_due_date,
         linked_task.proof_url AS task_proof_url,
         linked_task.planned_minutes AS task_planned_minutes,
         linked_task.actual_minutes AS task_actual_minutes,
         linked_task.assigned_to AS task_assigned_to,
-        assignee.name AS task_assignee_name
+        assignee.name AS task_assignee_name,
+        linked_task.assigned_by AS task_assigned_by,
+        assigner.name AS task_assigned_by_name,
+        linked_task.assigned_at AS task_assigned_at,
+        linked_task.started_at AS task_started_at,
+        linked_task.completed_at AS task_completed_at,
+        linked_task.closed_at AS task_closed_at,
+        linked_task.submitted_at AS task_submitted_at,
+        linked_task.approved_at AS task_approved_at,
+        linked_task.created_at AS task_created_at,
+        linked_task.updated_at AS task_updated_at,
+        linked_task.rejection_count AS task_rejection_count
       FROM design.fixtures f
       JOIN design.projects p
         ON p.id = f.project_id
@@ -1582,10 +1617,20 @@ async function getFixturesForProject(projectId, user) {
           t.status,
           t.priority,
           t.deadline,
+          t.due_date,
+          t.sla_due_date,
           t.proof_url,
           t.planned_minutes,
           t.actual_minutes,
           t.assigned_to,
+          t.assigned_by,
+          t.assigned_at,
+          t.started_at,
+          t.completed_at,
+          t.closed_at,
+          t.submitted_at,
+          t.approved_at,
+          t.rejection_count,
           t.updated_at,
           t.created_at
         FROM tasks t
@@ -1608,6 +1653,8 @@ async function getFixturesForProject(projectId, user) {
       ) linked_task ON TRUE
       LEFT JOIN users assignee
         ON assignee.employee_id = linked_task.assigned_to
+      LEFT JOIN users assigner
+        ON assigner.employee_id = linked_task.assigned_by
       WHERE f.project_id = $2
         AND ${visibleFixturePredicate("f", "p")}
       ORDER BY f.fixture_no ASC, f.id ASC
@@ -1807,7 +1854,12 @@ function formatDateRange(startValue, endValue) {
 function formatStageContributors(contributions, fallbackName = "") {
   if (Array.isArray(contributions) && contributions.length > 0) {
     return contributions
-      .map((contribution) => `${contribution.employee_name || contribution.employee_id} - ${Number(contribution.contribution_percent || 0)}%`)
+      .map((contribution) => {
+        const percent = contribution.contribution_percent === null || contribution.contribution_percent === undefined
+          ? "Contribution %: Not recorded"
+          : `${Number(contribution.contribution_percent)}%`;
+        return `${contribution.employee_name || contribution.employee_id} - ${percent}`;
+      })
       .join("\n");
   }
 
@@ -2104,6 +2156,8 @@ async function generateDesignProjectExecutionTemplateExcel({
 async function exportDesignReport(user, query = {}, options = {}) {
   const reportType = REPORT_TYPES.PROJECT;
   const departmentId = resolveReportDepartmentId(user, query.department_id);
+  const requestedFormat = String(query.format || query.export_format || "xlsx").trim().toLowerCase();
+  const exportFormat = requestedFormat === "pdf" ? "pdf" : "xlsx";
   let context = null;
   let fixtures = [];
 
@@ -2117,18 +2171,30 @@ async function exportDesignReport(user, query = {}, options = {}) {
     fixtures = await getFixturesForProject(projectId, user);
   }
 
-  if (!fixtures.length) {
-    throw new AppError(404, "No fixtures found for this report");
-  }
+  const reportData = await loadDesignReportExportData({
+    fixtures,
+    projectId: context.project_id,
+    departmentId: context.department_id,
+  });
 
-    const reportData = await loadDesignReportExportData({
+  if (exportFormat === "pdf") {
+    const reportModel = buildDesignManagementReportModel({
+      context,
       fixtures,
-      projectId: context.project_id,
-      departmentId: context.department_id,
+      reportData,
+      generatedAt: options.generatedAt || new Date(),
+      generatedBy: user,
     });
 
-  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "design-report-"));
-  const finalPath = path.join(tempDirectory, buildReportFileName(context));
+    return {
+      filename: buildReportFileName(context, "pdf"),
+      contentType: "application/pdf",
+      buffer: generateDesignManagementPdf(reportModel),
+    };
+  }
+
+  const tempDirectory = await fs.mkdtemp(path.join(getReportTempRoot(), "design-report-"));
+  const finalPath = path.join(tempDirectory, buildReportFileName(context, "xlsx"));
 
   try {
     await generateTemplateExport({
@@ -2141,7 +2207,7 @@ async function exportDesignReport(user, query = {}, options = {}) {
     const buffer = await fs.readFile(finalPath);
 
     return {
-      filename: buildReportFileName(context),
+      filename: buildReportFileName(context, "xlsx"),
       contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       buffer,
     };
@@ -2153,8 +2219,10 @@ async function exportDesignReport(user, query = {}, options = {}) {
 module.exports = {
   assertDesignReportExportIntegrity,
   assertDesignReportTruthLayerComplete: assertWorkflowTruthLayerComplete,
+  buildDesignManagementReportModel,
   collectDesignReportTruthLayerErrors: collectWorkflowTruthLayerErrors,
   exportDesignReport,
+  generateDesignManagementPdf,
   generateDesignProjectExecutionTemplateExcel: generateTemplateExport,
   generateRawScopeExcel,
   normalizeStoredImageUrl,

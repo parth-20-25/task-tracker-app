@@ -1,5 +1,6 @@
 const { randomUUID } = require("crypto");
 const { safeSerialize } = require("./serialization");
+const { redactSensitiveData } = require("./redaction");
 
 const LEVELS = {
   INFO: "INFO",
@@ -9,6 +10,7 @@ const LEVELS = {
 
 function formatMessage(level, message, metadata = {}) {
   const timestamp = new Date().toISOString();
+  const safeMetadata = redactSensitiveData(metadata);
   
   // Create a base object for logging
   const logObject = {
@@ -18,10 +20,10 @@ function formatMessage(level, message, metadata = {}) {
   };
 
   // Safely merge metadata, handling cases where it might be a primitive or circular
-  if (metadata && typeof metadata === "object") {
-    Object.keys(metadata).forEach(key => {
+  if (safeMetadata && typeof safeMetadata === "object") {
+    Object.keys(safeMetadata).forEach(key => {
       try {
-        const val = metadata[key];
+        const val = safeMetadata[key];
         // If the value is an object, serialize it safely as a string
         if (val && typeof val === "object") {
           logObject[key] = safeSerialize(val);
@@ -32,9 +34,9 @@ function formatMessage(level, message, metadata = {}) {
         logObject[key] = "[Serialization Error]";
       }
     });
-  } else if (metadata !== undefined) {
+  } else if (safeMetadata !== undefined) {
 
-    logObject.metadata = metadata;
+    logObject.metadata = safeMetadata;
   }
 
   try {

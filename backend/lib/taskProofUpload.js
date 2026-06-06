@@ -3,10 +3,11 @@ const fs = require("fs");
 const multer = require("multer");
 const path = require("path");
 const { AppError } = require("./AppError");
+const { ensureDirectorySync, getTaskProofUploadDir } = require("./runtimePaths");
 
 const TASK_PROOF_MAX_SIZE_BYTES = 10 * 1024 * 1024;
 const TASK_PROOF_MAX_SIZE_MB = 10;
-const TASK_PROOF_UPLOAD_DIR = path.join(__dirname, "../uploads/task-proofs");
+const TASK_PROOF_UPLOAD_DIR = getTaskProofUploadDir();
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/bmp",
   "image/gif",
@@ -38,7 +39,7 @@ const MIME_TYPE_EXTENSIONS = {
 };
 const SAFE_FILE_NAME_PATTERN = /[^a-zA-Z0-9._() -]/g;
 
-fs.mkdirSync(TASK_PROOF_UPLOAD_DIR, { recursive: true });
+ensureDirectorySync(TASK_PROOF_UPLOAD_DIR);
 
 function normalizeMimeType(mimeType) {
   return String(mimeType || "").trim().toLowerCase();

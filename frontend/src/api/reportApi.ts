@@ -4,11 +4,13 @@ export interface DesignReportFilters {
   department_id?: string;
   project_id?: string;
   report_type: "project";
+  format?: "xlsx" | "pdf";
 }
 
 export async function downloadDesignReport(filters: DesignReportFilters, fileName: string) {
   const params = new URLSearchParams();
   params.set("report_type", filters.report_type);
+  params.set("format", filters.format || "xlsx");
 
   if (filters.department_id) {
     params.set("department_id", filters.department_id);

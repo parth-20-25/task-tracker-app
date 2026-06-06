@@ -4,6 +4,7 @@ const { logger } = require("./logger");
 
 const requestContextStorage = new AsyncLocalStorage();
 const { safeSerialize, truncateText } = require("./serialization");
+const { redactSensitiveData } = require("./redaction");
 
 function getContext() {
   return requestContextStorage.getStore() || null;
@@ -75,11 +76,30 @@ function buildRouteLabel(req) {
 }
 
 function sanitizeRequestPayload(req) {
-  return {
+  return redactSensitiveData({
     params: req.params || {},
     query: req.query || {},
     body: req.body || {},
-  };
+  });
+}
+
+function summarizeResultForLog(result) {
+  if (result === null || result === undefined) {
+    return { type: String(result) };
+  }
+
+  if (Array.isArray(result)) {
+    return { type: "array", length: result.length };
+  }
+
+  if (typeof result === "object") {
+    return {
+      type: result.constructor?.name || "object",
+      keys: Object.keys(result).slice(0, 25),
+    };
+  }
+
+  return { type: typeof result };
 }
 
 function getExecutionMetadata(extraMetadata = {}) {
@@ -143,7 +163,7 @@ function instrumentModuleExports(layer, exportedMembers) {
         return traceExecution(
           layer,
           memberName,
-          { args: safeSerialize(args) },
+          { argCount: args.length },
           async () => {
             const result = await memberValue.apply(this, args);
 
@@ -151,7 +171,7 @@ function instrumentModuleExports(layer, exportedMembers) {
               layer,
               functionName: memberName,
               executionId: ensureExecutionId(),
-              result: safeSerialize(result),
+              result: summarizeResultForLog(result),
             }));
 
             return result;
@@ -182,7 +202,7 @@ function validateQueryResult(result, queryText) {
     logger.error("Invalid database response", getExecutionMetadata({
       layer: "repository.db",
       query: summarizeQuery(queryText),
-      result: safeSerialize(result),
+      result: summarizeResultForLog(result),
       errorMessage: invalidResultError.message,
       stack: invalidResultError.stack,
     }));
@@ -227,6 +247,7 @@ module.exports = {
   runWithRequestContext,
   safeSerialize,
   sanitizeRequestPayload,
+  summarizeResultForLog,
   summarizeQuery,
   traceExecution,
   truncateText,

@@ -15,6 +15,7 @@ import { taskQueryKeys } from '@/lib/queryKeys';
 import { cn } from '@/lib/utils';
 import { SafeImage } from '@/components/SafeImage';
 import { resolveImageUrl } from '@/lib/imageUrl';
+import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import type { Task } from '@/types';
 
 function formatRevisionCode(task: Task) {
@@ -144,7 +145,10 @@ export default function Verifications() {
                 </CardHeader>
                 <CardContent className="p-4 pt-2 space-y-3">
                   <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1"><User className="h-3 w-3" />Assignee: {task.assignee?.name || task.assigned_to}</span>
+                    <span className="flex items-center gap-1">
+                      <User className="h-3 w-3" />
+                      Assignee: {task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to)}
+                    </span>
                     {task.workflow_contributor_names && (
                       <span className="flex items-center gap-1">Contributors: {task.workflow_contributor_names}</span>
                     )}
@@ -164,7 +168,7 @@ export default function Verifications() {
                       <div className="text-muted-foreground">
                         <p className="font-medium text-foreground">Work proof</p>
                         <p>{task.latest_proof?.uploaded_at ? new Date(task.latest_proof.uploaded_at).toLocaleString() : "Upload time unavailable"}</p>
-                        <p>{task.latest_proof?.uploaded_by_name || task.latest_proof?.uploaded_by || "Uploader unavailable"}</p>
+                        <p>{formatEmployeeDisplay(task.latest_proof?.uploaded_by || null, task.latest_proof?.uploaded_by_name)}</p>
                       </div>
                     </div>
                   ) : null}

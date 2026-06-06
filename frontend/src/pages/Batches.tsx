@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, PauseCircle, RefreshCw, Rocket, Route, Trash2 } from "lucide-react";
-import { deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
-import { assignProjectTo2D, fetchProject2DRouting, updateProject2DAssignment } from "@/api/designApi";
+import { Eye, PauseCircle, PlayCircle, RefreshCw, Rocket, Route, Trash2, Wrench } from "lucide-react";
+import { activateBatchProject, deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
+import { assignProjectTo2D, fetchProject2DRouting, updateProject2DAssignment, updateProjectModification } from "@/api/designApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -21,6 +21,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { isAdminUser, isProjectAuthorityUser } from "@/lib/permissions";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
+import { formatProjectNumber } from "@/lib/projectDisplay";
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import { ProjectStatus, UploadBatch } from "@/types";
@@ -42,6 +44,8 @@ function projectStatusLabel(status: ProjectStatus | string | undefined) {
       return "On Hold";
     case "completed":
       return "Completed";
+    case "released":
+      return "Released";
     default:
       return "Active";
   }
@@ -52,6 +56,7 @@ function projectStatusClass(status: ProjectStatus | string | undefined) {
     case "on_hold":
       return "border-amber-200 bg-amber-50 text-amber-900";
     case "completed":
+    case "released":
       return "border-emerald-200 bg-emerald-50 text-emerald-800";
     default:
       return "border-sky-200 bg-sky-50 text-sky-800";
@@ -74,7 +79,7 @@ function DeleteAction({
   const disabled = !canDelete || batch.deletion_blocked;
   const reason = !canDelete
     ? "Only the canonical project owner or an admin can delete it."
-    : batch.delete_blocked_reason || "Cannot delete this batch while active work exists.";
+    : batch.delete_blocked_reason || "Cannot delete this project while active work exists.";
 
   return (
     <div className="flex items-center justify-end gap-2">
@@ -167,14 +172,14 @@ export default function Batches() {
         queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
       ]);
       toast({
-        title: result.force ? "Batch force deleted" : "Batch deleted",
+        title: result.force ? "Project force deleted" : "Project deleted",
         description: result.message,
       });
     },
     onError: (error) => {
       toast({
         title: "Delete failed",
-        description: error instanceof Error ? error.message : "Could not delete the batch.",
+        description: error instanceof Error ? error.message : "Could not delete the project.",
         variant: "destructive",
       });
     },
@@ -200,6 +205,26 @@ export default function Batches() {
     },
   });
 
+  const activateMutation = useMutation({
+    mutationFn: (batchId: string) => activateBatchProject(batchId),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      ]);
+      toast({ title: "Project active", description: result.message });
+    },
+    onError: (error) => {
+      toast({
+        title: "Activation failed",
+        description: error instanceof Error ? error.message : "Could not activate the project.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const releaseMutation = useMutation({
     mutationFn: (batchId: string) => releaseBatchProject(batchId),
     onSuccess: async (result) => {
@@ -215,11 +240,33 @@ export default function Batches() {
     },
   });
 
+  const modificationMutation = useMutation({
+    mutationFn: ({ projectId, isModified }: { projectId: string; isModified: boolean }) =>
+      updateProjectModification(projectId, isModified),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+      ]);
+      toast({ title: "Project marker updated" });
+    },
+    onError: (error) => {
+      toast({
+        title: "Marker update failed",
+        description: error instanceof Error ? error.message : "Could not update project modification status.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleDelete = (batch: UploadBatch, force: boolean) => {
+    const projectNumber = formatProjectNumber(batch);
     const confirmed = window.confirm(
       force
-        ? `Force delete project ${batch.project_no}? This bypasses workflow safety validation.`
-        : `Delete project ${batch.project_no}?`,
+        ? `Force delete project ${projectNumber}? This bypasses workflow safety validation.`
+        : `Delete project ${projectNumber}?`,
     );
 
     if (!confirmed) {
@@ -230,19 +277,34 @@ export default function Batches() {
   };
 
   const handleHold = (batch: UploadBatch) => {
-    if (!window.confirm(`Place project ${batch.project_no} on hold? Active assignment workflow will stop for this project.`)) {
+    if (!window.confirm(`Place project ${formatProjectNumber(batch)} on hold? Active assignment workflow will stop for this project.`)) {
       return;
     }
 
     holdMutation.mutate(batch.id);
   };
 
+  const handleActivate = (batch: UploadBatch) => {
+    if (!window.confirm(`Activate project ${formatProjectNumber(batch)}? Tasks and fixtures will reappear in active workflows.`)) {
+      return;
+    }
+
+    activateMutation.mutate(batch.id);
+  };
+
   const handleRelease = (batch: UploadBatch) => {
-    if (!window.confirm(`Release project ${batch.project_no}? This marks all fixtures and tasks completed.`)) {
+    if (!window.confirm(`Release project ${formatProjectNumber(batch)}? This marks all fixtures and tasks completed.`)) {
       return;
     }
 
     releaseMutation.mutate(batch.id);
+  };
+
+  const handleToggleModification = (batch: UploadBatch) => {
+    modificationMutation.mutate({
+      projectId: batch.project_id,
+      isModified: !batch.is_modified,
+    });
   };
 
   return (
@@ -293,19 +355,36 @@ export default function Batches() {
                 const hasCompletionTruth = typeof batch.project_completion_percent === "number";
                 const isOwner = Boolean(
                   user?.employee_id
-                  && ((batch.uploaded_by_user_id || batch.uploaded_by) === user.employee_id),
+                  && batch.project_created_by_user_id === user.employee_id,
                 );
                 const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
                 const canManageProject = isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
                 const canManage2DRouting = batch.can_manage_2d_routing === true;
-                const projectCompleted = batch.project_status === "completed";
+                const projectTerminal = batch.project_status === "completed" || batch.project_status === "released";
                 const projectOnHold = batch.project_status === "on_hold";
-                const lifecyclePending = holdMutation.isPending || releaseMutation.isPending;
+                const lifecyclePending = holdMutation.isPending || activateMutation.isPending || releaseMutation.isPending;
 
                 return (
                   <TableRow key={batch.project_id}>
                     <TableCell>
-                      <div className="font-medium">{batch.project_no}</div>
+                      <div className="flex items-center gap-2">
+                        {batch.can_toggle_modification ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            disabled={projectTerminal || modificationMutation.isPending}
+                            onClick={() => handleToggleModification(batch)}
+                            title={batch.is_modified ? "Clear modification marker" : "Mark project modified"}
+                          >
+                            <Wrench className={cn("h-4 w-4", batch.is_modified ? "text-primary" : "text-muted-foreground")} />
+                          </Button>
+                        ) : batch.is_modified ? (
+                          <Wrench className="h-4 w-4 text-primary" />
+                        ) : null}
+                        <div className="font-medium">{formatProjectNumber(batch)}</div>
+                      </div>
                       <div className="text-xs text-muted-foreground">{batch.project_name}</div>
                     </TableCell>
                     <TableCell>{formatDateTime(batch.uploaded_at)}</TableCell>
@@ -347,7 +426,7 @@ export default function Batches() {
                             type="button"
                             variant="outline"
                             size="sm"
-                            disabled={projectCompleted}
+                            disabled={projectTerminal}
                             onClick={() => {
                               setRoutingBatch(batch);
                               setSelected2DLeader("");
@@ -357,21 +436,34 @@ export default function Batches() {
                             Assign to 2D
                           </Button>
                         ) : null}
+                        {projectOnHold ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={!canManageProject || projectTerminal || lifecyclePending}
+                            onClick={() => handleActivate(batch)}
+                          >
+                            <PlayCircle className="h-4 w-4 mr-2" />
+                            Activate
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={!canManageProject || projectTerminal || lifecyclePending}
+                            onClick={() => handleHold(batch)}
+                          >
+                            <PauseCircle className="h-4 w-4 mr-2" />
+                            Hold
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          disabled={!canManageProject || projectOnHold || projectCompleted || lifecyclePending}
-                          onClick={() => handleHold(batch)}
-                        >
-                          <PauseCircle className="h-4 w-4 mr-2" />
-                          On Hold
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={!canManageProject || projectCompleted || lifecyclePending}
+                          disabled={!canManageProject || projectTerminal || lifecyclePending}
                           onClick={() => handleRelease(batch)}
                         >
                           <Rocket className="h-4 w-4 mr-2" />
@@ -411,7 +503,7 @@ export default function Batches() {
             <div className="grid gap-3 text-sm">
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Project</span>
-                <span>{selectedBatch.project_no}</span>
+                <span>{formatProjectNumber(selectedBatch)}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Project Name</span>
@@ -435,7 +527,7 @@ export default function Batches() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Uploaded By</span>
-                <span>{selectedBatch.uploaded_by_user_id || selectedBatch.uploaded_by || "-"}</span>
+                <span>{formatEmployeeDisplay(selectedBatch.uploaded_by_user_id || selectedBatch.uploaded_by || "-", selectedBatch.uploaded_by_name)}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Accepted / Rejected</span>
@@ -455,7 +547,7 @@ export default function Batches() {
           <DialogHeader>
             <DialogTitle>Assign to 2D</DialogTitle>
             <DialogDescription>
-              {routingBatch ? `${routingBatch.project_no} · ${routingBatch.project_name}` : ""}
+              {routingBatch ? `${formatProjectNumber(routingBatch)} · ${routingBatch.project_name}` : ""}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -469,7 +561,7 @@ export default function Batches() {
                   <SelectItem value="__none__">Select 2D leader</SelectItem>
                   {(routingQuery.data?.eligible_leaders ?? []).map((leader) => (
                     <SelectItem key={leader.employee_id} value={leader.employee_id}>
-                      {leader.name} ({leader.employee_id})
+                      {formatEmployeeDisplay(leader)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -494,7 +586,7 @@ export default function Batches() {
                   {(routingQuery.data?.assignments ?? []).map((assignment) => (
                     <div key={assignment.id} className="flex items-center justify-between rounded-md border p-2 text-sm">
                       <span>
-                        {assignment.assigned_leader_name || assignment.assigned_leader_id}
+                        {formatEmployeeDisplay(assignment.assigned_leader_id, assignment.assigned_leader_name)}
                         <span className="ml-2 text-xs text-muted-foreground">
                           {assignment.is_active ? "Active" : "Inactive"}
                         </span>

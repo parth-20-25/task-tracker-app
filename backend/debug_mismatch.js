@@ -1,3 +1,7 @@
+const { assertSafeScriptExecution } = require("./lib/scriptGuards");
+
+assertSafeScriptExecution("debug_mismatch.js", { overrideEnv: "ALLOW_PRODUCTION_DEBUG" });
+
 const pool = require("./db");
 
 async function run() {

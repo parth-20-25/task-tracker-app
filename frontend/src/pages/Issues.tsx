@@ -22,6 +22,7 @@ import { toast } from "@/hooks/use-toast";
 import { ListSkeleton } from "@/components/LoadingSkeletons";
 import { issueQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { Issue, IssuePriority, IssueStatus } from "@/types";
 
 const priorities: IssuePriority[] = ["LOW", "MEDIUM", "HIGH"];
@@ -111,8 +112,8 @@ function IssueList({
                 </div>
                 <p className="text-sm text-muted-foreground">{issue.description}</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span>Created by {issue.creator?.name || issue.created_by}</span>
-                  <span>Assigned to {issue.assignee?.name || issue.assigned_to}</span>
+                  <span>Created by {issue.creator ? formatEmployeeDisplay(issue.creator) : formatEmployeeDisplay(issue.created_by)}</span>
+                  <span>Assigned to {issue.assignee ? formatEmployeeDisplay(issue.assignee) : formatEmployeeDisplay(issue.assigned_to)}</span>
                   <span>{formatDateTime(issue.created_at)}</span>
                 </div>
               </div>
@@ -341,7 +342,7 @@ export default function Issues() {
                     <SelectItem value="__none__">Select user</SelectItem>
                     {usersQuery.data?.map((targetUser) => (
                       <SelectItem key={targetUser.employee_id} value={targetUser.employee_id}>
-                        {targetUser.name} · {targetUser.employee_id}
+                        {formatEmployeeDisplay(targetUser)}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -1,6 +1,6 @@
 export type TaskStatus = 'created' | 'assigned' | 'in_progress' | 'on_hold' | 'under_review' | 'rework' | 'closed' | 'cancelled';
 export type VerificationStatus = 'pending' | 'manager_approved' | 'quality_pending' | 'approved' | 'rejected';
-export type ProjectStatus = 'active' | 'on_hold' | 'completed';
+export type ProjectStatus = 'active' | 'on_hold' | 'completed' | 'released';
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type RoleScope = 'global' | 'department' | 'team' | 'self';
 export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed' | 'cancelled';
@@ -39,7 +39,16 @@ export interface DepartmentSubdivision {
 export interface User {
   employee_id: string;
   name: string;
+  display_name?: string;
   email?: string | null;
+  username?: string | null;
+  username_changed_at?: string | null;
+  bio?: string;
+  avatar_url?: string | null;
+  avatar_bucket?: string | null;
+  avatar_path?: string | null;
+  avatar_updated_at?: string | null;
+  avatar_fallback?: string;
   role_id: string;
   permissions?: string[];
   role?: Role;
@@ -97,6 +106,7 @@ export interface Task {
   location_tag?: string;
   project_id?: string | null;
   project_status?: ProjectStatus;
+  project_is_modified?: boolean;
   fixture_id?: string | null;
   project_no?: string | null;
   fixture_no?: string | null;
@@ -188,11 +198,13 @@ export interface UploadBatch {
   batch_id: string;
   project_id: string;
   project_no: string;
+  project_created_by_user_id?: string | null;
   project_name: string;
   customer_name: string;
   department_id: string;
   uploaded_by?: string | null;
   uploaded_by_user_id?: string | null;
+  uploaded_by_name?: string | null;
   uploaded_at: string;
   created_at: string;
   accepted_rows: number;
@@ -212,6 +224,8 @@ export interface UploadBatch {
   deletion_blocked: boolean;
   delete_blocked_reason?: string | null;
   can_manage_2d_routing?: boolean;
+  is_modified?: boolean;
+  can_toggle_modification?: boolean;
 }
 
 export interface ProjectDashboardSummary {
@@ -222,6 +236,7 @@ export interface ProjectDashboardSummary {
   department_id: string;
   department_name?: string | null;
   project_status: ProjectStatus;
+  is_modified?: boolean;
   completion_percent: number | null;
   completion_truth_status?: string | null;
   completion_strict_complete?: boolean;
@@ -237,6 +252,7 @@ export interface ProjectDashboardSummary {
   project_leader_id?: string | null;
   project_leader_name?: string | null;
   uploaded_by_name?: string | null;
+  can_toggle_modification?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -541,6 +557,7 @@ export interface DepartmentProject {
   rework_date: string | null;
   department_id: string;
   project_status?: ProjectStatus;
+  is_modified?: boolean;
   uploaded_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -553,6 +570,7 @@ export interface DesignProjectOption {
   company_name: string;
   department_id: string;
   project_status?: ProjectStatus;
+  is_modified?: boolean;
 }
 
 export interface DesignFixtureOption {
@@ -568,6 +586,10 @@ export interface DesignFixtureOption {
   image_1_url?: string | null;
   image_2_url?: string | null;
   ingestion_source?: string | null;
+  is_outsourced?: boolean;
+  vendor_name?: string | null;
+  outsourced_at?: string | null;
+  outsourced_by?: string | null;
   revision_no?: number;
   is_legacy_workflow?: boolean;
   is_workflow_complete?: boolean;

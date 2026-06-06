@@ -607,14 +607,26 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS rework_date DATE,
       ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
       ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS is_modified BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
     await client.query(`
       UPDATE projects
       SET status = 'active'
       WHERE status IS NULL
-         OR status NOT IN ('active', 'on_hold', 'completed')
+         OR status NOT IN ('active', 'on_hold', 'completed', 'released')
+    `);
+
+    await client.query(`
+      UPDATE projects
+      SET is_modified = FALSE
+      WHERE is_modified IS NULL
+    `);
+
+    await client.query(`
+      ALTER TABLE projects
+      DROP CONSTRAINT IF EXISTS projects_status_check
     `);
 
     await client.query(`
@@ -627,7 +639,7 @@ async function runMigrations() {
         ) THEN
           ALTER TABLE projects
           ADD CONSTRAINT projects_status_check
-          CHECK (status IN ('active', 'on_hold', 'completed'));
+          CHECK (status IN ('active', 'on_hold', 'completed', 'released'));
         END IF;
       END $$;
     `);

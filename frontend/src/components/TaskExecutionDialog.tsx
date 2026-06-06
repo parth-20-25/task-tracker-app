@@ -1,6 +1,6 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type ClipboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, CheckSquare, FileImage, History, Loader2, NotebookText, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Camera, CheckSquare, ClipboardPaste, FileImage, History, Loader2, NotebookText, Trash2, UploadCloud, X } from "lucide-react";
 import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAssignmentUsers, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, transferTask, updateTask, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
 import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog } from "@/types";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,6 +18,7 @@ import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
 import { isProjectAuthorityUser } from "@/lib/permissions";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { batchQueryKeys } from "@/lib/queryKeys";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
 import { resolveImageUrl } from "@/lib/imageUrl";
@@ -51,12 +53,59 @@ function isAllowedTaskProofFile(file: File) {
   return ALLOWED_TASK_PROOF_EXTENSIONS.some((extension) => lowerCaseName.endsWith(extension));
 }
 
+function extensionForMimeType(mimeType: string) {
+  switch (mimeType.toLowerCase()) {
+    case "image/bmp":
+      return ".bmp";
+    case "image/gif":
+      return ".gif";
+    case "image/heic":
+      return ".heic";
+    case "image/heif":
+      return ".heif";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/png":
+    default:
+      return ".png";
+  }
+}
+
+function buildClipboardProofFile(blob: Blob) {
+  if (blob instanceof File && blob.name) {
+    return blob;
+  }
+
+  const mimeType = blob.type || "image/png";
+  return new File([blob], `clipboard-proof-${Date.now()}${extensionForMimeType(mimeType)}`, {
+    type: mimeType,
+  });
+}
+
+function getClipboardImageFile(clipboardData: DataTransfer | null) {
+  if (!clipboardData) {
+    return null;
+  }
+
+  const directFile = Array.from(clipboardData.files || []).find((file) => file.type.startsWith("image/"));
+  if (directFile) {
+    return buildClipboardProofFile(directFile);
+  }
+
+  const imageItem = Array.from(clipboardData.items || []).find((item) => item.type.startsWith("image/"));
+  const imageFile = imageItem?.getAsFile();
+  return imageFile ? buildClipboardProofFile(imageFile) : null;
+}
+
 export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const { access, user } = useAuth();
   const { refreshTasks } = useTasks();
   const queryClient = useQueryClient();
   const taskDisplay = getTaskCardDisplay(task);
   const [open, setOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("activity");
   const [loading, setLoading] = useState(false);
   const [activity, setActivity] = useState<TaskActivity[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
@@ -73,8 +122,13 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const [transferTo, setTransferTo] = useState("");
   const [transferReason, setTransferReason] = useState("");
   const [transferring, setTransferring] = useState(false);
+  const [proofPickerOpen, setProofPickerOpen] = useState(false);
+  const [pendingProofFile, setPendingProofFile] = useState<File | null>(null);
+  const [pendingProofPreviewUrl, setPendingProofPreviewUrl] = useState<string | null>(null);
+  const [waitingForPaste, setWaitingForPaste] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const proofPasteTargetRef = useRef<HTMLDivElement | null>(null);
   const isAssignee = user
     ? user.employee_id === task.assigned_to || task.assignee_ids?.includes(user.employee_id)
     : false;
@@ -147,7 +201,22 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     }
   }, [task.id]);
 
-  const handleProofSelection = useCallback(async (file: File | null) => {
+  useEffect(() => {
+    return () => {
+      if (pendingProofPreviewUrl) {
+        URL.revokeObjectURL(pendingProofPreviewUrl);
+      }
+    };
+  }, [pendingProofPreviewUrl]);
+
+  const clearPendingProof = useCallback(() => {
+    setPendingProofFile(null);
+    setPendingProofPreviewUrl(null);
+    setWaitingForPaste(false);
+    resetProofInputs();
+  }, [resetProofInputs]);
+
+  const stageProofSelection = useCallback((file: File | null) => {
     if (!file) {
       return;
     }
@@ -172,26 +241,110 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
       return;
     }
 
+    setPendingProofFile(file);
+    setPendingProofPreviewUrl(URL.createObjectURL(file));
+    setWaitingForPaste(false);
+    setProofPickerOpen(false);
+    resetProofInputs();
+  }, [resetProofInputs]);
+
+  const handlePendingProofSubmit = useCallback(async () => {
+    if (!pendingProofFile) {
+      toast({
+        title: "No proof selected",
+        description: "Choose or paste an image before submitting proof.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setUploading(true);
 
     try {
-      await uploadTaskAttachment(task.id, file);
+      await uploadTaskAttachment(task.id, pendingProofFile);
       await Promise.all([loadExecutionData(), refreshTasks()]);
+      clearPendingProof();
+      toast({ title: "Proof uploaded", description: "The proof image is ready for the task submission flow." });
     } catch (error) {
       toast({ title: "Could not upload proof", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
     } finally {
       setUploading(false);
-      resetProofInputs();
     }
-  }, [loadExecutionData, refreshTasks, resetProofInputs, task.id]);
+  }, [clearPendingProof, loadExecutionData, pendingProofFile, refreshTasks, task.id]);
 
   const handleFileUpload = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    void handleProofSelection(event.target.files?.[0] || null);
-  }, [handleProofSelection]);
+    stageProofSelection(event.target.files?.[0] || null);
+  }, [stageProofSelection]);
 
   const handleCameraCapture = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    void handleProofSelection(event.target.files?.[0] || null);
-  }, [handleProofSelection]);
+    stageProofSelection(event.target.files?.[0] || null);
+  }, [stageProofSelection]);
+
+  const handleProofPaste = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
+    if (!isAssignee || task.status === "closed") {
+      return;
+    }
+
+    const imageFile = getClipboardImageFile(event.clipboardData);
+    if (!imageFile) {
+      return;
+    }
+
+    event.preventDefault();
+    stageProofSelection(imageFile);
+  }, [isAssignee, stageProofSelection, task.status]);
+
+  const tryReadClipboardImage = useCallback(async () => {
+    if (!navigator.clipboard?.read) {
+      return false;
+    }
+
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) {
+          continue;
+        }
+
+        const blob = await item.getType(imageType);
+        stageProofSelection(buildClipboardProofFile(blob));
+        return true;
+      }
+    } catch (_error) {
+      return false;
+    }
+
+    return false;
+  }, [stageProofSelection]);
+
+  const handlePasteOption = useCallback(() => {
+    setWaitingForPaste(true);
+    setProofPickerOpen(false);
+    window.setTimeout(() => proofPasteTargetRef.current?.focus(), 0);
+    void tryReadClipboardImage();
+  }, [tryReadClipboardImage]);
+
+  const openProofDialog = useCallback(() => {
+    setActiveTab("proof");
+    if (isAssignee && task.status !== "closed") {
+      window.setTimeout(() => setProofPickerOpen(true), 0);
+    }
+  }, [isAssignee, task.status]);
+
+  const handleDialogOpenChange = useCallback((nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setProofPickerOpen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      clearPendingProof();
+      setProofPickerOpen(false);
+    }
+  }, [clearPendingProof, open]);
 
   useEffect(() => {
     if (open) {
@@ -324,11 +477,16 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   }, [completionInput, loadExecutionData, queryClient, refreshTasks, task.id, transferReason, transferTo]);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="ghost" className="text-xs h-7">
-          <NotebookText className="h-3.5 w-3.5 mr-1" />
-          Track
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 w-7 p-0"
+          aria-label="Track proof"
+          onClick={openProofDialog}
+        >
+          <Camera className="h-3.5 w-3.5" />
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-4xl">
@@ -381,7 +539,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
               )}
             </div>
 
-            <Tabs defaultValue="activity" className="w-full">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList>
               <TabsTrigger value="activity"><History className="h-3.5 w-3.5 mr-1.5" />Activity</TabsTrigger>
               <TabsTrigger value="logs"><NotebookText className="h-3.5 w-3.5 mr-1.5" />Logs</TabsTrigger>
@@ -400,7 +558,9 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                       <Badge variant="outline">{item.action_type}</Badge>
                       <span className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</span>
                     </div>
-                    {item.user_name && <p className="text-sm">{item.user_name}</p>}
+                    {(item.user_employee_id || item.user_name) && (
+                      <p className="text-sm">{formatEmployeeDisplay(item.user_employee_id, item.user_name)}</p>
+                    )}
                     {item.notes && <p className="text-sm text-muted-foreground">{item.notes}</p>}
                   </div>
                 ))
@@ -441,7 +601,9 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                       <span className="text-xs text-muted-foreground">{new Date(item.timestamp).toLocaleString()}</span>
                     </div>
                     <p className="text-sm font-medium">{item.step_name}</p>
-                    <p className="text-sm">{item.updated_by_name || item.updated_by || "Unknown user"}</p>
+                    <p className="text-sm">
+                      {formatEmployeeDisplay(item.updated_by || item.user_employee_id || null, item.updated_by_name || item.user_name)}
+                    </p>
                     {item.notes && <p className="text-sm text-muted-foreground">{item.notes}</p>}
                   </div>
                 ))
@@ -516,7 +678,9 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 md:grid-cols-3">
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Current Assignee</p>
-                    <p className="text-sm font-medium">{task.assignee?.name || task.assigned_to}</p>
+                    <p className="text-sm font-medium">
+                      {task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to)}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Preserved</p>
@@ -543,7 +707,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                         <SelectItem value="__none__">Select employee</SelectItem>
                         {transferCandidates.map((candidate) => (
                           <SelectItem key={candidate.employee_id} value={candidate.employee_id}>
-                            {candidate.name || candidate.employee_id}
+                            {formatEmployeeDisplay(candidate)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -573,7 +737,13 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
               </TabsContent>
             ) : null}
 
-            <TabsContent value="proof" className="space-y-4 mt-4">
+            <TabsContent
+              value="proof"
+              className="space-y-4 mt-4 focus:outline-none"
+              ref={proofPasteTargetRef}
+              tabIndex={0}
+              onPaste={handleProofPaste}
+            >
               {task.status === 'closed' && (
                 <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-sm text-primary mb-4">
                   This task is completed. Proof documents are locked and available for viewing only.
@@ -600,29 +770,50 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                   style={{ display: "none" }}
                   onChange={handleCameraCapture}
                 />
-                <Button
-                  disabled={!isAssignee || uploading || task.status === 'closed'}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  Upload from Device
-                </Button>
-                <Button
-                  disabled={!isAssignee || uploading || task.status === 'closed' || !isMobile}
-                  onClick={() => {
-                    if (!isMobile) {
-                      toast({
-                        title: "Camera not supported",
-                        description: "Use a mobile device to capture images directly.",
-                        variant: "destructive",
-                      });
-                      return;
-                    }
-
-                    cameraInputRef.current?.click();
-                  }}
-                >
-                  Open Camera
-                </Button>
+                <Popover open={proofPickerOpen} onOpenChange={setProofPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8"
+                      disabled={!isAssignee || uploading || task.status === 'closed'}
+                      aria-label="Add proof image"
+                    >
+                      <Camera className="h-4 w-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-56 p-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 w-full justify-start px-2 text-xs"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <UploadCloud className="mr-2 h-3.5 w-3.5" />
+                      Upload From Device
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 w-full justify-start px-2 text-xs"
+                      disabled={!isMobile}
+                      onClick={() => cameraInputRef.current?.click()}
+                    >
+                      <Camera className="mr-2 h-3.5 w-3.5" />
+                      Open Camera
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 w-full justify-start px-2 text-xs"
+                      onClick={handlePasteOption}
+                    >
+                      <ClipboardPaste className="mr-2 h-3.5 w-3.5" />
+                      Paste Screenshot (Ctrl + V)
+                    </Button>
+                  </PopoverContent>
+                </Popover>
                 {latestProof && resolveImageUrl(latestProof.file_url) && (
                   <a href={resolveImageUrl(latestProof.file_url) || "#"} target="_blank" rel="noreferrer" className="text-sm text-primary underline">
                     Open latest proof
@@ -630,8 +821,55 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Images only. Max {MAX_TASK_PROOF_SIZE_MB} MB. Use Upload from Device for files and Open Camera for direct capture.
+                Images only. Max {MAX_TASK_PROOF_SIZE_MB} MB.
               </p>
+
+              {pendingProofPreviewUrl ? (
+                <div className="rounded-lg border bg-slate-50/60 p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <div className="h-40 w-full overflow-hidden rounded-md border bg-background sm:w-56">
+                      <img
+                        src={pendingProofPreviewUrl}
+                        alt="Selected proof preview"
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{pendingProofFile?.name || "Proof image"}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {pendingProofFile ? `${Math.ceil(pendingProofFile.size / 1024)} KB` : "Ready to upload"}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={clearPendingProof}
+                          disabled={uploading}
+                        >
+                          <X className="mr-1.5 h-3.5 w-3.5" />
+                          Clear
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => { handlePendingProofSubmit().catch(() => undefined); }}
+                          disabled={uploading || !pendingProofFile}
+                        >
+                          {uploading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                          Submit
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : waitingForPaste ? (
+                <div className="rounded-lg border border-dashed bg-slate-50/60 p-3 text-sm text-muted-foreground">
+                  Waiting for pasted screenshot...
+                </div>
+              ) : null}
 
               {attachments.length === 0 && !latestProof ? (
                 <p className="text-sm text-muted-foreground">No proof attachments yet.</p>

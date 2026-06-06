@@ -3,6 +3,7 @@ const { canonicalFixtureNo, normalizeComparableText } = require("./normalize");
 
 const FIELD_LABELS = {
   fixture_no: "Fixture No",
+  op_no: "OP.NO",
   part_name: "Part Name",
   fixture_type: "Fixture Type",
   qty: "QTY",
@@ -114,6 +115,7 @@ function toFieldKey(label) {
     .replace(/^_+|_+$/g, "");
 
   if (normalized === "fixture_no") return "fixture_no";
+  if (normalized === "op_no" || normalized === "opno" || normalized === "operation" || normalized === "operation_no") return "op_no";
   if (normalized === "part_name") return "part_name";
   if (normalized === "fixture_type") return "fixture_type";
   if (normalized === "qty") return "qty";
@@ -139,6 +141,10 @@ function buildProblemFields(reason, missingFields = [], candidateField) {
     derived.add("fixture_no");
   }
 
+  if (reason === "op_no_missing" || reason === "op_no_invalid") {
+    derived.add("op_no");
+  }
+
   if (reason === "qty_invalid") {
     derived.add("qty");
   }
@@ -159,12 +165,14 @@ function buildFieldDiagnostics(fields) {
     business_row_reference: fields?.business_row_reference || null,
     raw: {
       fixture_no: fields.fixture_no_raw ?? null,
+      op_no: fields.op_no_raw ?? null,
       part_name: fields.part_name_raw ?? null,
       fixture_type: fields.fixture_type_raw ?? null,
       qty: fields.qty_raw ?? null,
     },
     normalized: {
       fixture_no: fields.fixture_no ?? null,
+      op_no: fields.op_no ?? null,
       part_name: fields.part_name ?? null,
       fixture_type: fields.fixture_type ?? null,
       qty: fields.qty || null,
@@ -216,6 +224,7 @@ function extractRowFields(item) {
       row_reference_source: getRowReferenceSource(item),
       business_row_reference: getBusinessRowReference(item),
       fixture_no: cols[1],
+      op_no: cols[2],
       part_name: cols[3],
       fixture_type: cols[4],
       qty: cols[5],
@@ -239,6 +248,7 @@ function extractRowFields(item) {
     row_reference_source: getRowReferenceSource(item),
     business_row_reference: getBusinessRowReference(item),
     fixture_no: normalizeTextCell(item?.fixture_no),
+    op_no: normalizeTextCell(item?.op_no),
     part_name: normalizeTextCell(item?.part_name),
     fixture_type: normalizeTextCell(item?.fixture_type),
     qty: item?.qty,
@@ -247,6 +257,7 @@ function extractRowFields(item) {
     parser_confidence: normalizeTextCell(item?.parser_confidence || "HIGH").toUpperCase(),
     raw_data: rawData || {
       fixture_no: item?.fixture_no ?? null,
+      op_no: item?.op_no ?? null,
       part_name: item?.part_name ?? null,
       fixture_type: item?.fixture_type ?? null,
       qty: item?.qty ?? null,
@@ -255,6 +266,31 @@ function extractRowFields(item) {
       row_reference_source: getRowReferenceSource(item),
       business_row_reference: getBusinessRowReference(item),
     },
+  };
+}
+
+function normalizeOpNo(value) {
+  const raw = normalizeNormalizedText(value);
+  if (!raw) {
+    return { raw, normalized: null };
+  }
+
+  const withoutPrefix = raw
+    .replace(/^op(?:\s*[\.-]?\s*no\.?)?[\.\-\s]*/i, "")
+    .trim();
+  const candidate = withoutPrefix || raw;
+  const match = candidate.match(/^(\d+)(?:\.0+)?([a-z]*)$/i);
+
+  if (!match) {
+    return { raw, normalized: null };
+  }
+
+  const number = String(parseInt(match[1], 10));
+  const suffix = String(match[2] || "").toUpperCase();
+
+  return {
+    raw,
+    normalized: `OP ${number}${suffix}`,
   };
 }
 
@@ -272,6 +308,7 @@ function validateParsedData(parsedRows) {
       row_reference_source,
       business_row_reference,
       fixture_no,
+      op_no,
       part_name,
       fixture_type,
       qty: qtyRaw,
@@ -289,6 +326,7 @@ function validateParsedData(parsedRows) {
     };
 
     const normalizedFixtureNo = normalizeFixtureNo(fixture_no);
+    const opNoInfo = normalizeOpNo(op_no);
     const normalizedPartName = normalizeNormalizedText(part_name);
     const normalizedFixtureType = normalizeNormalizedText(fixture_type);
     const qtyInfo = normalizeQty(qtyRaw);
@@ -299,10 +337,12 @@ function validateParsedData(parsedRows) {
       row_reference_source,
       business_row_reference,
       fixture_no_raw: fixture_no,
+      op_no_raw: opNoInfo.raw,
       part_name_raw: part_name,
       fixture_type_raw: fixture_type,
       qty_raw: qtyInfo.raw,
       fixture_no: normalizedFixtureNo,
+      op_no: opNoInfo.normalized,
       part_name: normalizedPartName || null,
       fixture_type: normalizedFixtureType || null,
       qty: qtyInfo.normalized,
@@ -326,6 +366,18 @@ function validateParsedData(parsedRows) {
         expected: "A PARC fixture number such as PARC25119001",
         rejected_field: "Fixture No",
         detected_value: fixture_no || "",
+      }));
+      continue;
+    }
+
+    if (!opNoInfo.normalized) {
+      const missingFields = opNoInfo.raw ? [] : [toFieldLabel("op_no")];
+      rejectedRows.push(buildRejectedRow(rowMeta, opNoInfo.raw ? "Invalid OP.NO format." : "OP.NO is mandatory for import.", raw_data, diagnostics, {
+        reason: opNoInfo.raw ? "op_no_invalid" : "op_no_missing",
+        expected: "OP format such as OP 10 or OP 10A",
+        rejected_field: "OP.NO",
+        detected_value: op_no || "",
+        missing_fields: missingFields,
       }));
       continue;
     }
@@ -399,6 +451,7 @@ function validateParsedData(parsedRows) {
       row_reference_source,
       business_row_reference,
       fixture_no: normalizedFixtureNo,
+      op_no: opNoInfo.normalized,
       part_name: normalizedPartName,
       fixture_type: normalizedFixtureType,
       qty,

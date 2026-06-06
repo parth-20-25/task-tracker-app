@@ -1,6 +1,7 @@
 const { Pool } = require("pg");
 const { logger } = require("./lib/logger");
 const { getExecutionMetadata, safeSerialize, summarizeQuery } = require("./lib/observability");
+const { resolveDatabaseSslConfig } = require("./lib/databaseSsl");
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required for PostgreSQL connectivity.");
@@ -8,9 +9,7 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: resolveDatabaseSslConfig(),
 });
 
 function normalizeQueryText(query) {
@@ -43,7 +42,8 @@ function formatQueryParams(values) {
         : Array.isArray(value)
           ? "array"
           : typeof value,
-    value: value instanceof Date ? value.toISOString() : value,
+    arrayLength: Array.isArray(value) ? value.length : undefined,
+    isNull: value === null,
   }));
 }
 
@@ -85,7 +85,7 @@ function instrumentQueryable(queryable, label) {
         ...queryMetadata,
         durationMs: Date.now() - startedAt,
         rowCount: result?.rowCount ?? result?.rows?.length ?? 0,
-        firstRow: result?.rows?.length ? safeSerialize(result.rows[0]) : null,
+        firstRowFields: result?.rows?.length ? Object.keys(result.rows[0]).slice(0, 50) : [],
       });
 
       return result;

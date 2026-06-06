@@ -8,12 +8,52 @@ import os
 import re
 import time
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from openpyxl import load_workbook
 from starlette.datastructures import UploadFile as StarletteUploadFile
+
+
+def normalize_runtime_mode(value: str | None) -> str:
+    return "production" if (value or "").strip().lower() == "production" else "development"
+
+
+def unquote_env_value(value: str) -> str:
+    stripped_value = value.strip()
+    if len(stripped_value) >= 2 and stripped_value[0] == stripped_value[-1] and stripped_value[0] in {"'", '"'}:
+        return stripped_value[1:-1]
+    return stripped_value
+
+
+def load_service_env() -> None:
+    mode = normalize_runtime_mode(os.getenv("PYTHON_ENV") or os.getenv("ENV") or os.getenv("NODE_ENV"))
+    os.environ["NODE_ENV"] = mode
+
+    service_root = Path(__file__).resolve().parents[1]
+    candidate_files = [service_root / f".env.{mode}"]
+    if mode == "development":
+        candidate_files.append(service_root / ".env")
+
+    for env_path in candidate_files:
+        if not env_path.exists():
+            continue
+
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key:
+                os.environ.setdefault(key, unquote_env_value(value))
+        break
+
+
+load_service_env()
 
 ALLOWED_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ALLOWED_EXTENSION = ".xlsx"

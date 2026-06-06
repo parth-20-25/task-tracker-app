@@ -9,24 +9,6 @@ function parseAllowedOrigins(value) {
     .filter(Boolean);
 }
 
-function deriveVercelPreviewPattern(origin) {
-  const match = /^https:\/\/([a-z0-9-]+)\.vercel\.app$/i.exec(origin);
-
-  if (!match) {
-    return null;
-  }
-
-  return `https://${match[1]}-*.vercel.app`;
-}
-
-function buildEffectiveAllowedOrigins(allowedOrigins) {
-  const derivedOrigins = allowedOrigins
-    .map(deriveVercelPreviewPattern)
-    .filter(Boolean);
-
-  return [...new Set([...allowedOrigins, ...derivedOrigins])];
-}
-
 function buildOriginRegex(pattern) {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`, "i");
@@ -38,9 +20,7 @@ function isOriginAllowed(origin, allowedOrigins) {
   }
 
   const normalizedOrigin = normalizeOriginPattern(origin);
-  const effectiveAllowedOrigins = buildEffectiveAllowedOrigins(
-    allowedOrigins.map(normalizeOriginPattern).filter(Boolean),
-  );
+  const effectiveAllowedOrigins = allowedOrigins.map(normalizeOriginPattern).filter(Boolean);
 
   return effectiveAllowedOrigins.some((allowedOrigin) => {
     if (allowedOrigin === "*") {
@@ -61,7 +41,7 @@ function isOriginAllowed(origin, allowedOrigins) {
 
 function buildCorsOptions(rawAllowedOrigins) {
   const configuredOrigins = parseAllowedOrigins(rawAllowedOrigins);
-  const effectiveAllowedOrigins = buildEffectiveAllowedOrigins(configuredOrigins);
+  const effectiveAllowedOrigins = configuredOrigins;
 
   return {
     origin(origin, callback) {

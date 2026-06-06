@@ -34,6 +34,8 @@ const {
   listDesignFixturesForUser,
   listDesignProjectsForUser,
   listProjectDashboardForUser,
+  updateFixtureOutsourcingForUser,
+  updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
 const {
@@ -170,6 +172,19 @@ router.get(
   }),
 );
 
+router.patch(
+  "/design/fixtures/:fixtureId/outsourcing",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(async (req, res) => {
+    const fixture = await updateFixtureOutsourcingForUser(req.user, req.params.fixtureId, {
+      ...req.body,
+      department_id: req.body?.department_id ?? req.query.department_id,
+    });
+    return sendSuccess(res, fixture);
+  }),
+);
+
 router.get(
   "/projects/summary",
   requireOperationalController,
@@ -289,6 +304,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const routing = await getProject2DRouting(req.user, req.params.projectId);
     return sendSuccess(res, routing);
+  }),
+);
+
+router.patch(
+  "/design/projects/:projectId/modification",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const project = await updateProjectModificationForUser(req.user, req.params.projectId, req.body);
+    return sendSuccess(res, project);
   }),
 );
 

@@ -1,5 +1,5 @@
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -9,14 +9,15 @@ lerna-debug.log*
 
 node_modules
 dist
+build
 dist-ssr
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
@@ -26,23 +27,34 @@ PROJECT_INTELLIGENCE_DOCUMENT.md
 
 # local env
 .env
+.env.*
+!.env.example
+!.env.*.example
 .env.local
 .env.*.local
+.env.production
 
 # uploads/runtime files
 backend/uploads/
 uploads/
+temp/
+tmp/
+*.temp
 
 # python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .venv/
 venv/
 venv-*/
+env/
 
 # node/build
 node_modules/
 frontend/dist/
+frontend/build/
+backend/build/
 
 # logs/temp
 *.log
@@ -58,3 +70,4 @@ screenshots/
 
 # local project notes
 PROJECT_INTELLIGENCE_DOCUMENT.md
+structure.txt

@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Users, FolderOpen, User } from 'lucide-react';
 import type { Task } from '@/types';
+import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
+import { formatProjectNumber } from '@/lib/projectDisplay';
 
 const statusTabs: Array<{
   value: string;
@@ -68,7 +70,7 @@ export default function TeamTasks() {
     const map = new Map<string, { name: string; tasks: Task[] }>();
     for (const task of filteredTasks) {
       const key = task.assigned_to || '__unassigned__';
-      const name = task.assignee?.name || task.assigned_to || 'Unassigned';
+      const name = task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to);
       if (!map.has(key)) {
         map.set(key, { name, tasks: [] });
       }
@@ -96,7 +98,7 @@ export default function TeamTasks() {
               <SelectItem value="__all__">All projects</SelectItem>
               {projectSummaries.map((p) => (
                 <SelectItem key={p.project_id} value={p.project_id}>
-                  {p.project_no} — {p.project_name}
+                  {formatProjectNumber(p)} — {p.project_name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -149,7 +151,7 @@ export default function TeamTasks() {
                     const assigneeGroups = new Map<string, { name: string; tasks: Task[] }>();
                     for (const task of list) {
                       const key = task.assigned_to || '__unassigned__';
-                      const name = task.assignee?.name || task.assigned_to || 'Unassigned';
+                      const name = task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to);
                       if (!assigneeGroups.has(key)) {
                         assigneeGroups.set(key, { name, tasks: [] });
                       }

@@ -10,6 +10,15 @@ const STATUS_LABELS = {
   REVIEW: "Review",
 };
 
+function clampPercent(value) {
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, percent));
+}
+
 function resolveFixtureGlobalStatus(fixtureTruth, fixtureRow) {
   if (fixtureTruth?.strict_complete) {
     return STATUS_LABELS.CLOSED;
@@ -102,7 +111,15 @@ function resolveReportKpisFromCompletionTruth(projectTruth, fixtureRows = []) {
   const totalFixtures = fixtureRows.length;
   const overallPercent = projectTruth.strict_complete
     ? 100
-    : Number(projectTruth.completion_percent);
+    : clampPercent(projectTruth.completion_percent);
+
+  if (overallPercent === null) {
+    return {
+      ok: false,
+      error: "project completion truth is unavailable",
+      truth_errors: projectTruth.truth_errors || [],
+    };
+  }
 
   return {
     ok: true,

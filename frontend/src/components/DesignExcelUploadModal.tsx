@@ -578,7 +578,7 @@ function PostConfirmReviewStage({
           </div>
         ) : batchFixtures.length === 0 ? (
           <div className="rounded-lg border border-dashed bg-muted/40 p-6 text-center">
-            <p className="text-sm text-muted-foreground">No fixtures in this batch.</p>
+            <p className="text-sm text-muted-foreground">No fixtures in this project upload.</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -1038,10 +1038,10 @@ export function DesignExcelUploadModal({
         const fixturesWithQueuedImages = await uploadQueuedPreviewImages(fixtures);
         setBatchFixtures(fixturesWithQueuedImages);
       } catch (err) {
-        console.error("Failed to load batch fixtures", err);
+        console.error("Failed to load project upload fixtures", err);
         toast({
           title: "Warning",
-          description: "Batch created but could not load fixture details. Please refresh.",
+          description: "Project upload completed but could not load fixture details. Please refresh.",
           variant: "default",
         });
       }

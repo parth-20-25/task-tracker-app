@@ -32,6 +32,7 @@ const env = {
   corsOrigin: process.env.CORS_ORIGIN || "",
   enableTaskSeed: parseBoolean(process.env.ENABLE_TASK_SEED, false),
   uploadsDir: process.env.UPLOADS_DIR || "uploads",
+  reportTempDir: process.env.REPORT_TEMP_DIR || "",
   supabase: {
     url: process.env.SUPABASE_URL || "",
     serviceKey: process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "",
@@ -62,6 +63,10 @@ function validateBackendEnv() {
 
   if (missingEnvVars.length > 0) {
     throw new Error(`Missing required backend environment variables: ${missingEnvVars.join(", ")}`);
+  }
+
+  if (env.nodeEnv === "production" && env.corsOrigin.split(",").some((origin) => origin.trim() === "*")) {
+    throw new Error("CORS_ORIGIN cannot include '*' when NODE_ENV=production.");
   }
 }
 

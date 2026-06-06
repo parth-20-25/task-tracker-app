@@ -5,6 +5,10 @@
  * Run with: PROJECT_VISIBILITY_DEBUG=true node backend/debug_visibility_bypass.js
  */
 
+const { assertSafeScriptExecution } = require("./lib/scriptGuards");
+
+assertSafeScriptExecution("debug_visibility_bypass.js", { overrideEnv: "ALLOW_PRODUCTION_DEBUG" });
+
 const { pool } = require("./db");
 const { getAccessibleProjectIds } = require("./repositories/projectVisibility");
 const { resolveAccessibleProjectIds } = require("./services/visibilityResolutionService");

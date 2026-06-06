@@ -6,6 +6,7 @@ import {
   CalendarIcon,
   CheckSquare,
   ChevronDown,
+  Factory,
   Image as ImageIcon,
   Loader2,
   User,
@@ -18,6 +19,7 @@ import {
   fetchFixtureFullProgress,
   manipulateFixtureStage,
   reopenFixtureStage,
+  updateFixtureOutsourcing,
   validateFixtureAssignment,
   type FixtureFullProgress,
   type FixtureRevisionType,
@@ -41,6 +43,7 @@ import { useTasks } from "@/contexts/useTasks";
 import { useAssignableUsersQuery } from "@/hooks/queries/useAssignableUsersQuery";
 import { toast } from "@/hooks/use-toast";
 import { analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { cn } from "@/lib/utils";
 import { resolveImageUrl } from "@/lib/imageUrl";
 import type { DesignFixtureOption, Priority, Task, User as AppUser } from "@/types";
@@ -246,15 +249,21 @@ function getProofUploadedAt(task: Task | null) {
 }
 
 function getProofUploadedBy(task: Task | null) {
-  return task?.latest_proof?.uploaded_by_name || task?.latest_proof?.uploaded_by || null;
+  return task?.latest_proof?.uploaded_by || task?.latest_proof?.uploaded_by_name
+    ? formatEmployeeDisplay(task?.latest_proof?.uploaded_by || null, task?.latest_proof?.uploaded_by_name)
+    : null;
 }
 
 function getAssigneeName(fixture: DesignFixtureOption, task: Task | null) {
-  return task?.assignee?.name
-    || task?.assigned_to
-    || fixture.workflow_assigned_to_name
-    || fixture.workflow_assigned_to
-    || "Unassigned";
+  if (task?.assignee) {
+    return formatEmployeeDisplay(task.assignee);
+  }
+
+  if (task?.assigned_to || fixture.workflow_assigned_to || fixture.workflow_assigned_to_name) {
+    return formatEmployeeDisplay(task?.assigned_to || fixture.workflow_assigned_to || null, fixture.workflow_assigned_to_name);
+  }
+
+  return "Unassigned";
 }
 
 function normalizeOperationalState(value: string | null | undefined): FixtureOperationalState {
@@ -280,7 +289,11 @@ function resolveFixtureOperationalState(fixture: DesignFixtureOption, task: Task
   const activeTask = isActiveTask(task) ? task : null;
   const state = normalizeOperationalState(fixture.operational_state);
   const activeAssignee = activeTask?.assigned_to || fixture.workflow_assigned_to || null;
-  const activeAssigneeName = activeTask?.assignee?.name || fixture.workflow_assigned_to_name || activeAssignee;
+  const activeAssigneeName = activeTask?.assignee
+    ? formatEmployeeDisplay(activeTask.assignee)
+    : activeAssignee || fixture.workflow_assigned_to_name
+      ? formatEmployeeDisplay(activeAssignee || null, fixture.workflow_assigned_to_name)
+      : null;
   const workflowStatus = String(fixture.workflow_status || "").toUpperCase();
   const hasWorkflowOccupancy = Boolean(
     fixture.workflow_assigned_to
@@ -364,6 +377,7 @@ interface ProjectFixtureOperationsGridProps {
 const FIXTURE_SECTION_ORDER = [
   { key: "VERIFICATION", label: "Verification" },
   { key: "REWORK", label: "Rework" },
+  { key: "OUTSOURCED", label: "Outsourced" },
   { key: "UNASSIGNED", label: "Unassigned" },
   { key: "IN_PROGRESS", label: "In Progress" },
   { key: "ASSIGNED", label: "Assigned" },
@@ -429,6 +443,7 @@ export function ProjectFixtureOperationsGrid({
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     VERIFICATION: true,
     REWORK: true,
+    OUTSOURCED: true,
     UNASSIGNED: true,
     IN_PROGRESS: true,
     ASSIGNED: true,
@@ -496,7 +511,9 @@ export function ProjectFixtureOperationsGrid({
           return false;
         }
 
-        const matches = operationalResolutionByFixtureId.get(fixture.fixture_id)?.state === section.key;
+        const matches = section.key === "OUTSOURCED"
+          ? fixture.is_outsourced === true
+          : fixture.is_outsourced !== true && operationalResolutionByFixtureId.get(fixture.fixture_id)?.state === section.key;
         if (matches) {
           seen.add(fixture.fixture_id);
         }
@@ -592,7 +609,7 @@ export function ProjectFixtureOperationsGrid({
                       isLoadingUsers={assignableUsersQuery.isLoading}
                       invalidateOperationalState={invalidateOperationalState}
                       operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
-                      selectable={bulkPanelOpen && section.key === "UNASSIGNED" && assignableFixtureIds.has(fixture.fixture_id)}
+                      selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
                       selected={selectedFixtureIds.includes(fixture.fixture_id)}
                       onSelectedChange={toggleSelectedFixture}
                     />
@@ -847,7 +864,7 @@ function BulkFixtureAssignmentPanel({
               <SelectItem value="__none__">Employee</SelectItem>
               {assignableUsers.map((employee) => (
                 <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                  {employee.name} ({employee.employee_id})
+                  {formatEmployeeDisplay(employee)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1042,11 +1059,13 @@ function ProjectFixtureCard({
 
   const proofImage = getProofImage(task);
   const canonicalOperationalState = operationalResolution.state;
+  const isOutsourced = fixture.is_outsourced === true;
   const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
   const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
   const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
   const canCancelTask = canCancelFixtureOperationalTask(task, canonicalOperationalState, user, access);
+  const canToggleOutsourcing = access.canAccessProjectFixtures && access.canChangeFixtureStage;
 
   const resetAssignForm = () => {
     setAssignedTo("");
@@ -1232,6 +1251,31 @@ function ProjectFixtureCard({
     },
   });
 
+  const outsourceMutation = useMutation({
+    mutationFn: async () => {
+      await updateFixtureOutsourcing(fixture.fixture_id, {
+        department_id: departmentId,
+        is_outsourced: !isOutsourced,
+        vendor_name: isOutsourced ? undefined : fixture.vendor_name || "Manual Outsource",
+      });
+    },
+    onSuccess: async () => {
+      await invalidateOperationalState();
+      setExpanded(null);
+      toast({
+        title: isOutsourced ? "Fixture brought in-house" : "Fixture outsourced",
+        description: "Fixture history, task history, reports, and analytics continue to use the same fixture record.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: isOutsourced ? "Bring in-house failed" : "Outsource failed",
+        description: error instanceof Error ? error.message : "Could not update fixture outsourcing state",
+        variant: "destructive",
+      });
+    },
+  });
+
   const assignmentDisabled = !canDeployDesignTask
     || !assignedTo
     || !deadline
@@ -1277,6 +1321,12 @@ function ProjectFixtureCard({
                 {workflowCode}
               </Badge>
             ) : null}
+            {isOutsourced ? (
+              <Badge variant="outline" className="gap-0.5 border-slate-300 bg-slate-50 text-xs font-semibold text-slate-700">
+                <Factory className="h-3 w-3" />
+                Outsourced
+              </Badge>
+            ) : null}
             <Badge variant="outline" className={cn("text-xs font-medium", fixtureStageStatusColor(canonicalOperationalState))}>
               {operationalStatus}
             </Badge>
@@ -1314,83 +1364,98 @@ function ProjectFixtureCard({
             ) : null}
           </div>
 
-          <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
-            {isSubmittedForVerification && canReviewTask ? (
-              <>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="h-7 bg-emerald-600 px-2 text-[11px] hover:bg-emerald-700"
-                  disabled={reviewMutation.isPending}
-                  onClick={() => {
-                    if (task) {
-                      reviewMutation.mutate({ reviewTask: task, action: "approve" });
-                    }
-                  }}
-                >
-                  APPROVE
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  className="h-7 px-2 text-[11px]"
-                  disabled={reviewMutation.isPending}
-                  onClick={() => {
-                    setRejectingTask(task);
-                    setRejectionReason("");
-                  }}
-                >
-                  REJECT
-                </Button>
-              </>
-            ) : isAssigned && (canTransferTask || canCancelTask) ? (
-              <>
-                {canTransferTask ? (
+          <div className="flex flex-col items-start gap-1.5 lg:items-end">
+            <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
+              {isSubmittedForVerification && canReviewTask ? (
+                <>
                   <Button
                     type="button"
                     size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-[11px]"
-                    onClick={() => {
-                      setExpanded(expanded === "transfer" ? null : "transfer");
-                      resetAssignForm();
-                      setInlineOperationalReason(null);
-                    }}
-                  >
-                    <ArrowRightLeft className="mr-1 h-3 w-3" />
-                    Transfer
-                  </Button>
-                ) : null}
-                {canCancelTask ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
-                    disabled={cancelMutation.isPending}
+                    className="h-7 bg-emerald-600 px-2 text-[11px] hover:bg-emerald-700"
+                    disabled={reviewMutation.isPending}
                     onClick={() => {
                       if (task) {
-                        setCancellingTask(task);
+                        reviewMutation.mutate({ reviewTask: task, action: "approve" });
                       }
                     }}
                   >
-                    <XCircle className="mr-1 h-3 w-3" />
-                    Cancel Task
+                    APPROVE
                   </Button>
-                ) : null}
-              </>
-            ) : operationalResolution.assignable && canDeployDesignTask ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    className="h-7 px-2 text-[11px]"
+                    disabled={reviewMutation.isPending}
+                    onClick={() => {
+                      setRejectingTask(task);
+                      setRejectionReason("");
+                    }}
+                  >
+                    REJECT
+                  </Button>
+                </>
+              ) : isAssigned && (canTransferTask || canCancelTask) ? (
+                <>
+                  {canTransferTask ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[11px]"
+                      onClick={() => {
+                        setExpanded(expanded === "transfer" ? null : "transfer");
+                        resetAssignForm();
+                        setInlineOperationalReason(null);
+                      }}
+                    >
+                      <ArrowRightLeft className="mr-1 h-3 w-3" />
+                      Transfer
+                    </Button>
+                  ) : null}
+                  {canCancelTask ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
+                      disabled={cancelMutation.isPending}
+                      onClick={() => {
+                        if (task) {
+                          setCancellingTask(task);
+                        }
+                      }}
+                    >
+                      <XCircle className="mr-1 h-3 w-3" />
+                      Cancel Task
+                    </Button>
+                  ) : null}
+                </>
+              ) : operationalResolution.assignable && canDeployDesignTask ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={openingAssign}
+                  onClick={() => void openAssignExpansion()}
+                >
+                  {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                  Assign Now
+                </Button>
+              ) : null}
+            </div>
+            {canToggleOutsourcing ? (
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 className="h-7 px-2 text-[11px]"
-                disabled={openingAssign}
-                onClick={() => void openAssignExpansion()}
+                disabled={outsourceMutation.isPending}
+                onClick={() => outsourceMutation.mutate()}
               >
-                {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                Assign Now
+                {outsourceMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Factory className="mr-1 h-3 w-3" />}
+                {isOutsourced ? "Bring In-House" : "Outsource"}
               </Button>
             ) : null}
           </div>
@@ -1444,7 +1509,7 @@ function ProjectFixtureCard({
                   <SelectItem value="__none__">Assignee</SelectItem>
                   {assignableUsers.map((employee) => (
                     <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                      {employee.name} ({employee.employee_id})
+                      {formatEmployeeDisplay(employee)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1563,7 +1628,7 @@ function ProjectFixtureCard({
                   .filter((employee) => employee.employee_id !== task?.assigned_to)
                   .map((employee) => (
                     <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                      {employee.name} ({employee.employee_id})
+                      {formatEmployeeDisplay(employee)}
                     </SelectItem>
                   ))}
               </SelectContent>

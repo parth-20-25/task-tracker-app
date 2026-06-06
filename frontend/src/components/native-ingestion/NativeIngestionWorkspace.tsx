@@ -296,7 +296,7 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
       toast({
         title: "Native transaction committed",
         description: result.batch_id
-          ? `Batch ${result.batch_id.slice(0, 8)} saved ${result.accepted_count} fixture change(s)`
+          ? `Project upload ${result.batch_id.slice(0, 8)} saved ${result.accepted_count} fixture change(s)`
           : `${result.accepted_count} fixture change(s) accepted`,
       });
     } catch (error) {
@@ -389,7 +389,7 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
           {lastCommit?.batch_id ? (
             <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
               <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-              Batch {lastCommit.batch_id.slice(0, 8)}
+              Project upload {lastCommit.batch_id.slice(0, 8)}
             </Badge>
           ) : null}
           {isBusy ? (

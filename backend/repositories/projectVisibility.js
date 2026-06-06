@@ -243,6 +243,7 @@ function twoDLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p") 
 
 function twoDNonLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p") {
   const {
+    twoDStageNameSql,
     userIs2DNonLeaderSql,
   } = require("./projectSubdivisionRoutingRepository");
 
@@ -257,7 +258,7 @@ function twoDNonLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p
           WHERE current_assignee_progress.fixture_id = ${fixtureAlias}.id
             AND current_assignee_progress.department_id = ${projectAlias}.department_id
             AND current_assignee_progress.status <> 'APPROVED'
-            AND ${roleKeySql("current_assignee_progress.stage_name")} = '2d'
+            AND ${twoDStageNameSql("current_assignee_progress.stage_name")}
             AND current_assignee_progress.assigned_to = root.employee_id
             AND current_assignee_progress.stage_order = (
               SELECT MIN(active_assignee_progress.stage_order)

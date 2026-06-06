@@ -115,14 +115,24 @@ function normalizeFixtureNumber(value) {
 }
 
 function isHeaderLikeCell(value) {
+  const text = normalizePastedCell(value);
   const key = normalize(value);
+  if (key === "opno" && /\d/.test(text)) {
+    return false;
+  }
+
   return (
     key === "sno"
     || key === "serialno"
     || key === "fixtureno"
+    || key === "fixturenumber"
     || key === "fixtureid"
+    || key === "opno"
+    || key === "operation"
+    || key === "operationno"
     || key === "partname"
     || key === "fixturetype"
+    || key === "fixturecategory"
     || key === "qty"
     || key === "quantity"
     || key === "designer"
@@ -155,6 +165,11 @@ function isImageOnlyCell(value) {
 function isFixtureTypeCell(value) {
   const normalized = normalizePastedCell(value).toLowerCase();
   return FIXTURE_TYPE_KEYWORDS.some((keyword) => normalized.includes(keyword));
+}
+
+function isOperationNumberCell(value) {
+  const text = normalizePastedCell(value);
+  return /^op(?:\s*[\.-]?\s*no\.?)?[\.\-\s]*\d+(?:[a-z]+)?$/i.test(text);
 }
 
 function isPositiveIntegerCell(value) {
@@ -234,6 +249,11 @@ function buildParsedRow(cells, rowNumber) {
       && !isHeaderLikeCell(cell)
     ));
 
+  const opNoCandidate = residualCells.find(({ cell }) => isOperationNumberCell(cell)) || null;
+  if (opNoCandidate) {
+    ignoredIndexes.add(opNoCandidate.index);
+  }
+
   const fixtureTypeCandidate = residualCells.find(({ cell }) => isFixtureTypeCell(cell)) || null;
   if (fixtureTypeCandidate) {
     ignoredIndexes.add(fixtureTypeCandidate.index);
@@ -261,6 +281,7 @@ function buildParsedRow(cells, rowNumber) {
 
   const hasRequiredStructure = Boolean(
     fixture_no
+    && opNoCandidate?.cell
     && qtyCell?.cell
     && partNameCandidate?.cell
     && fixtureTypeCandidate?.cell
@@ -268,6 +289,7 @@ function buildParsedRow(cells, rowNumber) {
 
   const hasPartialStructure = Boolean(
     fixture_no
+    || opNoCandidate?.cell
     || qtyCell?.cell
     || partNameCandidate?.cell
     || fixtureTypeCandidate?.cell
@@ -276,6 +298,7 @@ function buildParsedRow(cells, rowNumber) {
   return {
     row_number: rowNumber,
     fixture_no,
+    op_no: opNoCandidate ? normalizePastedCell(opNoCandidate.cell) : "",
     part_name: partNameCandidate ? normalizePastedCell(partNameCandidate.cell) : "",
     fixture_type: fixtureTypeCandidate ? normalizePastedCell(fixtureTypeCandidate.cell) : "",
     designer: designerCandidate ? normalizePastedCell(designerCandidate.cell) : "",
@@ -364,6 +387,7 @@ function parsePasteData(text) {
 
 module.exports = {
   FIXTURE_NO_REGEX,
+  isOperationNumberCell,
   normalize,
   normalizePastedCell,
   parseTabularRows,

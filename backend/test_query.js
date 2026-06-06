@@ -1,3 +1,7 @@
+const { assertSafeScriptExecution } = require("./lib/scriptGuards");
+
+assertSafeScriptExecution("test_query.js", { overrideEnv: "ALLOW_PRODUCTION_DEBUG" });
+
 const { pool } = require("./db");
 
 async function run() {

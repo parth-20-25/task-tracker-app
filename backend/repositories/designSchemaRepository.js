@@ -345,6 +345,7 @@ async function ensureDesignDepartmentSchema(client) {
       status TEXT NOT NULL DEFAULT 'active',
       status_changed_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
+      is_modified BOOLEAN NOT NULL DEFAULT FALSE,
       plant TEXT,
       project_leader_id VARCHAR(50),
       team_lead_id VARCHAR(50),
@@ -352,7 +353,7 @@ async function ensureDesignDepartmentSchema(client) {
       created_by_user_id VARCHAR(50),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      CONSTRAINT design_projects_status_check CHECK (status IN ('active', 'on_hold', 'completed')),
+      CONSTRAINT design_projects_status_check CHECK (status IN ('active', 'on_hold', 'completed', 'released')),
       CONSTRAINT design_projects_project_no_department_key UNIQUE (project_no, department_id)
     )
   `);
@@ -367,6 +368,7 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
     ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS is_modified BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   `);
@@ -375,7 +377,13 @@ async function ensureDesignDepartmentSchema(client) {
     UPDATE design.projects
     SET status = 'active'
     WHERE status IS NULL
-       OR status NOT IN ('active', 'on_hold', 'completed')
+       OR status NOT IN ('active', 'on_hold', 'completed', 'released')
+  `);
+
+  await client.query(`
+    UPDATE design.projects
+    SET is_modified = FALSE
+    WHERE is_modified IS NULL
   `);
 
   await client.query(`
@@ -387,6 +395,11 @@ async function ensureDesignDepartmentSchema(client) {
 
   // Prevent accidental or malicious updates to created_by_user_id after initial set.
   // Backfill must run before this trigger is installed (one-time migration backfill).
+  await client.query(`
+    ALTER TABLE design.projects
+    DROP CONSTRAINT IF EXISTS design_projects_status_check
+  `);
+
   await client.query(`
     DO $$
     BEGIN
@@ -428,7 +441,7 @@ async function ensureDesignDepartmentSchema(client) {
       ) THEN
         ALTER TABLE design.projects
         ADD CONSTRAINT design_projects_status_check
-        CHECK (status IN ('active', 'on_hold', 'completed'));
+        CHECK (status IN ('active', 'on_hold', 'completed', 'released'));
       END IF;
     END $$;
   `);
@@ -696,7 +709,7 @@ async function ensureDesignDepartmentSchema(client) {
       revision_code TEXT NOT NULL,
       stage_revision_no INTEGER NOT NULL DEFAULT 0,
       employee_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
-      contribution_percent NUMERIC(5, 2) NOT NULL,
+      contribution_percent NUMERIC(5, 2),
       contribution_kind TEXT NOT NULL DEFAULT 'ACTUAL',
       transfer_reason TEXT,
       transferred_by VARCHAR(50) REFERENCES users(employee_id),
@@ -736,6 +749,11 @@ async function ensureDesignDepartmentSchema(client) {
     ADD COLUMN IF NOT EXISTS superseded_by UUID,
     ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixture_stage_contributions
+    ALTER COLUMN contribution_percent DROP NOT NULL
   `);
 
   await client.query(`

@@ -14,8 +14,25 @@ test("parseAllowedOrigins trims and drops empty entries", () => {
   );
 });
 
-test("vercel preview deployments are allowed when the stable vercel domain is configured", () => {
+test("vercel preview deployments must be configured explicitly", () => {
   const corsOptions = buildCorsOptions("https://parc-control-system.vercel.app");
+  let callbackError = null;
+  let callbackValue = null;
+
+  corsOptions.origin(
+    "https://parc-control-system-9s1tipend-parths-projects-3440cd91.vercel.app",
+    (error, value) => {
+      callbackError = error;
+      callbackValue = value;
+    },
+  );
+
+  assert.match(callbackError.message, /CORS origin not allowed/);
+  assert.equal(callbackValue, undefined);
+});
+
+test("explicit wildcard patterns continue to work for intentional preview origins", () => {
+  const corsOptions = buildCorsOptions("https://parc-control-system-*.vercel.app");
   let callbackError = null;
   let callbackValue = null;
 

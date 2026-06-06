@@ -1,6 +1,7 @@
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from './AppSidebar';
 import { useAuth } from '@/contexts/useAuth';
+import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -18,7 +19,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             <div className="flex items-center gap-2">
               <SidebarTrigger />
               <span className="text-sm text-muted-foreground hidden sm:inline">
-                {role?.name} · {user?.employee_id}
+                {role?.name} · {formatEmployeeDisplay(user)}
               </span>
             </div>
           </header>

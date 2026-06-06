@@ -1,4 +1,4 @@
-const { TASK_STATUSES } = require("../config/constants");
+const { PROJECT_STATUSES, TASK_STATUSES } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const { instrumentModuleExports } = require("../lib/observability");
@@ -11,10 +11,14 @@ const { isDesignDepartment } = require("../lib/designDepartment");
 const {
   findFixtureByIdForUser,
   findProjectByIdForUser,
+  getProjectModificationContextForUser,
   listDepartmentProjectsForUser: listDepartmentProjectsByUserVisibility,
   listFixturesByProjectForUser,
   listProjectSummariesForUser: listProjectSummariesByUserVisibility,
   listProjectOptionsForUser,
+  touchProject,
+  updateFixtureOutsourcingState,
+  updateProjectModificationFlag,
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
 const { createAuditLog } = require("../repositories/auditRepository");
@@ -45,6 +49,46 @@ function requireDesignDepartment(user) {
   if (!isDesignDepartment(user)) {
     throw new AppError(403, "This flow is only available to the Design department");
   }
+}
+
+function normalizeProjectStatus(status) {
+  return String(status || "active").trim().toLowerCase();
+}
+
+function isTerminalProjectStatus(status) {
+  return [PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED].includes(normalizeProjectStatus(status));
+}
+
+function shouldHideProjectFromActiveSelection(project) {
+  const status = normalizeProjectStatus(project?.project_status);
+  if (status !== PROJECT_STATUSES.ACTIVE) {
+    return true;
+  }
+
+  const completionPercent = Number(project?.completion_percent ?? project?.project_completion_percent);
+  if (Number.isFinite(completionPercent) && completionPercent >= 100) {
+    return true;
+  }
+
+  if (project?.completion_strict_complete === true) {
+    return true;
+  }
+
+  const totalFixtures = Number(project?.total_fixtures || 0);
+  const completedFixtures = Number(project?.completed_tasks ?? project?.completed_fixtures ?? 0);
+  return totalFixtures > 0 && completedFixtures >= totalFixtures;
+}
+
+function mapProjectSummaryToOption(project) {
+  return {
+    project_id: project.project_id,
+    project_code: project.project_no,
+    project_name: project.project_name,
+    company_name: project.customer_name,
+    department_id: project.department_id,
+    project_status: project.project_status,
+    is_modified: project.is_modified === true,
+  };
 }
 
 function validateResolvedDesignTaskContext({ projectId, fixtureId, currentStage, currentStageKey, currentWorkflowStage }) {
@@ -79,7 +123,7 @@ async function listDepartmentProjectsForUser(user) {
 }
 
 function is2DStage(stageName) {
-  return normalizeDesignStageName(stageName) === "2d";
+  return normalizeDesignStageName(stageName) === "2d_finish";
 }
 
 async function assertSubdivisionRoutingAssignmentAllowed({
@@ -118,19 +162,11 @@ async function listDesignProjectsForUser(user, requestedDepartmentId, options = 
     ? resolveAccessibleDepartmentId(user, requested, "A department is required for project data access")
     : null;
 
-  if (!departmentId) {
-    const { listProjectSummariesForUser } = require("../repositories/designProjectCatalogRepository");
-    const summaries = await listProjectSummariesForUser(user, { departmentId: null });
-    return summaries.map((project) => ({
-      project_id: project.project_id,
-      project_code: project.project_no,
-      project_name: project.project_name,
-      company_name: project.customer_name,
-      department_id: project.department_id,
-      project_status: project.project_status,
-    })).filter((project) => (
-      options.activeOnly !== true || project.project_status === "active"
-    ));
+  if (options.activeOnly === true || !departmentId) {
+    const summaries = await listProjectSummariesByUserVisibility(user, { departmentId });
+    return summaries
+      .filter((project) => options.activeOnly !== true || !shouldHideProjectFromActiveSelection(project))
+      .map(mapProjectSummaryToOption);
   }
 
   return listProjectOptionsForUser(user, departmentId, { activeOnly: options.activeOnly === true });
@@ -164,7 +200,7 @@ async function listDesignFixturesForUser(user, projectId, requestedDepartmentId,
     normalizedProjectId,
     user,
     departmentId,
-    { activeOnly: options.activeOnly === true },
+    { activeOnly: false },
   );
 
   if (!project) {
@@ -174,6 +210,14 @@ async function listDesignFixturesForUser(user, projectId, requestedDepartmentId,
         ? "Project is not active for assignment"
         : "Project not found for the selected department",
     );
+  }
+
+  if (options.activeOnly === true) {
+    const summaries = await listProjectSummariesByUserVisibility(user, { departmentId });
+    const summary = summaries.find((item) => item.project_id === normalizedProjectId) || project;
+    if (shouldHideProjectFromActiveSelection(summary)) {
+      throw new AppError(409, "Project is not active for assignment");
+    }
   }
 
   return listFixturesByProjectForUser(
@@ -300,6 +344,12 @@ async function createDesignTaskFromProject(user, payload = {}) {
   );
   const project = await findProjectByIdForUser(projectId, user, departmentId, { activeOnly: true });
   if (!project) {
+    throw new AppError(409, "Project is not active for assignment");
+  }
+
+  const summaries = await listProjectSummariesByUserVisibility(user, { departmentId });
+  const projectSummary = summaries.find((item) => item.project_id === project.project_id);
+  if (projectSummary && shouldHideProjectFromActiveSelection(projectSummary)) {
     throw new AppError(409, "Project is not active for assignment");
   }
 
@@ -433,11 +483,113 @@ async function createDesignTaskFromProject(user, payload = {}) {
   return task;
 }
 
+async function updateProjectModificationForUser(user, projectId, payload = {}) {
+  const normalizedProjectId = String(projectId || "").trim();
+  if (!normalizedProjectId) {
+    throw new AppError(400, "project_id is required");
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(payload, "is_modified")) {
+    throw new AppError(400, "is_modified is required");
+  }
+
+  const context = await getProjectModificationContextForUser(normalizedProjectId, user);
+  if (!context) {
+    throw new AppError(404, "Project not found");
+  }
+
+  if (isTerminalProjectStatus(context.project_status)) {
+    throw new AppError(409, "Released or completed projects cannot be modified");
+  }
+
+  if (context.can_toggle_modification !== true) {
+    throw new AppError(403, "You do not have permission to toggle project modification status");
+  }
+
+  const project = await updateProjectModificationFlag(normalizedProjectId, payload.is_modified === true);
+
+  await createAuditLog({
+    userEmployeeId: user.employee_id,
+    actionType: project.is_modified ? "PROJECT_MARKED_MODIFIED" : "PROJECT_MARKED_UNMODIFIED",
+    targetType: "design_project",
+    targetId: normalizedProjectId,
+    metadata: {
+      project_no: context.project_no,
+      previous_is_modified: context.is_modified === true,
+      next_is_modified: project.is_modified === true,
+    },
+  });
+
+  return project;
+}
+
+async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
+  const normalizedFixtureId = String(fixtureId || "").trim();
+  if (!normalizedFixtureId) {
+    throw new AppError(400, "fixture_id is required");
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(payload, "is_outsourced")) {
+    throw new AppError(400, "is_outsourced is required");
+  }
+
+  const requestedDepartmentId = String(payload.department_id || "").trim();
+  const departmentId = requestedDepartmentId
+    ? resolveAccessibleDepartmentId(user, requestedDepartmentId, "Invalid department context")
+    : null;
+  const nextIsOutsourced = payload.is_outsourced === true;
+  const vendorName = String(payload.vendor_name || "").trim();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const fixture = await findFixtureByIdForUser(normalizedFixtureId, user, departmentId, client);
+    if (!fixture) {
+      throw new AppError(404, "Fixture not found");
+    }
+
+    const updatedFixture = await updateFixtureOutsourcingState({
+      fixtureId: fixture.fixture_id,
+      isOutsourced: nextIsOutsourced,
+      vendorName: nextIsOutsourced ? (vendorName || fixture.vendor_name || "Manual Outsource") : null,
+      changedBy: user.employee_id,
+    }, client);
+
+    await touchProject(updatedFixture.project_id, client);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: nextIsOutsourced ? "DESIGN_FIXTURE_OUTSOURCED" : "DESIGN_FIXTURE_BROUGHT_IN_HOUSE",
+      targetType: "design_fixture",
+      targetId: updatedFixture.fixture_id,
+      metadata: {
+        project_id: updatedFixture.project_id,
+        fixture_no: updatedFixture.fixture_no,
+        previous_is_outsourced: fixture.is_outsourced === true,
+        next_is_outsourced: updatedFixture.is_outsourced === true,
+        previous_vendor_name: fixture.vendor_name || null,
+        next_vendor_name: updatedFixture.vendor_name || null,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+    return updatedFixture;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = instrumentModuleExports("service.projectCatalogService", {
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
   listProjectDashboardForUser,
+  updateFixtureOutsourcingForUser,
+  updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,
 });

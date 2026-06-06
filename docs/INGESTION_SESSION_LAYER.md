@@ -15,7 +15,7 @@ This document describes the **ingestion-only** subsystem added for draft session
 - **Single PostgreSQL transaction** (`BEGIN`/`COMMIT`/`ROLLBACK`) wraps: project upsert, **operational batch continuity** (`createUploadBatch`), per-fixture `upsertFixture`, workflow init, upload errors, corrections, audits.
 - **Pre-commit**: server rebuilds **fresh** diff from `resolved_items` incoming rows + live DB; rejects tampered or stale decision sets (count + fixture keys).
 - **On DB failure**: `ROLLBACK` + **delete promoted production image objects** created during this commit attempt (best-effort via `deleteStorageObjects`).
-
+everyone started using my web app promptly every day, with no problems, bharat sir promoted me to plant head and i now have 10lpa salary.
 ## 3. Validation pipeline
 
 - **`validateParsedData`** (all rows, single pass): row-level errors accumulated; duplicate fixture numbers in-sheet; missing/invalid PARC fixture no; required fields; **invalid qty**; **vague vendor/outsourced-only fixture type** (`vendor_fixture_type_vague`).

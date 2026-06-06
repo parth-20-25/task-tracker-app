@@ -120,8 +120,12 @@ function splitOnLastProjectSeparator(value) {
 }
 
 function parseProjectIdentity(value) {
-  const rawIdentity = stripLegacyWbsPrefix(value);
-  if (!rawIdentity) {
+  const rawIdentity = String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n+/g, " ")
+    .replace(/^WBS\s*[-_]?\s*/i, "")
+    .trim();
+  if (!collapseWhitespace(rawIdentity)) {
     return { project_code: "", project_name: "", customer_name: "" };
   }
 

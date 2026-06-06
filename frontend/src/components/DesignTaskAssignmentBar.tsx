@@ -44,6 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { getResolvedUserPermissionIds, hasUserPermission, PERMISSIONS } from "@/lib/permissions";
+import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ function formatStageContributors(stage: FixtureFullProgress["stages"][number]) {
   }
 
   return contributions
-    .map((contribution) => `${contribution.employee_name || contribution.employee_id} - ${Number(contribution.contribution_percent || 0)}%`)
+    .map((contribution) => `${formatEmployeeDisplay(contribution.employee_id, contribution.employee_name)} - ${Number(contribution.contribution_percent || 0)}%`)
     .join(", ");
 }
 
@@ -714,7 +715,7 @@ export function DesignTaskAssignmentBar({
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="h-9 w-full justify-start text-sm font-normal">
                     <Search className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                    {selectedUser ? `${selectedUser.name} (${selectedUser.employee_id})` : "Search employee..."}
+                    {selectedUser ? formatEmployeeDisplay(selectedUser) : "Search employee..."}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-72 p-2" align="start">
@@ -736,8 +737,7 @@ export function DesignTaskAssignmentBar({
                           setSearchQuery("");
                         }}
                       >
-                        <span className="font-medium">{user.name}</span>
-                        <span className="ml-2 text-xs text-muted-foreground">{user.employee_id}</span>
+                        <span className="font-medium">{formatEmployeeDisplay(user)}</span>
                       </button>
                     ))}
                     {filteredUsers.length === 0 && (

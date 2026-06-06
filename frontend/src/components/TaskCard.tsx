@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { formatDurationMinutes } from '@/lib/formatDuration';
 import { TaskExecutionDialog } from '@/components/TaskExecutionDialog';
 import { isOperationalControllerUser, isProjectAuthorityUser } from '@/lib/permissions';
+import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { resolveImageUrl } from '@/lib/imageUrl';
 import { Progress } from '@/components/ui/progress';
@@ -128,7 +129,7 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <User className="h-3 w-3" />
-            {task.assignee?.name || 'Unassigned'}
+            {task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to)}
           </span>
           <span className={cn('flex items-center gap-1', isOverdue && 'text-destructive font-medium')}>
             <Calendar className="h-3 w-3" />

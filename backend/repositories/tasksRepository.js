@@ -46,6 +46,7 @@ function taskSelectQuery(whereClause = "") {
       project.uploaded_by AS project_uploaded_by,
       project.created_by_user_id AS project_created_by_user_id,
       COALESCE(project.status, 'active') AS project_status,
+      COALESCE(project.is_modified, FALSE) AS project_is_modified,
       fixture_batch.uploaded_by AS fixture_batch_uploaded_by,
       fixture_batch.uploaded_by_user_id AS fixture_batch_uploaded_by_user_id,
       t.workflow_id,
@@ -181,15 +182,33 @@ async function listTasksByAccess({ clause = "", params = [] }, client = pool) {
   return result.rows.map((row) => mapTaskRow(row));
 }
 
+function appendActiveProjectFilter(clause = "") {
+  const activeProjectPredicate = "COALESCE(project.status, 'active') = 'active'";
+
+  if (clause && /\bWHERE\b/i.test(clause)) {
+    return `${clause} AND ${activeProjectPredicate}`;
+  }
+
+  return `WHERE ${activeProjectPredicate}`;
+}
+
+async function listActiveProjectTasksByAccess(access, client = pool) {
+  return listTasksByAccess({
+    ...access,
+    clause: appendActiveProjectFilter(access?.clause || ""),
+  }, client);
+}
+
 async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool) {
   const nextParams = [...params, currentUserEmployeeId];
+  const activeProjectPredicate = "COALESCE(project.status, 'active') = 'active'";
   const verificationClause = clause
-    ? `${clause} AND t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+    ? `${clause} AND ${activeProjectPredicate} AND t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
         SELECT 1
         FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
         WHERE task_assignee.employee_id = $${nextParams.length}
       )`
-    : `WHERE t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+    : `WHERE ${activeProjectPredicate} AND t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
         SELECT 1
         FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
         WHERE task_assignee.employee_id = $${nextParams.length}
@@ -1023,6 +1042,7 @@ module.exports = instrumentModuleExports("repository.tasksRepository", {
   listTaskAttachments,
   listTaskChecklists,
   listTaskLogs,
+  listActiveProjectTasksByAccess,
   listTasksByAccess,
   listTasksDueForEscalation,
   listTasksForWorkflowInstance,

@@ -9,6 +9,7 @@ const {
 const DESIGN_2D_SUBDIVISION_NAME = "2D";
 const DESIGN_DEPARTMENT_KEYS = ["design"];
 const DESIGN_2D_LEADER_ROLE_KEYS = ["team_leader", "line_manager", "co_leader", "team_co_leader", "shift_incharge"];
+const DESIGN_2D_STAGE_KEYS = ["2d", "2d_finish", "two_d", "two_d_finish"];
 
 function sqlLiteral(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
@@ -28,6 +29,10 @@ function designDepartmentSql(alias = "d") {
 
 function twoDSubdivisionSql(alias = "ds") {
   return `LOWER(BTRIM(COALESCE(${alias}.subdivision_name, ''))) = LOWER(${sqlLiteral(DESIGN_2D_SUBDIVISION_NAME)})`;
+}
+
+function twoDStageNameSql(expression) {
+  return `${roleKeySql(expression)} = ANY(${sqlTextArray(DESIGN_2D_STAGE_KEYS)})`;
 }
 
 function assignedTo2DLeaderProjectSql(projectAlias = "p", employeeIdExpression = "root.employee_id") {
@@ -54,7 +59,7 @@ function current2DWorkflowStageFixtureSql(fixtureAlias = "f", projectAlias = "p"
       WHERE current_2d_progress.fixture_id = ${fixtureAlias}.id
         AND current_2d_progress.department_id = ${projectAlias}.department_id
         AND current_2d_progress.status <> 'APPROVED'
-        AND ${roleKeySql("current_2d_progress.stage_name")} = '2d'
+        AND ${twoDStageNameSql("current_2d_progress.stage_name")}
         AND current_2d_progress.stage_order = (
           SELECT MIN(active_progress.stage_order)
           FROM fixture_workflow_progress active_progress
@@ -361,6 +366,7 @@ async function setProjectSubdivisionAssignmentActive(assignmentId, isActive, cli
 
 module.exports = {
   DESIGN_2D_LEADER_ROLE_KEYS,
+  DESIGN_2D_STAGE_KEYS,
   DESIGN_2D_SUBDIVISION_NAME,
   assignedTo2DLeaderProjectSql,
   assignProjectTo2DLeader,
@@ -374,6 +380,7 @@ module.exports = {
   projectHasActive2DRouting,
   setProjectSubdivisionAssignmentActive,
   twoDSubdivisionSql,
+  twoDStageNameSql,
   userIs2DLeaderSql,
   userIs2DNonLeaderSql,
   userIs2DSubdivisionSql,

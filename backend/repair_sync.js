@@ -1,3 +1,7 @@
+const { assertSafeScriptExecution } = require("./lib/scriptGuards");
+
+assertSafeScriptExecution("repair_sync.js");
+
 const pool = require("./db");
 
 const ORDERED_STAGES = ["concept", "dap", "3d_finish", "2d_finish", "release"];

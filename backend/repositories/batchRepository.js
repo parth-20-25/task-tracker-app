@@ -8,10 +8,23 @@ const {
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
 
-const BATCH_DELETE_BLOCK_REASON = "Cannot delete batch. Some fixtures have active or pending approval tasks.";
+const BATCH_DELETE_BLOCK_REASON = "Cannot delete project. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
 const SCHEMA_METADATA_TTL_MS = 60 * 1000;
 const schemaMetadataCache = new Map();
+const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
+const MODIFICATION_AUTHORITY_ROLE_IDS = ["admin", "director", "director_ceo", "r1", "r2"];
+const MODIFICATION_UPLOADER_LEADER_ROLE_KEYS = [
+  "team_leader",
+  "line_manager",
+  "co_leader",
+  "team_co_leader",
+  "shift_incharge",
+  "uploader_leader",
+  "uploader_co_leader",
+  "project_uploader_leader",
+  "project_uploader_co_leader",
+];
 
 function getCachedSchemaMetadata(cacheKey) {
   const cachedEntry = schemaMetadataCache.get(cacheKey);
@@ -33,6 +46,41 @@ function setCachedSchemaMetadata(cacheKey, value) {
     value,
     expiresAt: Date.now() + SCHEMA_METADATA_TTL_MS,
   });
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function sqlTextArray(values) {
+  return `ARRAY[${values.map(sqlLiteral).join(", ")}]::text[]`;
+}
+
+function projectModificationPermissionSql(projectAlias = "dp", employeeExpression = "$1") {
+  return `
+    (
+      EXISTS (
+        SELECT 1
+        FROM root_user root
+        WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_KEYS)})
+           OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_IDS)})
+      )
+      OR COALESCE(${projectAlias}.created_by_user_id = ${employeeExpression}, FALSE)
+      OR COALESCE(${projectAlias}.uploaded_by = ${employeeExpression}, FALSE)
+      OR (
+        EXISTS (
+          SELECT 1
+          FROM root_user root
+          WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
+             OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
+        )
+        AND (
+          COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM visible_users), FALSE)
+          OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM visible_users), FALSE)
+        )
+      )
+    )
+  `;
 }
 
 function fixtureOperationalStatsLateral(projectAlias = "dp") {
@@ -157,11 +205,12 @@ function mapBatchSummary(row) {
     batch_id: row.id,
     project_id: row.project_id,
     project_no: row.project_no,
-      project_created_by_user_id: row.project_created_by_user_id || null,
+    project_created_by_user_id: row.project_created_by_user_id || null,
     project_name: row.project_name,
     customer_name: row.customer_name,
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
+    is_modified: row.is_modified === true,
     project_completion_percent: row.project_completion_percent === null || row.project_completion_percent === undefined
       ? null
       : Number(row.project_completion_percent),
@@ -172,6 +221,7 @@ function mapBatchSummary(row) {
     completed_tasks: completedFixtures,
     uploaded_by: row.uploaded_by,
     uploaded_by_user_id: row.uploaded_by_user_id || row.uploaded_by || null,
+    uploaded_by_name: row.uploaded_by_name || null,
     uploaded_at: row.uploaded_at,
     created_at: row.uploaded_at,
     accepted_rows: Number(row.accepted_rows || 0),
@@ -184,6 +234,7 @@ function mapBatchSummary(row) {
     deletion_blocked: activeCount > 0,
     delete_blocked_reason: activeCount > 0 ? BATCH_DELETE_BLOCK_REASON : null,
     can_manage_2d_routing: row.can_manage_2d_routing === true,
+    can_toggle_modification: row.can_toggle_modification === true,
   };
 }
 
@@ -207,11 +258,13 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         dp.customer_name,
         dp.department_id,
         COALESCE(dp.status, $${params.length + 1}) AS project_status,
+        COALESCE(dp.is_modified, FALSE) AS is_modified,
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
+        uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
@@ -219,7 +272,8 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
         COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
-        TRUE AS can_manage_2d_routing
+        TRUE AS can_manage_2d_routing,
+        FALSE AS can_toggle_modification
       FROM (
         SELECT DISTINCT ON (project_id)
           id,
@@ -234,6 +288,7 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         ORDER BY project_id, uploaded_at DESC, id DESC
       ) ub
       JOIN design.projects dp ON dp.id = ub.project_id
+      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
       ${fixtureOperationalStatsLateral("dp")}
       ${departmentFilter}
       ORDER BY ub.uploaded_at DESC
@@ -260,11 +315,13 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         dp.customer_name,
         dp.department_id,
         COALESCE(dp.status, $3) AS project_status,
+        COALESCE(dp.is_modified, FALSE) AS is_modified,
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
+        uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
@@ -285,7 +342,8 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
-        ) AS can_manage_2d_routing
+        ) AS can_manage_2d_routing,
+        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
       FROM (
         SELECT DISTINCT ON (project_id)
           id,
@@ -300,6 +358,7 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         ORDER BY project_id, uploaded_at DESC, id DESC
       ) ub
       JOIN design.projects dp ON dp.id = ub.project_id
+      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ($2::text IS NULL OR dp.department_id = $2)
         AND ${visibleProjectPredicate("dp")}
@@ -355,11 +414,13 @@ async function getBatchById(batchId, client = pool) {
         dp.customer_name,
         dp.department_id,
         COALESCE(dp.status, $2) AS project_status,
+        COALESCE(dp.is_modified, FALSE) AS is_modified,
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
+        uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
@@ -367,9 +428,11 @@ async function getBatchById(batchId, client = pool) {
         COALESCE(fixture_stats.pending_fixtures, 0)::integer AS pending_fixtures,
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
         COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
-        TRUE AS can_manage_2d_routing
+        TRUE AS can_manage_2d_routing,
+        FALSE AS can_toggle_modification
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
+      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $1
     `,
@@ -394,11 +457,13 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         dp.customer_name,
         dp.department_id,
         COALESCE(dp.status, $3) AS project_status,
+        COALESCE(dp.is_modified, FALSE) AS is_modified,
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         ub.uploaded_by,
         ub.uploaded_by_user_id,
+        uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
         ub.rejected_rows,
@@ -419,9 +484,11 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
           OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
-        ) AS can_manage_2d_routing
+        ) AS can_manage_2d_routing,
+        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
+      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $2
         AND ${visibleProjectPredicate("dp")}
@@ -465,12 +532,12 @@ async function setProjectLifecycleStatus(projectId, status, client = pool) {
       UPDATE design.projects
       SET status = $2,
           status_changed_at = NOW(),
-          completed_at = CASE WHEN $2 = $3 THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+          completed_at = CASE WHEN $2 IN ($3, $4) THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
           updated_at = NOW()
       WHERE id = $1
       RETURNING id
     `,
-    [projectId, status, PROJECT_STATUSES.COMPLETED],
+    [projectId, status, PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED],
   );
 
   return result.rowCount > 0;

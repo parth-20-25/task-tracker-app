@@ -3,6 +3,10 @@ const dotenv = require("dotenv");
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
+const { assertSafeScriptExecution } = require("../lib/scriptGuards");
+
+assertSafeScriptExecution("scripts/backfillStartedTaskState.js");
+
 const { pool } = require("../db");
 
 const BACKFILL_STARTED_TASK_STATE_SQL = `

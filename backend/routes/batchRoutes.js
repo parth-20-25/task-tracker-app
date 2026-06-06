@@ -3,6 +3,7 @@ const { asyncHandler } = require("../lib/asyncHandler");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const {
+  activateProjectForBatch,
   deleteBatch,
   getBatches,
   holdProjectForBatch,
@@ -33,6 +34,14 @@ router.post(
   "/batches/:id/on-hold",
   asyncHandler(async (req, res) => {
     const result = await holdProjectForBatch(req.user, req.params.id);
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/batches/:id/activate",
+  asyncHandler(async (req, res) => {
+    const result = await activateProjectForBatch(req.user, req.params.id);
     return sendSuccess(res, result);
   }),
 );

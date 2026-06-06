@@ -1,18 +1,44 @@
 # TaskTracker Application
 
-This is a full-stack Task Tracker application structured as a monorepo. It contains two completely decoupled components:
+This is the PARC Task Tracking System, structured as a monorepo with three deployable services:
 
 ## Structure
 
 - `/frontend`: The React (Vite + TypeScript) client application.
 - `/backend`: The Node.js (Express + PostgreSQL) REST API and background workers.
+- `/python-service`: The FastAPI extraction service used by design ingestion.
 
 ## Deployment Notes
 
-Both the frontend and backend are independently deployable without conflicts:
+The app can run on an Ubuntu Server 24.04 VM without Docker, Nginx, or PM2 as long as the Node backend, Vite-built frontend, Python extraction service, and PostgreSQL database are started with explicit environment variables.
 
-- **Frontend (`/frontend`)** is configured to run and deploy on **Vercel**. When configuring Vercel, ensure you set the `Root Directory` within the Project Settings to `frontend`.
-- **Backend (`/backend`)** is configured to run and deploy on **Render**. The project is pre-configured with a `render.yaml` specification that sets the `rootDir` appropriately.
+Target runtime prerequisites:
+- Node.js 22 LTS with npm 10+
+- Python 3.12
+- PostgreSQL 16
+- Backend on port `5000`
+- Python service on port `8000`
+- Frontend preview on port `8080`
+
+Required backend env vars:
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `CORS_ORIGIN`
+- `UPLOADS_DIR`
+- `DATABASE_SSL=false` for local VM PostgreSQL that does not support SSL; leave unset or use `DATABASE_SSL=true`/`sslmode=require` for managed databases that require SSL.
+
+Required frontend build env var:
+- `VITE_API_URL`
+
+Python extraction token:
+- `EXTRACTION_SERVICE_TOKEN` or `DESIGN_EXTRACTION_SERVICE_TOKEN`
+
+For persistent local uploads, set `UPLOADS_DIR` to a durable filesystem path. `REPORT_TEMP_DIR` is optional; when unset, report exports use the OS temp directory.
+
+Production notes:
+- Runtime database bootstrap still creates/updates schema at startup. Treat that as a production migration risk until replaced by reviewed migrations.
+- `/uploads` is served statically by the backend. Do not place sensitive files in the upload tree unless route-level authorization is added.
+- `.env` files are local runtime files and should not be committed.
 
 ## Local Development
 

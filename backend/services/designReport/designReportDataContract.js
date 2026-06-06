@@ -4,7 +4,7 @@ const { listStageAttemptsForFixtures } = require("../../repositories/fixtureWork
 const { loadStageWeightRowsForDepartment } = require("../../repositories/designCompletionRepository");
 const { getConfiguredWorkflowForDepartment } = require("../../repositories/fixtureWorkflowRepository");
 const { getProjectCompletionTruthById } = require("../designCompletion/designCompletionEngine");
-const { assertDesignReportExportIntegrity } = require("./designReportValidation");
+const { collectDesignReportTruthLayerErrors } = require("./designReportValidation");
 
 async function getFixtureProgressRows(fixtureIds) {
   if (!fixtureIds.length) {
@@ -51,11 +51,31 @@ async function getFixtureStageTaskRows(fixtureIds) {
         COALESCE(NULLIF(t.stage, ''), NULLIF(stage.stage_name, ''), NULLIF(stage.name, ''), 'Workflow Stage') AS stage_name,
         t.proof_url,
         t.status,
+        t.priority,
+        t.deadline,
+        t.due_date,
+        t.sla_due_date,
+        t.assigned_to,
+        assignee.name AS assigned_to_name,
+        t.assigned_by,
+        assigner.name AS assigned_by_name,
+        t.assigned_at,
+        t.started_at,
+        t.completed_at,
+        t.closed_at,
+        t.submitted_at,
+        t.approved_at,
+        t.created_at,
+        t.updated_at,
         t.planned_minutes,
         t.actual_minutes
       FROM tasks t
       LEFT JOIN workflow_stages stage
         ON stage.id = t.current_stage_id
+      LEFT JOIN users assignee
+        ON assignee.employee_id = t.assigned_to
+      LEFT JOIN users assigner
+        ON assigner.employee_id = t.assigned_by
       WHERE t.fixture_id = ANY($1::uuid[])
         AND t.status <> 'cancelled'
       ORDER BY t.fixture_id ASC, t.created_at ASC, t.id ASC
@@ -83,8 +103,11 @@ async function getTaskAttachmentsByTaskIds(taskIds) {
         ta.mime_type,
         ta.file_size,
         ta.uploaded_by,
+        uploader.name AS uploaded_by_name,
         ta.uploaded_at
       FROM task_attachments ta
+      LEFT JOIN users uploader
+        ON uploader.employee_id = ta.uploaded_by
       WHERE ta.task_id = ANY($1::int[])
       ORDER BY ta.task_id ASC, ta.uploaded_at ASC, ta.id ASC
     `,
@@ -111,6 +134,7 @@ async function getTaskActivitiesByTaskIds(taskIds) {
     `
       SELECT
         activity.task_id,
+        activity.user_employee_id,
         activity.action_type,
         activity.notes,
         activity.metadata,
@@ -196,7 +220,7 @@ async function loadDesignReportExportData({
       .map((truth) => String(truth.fixture_id)),
   );
 
-  assertDesignReportExportIntegrity({
+  const integrityWarnings = collectDesignReportTruthLayerErrors({
     fixtures,
     progressRows,
     attemptRows,
@@ -229,6 +253,7 @@ async function loadDesignReportExportData({
     attachmentsByTaskId,
     activitiesByTaskId,
     outsourcedFixtureIds,
+    integrityWarnings,
   };
 }
 

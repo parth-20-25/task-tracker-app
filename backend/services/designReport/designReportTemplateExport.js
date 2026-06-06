@@ -14,13 +14,16 @@ const {
   formatDuration,
   formatHoldHistory,
   formatProofRegister,
-  formatStageContributors,
   formatStageProgressPercent,
   formatStageRevisionBlock,
   formatTimelineTimestamp,
   resolveRevisionForStage,
 } = require("./designReportPresentation");
-const { resolveFixtureGlobalStatus, resolveReportKpisFromCompletionTruth } = require("./designReportKpiContract");
+const {
+  STATUS_LABELS,
+  resolveFixtureGlobalStatus,
+  resolveReportKpisFromCompletionTruth,
+} = require("./designReportKpiContract");
 
 const DESIGN_REPORT_TEMPLATE_PATH = path.join(
   __dirname,
@@ -32,8 +35,27 @@ const DESIGN_REPORT_TEMPLATE_PATH = path.join(
 
 const TEMPLATE_DATA_COLUMN_COUNT = 39;
 const TEMPLATE_FIRST_DATA_ROW = 14;
+const TEMPLATE_HEADER_ROW = 13;
+const TEMPLATE_STYLE_ROW = 15;
 
 const MAX_STAGE_DURATION_MINUTES = 1000 * 60;
+const NOT_AVAILABLE = "Not available";
+const NOT_STARTED = "Not started";
+const NOT_ASSIGNED = "Not assigned";
+const NOT_COMPLETED = "Not completed";
+const NOT_RECORDED = "Not recorded";
+const NO_PROOF_UPLOADED = "No proof uploaded";
+const CONTRIBUTION_NOT_RECORDED = "Contribution % Not Recorded";
+
+const STATUS_COLORS = Object.freeze({
+  [STATUS_LABELS.ASSIGNED]: "3A7BD5",
+  [STATUS_LABELS.IN_PROGRESS]: "28A745",
+  [STATUS_LABELS.ON_HOLD]: "FF9800",
+  [STATUS_LABELS.REVIEW]: "009688",
+  [STATUS_LABELS.REWORK]: "9C27B0",
+  [STATUS_LABELS.CLOSED]: "616161",
+  [STATUS_LABELS.OVERDUE]: "D32F2F",
+});
 
 function cloneStyle(style) {
   return JSON.parse(JSON.stringify(style || {}));
@@ -41,6 +63,62 @@ function cloneStyle(style) {
 
 function writeMergedValue(worksheet, address, value) {
   worksheet.getCell(address).value = value ?? "";
+}
+
+function toArgb(color) {
+  const normalized = String(color || "").replace("#", "").trim();
+  return normalized.length === 8 ? normalized : `FF${normalized}`;
+}
+
+function styleStatusCell(cell, status) {
+  const color = STATUS_COLORS[status];
+  if (!color) {
+    return;
+  }
+
+  cell.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: toArgb(color) },
+  };
+  cell.font = {
+    ...(cell.font || {}),
+    color: { argb: "FFFFFFFF" },
+    bold: true,
+  };
+  cell.alignment = {
+    ...(cell.alignment || {}),
+    horizontal: "center",
+    vertical: "middle",
+    wrapText: true,
+  };
+}
+
+function withKpiLabel(label, value) {
+  return `${label}: ${value === null || value === undefined || value === "" ? NOT_AVAILABLE : value}`;
+}
+
+function calculateLiveStatusKpis(rows) {
+  const totalFixtures = rows.length;
+  const completed = rows.filter((row) => row.globalStatus === STATUS_LABELS.CLOSED).length;
+  const pending = rows.filter((row) => [
+    STATUS_LABELS.ASSIGNED,
+    STATUS_LABELS.IN_PROGRESS,
+    STATUS_LABELS.REVIEW,
+  ].includes(row.globalStatus)).length;
+  const overdue = rows.filter((row) => row.globalStatus === STATUS_LABELS.OVERDUE).length;
+  const onHold = rows.filter((row) => row.globalStatus === STATUS_LABELS.ON_HOLD).length;
+  const rejected = rows.filter((row) => row.globalStatus === STATUS_LABELS.REWORK).length;
+
+  return {
+    overallProgress: NOT_AVAILABLE,
+    totalFixtures,
+    completed,
+    pending,
+    overdue,
+    onHold,
+    rejected,
+  };
 }
 
 function normalizeStatus(value) {
@@ -228,9 +306,288 @@ function buildStageTaskLookup(stageTasks, attachmentsByTaskId, activitiesByTaskI
   }, new Map());
 }
 
+function getFirstProofUrl(stageTasks = []) {
+  return stageTasks
+    .flatMap((task) => (Array.isArray(task.proof_urls) ? task.proof_urls : []))
+    .filter(Boolean)[0] || "";
+}
+
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function formatEmployeeName(employeeId, employeeName) {
+  return normalizeText(employeeName) || normalizeText(employeeId);
+}
+
+function formatAllocationPercent(value) {
+  if (value === null || value === undefined || value === "") {
+    return CONTRIBUTION_NOT_RECORDED;
+  }
+
+  const percent = Number(String(value).replace("%", "").trim());
+  if (!Number.isFinite(percent)) {
+    return CONTRIBUTION_NOT_RECORDED;
+  }
+
+  return `${Number.isInteger(percent) ? percent : percent.toFixed(2)}%`;
+}
+
+function formatEmployeeAllocationLine(row) {
+  const name = formatEmployeeName(row.employee_id, row.employee_name);
+  if (!name) {
+    return "";
+  }
+
+  const percent = formatAllocationPercent(row.contribution_percent);
+  return `${name}: ${percent}`;
+}
+
+function dedupeEmployeeAllocationRows(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = [
+      normalizeText(row.employee_id),
+      normalizeText(row.employee_name).toLowerCase(),
+      formatAllocationPercent(row.contribution_percent),
+    ].join("::");
+    if (!normalizeText(row.employee_id) && !normalizeText(row.employee_name)) {
+      return false;
+    }
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function metadataValue(metadata, keys) {
+  if (!metadata || typeof metadata !== "object") {
+    return "";
+  }
+
+  for (const key of keys) {
+    const value = metadata[key];
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function collectTransferAllocationRows({ stageTasks, stage, revisionCode, revisionNo }) {
+  return stageTasks.flatMap((task) => (
+    (task.activities || []).flatMap((activity) => {
+      const metadata = activity.metadata && typeof activity.metadata === "object" ? activity.metadata : {};
+      const reassignment = metadata.reassignment_contribution;
+      if (!reassignment || typeof reassignment !== "object") {
+        return [];
+      }
+
+      const activityStageKey = getStageBucket(
+        reassignment.stage_name
+        || metadata.stage_name
+        || metadata.stage
+        || task.stage_name,
+      );
+      if (activityStageKey && activityStageKey !== stage.key) {
+        return [];
+      }
+
+      const activityRevisionNo = normalizeStageVersion(
+        reassignment.stage_revision_no
+        ?? metadata.stage_revision_no
+        ?? revisionNo,
+      );
+      const activityRevisionCode = normalizeText(
+        reassignment.revision_code
+        || metadata.revision_code
+        || metadata.stage_revision_code,
+      );
+      if (activityRevisionCode && activityRevisionCode !== revisionCode) {
+        return [];
+      }
+      if (!activityRevisionCode && activityRevisionNo !== revisionNo) {
+        return [];
+      }
+
+      return [
+        {
+          employee_id: metadataValue(reassignment, ["previous_assigned_to", "previous_employee_id"]),
+          employee_name: metadataValue(reassignment, ["previous_assigned_to_name", "previous_employee_name"]),
+          contribution_percent: metadataValue(reassignment, [
+            "previous_contribution_percent",
+            "completed_contribution_percent",
+          ]),
+        },
+        {
+          employee_id: metadataValue(reassignment, ["next_assigned_to", "new_assigned_to", "remaining_assigned_to"]),
+          employee_name: metadataValue(reassignment, [
+            "next_assigned_to_name",
+            "new_assigned_to_name",
+            "remaining_assigned_to_name",
+          ]),
+          contribution_percent: metadataValue(reassignment, [
+            "remaining_contribution_percent",
+            "next_contribution_percent",
+          ]),
+        },
+      ];
+    })
+  ));
+}
+
+function collectAssignedEmployeeRows({ progressRow, stageAttempts, stageTasks }) {
+  return dedupeEmployeeAllocationRows([
+    ...stageAttempts.map((attempt) => ({
+      employee_id: attempt.assigned_to,
+      employee_name: attempt.assigned_to_name,
+    })),
+    ...stageTasks.map((task) => ({
+      employee_id: task.assigned_to,
+      employee_name: task.assigned_to_name,
+    })),
+    {
+      employee_id: progressRow?.assigned_to,
+      employee_name: progressRow?.assigned_to_name,
+    },
+  ]);
+}
+
+function formatStageEmployeeAllocations({
+  contributionRows,
+  stageTasks,
+  stageAttempts,
+  progressRow,
+  stage,
+  revisionCode,
+  revisionNo,
+}) {
+  const allocatedRows = dedupeEmployeeAllocationRows([
+    ...contributionRows,
+    ...collectTransferAllocationRows({
+      stageTasks,
+      stage,
+      revisionCode,
+      revisionNo,
+    }),
+  ]);
+  const rows = allocatedRows.length
+    ? allocatedRows
+    : collectAssignedEmployeeRows({
+      progressRow,
+      stageAttempts,
+      stageTasks,
+    });
+
+  return rows
+    .map(formatEmployeeAllocationLine)
+    .filter(Boolean)
+    .join("\n") || NOT_ASSIGNED;
+}
+
 function buildStageWeightLookup(progressRows, weightRows, workflowStages) {
   const stageKeys = resolveStageKeysFromProgress(progressRows, workflowStages);
   return buildWeightMapForStageKeys(stageKeys, weightRows);
+}
+
+function formatDurationOrNotRecorded(minutes, label) {
+  const numeric = Number(minutes);
+  const formatted = Number.isFinite(numeric) && numeric > 0
+    ? formatDuration(numeric)
+    : NOT_RECORDED;
+  return label ? `${label}: ${formatted}` : formatted;
+}
+
+function formatSignedDuration(minutes) {
+  const numeric = Number(minutes);
+  if (!Number.isFinite(numeric)) {
+    return NOT_AVAILABLE;
+  }
+
+  if (numeric === 0) {
+    return "0h 0m";
+  }
+
+  const sign = numeric > 0 ? "+" : "-";
+  return `${sign}${formatDuration(Math.abs(numeric))}`;
+}
+
+function formatVariance(plannedMinutes, actualMinutes) {
+  const planned = Number(plannedMinutes);
+  const actual = Number(actualMinutes);
+  if (!Number.isFinite(planned) || planned <= 0 || !Number.isFinite(actual) || actual <= 0) {
+    return `Variance: ${NOT_AVAILABLE}`;
+  }
+
+  return `Variance: ${formatSignedDuration(actual - planned)}`;
+}
+
+function formatStageDateCell(progressRow, presentation) {
+  if (!progressRow || normalizeStatus(progressRow.status) === "PENDING") {
+    return NOT_STARTED;
+  }
+
+  const range = formatDateRange(presentation.assignedAt, presentation.completedAt);
+  if (range) {
+    return range;
+  }
+
+  const start = formatTimelineTimestamp(presentation.assignedAt || progressRow.assigned_at || progressRow.started_at);
+  if (start) {
+    return `${start} -> ${NOT_COMPLETED}`;
+  }
+
+  return NOT_RECORDED;
+}
+
+function formatStageHoursCell(progressRow, minutes) {
+  if (!progressRow || normalizeStatus(progressRow.status) === "PENDING") {
+    return NOT_STARTED;
+  }
+
+  return Number(minutes) > 0 ? formatDuration(minutes) : NOT_RECORDED;
+}
+
+function formatStageProgressCell(progressRow, weightPercent) {
+  if (!progressRow || normalizeStatus(progressRow.status) === "PENDING") {
+    return NOT_STARTED;
+  }
+
+  return formatStageProgressPercent(progressRow, weightPercent) || NOT_AVAILABLE;
+}
+
+function formatStageRevisionCell(progressRow, revisionRow) {
+  if (!progressRow || normalizeStatus(progressRow.status) === "PENDING") {
+    return NOT_STARTED;
+  }
+
+  return formatStageRevisionBlock(progressRow, revisionRow) || NOT_RECORDED;
+}
+
+function formatApprovalStatusCell(progressRow) {
+  if (!progressRow || normalizeStatus(progressRow.status) === "PENDING") {
+    return NOT_STARTED;
+  }
+
+  return formatApprovalStatus(progressRow) || NOT_RECORDED;
+}
+
+function formatPerson(employeeId, employeeName) {
+  return formatEmployeeName(employeeId, employeeName) || "";
+}
+
+function getLatestStageTask(stageTasks = []) {
+  return stageTasks.length ? stageTasks[stageTasks.length - 1] : null;
+}
+
+function formatAssignmentSummary({ assignedTo, assignedBy }) {
+  return [
+    `Assigned To: ${assignedTo || NOT_ASSIGNED}`,
+    `Assigned By: ${assignedBy || NOT_RECORDED}`,
+  ].join("\n");
 }
 
 function buildTemplateFixtureRows({
@@ -268,59 +625,120 @@ function buildTemplateFixtureRows({
     const fixtureStageTasks = stageTaskLookup.get(fixture.fixture_id) || new Map();
     const fixtureTruth = fixtureTruthById.get(String(fixture.fixture_id)) || null;
     const stageCells = {};
+    let currentStageName = "";
+    let currentAssignedTo = "";
+    let currentAssignedBy = "";
+    let latestAssignedTo = "";
+    let latestAssignedBy = "";
     let actualMinutes = 0;
 
     for (const stage of REPORT_STAGES) {
       const progressRow = fixtureProgress.get(stage.key) || null;
+      const progressStatus = normalizeStatus(progressRow?.status);
       const presentation = buildStagePresentation({
         stageAttempts: fixtureAttempts.get(stage.key) || [],
         progressRow,
-        isCurrent: normalizeStatus(progressRow?.status) === "IN_PROGRESS",
+        isCurrent: progressStatus === "IN_PROGRESS",
       });
+      const stageAttempts = fixtureAttempts.get(stage.key) || [];
       const revisionRow = resolveRevisionForStage(revisionLookup, fixture.fixture_id, progressRow);
       const revisionCode = progressRow
         ? formatStageRevisionCode(progressRow.stage_name, normalizeStageVersion(progressRow.stage_version))
         : "";
+      const revisionNo = progressRow ? normalizeStageVersion(progressRow.stage_version) : 0;
       const contributionRows = progressRow
         ? contributionLookup.get(`${fixture.fixture_id}::${progressRow.stage_name}::${revisionCode}`) || []
         : [];
       const stageKey = normalizeDesignStageName(progressRow?.stage_name);
       const weightPercent = weightByStageKey.get(stageKey) || 0;
-      const revisionText = formatStageRevisionBlock(progressRow, revisionRow);
-      const employees = formatStageContributors(contributionRows);
-      const approvalStatus = formatApprovalStatus(progressRow);
       const stageTasks = fixtureStageTasks.get(stage.key) || [];
+      const latestStageTask = getLatestStageTask(stageTasks);
+      const stageAssignedTo = formatPerson(
+        latestStageTask?.assigned_to || progressRow?.assigned_to,
+        latestStageTask?.assigned_to_name || progressRow?.assigned_to_name,
+      );
+      const stageAssignedBy = formatPerson(
+        latestStageTask?.assigned_by,
+        latestStageTask?.assigned_by_name,
+      );
+      const revisionText = formatStageRevisionCell(progressRow, revisionRow);
+      const approvalStatus = formatApprovalStatusCell(progressRow);
+      const employees = formatStageEmployeeAllocations({
+        contributionRows,
+        stageTasks,
+        stageAttempts,
+        progressRow,
+        stage,
+        revisionCode,
+        revisionNo,
+      });
+
+      if (stageAssignedTo) {
+        latestAssignedTo = stageAssignedTo;
+      }
+      if (stageAssignedBy) {
+        latestAssignedBy = stageAssignedBy;
+      }
+      if (
+        progressRow
+        && !["APPROVED", "PENDING"].includes(progressStatus)
+      ) {
+        currentStageName = stage.label;
+        currentAssignedTo = stageAssignedTo;
+        currentAssignedBy = stageAssignedBy;
+      }
 
       actualMinutes += Number(presentation.minutes || 0);
       stageCells[stage.key] = {
-        hrs: presentation.minutes ? formatDuration(presentation.minutes) : "",
-        dateRange: formatDateRange(presentation.assignedAt, presentation.completedAt),
-        progress: formatStageProgressPercent(progressRow, weightPercent),
+        hrs: formatStageHoursCell(progressRow, presentation.minutes),
+        dateRange: formatStageDateCell(progressRow, presentation),
+        progress: formatStageProgressCell(progressRow, weightPercent),
         revision: revisionText,
         employees,
         approvalStatus: revisionText && stagesWithoutRevisionColumn.has(stage.key)
           ? [approvalStatus, revisionText].filter(Boolean).join("\n")
           : approvalStatus,
-        proof: formatProofRegister(stageTasks),
-        holdHistory: formatHoldHistory(stageTasks),
+        proof: formatProofRegister(stageTasks) || NO_PROOF_UPLOADED,
+        proofUrl: getFirstProofUrl(stageTasks),
+        holdHistory: formatHoldHistory(stageTasks) || NOT_RECORDED,
         timeline: presentation.timeline,
       };
     }
+
+    if (!currentStageName) {
+      const firstOpenStage = REPORT_STAGES.find((stage) => (
+        normalizeStatus(fixtureProgress.get(stage.key)?.status) !== "APPROVED"
+      ));
+      currentStageName = firstOpenStage?.label || (fixtureProgress.size ? "Completed" : NOT_STARTED);
+    }
+
+    const plannedMinutes = Number(fixture.task_planned_minutes || 0);
+    const resolvedActualMinutes = Number(fixture.task_actual_minutes || 0) || actualMinutes;
+    const assignedTo = currentAssignedTo
+      || latestAssignedTo
+      || formatPerson(fixture.task_assigned_to, fixture.task_assignee_name);
+    const assignedBy = currentAssignedBy
+      || latestAssignedBy
+      || formatPerson(fixture.task_assigned_by, fixture.task_assigned_by_name);
 
     return {
       srNo: index + 1,
       fixtureNo: fixture.fixture_no,
       opNo: fixture.op_no,
       partName: fixture.part_name,
-      priority: fixture.task_priority || "",
-      assigned: fixture.task_assignee_name || fixture.task_assigned_to || "",
+      priority: fixture.task_priority || NOT_RECORDED,
+      assigned: formatAssignmentSummary({ assignedTo, assignedBy }),
       globalStatus: resolveFixtureGlobalStatus(fixtureTruth, fixture),
+      currentStage: currentStageName,
       concept: stageCells.concept,
       dap: stageCells.dap,
       finish3d: stageCells.three_d_finish,
       finish2d: stageCells.two_d_finish,
-      plannedHrs: formatDuration(Number(fixture.task_planned_minutes || 0)),
-      actualHrs: formatDuration(Number(fixture.task_actual_minutes || 0) || actualMinutes),
+      plannedHrs: formatDurationOrNotRecorded(plannedMinutes, "Planned Hours"),
+      actualHrs: [
+        formatDurationOrNotRecorded(resolvedActualMinutes, "Actual Hours"),
+        formatVariance(plannedMinutes, resolvedActualMinutes),
+      ].join("\n"),
     };
   });
 }
@@ -333,7 +751,7 @@ function writeDesignTemplateRow(worksheet, rowNumber, row) {
     D: row.partName,
     E: row.priority,
     F: row.assigned,
-    G: row.globalStatus,
+    G: [`Status: ${row.globalStatus}`, `Current Stage: ${row.currentStage || NOT_AVAILABLE}`].join("\n"),
     H: row.concept.hrs,
     I: row.concept.dateRange || row.concept.timeline,
     J: row.concept.progress,
@@ -367,14 +785,44 @@ function writeDesignTemplateRow(worksheet, rowNumber, row) {
     AL: row.plannedHrs,
     AM: row.actualHrs,
   };
+  const hyperlinks = {
+    AH: row.concept.proofUrl,
+    AI: row.dap.proofUrl,
+    AJ: row.finish3d.proofUrl,
+    AK: row.finish2d.proofUrl,
+  };
 
   for (const [column, value] of Object.entries(values)) {
-    worksheet.getCell(`${column}${rowNumber}`).value = value;
+    const cell = worksheet.getCell(`${column}${rowNumber}`);
+    const hyperlink = hyperlinks[column];
+    if (hyperlink) {
+      cell.value = {
+        text: value || "View Proof",
+        hyperlink,
+      };
+      cell.font = {
+        ...(cell.font || {}),
+        color: { argb: "FF1D4ED8" },
+        underline: true,
+      };
+    } else {
+      cell.value = value;
+      if (["AH", "AI", "AJ", "AK"].includes(column)) {
+        cell.font = {
+          ...(cell.font || {}),
+          color: { argb: "FF000000" },
+          underline: false,
+        };
+      }
+    }
   }
+
+  styleStatusCell(worksheet.getCell(`G${rowNumber}`), row.globalStatus);
 }
 
 function estimateRowHeight(row, templateHeight) {
   const segments = [
+    row.assigned,
     row.concept,
     row.dap,
     row.finish3d,
@@ -394,6 +842,73 @@ function estimateRowHeight(row, templateHeight) {
   }, 1);
 
   return Math.max(templateHeight || 18, Math.min(120, 18 + (maxLines - 1) * 12));
+}
+
+function findTemplateStyleRow(worksheet, startRow, columnCount) {
+  for (let rowNumber = TEMPLATE_STYLE_ROW; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    const hasStyle = Array.from({ length: columnCount }, (_unused, index) => (
+      Object.keys(row.getCell(index + 1).style || {}).length > 0
+    )).some(Boolean);
+
+    if (hasStyle) {
+      return row;
+    }
+  }
+
+  return worksheet.getRow(startRow);
+}
+
+function removeTemplateDataRows(worksheet, startRow) {
+  const rowsToDelete = worksheet.rowCount >= startRow
+    ? worksheet.rowCount - startRow + 1
+    : 0;
+
+  if (rowsToDelete > 0) {
+    worksheet.spliceRows(startRow, rowsToDelete);
+  }
+}
+
+function clearUnusedRows(worksheet, startRow, columnCount) {
+  if (worksheet.rowCount < startRow) {
+    return;
+  }
+
+  for (let rowNumber = startRow; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    row.height = undefined;
+    row.hidden = false;
+
+    for (let columnIndex = 1; columnIndex <= columnCount; columnIndex += 1) {
+      const cell = row.getCell(columnIndex);
+      cell.value = null;
+      cell.style = {};
+      cell.note = undefined;
+      cell.comment = undefined;
+    }
+
+    row.commit();
+  }
+}
+
+function getDesignExecutionWorksheet(workbook) {
+  const worksheet = workbook.worksheets.find((sheet) => (
+    sheet.name.trim().toLowerCase() === "design project execution"
+  )) || workbook.worksheets[0];
+
+  if (!worksheet) {
+    throw new Error("Design Project Execution worksheet is missing from report template");
+  }
+
+  workbook.worksheets.forEach((sheet) => {
+    if (sheet.id !== worksheet.id) {
+      workbook.removeWorksheet(sheet.id);
+    }
+  });
+  worksheet.name = "Design Project Execution";
+  worksheet.views = [];
+
+  return worksheet;
 }
 
 async function generateDesignProjectExecutionTemplateExcel({
@@ -417,18 +932,14 @@ async function generateDesignProjectExecutionTemplateExcel({
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(DESIGN_REPORT_TEMPLATE_PATH);
-  const worksheet = workbook.worksheets[0];
-  const templateRow = worksheet.getRow(TEMPLATE_FIRST_DATA_ROW);
+  const worksheet = getDesignExecutionWorksheet(workbook);
+  const templateRow = findTemplateStyleRow(worksheet, TEMPLATE_FIRST_DATA_ROW, TEMPLATE_DATA_COLUMN_COUNT);
   const templateStyles = Array.from(
     { length: TEMPLATE_DATA_COLUMN_COUNT },
     (_, index) => cloneStyle(templateRow.getCell(index + 1).style),
   );
   const templateHeight = templateRow.height;
-  const existingDataRows = Math.max(0, worksheet.rowCount - (TEMPLATE_FIRST_DATA_ROW - 1));
-
-  if (existingDataRows > 0) {
-    worksheet.spliceRows(TEMPLATE_FIRST_DATA_ROW, existingDataRows);
-  }
+  removeTemplateDataRows(worksheet, TEMPLATE_FIRST_DATA_ROW);
 
   const stageTaskLookup = buildStageTaskLookup(stageTasks, attachmentsByTaskId, activitiesByTaskId);
   const rows = buildTemplateFixtureRows({
@@ -445,7 +956,6 @@ async function generateDesignProjectExecutionTemplateExcel({
 
   rows.forEach((row, index) => {
     const rowNumber = TEMPLATE_FIRST_DATA_ROW + index;
-    worksheet.spliceRows(rowNumber, 0, []);
     const excelRow = worksheet.getRow(rowNumber);
     excelRow.height = estimateRowHeight(row, templateHeight);
 
@@ -462,13 +972,16 @@ async function generateDesignProjectExecutionTemplateExcel({
     writeDesignTemplateRow(worksheet, rowNumber, row);
     excelRow.commit();
   });
+  clearUnusedRows(
+    worksheet,
+    TEMPLATE_FIRST_DATA_ROW + rows.length,
+    TEMPLATE_DATA_COLUMN_COUNT,
+  );
 
-  const kpiResult = resolveReportKpisFromCompletionTruth(projectTruth, rows);
-  if (!kpiResult.ok) {
-    throw new Error(kpiResult.error || "Unable to resolve report KPI truth");
-  }
-
-  const { kpis } = kpiResult;
+  const kpiResult = resolveReportKpisFromCompletionTruth(projectTruth, fixtures);
+  const kpis = kpiResult.ok
+    ? kpiResult.kpis
+    : calculateLiveStatusKpis(rows);
   writeMergedValue(worksheet, "A2", `Report Date: ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`);
   writeMergedValue(worksheet, "A5", context.project_no || "");
   writeMergedValue(worksheet, "E5", context.project_name || "");
@@ -476,13 +989,33 @@ async function generateDesignProjectExecutionTemplateExcel({
   writeMergedValue(worksheet, "M5", context.plant || "");
   writeMergedValue(worksheet, "Q5", context.project_leader_name || context.project_leader_id || "");
   writeMergedValue(worksheet, "U5", context.team_lead_name || context.team_lead_id || "");
-  writeMergedValue(worksheet, "A8", kpis.overallProgress);
-  writeMergedValue(worksheet, "E8", kpis.totalFixtures);
-  writeMergedValue(worksheet, "I8", kpis.completed);
-  writeMergedValue(worksheet, "M8", kpis.pending);
-  writeMergedValue(worksheet, "Q8", kpis.overdue);
-  writeMergedValue(worksheet, "U8", kpis.onHold);
-  writeMergedValue(worksheet, "Y8", kpis.rejected);
+  writeMergedValue(worksheet, "A7", "Completion");
+  writeMergedValue(worksheet, "E7", "Total Fixtures");
+  writeMergedValue(worksheet, "I7", "Completed Fixtures");
+  writeMergedValue(worksheet, "M7", "Active Fixtures");
+  writeMergedValue(worksheet, "Q7", "Overdue Fixtures");
+  writeMergedValue(worksheet, "U7", "On Hold Fixtures");
+  writeMergedValue(worksheet, "Y7", "Rework Fixtures");
+  writeMergedValue(worksheet, "A8", withKpiLabel("Completion", kpis.overallProgress));
+  writeMergedValue(worksheet, "E8", withKpiLabel("Total Fixtures", kpis.totalFixtures));
+  writeMergedValue(worksheet, "I8", withKpiLabel("Completed Fixtures", kpis.completed));
+  writeMergedValue(worksheet, "M8", withKpiLabel("Active Fixtures", kpis.pending));
+  writeMergedValue(worksheet, "Q8", withKpiLabel("Overdue Fixtures", kpis.overdue));
+  writeMergedValue(worksheet, "U8", withKpiLabel("On Hold Fixtures", kpis.onHold));
+  writeMergedValue(worksheet, "Y8", withKpiLabel("Rework Fixtures", kpis.rejected));
+
+  ["A8", "E8", "I8", "M8", "Q8", "U8", "Y8"].forEach((address) => {
+    worksheet.getCell(address).numFmt = "@";
+  });
+  worksheet.getCell("AM13").value = "Hrs / Variance";
+  worksheet.views = [{ state: "frozen", ySplit: TEMPLATE_HEADER_ROW }];
+  worksheet.autoFilter = {
+    from: { row: TEMPLATE_HEADER_ROW, column: 1 },
+    to: {
+      row: Math.max(TEMPLATE_HEADER_ROW, TEMPLATE_FIRST_DATA_ROW + rows.length - 1),
+      column: TEMPLATE_DATA_COLUMN_COUNT,
+    },
+  };
 
   await workbook.xlsx.writeFile(filePath);
   return rows;

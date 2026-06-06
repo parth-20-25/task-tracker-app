@@ -1,4 +1,4 @@
-import { Download, FileSpreadsheet } from "lucide-react";
+import { FileSpreadsheet, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -18,9 +18,10 @@ interface ReportFiltersProps {
   onProjectChange: (value: string) => void;
   selectedProject: DesignProjectOption | null;
   projectsLoading: boolean;
-  exportLoading: boolean;
+  exportLoading: "xlsx" | "pdf" | null;
   canDownloadReport: boolean;
-  onDownload: () => void;
+  onDownloadExcel: () => void;
+  onDownloadPdf: () => void;
 }
 
 export function ReportFilters({
@@ -37,7 +38,8 @@ export function ReportFilters({
   projectsLoading,
   exportLoading,
   canDownloadReport,
-  onDownload,
+  onDownloadExcel,
+  onDownloadPdf,
 }: ReportFiltersProps) {
   if (!canExportReports) {
     return null;
@@ -64,7 +66,7 @@ export function ReportFilters({
             <Select
               value={selectedDepartmentId || "__none__"}
               onValueChange={(value) => onDepartmentChange(value === "__none__" ? "" : value)}
-              disabled={!canSelectDepartments || projectsLoading || exportLoading}
+              disabled={!canSelectDepartments || projectsLoading || Boolean(exportLoading)}
             >
               <SelectTrigger className="h-9 text-sm">
                 <SelectValue placeholder="Select department" />
@@ -85,7 +87,7 @@ export function ReportFilters({
             <Select
               value={selectedProjectId || "__none__"}
               onValueChange={(value) => onProjectChange(value === "__none__" ? "" : value)}
-              disabled={!selectedDepartmentId || projectsLoading || exportLoading}
+              disabled={!selectedDepartmentId || projectsLoading || Boolean(exportLoading)}
             >
               <SelectTrigger className="h-9 text-sm">
                 <SelectValue placeholder={projectsLoading ? "Loading projects..." : "Select project"} />
@@ -109,15 +111,26 @@ export function ReportFilters({
               : helperText}
           </div>
 
-          <Button
-            className="w-full md:w-auto"
-            variant="outline"
-            disabled={!canDownloadReport || exportLoading}
-            onClick={onDownload}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            {exportLoading ? "Downloading..." : "Download Report"}
-          </Button>
+          <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row">
+            <Button
+              className="w-full md:w-auto"
+              variant="outline"
+              disabled={!canDownloadReport || Boolean(exportLoading)}
+              onClick={onDownloadExcel}
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              {exportLoading === "xlsx" ? "Downloading..." : "Excel Report"}
+            </Button>
+            <Button
+              className="w-full md:w-auto"
+              variant="outline"
+              disabled={!canDownloadReport || Boolean(exportLoading)}
+              onClick={onDownloadPdf}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              {exportLoading === "pdf" ? "Downloading..." : "PDF Report"}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

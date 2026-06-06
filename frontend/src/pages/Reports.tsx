@@ -9,7 +9,7 @@ import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { DesignProjectOption } from "@/types";
 import { isProjectAuthorityUser } from "@/lib/permissions";
-import { formatDesignProjectLabel } from "@/lib/projectDisplay";
+import { formatDesignProjectLabel, formatProjectNumber } from "@/lib/projectDisplay";
 
 function sanitizeFileNamePart(value: string) {
   return value
@@ -28,7 +28,7 @@ export default function Reports() {
   const [selectedReportDepartmentId, setSelectedReportDepartmentId] = useState("");
   const [reportProjects, setReportProjects] = useState<DesignProjectOption[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [reportExportLoading, setReportExportLoading] = useState(false);
+  const [reportExportLoading, setReportExportLoading] = useState<"xlsx" | "pdf" | null>(null);
   const [reportProjectsLoading, setReportProjectsLoading] = useState(false);
 
   useEffect(() => {
@@ -142,20 +142,21 @@ export default function Reports() {
       && selectedProject,
   );
 
-  const handleReportDownload = () => {
+  const handleReportDownload = (format: "xlsx" | "pdf") => {
     if (!selectedProject || !selectedReportDepartmentId) {
       return;
     }
 
     const targetName = formatDesignProjectLabel(selectedProject);
     const reportLabel = "Project_Report";
-    const fileName = `${sanitizeFileNamePart(selectedProject.project_code)}_${sanitizeFileNamePart(targetName)}_${reportLabel}.xlsx`;
+    const fileName = `${sanitizeFileNamePart(formatProjectNumber(selectedProject))}_${sanitizeFileNamePart(targetName)}_${reportLabel}_v2.${format}`;
 
-    setReportExportLoading(true);
+    setReportExportLoading(format);
     downloadDesignReport({
       department_id: selectedReportDepartmentId,
       project_id: selectedProject.project_id,
       report_type: "project",
+      format,
     }, fileName)
       .catch((error) => {
         toast({
@@ -165,7 +166,7 @@ export default function Reports() {
         });
       })
       .finally(() => {
-        setReportExportLoading(false);
+        setReportExportLoading(null);
       });
   };
 
@@ -190,7 +191,8 @@ export default function Reports() {
         projectsLoading={reportProjectsLoading}
         exportLoading={reportExportLoading}
         canDownloadReport={canDownloadReport}
-        onDownload={handleReportDownload}
+        onDownloadExcel={() => handleReportDownload("xlsx")}
+        onDownloadPdf={() => handleReportDownload("pdf")}
       />
     </div>
   );

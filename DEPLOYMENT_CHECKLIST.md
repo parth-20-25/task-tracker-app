@@ -18,8 +18,14 @@ All required changes have been successfully implemented and verified.
 - ✅ `/package.json` - Simplified to workspace reference
 - ✅ `/frontend/src/vite-env.d.ts` - Updated environment variable names
 - ✅ `/frontend/src/api/config.ts` - Updated API URL environment variable
+- ✅ `/backend/.env.example` - Added backend env template
+- ✅ `/backend/.env.production.example` - Added backend production template
+- ✅ `/frontend/.env.example` - Added frontend env template
 - ✅ `/frontend/.env.development` - Updated to VITE_API_URL
-- ✅ `/frontend/.env.production` - Updated to VITE_API_URL
+- ✅ `/frontend/.env.production` - Updated to current local production backend URL
+- ✅ `/frontend/.env.production.example` - Added frontend production template
+- ✅ `/python-service/.env.example` - Added Python service env template
+- ✅ `/python-service/.env.production.example` - Added Python service production template
 - ✅ `/frontend/vite.config.ts` - Updated Vite config for new env var
 - ✅ `/render.yaml` - Optimized for Render deployment
 
@@ -55,10 +61,12 @@ Port: Dynamic (Render provides $PORT)
 ```
 Build Command: npm run build
 Output Directory: dist
-Environment: VITE_API_URL=https://your-backend.onrender.com
+Environment: VITE_API_URL=http://192.168.1.227:5000
 ```
 
 ✅ **Verified:** Environment variable correctly configured in code
+
+Current local VM production frontend runs with `npm run preview` on `http://192.168.1.227:4173`.
 
 ---
 
@@ -67,24 +75,31 @@ Environment: VITE_API_URL=https://your-backend.onrender.com
 ### Backend Production
 ```
 DATABASE_URL                              → PostgreSQL connection string
+DATABASE_SSL                             → false for current local PostgreSQL
 JWT_SECRET                                → Secure random value (GENERATE NEW)
-CORS_ORIGIN                               → Frontend URL (e.g., https://app.example.com)
+CORS_ORIGIN                               → http://192.168.1.227:4173
 NODE_ENV                                  → production
-DESIGN_EXTRACTION_SERVICE_URL             → Optional
-DESIGN_EXTRACTION_SERVICE_TOKEN           → Optional
+UPLOADS_DIR                               → uploads, or another persistent writable path
+ENABLE_TASK_SEED                          → false
+RBAC_AUTO_CREATE_PERMISSIONS              → false unless intentionally bootstrapping permissions
+PERFORMANCE_MIN_APPROVED_TASKS            → Optional, default 5
+DEPARTMENT_OVERDUE_PENALTY_FACTOR         → Optional, default 1
+PERFORMANCE_ANALYTICS_REFRESH_MS          → Optional, default 900000
 ```
 
 ### Python Service Production
 ```
-DATABASE_URL                              → Same as backend
-BACKEND_API_URL                           → Backend service URL
-EXTRACTION_SERVICE_TOKEN                  → Optional
-PUBLIC_UPLOAD_BASE_URL                    → Optional
+NODE_ENV                                  → production
+PORT                                      → 8000
+LOG_LEVEL                                 → INFO
+EXTRACTION_SERVICE_TOKEN                  → Required for POST /extract
+EXTRACTION_MAX_UPLOAD_BYTES               → Optional, default 10485760
+DATABASE_URL                              → Leave unset for current local PostgreSQL unless Python DB SSL handling changes
 ```
 
 ### Frontend Production
 ```
-VITE_API_URL                              → Backend API URL (e.g., https://backend.onrender.com)
+VITE_API_URL                              → http://192.168.1.227:5000
 ```
 
 ---
@@ -139,10 +154,11 @@ All systems checked and working:
 
 ### 1. Update Environment Variables in Render
 - [ ] Set `DATABASE_URL` for backend service
+- [ ] Set `DATABASE_SSL=false` for the current local PostgreSQL service
 - [ ] Generate and set `JWT_SECRET` for backend
-- [ ] Set `CORS_ORIGIN` to your frontend domain
-- [ ] Set `BACKEND_API_URL` for Python service
-- [ ] Set `VITE_API_URL` for frontend service
+- [ ] Set `CORS_ORIGIN=http://192.168.1.227:4173`
+- [ ] Set `VITE_API_URL=http://192.168.1.227:5000`
+- [ ] Set `EXTRACTION_SERVICE_TOKEN` for Python service if `/extract` is used
 
 ### 2. Deploy to Render
 - [ ] Connect GitHub repository to Render
@@ -195,7 +211,7 @@ All systems checked and working:
 │  ├─ Root: /python-service                   │
 │  ├─ Build: pip install -r requirements.txt  │
 │  ├─ Start: uvicorn app.main:app ...         │
-│  ├─ Env: DATABASE_URL, BACKEND_API_URL      │
+│  ├─ Env: EXTRACTION_SERVICE_TOKEN           │
 │  └─ Connects to: Database                   │
 │                                             │
 │  Database (PostgreSQL)                      │
@@ -233,6 +249,12 @@ All systems checked and working:
 Backend Health: `GET /api/health`
 Python Health: `GET /health`
 Frontend Config: `VITE_API_URL` environment variable
+
+Current VM production values:
+- Frontend: `http://192.168.1.227:4173`
+- Backend: `http://192.168.1.227:5000`
+- Python service: `http://192.168.1.227:8000`
+- Database: `postgresql://parc_user:<production-password>@localhost:5432/parc_task_tracker`
 
 ---
 

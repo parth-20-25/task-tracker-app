@@ -1910,7 +1910,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
     throw new AppError(403, "You do not have permission to verify this task");
   }
 
-  if (task.assigned_to === user.employee_id) {
+  if (isTaskAssignee(user, task) && !hasPermission(user, PERMISSIONS.SELF_APPROVE)) {
     throw new AppError(403, "You cannot approve your own task");
   }
 

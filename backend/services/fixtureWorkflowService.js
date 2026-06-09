@@ -148,6 +148,25 @@ async function ensureProgressInitialized(fixtureId, departmentId, workflow) {
   try {
     await client.query("BEGIN");
     await initProgressForFixture(fixtureId, departmentId, workflow.stages, client);
+    await client.query(
+      `
+        UPDATE fixture_workflow_progress fwp
+        SET status = $3,
+            completed_at = COALESCE(fwp.completed_at, NOW()),
+            assigned_to = NULL,
+            assigned_at = NULL,
+            started_at = NULL,
+            duration_minutes = NULL,
+            updated_at = NOW()
+        FROM design.fixtures f
+        WHERE f.id = $1
+          AND fwp.fixture_id = f.id
+          AND fwp.department_id = $2
+          AND f.is_workflow_complete IS TRUE
+          AND fwp.status <> $3
+      `,
+      [fixtureId, departmentId, WORKFLOW_STATUSES.APPROVED],
+    );
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -210,6 +229,14 @@ function getProgressRevisionCode(stage) {
   }
 
   return formatStageRevisionCode(stage.stage_name, stage.stage_version);
+}
+
+function isReleaseStageName(stageName) {
+  return normalizeDesignStageName(stageName) === "release";
+}
+
+function getReleaseStage(progressRows = []) {
+  return progressRows.find((stage) => isReleaseStageName(stage.stage_name)) || null;
 }
 
 function normalizeRevisionType(value, fallback = "OTHER") {
@@ -1018,6 +1045,77 @@ async function releaseFixtureStageAssignment(fixtureId, departmentId, client = p
   return { released: true, currentStage: current };
 }
 
+async function releaseFixtureWorkflow({ actor = null, fixtureId, departmentId }) {
+  await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
+
+  const workflow = await requireWorkflow(departmentId);
+  let progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
+  const releaseStage = getReleaseStage(progress);
+
+  if (!releaseStage) {
+    throw new AppError(409, "Release stage is not configured for this department workflow");
+  }
+
+  const incompleteBeforeRelease = progress.filter((stage) => (
+    Number(stage.stage_order) < Number(releaseStage.stage_order)
+    && stage.status !== WORKFLOW_STATUSES.APPROVED
+  ));
+
+  if (incompleteBeforeRelease.length > 0) {
+    throw new AppError(409, "Previous design stages must be approved before Release");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT id FROM fixture_workflow_progress WHERE fixture_id = $1::uuid AND department_id = $2 FOR UPDATE",
+      [fixtureId, departmentId],
+    );
+
+    progress = await getProgressForFixture(fixtureId, departmentId, client);
+    const lockedReleaseStage = getReleaseStage(progress);
+    if (!lockedReleaseStage) {
+      throw new AppError(409, "Release stage is not configured for this department workflow");
+    }
+
+    const lockedIncompleteBeforeRelease = progress.filter((stage) => (
+      Number(stage.stage_order) < Number(lockedReleaseStage.stage_order)
+      && stage.status !== WORKFLOW_STATUSES.APPROVED
+    ));
+    if (lockedIncompleteBeforeRelease.length > 0) {
+      throw new AppError(409, "Previous design stages must be approved before Release");
+    }
+
+    const timestamp = new Date();
+    await updateProgressRow(fixtureId, lockedReleaseStage.stage_name, {
+      status: WORKFLOW_STATUSES.APPROVED,
+      assigned_to: null,
+      assigned_at: null,
+      started_at: null,
+      completed_at: timestamp,
+      duration_minutes: null,
+    }, client);
+    await markFixtureComplete(fixtureId, client);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  console.info("[workflow] releaseFixtureWorkflow completed", {
+    fixture_id: fixtureId,
+    department_id: departmentId,
+    released_by: actor?.employee_id || null,
+  });
+
+  return getCurrentStage(fixtureId, departmentId);
+}
+
 /**
  * Returns the full progress detail for a fixture (all stages with statuses).
  * Used for the workflow timeline display.
@@ -1255,6 +1353,7 @@ module.exports = instrumentModuleExports("service.fixtureWorkflowService", {
   manipulateFixtureStage,
   reopenFixtureStage,
   releaseFixtureStageAssignment,
+  releaseFixtureWorkflow,
   advanceFixtureWorkflowStage,
   advanceWorkflowAfterTaskApproval,
   submitFixtureStageForVerification,

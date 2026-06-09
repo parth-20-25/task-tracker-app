@@ -1,5 +1,6 @@
 const { env } = require("../config/env");
 const {
+  PERMISSIONS,
   PERMISSION_DEFINITIONS,
 } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
@@ -233,7 +234,9 @@ async function syncRolePermissionJson(client) {
 async function alignPermissionData(client) {
   await seedPermissions(client);
   const canonicalPermissionMap = normalizePermissionIds(
-    PERMISSION_DEFINITIONS.map(([permissionId]) => permissionId),
+    PERMISSION_DEFINITIONS
+      .map(([permissionId]) => permissionId)
+      .filter((permissionId) => permissionId !== PERMISSIONS.SELF_APPROVE),
   ).reduce((permissionMap, permissionId) => {
     permissionMap[permissionId] = true;
     return permissionMap;

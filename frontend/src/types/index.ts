@@ -195,7 +195,7 @@ export interface AuditLog {
 
 export interface UploadBatch {
   id: string;
-  batch_id: string;
+  batch_id: string | null;
   project_id: string;
   project_no: string;
   project_created_by_user_id?: string | null;

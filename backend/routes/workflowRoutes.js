@@ -19,6 +19,7 @@ const {
   getFullProgressForFixture,
   manipulateFixtureStage,
   reopenFixtureStage,
+  releaseFixtureWorkflow,
 } = require("../services/fixtureWorkflowService");
 
 const router = express.Router();
@@ -277,6 +278,35 @@ router.post(
       remarks: req.body?.remarks,
       requestedBy: req.body?.requested_by,
       approvedBy: req.body?.approved_by,
+    });
+    return sendSuccess(res, result, 200);
+  }),
+);
+
+router.post(
+  "/workflows/release",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(async (req, res) => {
+    const departmentId = resolveAccessibleDepartmentId(
+      req.user,
+      req.body?.department_id,
+      "A department is required",
+    );
+
+    const fixtureId = String(req.body?.fixture_id || "").trim();
+    if (!fixtureId) throw new AppError(400, "fixture_id is required");
+
+    await logChangeFixtureStageTrace(req, {
+      operation: "release_fixture_workflow",
+      fixture_id: fixtureId,
+      department_id: departmentId,
+    });
+    await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
+    const result = await releaseFixtureWorkflow({
+      actor: req.user,
+      fixtureId,
+      departmentId,
     });
     return sendSuccess(res, result, 200);
   }),

@@ -17,6 +17,7 @@ const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
   TRANSFER_TASK: "transfer_task",
   APPROVE_COMPLETED_TASK: "approve_completed_task",
+  SELF_APPROVE: "self_approve",
   APPROVE_QUALITY: "can_approve_quality",
   CHANGE_FIXTURE_STAGE: "change_fixture_stage",
   DELETE_WBS_BATCH: "delete_wbs_batch",
@@ -61,6 +62,7 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.ASSIGN_TASK, "Assign Task", "Allows assigning tasks to other users."],
   [PERMISSIONS.TRANSFER_TASK, "Transfer Task", "Allows transferring Design stage work while preserving contribution history."],
   [PERMISSIONS.APPROVE_COMPLETED_TASK, "Approve Completed Task", "Allows approving completed non-quality task submissions."],
+  [PERMISSIONS.SELF_APPROVE, "Self Approve", "Allows a user to approve their own task when they already have the relevant approval permission."],
   [PERMISSIONS.APPROVE_QUALITY, "Approve Quality", "Allows performing quality-stage approval."],
   [PERMISSIONS.CHANGE_FIXTURE_STAGE, "Change Fixture Stage", "Allows controlled fixture stage transitions."],
   [PERMISSIONS.DELETE_WBS_BATCH, "Delete WBS Batch", "Allows deleting owned WBS upload batches subject to ownership controls."],
@@ -98,8 +100,11 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.VIEW_PREDICTIVE_ANALYTICS, "View Predictive Insights", "Allows access to predictive delay and risk analysis."],
 ];
 
+const DEFAULT_GRANTED_PERMISSION_IDS = Object.values(PERMISSIONS)
+  .filter((permissionId) => permissionId !== PERMISSIONS.SELF_APPROVE);
+
 const ROLE_DEFAULT_PERMISSIONS = {
-  r1: Object.values(PERMISSIONS),
+  r1: DEFAULT_GRANTED_PERMISSION_IDS,
   r2: [
     PERMISSIONS.ASSIGN_TASK,
     PERMISSIONS.TRANSFER_TASK,

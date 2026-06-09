@@ -12,7 +12,7 @@ function mapFixtureBundleRow(row) {
     is_outsourced: row.is_outsourced === true,
     is_legacy_workflow: row.is_legacy_workflow === true,
     removed_from_latest_ingestion: row.removed_from_latest_ingestion === true,
-    is_required_for_project_kpi: row.removed_from_latest_ingestion !== true,
+    is_required_for_project_kpi: true,
     project_status: row.project_status,
     progress_rows: Array.isArray(row.progress_rows) ? row.progress_rows : [],
   };
@@ -74,7 +74,6 @@ async function loadFixtureBundlesForProject(projectId, departmentId, client = po
        AND fwp.department_id = dp.department_id
       WHERE df.project_id = $1
         AND dp.department_id = $2
-        AND COALESCE(df.removed_from_latest_ingestion, FALSE) = FALSE
       GROUP BY
         df.id,
         df.fixture_no,
@@ -131,7 +130,6 @@ async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
        AND fwp.department_id = dp.department_id
       WHERE df.id = $1
         AND dp.department_id = $2
-        AND COALESCE(df.removed_from_latest_ingestion, FALSE) = FALSE
       GROUP BY
         df.id,
         df.fixture_no,
@@ -177,7 +175,7 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
               'is_outsourced', df.is_outsourced,
               'is_legacy_workflow', df.is_legacy_workflow,
               'removed_from_latest_ingestion', df.removed_from_latest_ingestion,
-              'is_required_for_project_kpi', (df.removed_from_latest_ingestion IS NOT TRUE),
+              'is_required_for_project_kpi', TRUE,
               'progress_rows', fixture_progress.progress_rows
             )
             ORDER BY df.fixture_no ASC
@@ -187,7 +185,6 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
       FROM design.projects dp
       LEFT JOIN design.fixtures df
         ON df.project_id = dp.id
-       AND COALESCE(df.removed_from_latest_ingestion, FALSE) = FALSE
       LEFT JOIN LATERAL (
         SELECT COALESCE(
           json_agg(

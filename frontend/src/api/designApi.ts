@@ -237,6 +237,15 @@ export function updateFixtureOutsourcing(
   });
 }
 
+export function fetchRecentOutsourceSuppliers(departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<string[]>(`/design/outsourcing/suppliers${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
 export function fetchProject2DRouting(projectId: string) {
   return apiRequest<Project2DRouting>(`/design/projects/${encodeURIComponent(projectId)}/2d-routing`);
 }
@@ -296,6 +305,13 @@ export function uploadDepartmentProjects(payload: DepartmentProjectPayload[]) {
 
 export function createDesignTask(payload: CreateDesignTaskPayload) {
   return apiRequest<Task>("/design/tasks", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function releaseFixtureWorkflow(payload: { fixture_id: string; department_id?: string }) {
+  return apiRequest<FixtureCurrentStage>("/workflows/release", {
     method: "POST",
     body: JSON.stringify(stripUndefined(payload)),
   });

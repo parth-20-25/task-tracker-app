@@ -313,7 +313,6 @@ function fixtureOperationalStatsLateral(projectAlias = "p") {
           ${activeTaskLateral("f", "operational_task")}
           ${currentProgressLateral("f", projectAlias, "current_progress")}
           WHERE f.project_id = ${projectAlias}.id
-            AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
         ) fixture_state
       ) fixture_stats ON TRUE
   `;
@@ -502,6 +501,43 @@ async function listProjectOptionsForUser(user, departmentId, { activeOnly = fals
   );
 
   return result.rows.map(mapProjectOptionRow);
+}
+
+async function listRecentOutsourceSuppliersForUser(user, departmentId = null, limit = 6, client = pool) {
+  const boundedLimit = Math.max(1, Math.min(6, Number(limit) || 6));
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      WITH vendor_usage AS (
+        SELECT
+          LOWER(BTRIM(di.vendor_name)) AS vendor_key,
+          BTRIM(di.vendor_name) AS vendor_name,
+          MAX(COALESCE(di.outsourced_at, di.updated_at, di.created_at)) AS latest_used_at
+        FROM design.fixtures di
+        JOIN design.projects dp
+          ON dp.id = di.project_id
+        WHERE ($2::text IS NULL OR dp.department_id = $2)
+          AND ${visibleFixturePredicate("di", "dp")}
+          AND di.vendor_name IS NOT NULL
+          AND BTRIM(di.vendor_name) <> ''
+        GROUP BY LOWER(BTRIM(di.vendor_name)), BTRIM(di.vendor_name)
+      ),
+      deduped AS (
+        SELECT DISTINCT ON (vendor_key)
+          vendor_name,
+          latest_used_at
+        FROM vendor_usage
+        ORDER BY vendor_key, latest_used_at DESC, vendor_name ASC
+      )
+      SELECT vendor_name
+      FROM deduped
+      ORDER BY latest_used_at DESC, vendor_name ASC
+      LIMIT $3
+    `,
+    [user.employee_id, departmentId || null, boundedLimit],
+  );
+
+  return result.rows.map((row) => row.vendor_name).filter(Boolean);
 }
 
 async function countProjectsByDepartment(departmentId, { activeOnly = false } = {}, client = pool) {
@@ -1410,7 +1446,7 @@ async function updateFixtureOutsourcingState({
       UPDATE design.fixtures AS di
       SET is_outsourced = $2,
           vendor_name = CASE
-            WHEN $2::boolean THEN COALESCE(NULLIF(BTRIM($3::text), ''), NULLIF(BTRIM(di.vendor_name), ''), 'Manual Outsource')
+            WHEN $2::boolean THEN NULLIF(BTRIM($3::text), '')
             ELSE NULL
           END,
           outsourced_at = CASE
@@ -1545,6 +1581,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   listProjectSummariesForUser,
   listProjectOptionsByDepartment,
   listProjectOptionsForUser,
+  listRecentOutsourceSuppliersForUser,
   touchProject,
   updateProjectModificationFlag,
   updateFixtureReferenceImageForDepartment,

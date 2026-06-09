@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils';
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
 import { formatProjectNumber } from '@/lib/projectDisplay';
+import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { ProjectDashboardSummary, ProjectStatus } from '@/types';
 
 function statusLabel(status: ProjectStatus) {
@@ -105,12 +106,10 @@ function ProjectCard({
           <span>{project.department_name || project.department_id}</span>
           <span>{project.customer_name || "No customer"}</span>
         </div>
-        {project.team_lead_name && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <User className="h-3 w-3" />
-              <span>Team Leader: {project.team_lead_name}</span>
-          </div>
-        )}
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <User className="h-3 w-3" />
+          <span>Team Leader: {formatEmployeeDisplay(project.team_lead_id || null, project.team_lead_name)}</span>
+        </div>
       </CardContent>
     </Card>
   );
@@ -213,7 +212,7 @@ export default function Dashboard() {
 
     for (const project of projectSummaries) {
       const leaderId = project.team_lead_id || null;
-      const leaderName = project.team_lead_name || 'No operational team leader assigned';
+      const leaderName = formatEmployeeDisplay(leaderId, project.team_lead_name);
       const key = `${leaderId || '__none__'}::${leaderName}`;
 
       if (!groups.has(key)) {

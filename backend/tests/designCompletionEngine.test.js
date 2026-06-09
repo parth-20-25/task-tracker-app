@@ -187,7 +187,7 @@ runTest("missing progress rows fail-safe to null completion", () => {
   assert.ok(truth.truth_errors.some((error) => error.startsWith("missing_progress:")));
 });
 
-runTest("catalog-soft-removed fixtures are excluded from project denominator", () => {
+runTest("catalog-soft-removed fixtures remain in project denominator", () => {
   const projectTruth = aggregateProjectCompletionTruth({
     project_id: "p1",
     project_status: "active",
@@ -197,8 +197,14 @@ runTest("catalog-soft-removed fixtures are excluded from project denominator", (
         fixture_no: "FX-8",
         project_id: "p1",
         removed_from_latest_ingestion: true,
-        is_required_for_project_kpi: false,
-        progress_rows: [buildProgress("concept", "PENDING", 1)],
+        is_required_for_project_kpi: true,
+        progress_rows: [
+          buildProgress("concept", "PENDING", 1),
+          buildProgress("dap", "PENDING", 2),
+          buildProgress("3d_finish", "PENDING", 3),
+          buildProgress("2d_finish", "PENDING", 4),
+          buildProgress("release", "PENDING", 5),
+        ],
       },
       {
         fixture_id: "f9",
@@ -218,8 +224,8 @@ runTest("catalog-soft-removed fixtures are excluded from project denominator", (
     ],
   });
 
-  assert.equal(projectTruth.total_fixtures, 1);
-  assert.equal(projectTruth.completion_percent, 15);
+  assert.equal(projectTruth.total_fixtures, 2);
+  assert.equal(projectTruth.completion_percent, 7.5);
 });
 
 console.log("All design completion engine tests passed.");

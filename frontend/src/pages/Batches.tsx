@@ -76,9 +76,12 @@ function DeleteAction({
   onDelete: (batch: UploadBatch, force: boolean) => void;
   isPending: boolean;
 }) {
-  const disabled = !canDelete || batch.deletion_blocked;
-  const reason = !canDelete
-    ? "Only the canonical project owner or an admin can delete it."
+  const hasOperationalBatch = Boolean(batch.batch_id);
+  const disabled = !hasOperationalBatch || !canDelete || batch.deletion_blocked;
+  const reason = !hasOperationalBatch
+      ? "No upload batch is recorded for this project."
+    : !canDelete
+      ? "Only the canonical project owner or an admin can delete it."
     : batch.delete_blocked_reason || "Cannot delete this project while active work exists.";
 
   return (
@@ -106,7 +109,7 @@ function DeleteAction({
           type="button"
           variant="outline"
           size="sm"
-          disabled={isPending}
+          disabled={isPending || !hasOperationalBatch}
           onClick={() => onDelete(batch, true)}
         >
           Force
@@ -273,31 +276,51 @@ export default function Batches() {
       return;
     }
 
-    deleteMutation.mutate({ batchId: batch.id, force });
+    if (!batch.batch_id) {
+      toast({ title: "No upload batch recorded", description: "This project can be viewed, but batch lifecycle actions are unavailable.", variant: "destructive" });
+      return;
+    }
+
+    deleteMutation.mutate({ batchId: batch.batch_id, force });
   };
 
   const handleHold = (batch: UploadBatch) => {
+    if (!batch.batch_id) {
+      toast({ title: "No upload batch recorded", description: "This project can be viewed, but batch lifecycle actions are unavailable.", variant: "destructive" });
+      return;
+    }
+
     if (!window.confirm(`Place project ${formatProjectNumber(batch)} on hold? Active assignment workflow will stop for this project.`)) {
       return;
     }
 
-    holdMutation.mutate(batch.id);
+    holdMutation.mutate(batch.batch_id);
   };
 
   const handleActivate = (batch: UploadBatch) => {
+    if (!batch.batch_id) {
+      toast({ title: "No upload batch recorded", description: "This project can be viewed, but batch lifecycle actions are unavailable.", variant: "destructive" });
+      return;
+    }
+
     if (!window.confirm(`Activate project ${formatProjectNumber(batch)}? Tasks and fixtures will reappear in active workflows.`)) {
       return;
     }
 
-    activateMutation.mutate(batch.id);
+    activateMutation.mutate(batch.batch_id);
   };
 
   const handleRelease = (batch: UploadBatch) => {
+    if (!batch.batch_id) {
+      toast({ title: "No upload batch recorded", description: "This project can be viewed, but batch lifecycle actions are unavailable.", variant: "destructive" });
+      return;
+    }
+
     if (!window.confirm(`Release project ${formatProjectNumber(batch)}? This marks all fixtures and tasks completed.`)) {
       return;
     }
 
-    releaseMutation.mutate(batch.id);
+    releaseMutation.mutate(batch.batch_id);
   };
 
   const handleToggleModification = (batch: UploadBatch) => {
@@ -358,7 +381,8 @@ export default function Batches() {
                   && batch.project_created_by_user_id === user.employee_id,
                 );
                 const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
-                const canManageProject = isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
+                const hasOperationalBatch = Boolean(batch.batch_id);
+                const canManageProject = hasOperationalBatch && (isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner));
                 const canManage2DRouting = batch.can_manage_2d_routing === true;
                 const projectTerminal = batch.project_status === "completed" || batch.project_status === "released";
                 const projectOnHold = batch.project_status === "on_hold";
@@ -527,7 +551,7 @@ export default function Batches() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Uploaded By</span>
-                <span>{formatEmployeeDisplay(selectedBatch.uploaded_by_user_id || selectedBatch.uploaded_by || "-", selectedBatch.uploaded_by_name)}</span>
+                <span>{formatEmployeeDisplay(selectedBatch.uploaded_by_user_id || selectedBatch.uploaded_by || null, selectedBatch.uploaded_by_name)}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Accepted / Rejected</span>

@@ -16,7 +16,14 @@ Target versions:
 Service ports:
 - Backend API: `5000`
 - Python extraction service: `8000`
-- Frontend Vite preview: `8080`
+- Frontend Vite preview: `4173`
+- Frontend Vite dev server: `8080`
+
+Current local production endpoints:
+- Frontend: `http://192.168.1.227:4173`
+- Backend: `http://192.168.1.227:5000`
+- Python service: `http://192.168.1.227:8000`
+- Database: `postgresql://parc_user:<production-password>@localhost:5432/parc_task_tracker`
 
 ## Project Structure
 
@@ -35,8 +42,10 @@ TaskTrackerApp/
 │   └── [other python files]
 ├── frontend/                   # React/Vite application
 │   ├── package.json
-│   ├── .env.development       # Development environment
-│   ├── .env.production        # Production environment
+│   ├── .env.example           # Development template
+│   ├── .env.development       # Local development environment
+│   ├── .env.production        # Local production environment, ignored by git
+│   ├── .env.production.example # Production template
 │   └── [other frontend files]
 ├── render.yaml                # Render deployment config
 └── package.json               # Root (workspace reference)
@@ -49,7 +58,7 @@ TaskTrackerApp/
 **Required:**
 - `DATABASE_URL` - PostgreSQL connection string
 - `JWT_SECRET` - Secret key for JWT tokens
-- `CORS_ORIGIN` - Allowed CORS origin (e.g., `https://your-frontend.onrender.com`)
+- `CORS_ORIGIN` - Allowed CORS origin. Current production: `http://192.168.1.227:4173`
 - `UPLOADS_DIR` - Persistent writable upload directory
 
 **Local PostgreSQL SSL:**
@@ -61,24 +70,32 @@ TaskTrackerApp/
 - `PORT` - Backend port, defaults to `5000`
 - `REPORT_TEMP_DIR` - Writable temp directory for report exports
 - `ENABLE_TASK_SEED` - Set to "false" for production
-- `DESIGN_EXTRACTION_SERVICE_URL` - URL to extraction service
-- `DESIGN_EXTRACTION_SERVICE_TOKEN` - Token for extraction service
+- `RBAC_AUTO_CREATE_PERMISSIONS` - Keep "false" unless intentionally bootstrapping new permissions
+- `PERFORMANCE_MIN_APPROVED_TASKS` - Minimum approved tasks before analytics scoring, default `5`
+- `DEPARTMENT_OVERDUE_PENALTY_FACTOR` - Overdue task scoring multiplier, default `1`
+- `PERFORMANCE_ANALYTICS_REFRESH_MS` - Worker refresh interval, default `900000`
+- `REPORT_FORMATTER_SCRIPT` - Optional Python formatter script override for report exports
+- `REPORT_FORMATTER_PYTHON` - Optional Python executable override for report exports
+- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_STORAGE_BUCKET` - Optional Supabase storage integration
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` - Optional email settings
 
 ### Python Service (.env / Render config)
 
-**Required:**
-- `DATABASE_URL` - Same PostgreSQL connection as backend
-- `BACKEND_API_URL` - Backend API URL (e.g., `https://your-backend.onrender.com`)
+**Required for `/extract`:**
+- `EXTRACTION_SERVICE_TOKEN` or `DESIGN_EXTRACTION_SERVICE_TOKEN` - Shared token expected in the `x-extraction-token` header
 
 **Optional:**
-- `PORT` - Port to run on (Render provides this automatically)
-- `EXTRACTION_SERVICE_TOKEN` - Token for extraction service
-- `PUBLIC_UPLOAD_BASE_URL` - Public URL for uploaded files
+- `NODE_ENV` - Set to `production` for deployments
+- `HOST` - Bind host, default `0.0.0.0`
+- `PORT` - Port to run on, current production `8000`
+- `LOG_LEVEL` - Log level, production template uses `INFO`
+- `EXTRACTION_MAX_UPLOAD_BYTES` - Max accepted upload size, default `10485760`
+- `DATABASE_URL` - Optional. Leave unset for the current local VM database because the Python helper forces `sslmode=require` when present.
 
 ### Frontend (.env files / Render/Vercel)
 
 **Required:**
-- `VITE_API_URL` - Backend API base URL
+- `VITE_API_URL` - Backend API base URL. Current production: `http://192.168.1.227:5000`
 
 **Development (.env.development):**
 ```
@@ -87,7 +104,7 @@ VITE_API_URL=http://localhost:5000
 
 **Production (.env.production):**
 ```
-VITE_API_URL=https://your-backend.onrender.com
+VITE_API_URL=http://192.168.1.227:5000
 ```
 
 ## Local Development Setup
@@ -132,26 +149,29 @@ Backend required env:
 ```bash
 NODE_ENV=production
 PORT=5000
-DATABASE_URL=postgresql://...
+DATABASE_URL=postgresql://parc_user:<production-password>@localhost:5432/parc_task_tracker
 DATABASE_SSL=false
 JWT_SECRET=<strong-random-secret>
-CORS_ORIGIN=http://<frontend-host>:8080
-UPLOADS_DIR=/srv/tasktracker/uploads
+CORS_ORIGIN=http://192.168.1.227:4173
+UPLOADS_DIR=uploads
+ENABLE_TASK_SEED=false
+RBAC_AUTO_CREATE_PERMISSIONS=false
 ```
 
 Frontend build required env:
 ```bash
-VITE_API_URL=http://<backend-host>:5000
+VITE_API_URL=http://192.168.1.227:5000
 npm run build
 npm run preview
 ```
 
 Python extraction service env:
 ```bash
+NODE_ENV=production
 PORT=8000
-EXTRACTION_SERVICE_TOKEN=<same-token-used-by-backend>
-BACKEND_API_URL=http://<backend-host>:5000/api
-EXTRACTED_IMAGE_DIR=/srv/tasktracker/uploads/design-excel
+LOG_LEVEL=INFO
+EXTRACTION_SERVICE_TOKEN=<strong-random-token>
+EXTRACTION_MAX_UPLOAD_BYTES=10485760
 ```
 
 Optional report temp env:
@@ -162,12 +182,17 @@ REPORT_TEMP_DIR=/srv/tasktracker/report-tmp
 Runtime filesystem requirements:
 - `UPLOADS_DIR` must be writable by the backend process and must be persistent across restarts.
 - `REPORT_TEMP_DIR`, if set, must be writable by the backend process.
-- The Python extraction image directory must point at the same persistent upload tree when local image URLs are expected.
 
 Known production risks to manage:
 - Backend startup still performs runtime schema bootstrap (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, index creation, permission alignment, and repair/sync routines). Keep database backups and treat startup as a migration event until this is replaced with reviewed migrations.
 - `/uploads` is a static public file mount. Uploaded task proofs and reference images are reachable by URL if the path is known; add route-level authorization before storing sensitive files.
 - Do not use `CORS_ORIGIN=*` in production. Production startup rejects wildcard CORS.
+
+Migration notes for the current production VM:
+- Frontend preview was aligned to port `4173` in `frontend/package.json`. Restarting with `npm run preview` now preserves the current production frontend URL.
+- Tracked `.env.example` and `.env.production.example` files redact secrets. The ignored `.env.production` files in this workspace contain the current local production values needed for service restart.
+- If an existing production `JWT_SECRET` is replaced, existing user sessions will be invalidated and users must sign in again.
+- Keep Python service `DATABASE_URL` unset for the current localhost PostgreSQL deployment unless the Python connection helper is changed to support non-SSL local Postgres.
 
 ## Render Deployment
 
@@ -226,14 +251,14 @@ npm run build
 # Deploy dist/ folder to Vercel
 ```
 
-Set environment variable: `VITE_API_URL=https://your-backend.onrender.com`
+Set environment variable: `VITE_API_URL=http://192.168.1.227:5000` for the current local VM, or your deployed backend URL for cloud hosting.
 
 ### Option 2: Render
 
 Create a static site service with:
 - Build Command: `npm run build`
 - Publish Directory: `dist`
-- Environment Variables: `VITE_API_URL=https://your-backend.onrender.com`
+- Environment Variables: `VITE_API_URL=http://192.168.1.227:5000` for the current local VM, or your deployed backend URL for cloud hosting.
 
 ## Troubleshooting
 
@@ -262,9 +287,10 @@ Create a static site service with:
 - [ ] Backend `NODE_ENV=production` is set
 - [ ] `JWT_SECRET` is set to a secure random value
 - [ ] `DATABASE_URL` uses production database
-- [ ] `CORS_ORIGIN` matches production frontend URL
-- [ ] `DESIGN_EXTRACTION_SERVICE_TOKEN` is set (if using extraction)
-- [ ] Frontend `VITE_API_URL` points to production backend
+- [ ] `DATABASE_SSL=false` is set for the current local PostgreSQL deployment
+- [ ] `CORS_ORIGIN=http://192.168.1.227:4173`
+- [ ] Frontend `VITE_API_URL=http://192.168.1.227:5000`
+- [ ] Python `EXTRACTION_SERVICE_TOKEN` is set if `/extract` is used
 - [ ] All services pass health checks
 - [ ] SSL/HTTPS is enabled
 - [ ] Database backups are configured

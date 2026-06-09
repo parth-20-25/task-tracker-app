@@ -115,16 +115,20 @@ function hasPermission(user, permission) {
     return false;
   }
 
-  if (getRoleDetails(user)?.permissions?.all === true) {
-    return true;
-  }
-
   const normalizedPermission = normalizePermissionId(permission);
 
   const grantedPermissions = new Set([
     ...(Array.isArray(user.permissions) ? normalizePermissionIds(user.permissions) : []),
     ...getRolePermissionFlags(user),
   ]);
+
+  if (normalizedPermission === PERMISSIONS.SELF_APPROVE) {
+    return grantedPermissions.has(normalizedPermission);
+  }
+
+  if (getRoleDetails(user)?.permissions?.all === true) {
+    return true;
+  }
 
   return grantedPermissions.has(normalizedPermission);
 }

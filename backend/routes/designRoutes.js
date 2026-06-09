@@ -34,6 +34,7 @@ const {
   listDesignFixturesForUser,
   listDesignProjectsForUser,
   listProjectDashboardForUser,
+  listRecentOutsourceSuppliersForUser,
   updateFixtureOutsourcingForUser,
   updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,
@@ -169,6 +170,15 @@ router.get(
       activeOnly: req.query.active_only === "true",
     });
     return sendSuccess(res, fixtures);
+  }),
+);
+
+router.get(
+  "/design/outsourcing/suppliers",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const suppliers = await listRecentOutsourceSuppliersForUser(req.user, req.query.department_id);
+    return sendSuccess(res, suppliers);
   }),
 );
 

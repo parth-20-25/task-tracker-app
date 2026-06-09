@@ -15,7 +15,7 @@ const {
   listDepartmentProjectsForUser: listDepartmentProjectsByUserVisibility,
   listFixturesByProjectForUser,
   listProjectSummariesForUser: listProjectSummariesByUserVisibility,
-  listProjectOptionsForUser,
+  listRecentOutsourceSuppliersForUser: listRecentOutsourceSuppliersByUserVisibility,
   touchProject,
   updateFixtureOutsourcingState,
   updateProjectModificationFlag,
@@ -162,14 +162,10 @@ async function listDesignProjectsForUser(user, requestedDepartmentId, options = 
     ? resolveAccessibleDepartmentId(user, requested, "A department is required for project data access")
     : null;
 
-  if (options.activeOnly === true || !departmentId) {
-    const summaries = await listProjectSummariesByUserVisibility(user, { departmentId });
-    return summaries
-      .filter((project) => options.activeOnly !== true || !shouldHideProjectFromActiveSelection(project))
-      .map(mapProjectSummaryToOption);
-  }
-
-  return listProjectOptionsForUser(user, departmentId, { activeOnly: options.activeOnly === true });
+  const summaries = await listProjectSummariesByUserVisibility(user, { departmentId });
+  return summaries
+    .filter((project) => options.activeOnly !== true || !shouldHideProjectFromActiveSelection(project))
+    .map(mapProjectSummaryToOption);
 }
 
 async function listDesignFixturesForUser(user, projectId, requestedDepartmentId, options = {}) {
@@ -373,6 +369,10 @@ async function createDesignTaskFromProject(user, payload = {}) {
     return normalizeDesignStageName(stage.name) === currentStageKey;
   }) || null;
 
+  if (currentStageKey === "release") {
+    throw new AppError(400, "Release is not a task assignment stage. Use the workflow release action.");
+  }
+
   validateResolvedDesignTaskContext({
     projectId,
     fixtureId,
@@ -539,6 +539,11 @@ async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
     : null;
   const nextIsOutsourced = payload.is_outsourced === true;
   const vendorName = String(payload.vendor_name || "").trim();
+
+  if (nextIsOutsourced && !vendorName) {
+    throw new AppError(400, "Supplier Name is required when outsourcing a fixture");
+  }
+
   const client = await pool.connect();
 
   try {
@@ -552,7 +557,7 @@ async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
     const updatedFixture = await updateFixtureOutsourcingState({
       fixtureId: fixture.fixture_id,
       isOutsourced: nextIsOutsourced,
-      vendorName: nextIsOutsourced ? (vendorName || fixture.vendor_name || "Manual Outsource") : null,
+      vendorName: nextIsOutsourced ? vendorName : null,
       changedBy: user.employee_id,
     }, client);
 
@@ -583,12 +588,22 @@ async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
   }
 }
 
+async function listRecentOutsourceSuppliersForUser(user, requestedDepartmentId = null) {
+  const requested = String(requestedDepartmentId || "").trim();
+  const departmentId = requested
+    ? resolveAccessibleDepartmentId(user, requested, "Invalid department context")
+    : null;
+
+  return listRecentOutsourceSuppliersByUserVisibility(user, departmentId, 6);
+}
+
 module.exports = instrumentModuleExports("service.projectCatalogService", {
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
   listProjectDashboardForUser,
+  listRecentOutsourceSuppliersForUser,
   updateFixtureOutsourcingForUser,
   updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,

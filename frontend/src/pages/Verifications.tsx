@@ -58,7 +58,13 @@ export default function Verifications() {
   });
 
   const pending = (verificationQuery.data ?? [])
-    .filter(task => task.assigned_to !== user?.employee_id)
+    .filter((task) => {
+      if (access.canSelfApprove || !user?.employee_id) {
+        return true;
+      }
+
+      return task.assigned_to !== user.employee_id && task.assignee_ids?.includes(user.employee_id) !== true;
+    })
     .filter(t => t.verification_status !== 'quality_pending' || access.canApproveQuality);
 
   return (

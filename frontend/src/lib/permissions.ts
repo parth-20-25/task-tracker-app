@@ -4,6 +4,7 @@ export const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
   TRANSFER_TASK: "transfer_task",
   APPROVE_COMPLETED_TASK: "approve_completed_task",
+  SELF_APPROVE: "self_approve",
   APPROVE_QUALITY: "can_approve_quality",
   CHANGE_FIXTURE_STAGE: "change_fixture_stage",
   DELETE_WBS_BATCH: "delete_wbs_batch",
@@ -46,6 +47,7 @@ export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);
 export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[number], string>> = {
   [PERMISSIONS.VIEW_SELF_TASKS]: "View Self Tasks Only",
   [PERMISSIONS.VIEW_ALL_TASKS]: "View All Tasks",
+  [PERMISSIONS.SELF_APPROVE]: "Self Approve",
 };
 
 export function getPermissionLabel(permission: string) {
@@ -79,6 +81,7 @@ export interface UiAccess {
   canAssignTasks: boolean;
   canTransferTasks: boolean;
   canApproveCompletedTasks: boolean;
+  canSelfApprove: boolean;
   canApproveQuality: boolean;
   canChangeFixtureStage: boolean;
   canDeleteWbsBatch: boolean;
@@ -124,7 +127,9 @@ export function buildRolePermissionSet(role: Role | null | undefined) {
 
   if (role.permissions.all === true) {
     PERMISSION_OPTIONS.forEach((permissionId) => {
-      permissionSet.add(permissionId);
+      if (permissionId !== PERMISSIONS.SELF_APPROVE) {
+        permissionSet.add(permissionId);
+      }
     });
     return permissionSet;
   }
@@ -229,6 +234,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canAssignTasks = hasUserPermission(user, PERMISSIONS.ASSIGN_TASK);
   const canTransferTasks = hasUserPermission(user, PERMISSIONS.TRANSFER_TASK);
   const canApproveCompletedTasks = hasUserPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK);
+  const canSelfApprove = hasUserPermission(user, PERMISSIONS.SELF_APPROVE);
   const canApproveQuality = hasUserPermission(user, PERMISSIONS.APPROVE_QUALITY);
   const canChangeFixtureStage = hasUserPermission(user, PERMISSIONS.CHANGE_FIXTURE_STAGE);
   const canDeleteWbsBatch = hasUserPermission(user, PERMISSIONS.DELETE_WBS_BATCH);
@@ -259,6 +265,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canAssignTasks,
     canTransferTasks,
     canApproveCompletedTasks,
+    canSelfApprove: operationalController && canSelfApprove,
     canApproveQuality,
     canChangeFixtureStage,
     canDeleteWbsBatch,

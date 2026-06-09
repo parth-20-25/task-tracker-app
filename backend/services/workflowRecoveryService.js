@@ -1,6 +1,7 @@
 const { pool } = require("../db");
+const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 
-const DEFAULT_WORKFLOW_STAGE_NAMES = ["Concept", "DAP", "3D", "2D"];
+const DEFAULT_WORKFLOW_STAGE_NAMES = ["Concept", "DAP", "3D", "2D", "Release"];
 
 function cloneDefaultStages() {
   return [...DEFAULT_WORKFLOW_STAGE_NAMES];
@@ -38,6 +39,107 @@ async function listWorkflowStageRows(workflowId, client = pool) {
   );
 
   return stageResult.rows;
+}
+
+async function ensureDefaultWorkflowStages(workflowId, stageRows, client = pool) {
+  let nextRows = stageRows;
+  let changed = false;
+
+  for (const stageName of DEFAULT_WORKFLOW_STAGE_NAMES) {
+    const stageKey = normalizeDesignStageName(stageName);
+    const hasStage = nextRows.some((stage) => normalizeDesignStageName(stage.stage_name || stage.name) === stageKey);
+    if (hasStage) {
+      continue;
+    }
+
+    const maxOrder = nextRows.reduce((max, stage) => {
+      const order = Number(stage.sequence_order ?? stage.order_index ?? 0);
+      return Number.isFinite(order) ? Math.max(max, order) : max;
+    }, 0);
+
+    await client.query(
+      `
+        INSERT INTO workflow_stages (
+          id,
+          workflow_id,
+          stage_name,
+          name,
+          description,
+          order_index,
+          sequence_order,
+          is_final,
+          is_active,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          gen_random_uuid()::text,
+          $1,
+          $2,
+          $2,
+          '',
+          $3,
+          $3,
+          $4,
+          TRUE,
+          NOW(),
+          NOW()
+        )
+      `,
+      [workflowId, stageName, maxOrder + 1, stageKey === "release"],
+    );
+    changed = true;
+    nextRows = await listWorkflowStageRows(workflowId, client);
+  }
+
+  const releaseRows = nextRows.filter((stage) => normalizeDesignStageName(stage.stage_name || stage.name) === "release");
+  if (releaseRows.length > 0) {
+    const releaseRow = releaseRows[releaseRows.length - 1];
+    const releaseOrder = Number(releaseRow.sequence_order ?? releaseRow.order_index ?? 0);
+    const maxNonReleaseOrder = nextRows.reduce((max, stage) => {
+      if (normalizeDesignStageName(stage.stage_name || stage.name) === "release") {
+        return max;
+      }
+      const order = Number(stage.sequence_order ?? stage.order_index ?? 0);
+      return Number.isFinite(order) ? Math.max(max, order) : max;
+    }, 0);
+
+    if (!Number.isFinite(releaseOrder) || releaseOrder <= maxNonReleaseOrder) {
+      const nextReleaseOrder = maxNonReleaseOrder + 1;
+      const orderUpdate = await client.query(
+        `
+          UPDATE workflow_stages
+          SET order_index = $3,
+              sequence_order = $3,
+              updated_at = NOW()
+          WHERE workflow_id = $1
+            AND id = $2
+            AND (
+              order_index IS DISTINCT FROM $3
+              OR sequence_order IS DISTINCT FROM $3
+            )
+        `,
+        [workflowId, releaseRow.id, nextReleaseOrder],
+      );
+      changed = changed || orderUpdate.rowCount > 0;
+      nextRows = await listWorkflowStageRows(workflowId, client);
+    }
+
+    const finalUpdate = await client.query(
+      `
+        UPDATE workflow_stages
+        SET is_final = CASE WHEN id = $2 THEN TRUE ELSE FALSE END,
+            updated_at = NOW()
+        WHERE workflow_id = $1
+          AND is_active = TRUE
+          AND is_final IS DISTINCT FROM CASE WHEN id = $2 THEN TRUE ELSE FALSE END
+      `,
+      [workflowId, releaseRow.id],
+    );
+    changed = changed || finalUpdate.rowCount > 0;
+  }
+
+  return changed ? listWorkflowStageRows(workflowId, client) : nextRows;
 }
 
 async function repairOrphanDesignProjects(departmentId = null, client = pool) {
@@ -212,6 +314,8 @@ async function ensureDepartmentWorkflow(departmentId, client = pool) {
 
     stageRows = await listWorkflowStageRows(workflow.id, client);
   }
+
+  stageRows = await ensureDefaultWorkflowStages(workflow.id, stageRows, client);
 
   const hasValidInitialStage = Boolean(
     workflow.initial_stage_id && stageRows.some((stage) => stage.id === workflow.initial_stage_id),

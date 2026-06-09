@@ -105,7 +105,6 @@ function fixtureOperationalStatsLateral(projectAlias = "dp") {
           ${activeTaskLateral("f", "operational_task")}
           ${currentProgressLateral("f", projectAlias, "current_progress")}
           WHERE f.project_id = ${projectAlias}.id
-            AND COALESCE(f.removed_from_latest_ingestion, FALSE) = FALSE
         ) fixture_state
       ) fixture_stats ON TRUE
   `;
@@ -201,8 +200,8 @@ function mapBatchSummary(row) {
   const completedFixtures = Number(row.completed_fixtures || 0);
 
   return {
-    id: row.id,
-    batch_id: row.id,
+    id: row.id || row.batch_id || row.project_id,
+    batch_id: row.batch_id || null,
     project_id: row.project_id,
     project_no: row.project_no,
     project_created_by_user_id: row.project_created_by_user_id || null,
@@ -219,11 +218,11 @@ function mapBatchSummary(row) {
     total_tasks: totalFixtures,
     pending_tasks: pendingFixtures,
     completed_tasks: completedFixtures,
-    uploaded_by: row.uploaded_by,
-    uploaded_by_user_id: row.uploaded_by_user_id || row.uploaded_by || null,
+    uploaded_by: row.uploaded_by || row.project_uploaded_by || row.project_created_by_user_id || null,
+    uploaded_by_user_id: row.uploaded_by_user_id || row.uploaded_by || row.project_uploaded_by || row.project_created_by_user_id || null,
     uploaded_by_name: row.uploaded_by_name || null,
-    uploaded_at: row.uploaded_at,
-    created_at: row.uploaded_at,
+    uploaded_at: row.uploaded_at || row.project_created_at || row.project_updated_at,
+    created_at: row.uploaded_at || row.project_created_at || row.project_updated_at,
     accepted_rows: Number(row.accepted_rows || 0),
     rejected_rows: Number(row.rejected_rows || 0),
     total_fixtures: totalFixtures,
@@ -250,10 +249,14 @@ async function listBatchesWithSummary(departmentId, client = pool) {
   const result = await client.query(
     `
       SELECT
-        ub.id,
-        ub.project_id,
+        COALESCE(ub.id::text, dp.id::text) AS id,
+        ub.id AS batch_id,
+        COALESCE(ub.project_id, dp.id) AS project_id,
         dp.project_no,
         dp.created_by_user_id AS project_created_by_user_id,
+        dp.uploaded_by AS project_uploaded_by,
+        dp.created_at AS project_created_at,
+        dp.updated_at AS project_updated_at,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -274,8 +277,9 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
         TRUE AS can_manage_2d_routing,
         FALSE AS can_toggle_modification
-      FROM (
-        SELECT DISTINCT ON (project_id)
+      FROM design.projects dp
+      LEFT JOIN LATERAL (
+        SELECT
           id,
           project_id,
           uploaded_by,
@@ -284,14 +288,17 @@ async function listBatchesWithSummary(departmentId, client = pool) {
           accepted_rows,
           rejected_rows
         FROM design.upload_batches
-        WHERE COALESCE(status, 'active') = 'active'
-        ORDER BY project_id, uploaded_at DESC, id DESC
-      ) ub
-      JOIN design.projects dp ON dp.id = ub.project_id
+        WHERE project_id = dp.id
+        ORDER BY
+          CASE WHEN COALESCE(status, 'active') = 'active' THEN 0 ELSE 1 END,
+          uploaded_at DESC,
+          id DESC
+        LIMIT 1
+      ) ub ON TRUE
       LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
       ${fixtureOperationalStatsLateral("dp")}
       ${departmentFilter}
-      ORDER BY ub.uploaded_at DESC
+      ORDER BY COALESCE(ub.uploaded_at, dp.updated_at, dp.created_at) DESC
     `,
     [...params, PROJECT_STATUSES.ACTIVE],
   );
@@ -307,10 +314,14 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
     `
       ${buildVisibleUsersCte("$1")}
       SELECT
-        ub.id,
-        ub.project_id,
+        COALESCE(ub.id::text, dp.id::text) AS id,
+        ub.id AS batch_id,
+        COALESCE(ub.project_id, dp.id) AS project_id,
         dp.project_no,
         dp.created_by_user_id AS project_created_by_user_id,
+        dp.uploaded_by AS project_uploaded_by,
+        dp.created_at AS project_created_at,
+        dp.updated_at AS project_updated_at,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -344,8 +355,9 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
         ) AS can_manage_2d_routing,
         ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
-      FROM (
-        SELECT DISTINCT ON (project_id)
+      FROM design.projects dp
+      LEFT JOIN LATERAL (
+        SELECT
           id,
           project_id,
           uploaded_by,
@@ -354,10 +366,13 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           accepted_rows,
           rejected_rows
         FROM design.upload_batches
-        WHERE COALESCE(status, 'active') = 'active'
-        ORDER BY project_id, uploaded_at DESC, id DESC
-      ) ub
-      JOIN design.projects dp ON dp.id = ub.project_id
+        WHERE project_id = dp.id
+        ORDER BY
+          CASE WHEN COALESCE(status, 'active') = 'active' THEN 0 ELSE 1 END,
+          uploaded_at DESC,
+          id DESC
+        LIMIT 1
+      ) ub ON TRUE
       LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ($2::text IS NULL OR dp.department_id = $2)
@@ -369,7 +384,7 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           WHEN $4 THEN 2
           ELSE 3
         END,
-        ub.uploaded_at DESC
+        COALESCE(ub.uploaded_at, dp.updated_at, dp.created_at) DESC
     `,
     [
       user.employee_id,
@@ -407,6 +422,7 @@ async function getBatchById(batchId, client = pool) {
     `
       SELECT
         ub.id,
+        ub.id AS batch_id,
         ub.project_id,
         dp.project_no,
         dp.created_by_user_id AS project_created_by_user_id,
@@ -450,6 +466,7 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
       ${buildVisibleUsersCte("$1")}
       SELECT
         ub.id,
+        ub.id AS batch_id,
         ub.project_id,
         dp.project_no,
         dp.created_by_user_id AS project_created_by_user_id,

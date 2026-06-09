@@ -6,7 +6,13 @@ export function formatEmployeeDisplay(employee?: {
   if (typeof employee === "string") {
     const employeeId = employee.trim();
     const employeeName = String(name || "").trim();
-    return employeeId && employeeName ? `${employeeId} - ${employeeName}` : employeeId || employeeName || "Unassigned";
+    if (employeeId && employeeName) {
+      return `${employeeId} - ${employeeName}`;
+    }
+    if (employeeId) {
+      return `${employeeId} - Unknown User`;
+    }
+    return employeeName || "Not assigned";
   }
 
   const employeeId = String(employee?.employee_id || "").trim();
@@ -21,5 +27,9 @@ export function formatEmployeeDisplay(employee?: {
     return `${employeeId} - ${employeeName}`;
   }
 
-  return employeeId || employeeName || "Unassigned";
+  if (employeeId) {
+    return `${employeeId} - Unknown User`;
+  }
+
+  return employeeName || "Not assigned";
 }

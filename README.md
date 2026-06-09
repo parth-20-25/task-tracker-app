@@ -18,7 +18,8 @@ Target runtime prerequisites:
 - PostgreSQL 16
 - Backend on port `5000`
 - Python service on port `8000`
-- Frontend preview on port `8080`
+- Frontend production preview on port `4173`
+- Frontend development server on port `8080`
 
 Required backend env vars:
 - `DATABASE_URL`
@@ -32,6 +33,12 @@ Required frontend build env var:
 
 Python extraction token:
 - `EXTRACTION_SERVICE_TOKEN` or `DESIGN_EXTRACTION_SERVICE_TOKEN`
+
+Current local production endpoints:
+- Frontend: `http://192.168.1.227:4173`
+- Backend: `http://192.168.1.227:5000`
+- Python service: `http://192.168.1.227:8000`
+- Database: `postgresql://parc_user:<production-password>@localhost:5432/parc_task_tracker`
 
 For persistent local uploads, set `UPLOADS_DIR` to a durable filesystem path. `REPORT_TEMP_DIR` is optional; when unset, report exports use the OS temp directory.
 

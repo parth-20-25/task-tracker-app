@@ -28,11 +28,13 @@ PROJECT_INTELLIGENCE_DOCUMENT.md
 # local env
 .env
 .env.*
-!.env.example
-!.env.*.example
 .env.local
 .env.*.local
 .env.production
+backend/.env
+backend/.env.production
+frontend/.env.production
+frontend/.env.development
 
 # uploads/runtime files
 backend/uploads/
@@ -45,10 +47,15 @@ tmp/
 __pycache__/
 .pytest_cache/
 *.py[cod]
+*.pyc
 .venv/
 venv/
 venv-*/
 env/
+python-service/venv/
+python-service/temp/
+python-service/**/__pycache__/
+python-service/**/*pycache*/
 
 # node/build
 node_modules/

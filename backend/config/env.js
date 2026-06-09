@@ -1,3 +1,5 @@
+const { resolveDatabaseUrlConfig } = require("./database");
+
 function parseNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -64,6 +66,8 @@ function validateBackendEnv() {
   if (missingEnvVars.length > 0) {
     throw new Error(`Missing required backend environment variables: ${missingEnvVars.join(", ")}`);
   }
+
+  resolveDatabaseUrlConfig(process.env.DATABASE_URL);
 
   if (env.nodeEnv === "production" && env.corsOrigin.split(",").some((origin) => origin.trim() === "*")) {
     throw new Error("CORS_ORIGIN cannot include '*' when NODE_ENV=production.");

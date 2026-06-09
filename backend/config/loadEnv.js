@@ -9,6 +9,7 @@ function normalizeRuntimeMode(value) {
 
 function loadBackendEnv(options = {}) {
   const mode = normalizeRuntimeMode(options.mode || process.env.NODE_ENV);
+  const override = options.override ?? mode === "production";
   process.env.NODE_ENV = mode;
 
   const candidateFiles = [`.env.${mode}`];
@@ -22,10 +23,11 @@ function loadBackendEnv(options = {}) {
       continue;
     }
 
-    const result = dotenv.config({ path: envPath, override: false, quiet: true });
+    const result = dotenv.config({ path: envPath, override, quiet: true });
     return {
       mode,
       path: envPath,
+      override,
       error: result.error || null,
     };
   }
@@ -33,6 +35,7 @@ function loadBackendEnv(options = {}) {
   return {
     mode,
     path: null,
+    override,
     error: null,
   };
 }

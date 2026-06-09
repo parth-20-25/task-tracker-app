@@ -4,5 +4,6 @@
 declare const process: {
   env: {
     VITE_API_URL?: string;
+    VITE_PYTHON_SERVICE_URL?: string;
   };
 };

@@ -8,6 +8,7 @@ import { VitePWA } from "vite-plugin-pwa";
 export default defineConfig(({ mode }) => {
   const runtimeEnv = loadEnv(mode, __dirname, "");
   const viteApiUrl = runtimeEnv.VITE_API_URL || process.env.VITE_API_URL || "";
+  const vitePythonServiceUrl = runtimeEnv.VITE_PYTHON_SERVICE_URL || process.env.VITE_PYTHON_SERVICE_URL || "";
 
   return {
     server: {
@@ -19,6 +20,7 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       "process.env.VITE_API_URL": JSON.stringify(viteApiUrl),
+      "process.env.VITE_PYTHON_SERVICE_URL": JSON.stringify(vitePythonServiceUrl),
     },
     plugins: [
       react(),

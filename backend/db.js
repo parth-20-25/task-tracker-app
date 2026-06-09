@@ -1,16 +1,12 @@
 const { Pool } = require("pg");
+const { loadBackendEnv } = require("./config/loadEnv");
 const { logger } = require("./lib/logger");
 const { getExecutionMetadata, safeSerialize, summarizeQuery } = require("./lib/observability");
-const { resolveDatabaseSslConfig } = require("./lib/databaseSsl");
+const { buildDatabasePoolConfig } = require("./config/database");
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is required for PostgreSQL connectivity.");
-}
+loadBackendEnv();
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: resolveDatabaseSslConfig(),
-});
+const pool = new Pool(buildDatabasePoolConfig());
 
 function normalizeQueryText(query) {
   if (typeof query === "string") {

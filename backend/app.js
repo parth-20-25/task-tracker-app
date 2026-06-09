@@ -1,3 +1,7 @@
+const { loadBackendEnv } = require("./config/loadEnv");
+
+loadBackendEnv();
+
 const express = require("express");
 const cors = require("cors");
 const { buildCorsOptions } = require("./config/cors");

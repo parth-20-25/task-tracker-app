@@ -8,6 +8,8 @@ export type TaskType = 'department_workflow' | 'custom';
 export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import';
 export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
+export type OutsourceStage = 'Concept' | '3D' | '2D';
+export type OutsourceStatus = 'outsourced' | 'completed' | 'brought_in_house';
 
 export interface Role {
   id: string;
@@ -588,8 +590,16 @@ export interface DesignFixtureOption {
   ingestion_source?: string | null;
   is_outsourced?: boolean;
   vendor_name?: string | null;
+  outsourced_stages?: OutsourceStage[];
+  outsource_status?: OutsourceStatus | null;
   outsourced_at?: string | null;
   outsourced_by?: string | null;
+  completed_by?: string | null;
+  completed_at?: string | null;
+  brought_in_house_by?: string | null;
+  brought_in_house_at?: string | null;
+  outsource_created_at?: string | null;
+  outsource_updated_at?: string | null;
   revision_no?: number;
   is_legacy_workflow?: boolean;
   is_workflow_complete?: boolean;

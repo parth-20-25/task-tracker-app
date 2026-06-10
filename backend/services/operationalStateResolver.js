@@ -70,7 +70,15 @@ function activeTaskStatusSqlArray() {
 
 function fixtureWorkflowCompleteSql(fixtureAlias = "f", projectAlias = "p") {
   return `(
-    ${fixtureAlias}.is_workflow_complete IS TRUE
+    (
+      ${fixtureAlias}.is_workflow_complete IS TRUE
+      AND NOT EXISTS (
+        SELECT 1
+        FROM design.fixture_outsource_records active_outsource
+        WHERE active_outsource.fixture_id = ${fixtureAlias}.id
+          AND active_outsource.outsource_status = 'outsourced'
+      )
+    )
     OR (
       EXISTS (
         SELECT 1
@@ -84,6 +92,12 @@ function fixtureWorkflowCompleteSql(fixtureAlias = "f", projectAlias = "p") {
         WHERE incomplete_progress.fixture_id = ${fixtureAlias}.id
           AND incomplete_progress.department_id = ${projectAlias}.department_id
           AND UPPER(COALESCE(incomplete_progress.status, '')) <> 'APPROVED'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM design.fixture_outsource_records active_outsource
+        WHERE active_outsource.fixture_id = ${fixtureAlias}.id
+          AND active_outsource.outsource_status = 'outsourced'
       )
     )
   )`;

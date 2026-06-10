@@ -7,6 +7,7 @@ import {
   DesignExcelUploadResponse,
   DesignFixtureOption,
   DesignProjectOption,
+  OutsourceStage,
   ProjectDashboardSummary,
   Task,
   ValidateRejectedDesignRowResponse,
@@ -187,6 +188,12 @@ export interface Project2DRouting {
   assignments: ProjectSubdivisionAssignment[];
 }
 
+export interface OutsourceFixturePayload {
+  supplier_name: string;
+  outsourced_stages: OutsourceStage[];
+  department_id?: string;
+}
+
 function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => value !== undefined),
@@ -229,12 +236,47 @@ export function fetchDesignFixtures(projectId: string, departmentId?: string, op
 
 export function updateFixtureOutsourcing(
   fixtureId: string,
-  payload: { is_outsourced: boolean; department_id?: string; vendor_name?: string },
+  payload: { is_outsourced: boolean; department_id?: string; vendor_name?: string; outsourced_stages?: OutsourceStage[] },
 ) {
   return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/outsourcing`, {
     method: "PATCH",
     body: JSON.stringify(stripUndefined(payload)),
   });
+}
+
+export function outsourceFixture(fixtureId: string, payload: OutsourceFixturePayload) {
+  return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/outsource`, {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function bringFixtureInHouse(fixtureId: string, payload: { department_id?: string } = {}) {
+  return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/bring-in-house`, {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function completeOutsourcedFixture(fixtureId: string, payload: { department_id?: string } = {}) {
+  return apiRequest<DesignFixtureOption & { workflow_marked_complete?: boolean }>(
+    `/design/fixtures/${encodeURIComponent(fixtureId)}/outsource-complete`,
+    {
+      method: "POST",
+      body: JSON.stringify(stripUndefined(payload)),
+    },
+  );
+}
+
+export function fetchProjectOutsourcedFixtures(projectId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<DesignFixtureOption[]>(
+    `/design/projects/${encodeURIComponent(projectId)}/outsourced-fixtures${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 export function fetchRecentOutsourceSuppliers(departmentId?: string) {

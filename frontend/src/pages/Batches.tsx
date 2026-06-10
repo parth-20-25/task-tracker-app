@@ -547,7 +547,9 @@ export default function Batches() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Fixtures</span>
-                <span>{selectedBatch.completed_tasks} completed / {selectedBatch.pending_tasks} pending</span>
+                <span>
+                  {selectedBatch.total_fixtures} total · {selectedBatch.completed_tasks} completed / {selectedBatch.active_count} active / {selectedBatch.pending_tasks} pending
+                </span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <span className="text-muted-foreground">Uploaded By</span>

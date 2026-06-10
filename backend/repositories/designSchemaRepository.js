@@ -815,6 +815,166 @@ async function ensureDesignDepartmentSchema(client) {
   `);
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS design.fixture_outsource_records (
+      fixture_id UUID PRIMARY KEY REFERENCES design.fixtures(id) ON DELETE CASCADE,
+      supplier_name TEXT NOT NULL,
+      outsourced_stages TEXT[] NOT NULL,
+      outsource_status TEXT NOT NULL DEFAULT 'outsourced',
+      outsourced_by VARCHAR(50),
+      outsourced_at TIMESTAMPTZ,
+      completed_by VARCHAR(50),
+      completed_at TIMESTAMPTZ,
+      brought_in_house_by VARCHAR(50),
+      brought_in_house_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixture_outsource_records
+    ADD COLUMN IF NOT EXISTS supplier_name TEXT,
+    ADD COLUMN IF NOT EXISTS outsourced_stages TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+    ADD COLUMN IF NOT EXISTS outsource_status TEXT NOT NULL DEFAULT 'outsourced',
+    ADD COLUMN IF NOT EXISTS outsourced_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS outsourced_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS completed_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS brought_in_house_by VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS brought_in_house_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `);
+
+  await client.query(`
+    UPDATE design.fixture_outsource_records
+    SET outsourced_stages = ARRAY['Concept', '3D', '2D']::text[]
+    WHERE outsourced_stages IS NULL
+       OR array_length(outsourced_stages, 1) IS NULL
+  `);
+
+  await client.query(`
+    UPDATE design.fixture_outsource_records
+    SET outsource_status = 'outsourced'
+    WHERE outsource_status IS NULL
+       OR outsource_status NOT IN ('outsourced', 'completed', 'brought_in_house')
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixture_outsource_records
+    DROP CONSTRAINT IF EXISTS fixture_outsource_supplier_name_check,
+    DROP CONSTRAINT IF EXISTS fixture_outsource_stages_check,
+    DROP CONSTRAINT IF EXISTS fixture_outsource_status_check
+  `);
+
+  await client.query(`
+    ALTER TABLE design.fixture_outsource_records
+    ADD CONSTRAINT fixture_outsource_supplier_name_check
+      CHECK (supplier_name IS NOT NULL AND BTRIM(supplier_name) <> ''),
+    ADD CONSTRAINT fixture_outsource_stages_check
+      CHECK (
+        array_length(outsourced_stages, 1) >= 1
+        AND outsourced_stages <@ ARRAY['Concept', '3D', '2D']::text[]
+      ),
+    ADD CONSTRAINT fixture_outsource_status_check
+      CHECK (outsource_status IN ('outsourced', 'completed', 'brought_in_house'))
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixture_outsource_records_status_updated
+    ON design.fixture_outsource_records (outsource_status, updated_at DESC)
+  `);
+
+  await client.query(`
+    INSERT INTO design.fixture_outsource_records (
+      fixture_id,
+      supplier_name,
+      outsourced_stages,
+      outsource_status,
+      outsourced_by,
+      outsourced_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      f.id,
+      BTRIM(f.vendor_name),
+      ARRAY['Concept', '3D', '2D']::text[],
+      'outsourced',
+      f.outsourced_by,
+      COALESCE(f.outsourced_at, f.updated_at, NOW()),
+      COALESCE(f.outsourced_at, f.created_at, NOW()),
+      COALESCE(f.updated_at, NOW())
+    FROM design.fixtures f
+    WHERE f.is_outsourced = TRUE
+      AND f.vendor_name IS NOT NULL
+      AND BTRIM(f.vendor_name) <> ''
+    ON CONFLICT (fixture_id) DO NOTHING
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS design.recent_outsource_suppliers (
+      supplier_key TEXT PRIMARY KEY,
+      supplier_name TEXT NOT NULL,
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT recent_outsource_supplier_name_check CHECK (BTRIM(supplier_name) <> '')
+    )
+  `);
+
+  await client.query(`
+    INSERT INTO design.recent_outsource_suppliers (
+      supplier_key,
+      supplier_name,
+      last_used_at,
+      created_at,
+      updated_at
+    )
+    SELECT DISTINCT ON (supplier_key)
+      supplier_key,
+      supplier_name,
+      latest_used_at,
+      latest_used_at,
+      latest_used_at
+    FROM (
+      SELECT
+        LOWER(BTRIM(supplier_name)) AS supplier_key,
+        BTRIM(supplier_name) AS supplier_name,
+        COALESCE(outsourced_at, updated_at, created_at, NOW()) AS latest_used_at
+      FROM design.fixture_outsource_records
+      WHERE supplier_name IS NOT NULL
+        AND BTRIM(supplier_name) <> ''
+      UNION ALL
+      SELECT
+        LOWER(BTRIM(vendor_name)) AS supplier_key,
+        BTRIM(vendor_name) AS supplier_name,
+        COALESCE(outsourced_at, updated_at, created_at, NOW()) AS latest_used_at
+      FROM design.fixtures
+      WHERE vendor_name IS NOT NULL
+        AND BTRIM(vendor_name) <> ''
+    ) suppliers
+    ORDER BY supplier_key, latest_used_at DESC, supplier_name ASC
+    ON CONFLICT (supplier_key) DO UPDATE
+    SET supplier_name = EXCLUDED.supplier_name,
+        last_used_at = GREATEST(design.recent_outsource_suppliers.last_used_at, EXCLUDED.last_used_at),
+        updated_at = NOW()
+  `);
+
+  await client.query(`
+    WITH ranked_suppliers AS (
+      SELECT
+        supplier_key,
+        ROW_NUMBER() OVER (ORDER BY last_used_at DESC, supplier_name ASC) AS rn
+      FROM design.recent_outsource_suppliers
+    )
+    DELETE FROM design.recent_outsource_suppliers recent
+    USING ranked_suppliers ranked
+    WHERE recent.supplier_key = ranked.supplier_key
+      AND ranked.rn > 6
+  `);
+
+  await client.query(`
     CREATE INDEX IF NOT EXISTS idx_design_fixtures_removed_from_ingestion
     ON design.fixtures (project_id, removed_from_latest_ingestion)
     WHERE removed_from_latest_ingestion = TRUE

@@ -18,6 +18,12 @@ const {
   currentProgressLateral,
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
+const {
+  canCompleteWorkflowAfterOutsource,
+  getOutsourceCompletionAutoApproveStageNames,
+  OUTSOURCE_STATUSES,
+  normalizeSupplierName,
+} = require("../lib/outsourceWorkflow");
 
 const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
 const MODIFICATION_AUTHORITY_ROLE_IDS = ["admin", "director", "director_ceo", "r1", "r2"];
@@ -32,6 +38,30 @@ const MODIFICATION_UPLOADER_LEADER_ROLE_KEYS = [
   "project_uploader_leader",
   "project_uploader_co_leader",
 ];
+
+const FIXTURE_OUTSOURCE_JOIN = `
+      LEFT JOIN design.fixture_outsource_records outsource
+        ON outsource.fixture_id = di.id
+`;
+
+const FIXTURE_OUTSOURCE_SELECT = `
+        CASE
+          WHEN outsource.outsource_status IN ('${OUTSOURCE_STATUSES.OUTSOURCED}', '${OUTSOURCE_STATUSES.COMPLETED}') THEN TRUE
+          WHEN outsource.outsource_status = '${OUTSOURCE_STATUSES.BROUGHT_IN_HOUSE}' THEN FALSE
+          ELSE di.is_outsourced
+        END AS is_outsourced,
+        COALESCE(outsource.supplier_name, di.vendor_name) AS vendor_name,
+        COALESCE(outsource.outsource_status, CASE WHEN di.is_outsourced THEN '${OUTSOURCE_STATUSES.OUTSOURCED}' ELSE NULL END) AS outsource_status,
+        outsource.outsourced_stages,
+        COALESCE(outsource.outsourced_at, di.outsourced_at) AS outsourced_at,
+        COALESCE(outsource.outsourced_by, di.outsourced_by) AS outsourced_by,
+        outsource.completed_by,
+        outsource.completed_at,
+        outsource.brought_in_house_by,
+        outsource.brought_in_house_at,
+        outsource.created_at AS outsource_created_at,
+        outsource.updated_at AS outsource_updated_at
+`;
 
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
@@ -158,6 +188,22 @@ function normalizeProjectCompletionPercent(row) {
   return Number(value);
 }
 
+function parseTextArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .replace(/^{|}$/g, "")
+    .split(",")
+    .map((item) => item.replace(/^"|"$/g, "").trim())
+    .filter(Boolean);
+}
+
 function mapProjectSummaryRow(row) {
   if (!row) {
     return null;
@@ -200,6 +246,7 @@ function mapFixtureOptionRow(row) {
   const workflowRevisionCode = row.workflow_revision_code
     || (row.workflow_stage ? formatStageRevisionCode(row.workflow_stage, stageVersion) : null);
   const workflowStatus = row.workflow_status || null;
+  const outsourceStatus = row.outsource_status || (row.is_outsourced === true ? OUTSOURCE_STATUSES.OUTSOURCED : null);
 
   return {
     fixture_id: row.fixture_id || row.id,
@@ -217,8 +264,16 @@ function mapFixtureOptionRow(row) {
     ingestion_source: row.ingestion_source || null,
     is_outsourced: row.is_outsourced === true,
     vendor_name: row.vendor_name || null,
+    outsourced_stages: parseTextArray(row.outsourced_stages),
+    outsource_status: outsourceStatus,
     outsourced_at: row.outsourced_at || null,
     outsourced_by: row.outsourced_by || null,
+    completed_by: row.completed_by || null,
+    completed_at: row.completed_at || null,
+    brought_in_house_by: row.brought_in_house_by || null,
+    brought_in_house_at: row.brought_in_house_at || null,
+    outsource_created_at: row.outsource_created_at || null,
+    outsource_updated_at: row.outsource_updated_at || null,
     revision_no: Number(row.revision_no || 0),
     is_legacy_workflow: row.is_legacy_workflow === true,
     is_workflow_complete: row.is_workflow_complete === true,
@@ -504,40 +559,20 @@ async function listProjectOptionsForUser(user, departmentId, { activeOnly = fals
 }
 
 async function listRecentOutsourceSuppliersForUser(user, departmentId = null, limit = 6, client = pool) {
+  void user;
+  void departmentId;
   const boundedLimit = Math.max(1, Math.min(6, Number(limit) || 6));
   const result = await client.query(
     `
-      ${buildVisibleUsersCte("$1")}
-      WITH vendor_usage AS (
-        SELECT
-          LOWER(BTRIM(di.vendor_name)) AS vendor_key,
-          BTRIM(di.vendor_name) AS vendor_name,
-          MAX(COALESCE(di.outsourced_at, di.updated_at, di.created_at)) AS latest_used_at
-        FROM design.fixtures di
-        JOIN design.projects dp
-          ON dp.id = di.project_id
-        WHERE ($2::text IS NULL OR dp.department_id = $2)
-          AND ${visibleFixturePredicate("di", "dp")}
-          AND di.vendor_name IS NOT NULL
-          AND BTRIM(di.vendor_name) <> ''
-        GROUP BY LOWER(BTRIM(di.vendor_name)), BTRIM(di.vendor_name)
-      ),
-      deduped AS (
-        SELECT DISTINCT ON (vendor_key)
-          vendor_name,
-          latest_used_at
-        FROM vendor_usage
-        ORDER BY vendor_key, latest_used_at DESC, vendor_name ASC
-      )
-      SELECT vendor_name
-      FROM deduped
-      ORDER BY latest_used_at DESC, vendor_name ASC
-      LIMIT $3
+      SELECT supplier_name
+      FROM design.recent_outsource_suppliers
+      ORDER BY last_used_at DESC, supplier_name ASC
+      LIMIT $1
     `,
-    [user.employee_id, departmentId || null, boundedLimit],
+    [boundedLimit],
   );
 
-  return result.rows.map((row) => row.vendor_name).filter(Boolean);
+  return result.rows.map((row) => row.supplier_name).filter(Boolean);
 }
 
 async function countProjectsByDepartment(departmentId, { activeOnly = false } = {}, client = pool) {
@@ -578,7 +613,7 @@ async function getProjectModificationContextForUser(projectId, user, client = po
         COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
         p.customer_name,
         p.department_id,
-        p.uploaded_by,
+        COALESCE(p.uploaded_by, p.created_by_user_id) AS uploaded_by,
         p.created_by_user_id,
         COALESCE(p.status, $3) AS project_status,
         COALESCE(p.is_modified, FALSE) AS is_modified,
@@ -633,7 +668,7 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         d.name AS department_name,
         COALESCE(p.status, $3) AS project_status,
         COALESCE(p.is_modified, FALSE) AS is_modified,
-        p.uploaded_by,
+        COALESCE(p.uploaded_by, p.created_by_user_id) AS uploaded_by,
         hierarchy_team_lead.employee_id AS team_lead_id,
         hierarchy_team_lead.name AS team_lead_name,
         uploader.name AS uploaded_by_name,
@@ -649,7 +684,7 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
       LEFT JOIN departments d
         ON d.id = p.department_id
       LEFT JOIN users uploader
-        ON uploader.employee_id = p.uploaded_by
+        ON uploader.employee_id = COALESCE(p.uploaded_by, p.created_by_user_id)
       ${hierarchyTeamLeaderLateral("p")}
       ${fixtureOperationalStatsLateral("p")}
       WHERE ($2::text IS NULL OR p.department_id = $2)
@@ -794,9 +829,8 @@ async function listDepartmentProjectsForUser(user, departmentId, client = pool) 
         COALESCE(p.is_modified, FALSE) AS is_modified,
         (
           SELECT COUNT(*)::integer
-          FROM design.fixtures visible_fixture
-          WHERE visible_fixture.project_id = p.id
-            AND ${visibleFixturePredicate("visible_fixture", "p")}
+          FROM design.fixtures project_fixture
+          WHERE project_fixture.project_id = p.id
         ) AS instance_count,
         NULL::text AS quantity_index,
         NULL::date AS rework_date,
@@ -928,10 +962,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        di.is_outsourced,
-        di.vendor_name,
-        di.outsourced_at,
-        di.outsourced_by,
+        ${FIXTURE_OUTSOURCE_SELECT},
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete,
@@ -953,6 +984,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      ${FIXTURE_OUTSOURCE_JOIN}
       ${activeTaskLateral("di", "operational_task")}
       ${currentProgressLateral("di", "dp", "current_progress")}
       LEFT JOIN users workflow_assignee
@@ -996,10 +1028,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        di.is_outsourced,
-        di.vendor_name,
-        di.outsourced_at,
-        di.outsourced_by,
+        ${FIXTURE_OUTSOURCE_SELECT},
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete,
@@ -1021,6 +1050,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      ${FIXTURE_OUTSOURCE_JOIN}
       ${activeTaskLateral("di", "operational_task")}
       ${currentProgressLateral("di", "dp", "current_progress")}
       LEFT JOIN users workflow_assignee
@@ -1064,13 +1094,14 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        di.is_outsourced,
-        di.vendor_name,
-        di.outsourced_at,
-        di.outsourced_by
+        ${FIXTURE_OUTSOURCE_SELECT},
+        di.revision_no,
+        di.is_legacy_workflow,
+        di.is_workflow_complete
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      ${FIXTURE_OUTSOURCE_JOIN}
       WHERE di.id = $1
         AND dp.department_id = $2
       LIMIT 1
@@ -1098,13 +1129,14 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        di.is_outsourced,
-        di.vendor_name,
-        di.outsourced_at,
-        di.outsourced_by
+        ${FIXTURE_OUTSOURCE_SELECT},
+        di.revision_no,
+        di.is_legacy_workflow,
+        di.is_workflow_complete
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
+      ${FIXTURE_OUTSOURCE_JOIN}
       WHERE di.id = $2
         AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
@@ -1435,6 +1467,236 @@ async function updateFixtureReferenceImageForDepartment({
   };
 }
 
+async function rememberRecentOutsourceSupplier(supplierName, client = pool) {
+  const normalizedSupplierName = normalizeSupplierName(supplierName);
+  if (!normalizedSupplierName) {
+    return [];
+  }
+
+  await client.query(
+    `
+      INSERT INTO design.recent_outsource_suppliers (
+        supplier_key,
+        supplier_name,
+        last_used_at,
+        created_at,
+        updated_at
+      )
+      VALUES (LOWER($1), $1, NOW(), NOW(), NOW())
+      ON CONFLICT (supplier_key) DO UPDATE
+      SET supplier_name = EXCLUDED.supplier_name,
+          last_used_at = NOW(),
+          updated_at = NOW()
+    `,
+    [normalizedSupplierName],
+  );
+
+  await client.query(
+    `
+      WITH ranked_suppliers AS (
+        SELECT
+          supplier_key,
+          ROW_NUMBER() OVER (ORDER BY last_used_at DESC, supplier_name ASC) AS rn
+        FROM design.recent_outsource_suppliers
+      )
+      DELETE FROM design.recent_outsource_suppliers recent
+      USING ranked_suppliers ranked
+      WHERE recent.supplier_key = ranked.supplier_key
+        AND ranked.rn > 6
+    `,
+  );
+
+  return listRecentOutsourceSuppliersForUser(null, null, 6, client);
+}
+
+async function upsertFixtureOutsourceRecord({
+  fixtureId,
+  supplierName,
+  outsourcedStages,
+  changedBy,
+}, client = pool) {
+  const result = await client.query(
+    `
+      INSERT INTO design.fixture_outsource_records (
+        fixture_id,
+        supplier_name,
+        outsourced_stages,
+        outsource_status,
+        outsourced_by,
+        outsourced_at,
+        completed_by,
+        completed_at,
+        brought_in_house_by,
+        brought_in_house_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3::text[], $4, $5, NOW(), NULL, NULL, NULL, NULL, NOW(), NOW())
+      ON CONFLICT (fixture_id) DO UPDATE
+      SET supplier_name = EXCLUDED.supplier_name,
+          outsourced_stages = EXCLUDED.outsourced_stages,
+          outsource_status = EXCLUDED.outsource_status,
+          outsourced_by = EXCLUDED.outsourced_by,
+          outsourced_at = NOW(),
+          completed_by = NULL,
+          completed_at = NULL,
+          brought_in_house_by = NULL,
+          brought_in_house_at = NULL,
+          updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      fixtureId,
+      supplierName,
+      outsourcedStages,
+      OUTSOURCE_STATUSES.OUTSOURCED,
+      changedBy || null,
+    ],
+  );
+
+  await client.query(
+    `
+      UPDATE design.fixtures
+      SET is_outsourced = TRUE,
+          vendor_name = $2,
+          outsourced_at = NOW(),
+          outsourced_by = $3,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [fixtureId, supplierName, changedBy || null],
+  );
+
+  await rememberRecentOutsourceSupplier(supplierName, client);
+
+  return result.rows[0] || null;
+}
+
+async function markFixtureOutsourceBroughtInHouse({
+  fixtureId,
+  changedBy,
+}, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE design.fixture_outsource_records
+      SET outsource_status = $2,
+          brought_in_house_by = $3,
+          brought_in_house_at = NOW(),
+          updated_at = NOW()
+      WHERE fixture_id = $1
+      RETURNING *
+    `,
+    [fixtureId, OUTSOURCE_STATUSES.BROUGHT_IN_HOUSE, changedBy || null],
+  );
+
+  await client.query(
+    `
+      UPDATE design.fixtures
+      SET is_outsourced = FALSE,
+          vendor_name = NULL,
+          outsourced_at = NULL,
+          outsourced_by = NULL,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [fixtureId],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function markFixtureOutsourceCompleted({
+  fixtureId,
+  changedBy,
+}, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE design.fixture_outsource_records
+      SET outsource_status = $2,
+          completed_by = COALESCE(completed_by, $3),
+          completed_at = COALESCE(completed_at, NOW()),
+          updated_at = NOW()
+      WHERE fixture_id = $1
+        AND outsource_status IN ($4, $2)
+      RETURNING *
+    `,
+    [
+      fixtureId,
+      OUTSOURCE_STATUSES.COMPLETED,
+      changedBy || null,
+      OUTSOURCE_STATUSES.OUTSOURCED,
+    ],
+  );
+
+  const record = result.rows[0] || null;
+  if (record) {
+    await client.query(
+      `
+        UPDATE design.fixtures
+        SET is_outsourced = TRUE,
+            vendor_name = $2,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [fixtureId, record.supplier_name],
+    );
+  }
+
+  return record;
+}
+
+async function markFixtureWorkflowCompleteIfSatisfied(fixtureId, departmentId, outsourcedStages = [], client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        stage_name,
+        status
+      FROM fixture_workflow_progress
+      WHERE fixture_id = $1
+        AND department_id = $2
+      ORDER BY stage_order ASC
+    `,
+    [fixtureId, departmentId],
+  );
+
+  const progressRows = result.rows || [];
+  if (!canCompleteWorkflowAfterOutsource(progressRows, outsourcedStages)) {
+    return false;
+  }
+
+  const stageNamesToApprove = getOutsourceCompletionAutoApproveStageNames(progressRows, outsourcedStages);
+  for (const stageName of stageNamesToApprove) {
+    await client.query(
+      `
+        UPDATE fixture_workflow_progress
+        SET status = 'APPROVED',
+            assigned_to = NULL,
+            assigned_at = NULL,
+            started_at = NULL,
+            completed_at = COALESCE(completed_at, NOW()),
+            duration_minutes = NULL,
+            updated_at = NOW()
+        WHERE fixture_id = $1
+          AND department_id = $2
+          AND stage_name = $3
+      `,
+      [fixtureId, departmentId, stageName],
+    );
+  }
+
+  await client.query(
+    `
+      UPDATE design.fixtures
+      SET is_workflow_complete = TRUE,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [fixtureId],
+  );
+
+  return true;
+}
+
 async function updateFixtureOutsourcingState({
   fixtureId,
   isOutsourced,
@@ -1582,9 +1844,14 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   listProjectOptionsByDepartment,
   listProjectOptionsForUser,
   listRecentOutsourceSuppliersForUser,
+  markFixtureOutsourceBroughtInHouse,
+  markFixtureOutsourceCompleted,
+  markFixtureWorkflowCompleteIfSatisfied,
+  rememberRecentOutsourceSupplier,
   touchProject,
   updateProjectModificationFlag,
   updateFixtureReferenceImageForDepartment,
+  upsertFixtureOutsourceRecord,
   updateFixtureOutsourcingState,
   upsertFixture,
   upsertProjectByNumber,

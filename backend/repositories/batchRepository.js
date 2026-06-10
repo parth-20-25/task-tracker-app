@@ -56,6 +56,29 @@ function sqlTextArray(values) {
   return `ARRAY[${values.map(sqlLiteral).join(", ")}]::text[]`;
 }
 
+function collapseProjectLabel(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripLegacyWbsPrefix(value) {
+  return collapseProjectLabel(value).replace(/^WBS\s*[-_]?\s*/i, "");
+}
+
+function normalizeProjectNo(value) {
+  return stripLegacyWbsPrefix(value)
+    .replace(/\s+/g, "")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .toUpperCase();
+}
+
+function normalizeProjectName(value) {
+  return stripLegacyWbsPrefix(value).replace(/^[-_]+\s*(?=\S)/, "");
+}
+
 function projectModificationPermissionSql(projectAlias = "dp", employeeExpression = "$1") {
   return `
     (
@@ -203,10 +226,10 @@ function mapBatchSummary(row) {
     id: row.id || row.batch_id || row.project_id,
     batch_id: row.batch_id || null,
     project_id: row.project_id,
-    project_no: row.project_no,
+    project_no: normalizeProjectNo(row.project_no),
     project_created_by_user_id: row.project_created_by_user_id || null,
-    project_name: row.project_name,
-    customer_name: row.customer_name,
+    project_name: normalizeProjectName(row.project_name),
+    customer_name: collapseProjectLabel(row.customer_name),
     department_id: row.department_id,
     project_status: row.project_status || PROJECT_STATUSES.ACTIVE,
     is_modified: row.is_modified === true,
@@ -265,8 +288,8 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
-        ub.uploaded_by,
-        ub.uploaded_by_user_id,
+        COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
+        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -295,7 +318,8 @@ async function listBatchesWithSummary(departmentId, client = pool) {
           id DESC
         LIMIT 1
       ) ub ON TRUE
-      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
+      LEFT JOIN users uploader
+        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
       ${fixtureOperationalStatsLateral("dp")}
       ${departmentFilter}
       ORDER BY COALESCE(ub.uploaded_at, dp.updated_at, dp.created_at) DESC
@@ -330,8 +354,8 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
-        ub.uploaded_by,
-        ub.uploaded_by_user_id,
+        COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
+        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -348,9 +372,11 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
                OR root.role_id_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
           )
           OR dp.created_by_user_id = $1
+          OR dp.uploaded_by = $1
           OR ub.uploaded_by_user_id = $1
           OR ub.uploaded_by = $1
           OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
+          OR dp.uploaded_by IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
         ) AS can_manage_2d_routing,
@@ -373,7 +399,8 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           id DESC
         LIMIT 1
       ) ub ON TRUE
-      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
+      LEFT JOIN users uploader
+        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ($2::text IS NULL OR dp.department_id = $2)
         AND ${visibleProjectPredicate("dp")}
@@ -426,6 +453,7 @@ async function getBatchById(batchId, client = pool) {
         ub.project_id,
         dp.project_no,
         dp.created_by_user_id AS project_created_by_user_id,
+        dp.uploaded_by AS project_uploaded_by,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -434,8 +462,8 @@ async function getBatchById(batchId, client = pool) {
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
-        ub.uploaded_by,
-        ub.uploaded_by_user_id,
+        COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
+        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -448,7 +476,8 @@ async function getBatchById(batchId, client = pool) {
         FALSE AS can_toggle_modification
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
+      LEFT JOIN users uploader
+        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $1
     `,
@@ -470,6 +499,7 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         ub.project_id,
         dp.project_no,
         dp.created_by_user_id AS project_created_by_user_id,
+        dp.uploaded_by AS project_uploaded_by,
         COALESCE(NULLIF(BTRIM(dp.project_name), ''), dp.project_no) AS project_name,
         dp.customer_name,
         dp.department_id,
@@ -478,8 +508,8 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         NULL::numeric AS project_completion_percent,
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
-        ub.uploaded_by,
-        ub.uploaded_by_user_id,
+        COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
+        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -496,16 +526,19 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
                OR root.role_id_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
           )
           OR dp.created_by_user_id = $1
+          OR dp.uploaded_by = $1
           OR ub.uploaded_by_user_id = $1
           OR ub.uploaded_by = $1
           OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
+          OR dp.uploaded_by IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
           OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
         ) AS can_manage_2d_routing,
         ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN users uploader ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by)
+      LEFT JOIN users uploader
+        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $2
         AND ${visibleProjectPredicate("dp")}

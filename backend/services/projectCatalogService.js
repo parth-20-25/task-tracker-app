@@ -16,8 +16,11 @@ const {
   listFixturesByProjectForUser,
   listProjectSummariesForUser: listProjectSummariesByUserVisibility,
   listRecentOutsourceSuppliersForUser: listRecentOutsourceSuppliersByUserVisibility,
+  markFixtureOutsourceBroughtInHouse,
+  markFixtureOutsourceCompleted,
+  markFixtureWorkflowCompleteIfSatisfied,
   touchProject,
-  updateFixtureOutsourcingState,
+  upsertFixtureOutsourceRecord,
   updateProjectModificationFlag,
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
@@ -30,6 +33,11 @@ const {
 } = require("../repositories/fixtureWorkflowRepository");
 const { insertStageContribution, listStageContributions } = require("../repositories/designStageContributionRepository");
 const { formatStageRevisionCode, normalizeStageVersion } = require("../lib/workflowStageVersioning");
+const {
+  OUTSOURCE_STATUSES,
+  normalizeOutsourceStages,
+  normalizeSupplierName,
+} = require("../lib/outsourceWorkflow");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
 const {
@@ -523,49 +531,64 @@ async function updateProjectModificationForUser(user, projectId, payload = {}) {
   return project;
 }
 
-async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
+async function resolveVisibleFixtureForOutsource(user, fixtureId, requestedDepartmentId, client) {
   const normalizedFixtureId = String(fixtureId || "").trim();
   if (!normalizedFixtureId) {
     throw new AppError(400, "fixture_id is required");
   }
 
-  if (!Object.prototype.hasOwnProperty.call(payload, "is_outsourced")) {
-    throw new AppError(400, "is_outsourced is required");
-  }
-
-  const requestedDepartmentId = String(payload.department_id || "").trim();
-  const departmentId = requestedDepartmentId
-    ? resolveAccessibleDepartmentId(user, requestedDepartmentId, "Invalid department context")
+  const requestedDepartment = String(requestedDepartmentId || "").trim();
+  const departmentId = requestedDepartment
+    ? resolveAccessibleDepartmentId(user, requestedDepartment, "Invalid department context")
     : null;
-  const nextIsOutsourced = payload.is_outsourced === true;
-  const vendorName = String(payload.vendor_name || "").trim();
 
-  if (nextIsOutsourced && !vendorName) {
-    throw new AppError(400, "Supplier Name is required when outsourcing a fixture");
+  const fixture = await findFixtureByIdForUser(normalizedFixtureId, user, departmentId, client);
+  if (!fixture) {
+    throw new AppError(404, "Fixture not found");
   }
 
+  return { fixture, departmentId: fixture.department_id || departmentId };
+}
+
+function validateOutsourcePayload(payload = {}) {
+  const supplierName = normalizeSupplierName(payload.supplier_name ?? payload.vendor_name);
+  if (!supplierName) {
+    throw new AppError(400, "supplier_name is required");
+  }
+
+  const { stages, error } = normalizeOutsourceStages(payload.outsourced_stages);
+  if (error) {
+    throw new AppError(400, error);
+  }
+
+  return {
+    supplierName,
+    outsourcedStages: stages,
+  };
+}
+
+async function outsourceFixtureForUser(user, fixtureId, payload = {}) {
+  const { supplierName, outsourcedStages } = validateOutsourcePayload(payload);
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    const fixture = await findFixtureByIdForUser(normalizedFixtureId, user, departmentId, client);
-    if (!fixture) {
-      throw new AppError(404, "Fixture not found");
-    }
+    const { fixture } = await resolveVisibleFixtureForOutsource(user, fixtureId, payload.department_id, client);
 
-    const updatedFixture = await updateFixtureOutsourcingState({
+    await upsertFixtureOutsourceRecord({
       fixtureId: fixture.fixture_id,
-      isOutsourced: nextIsOutsourced,
-      vendorName: nextIsOutsourced ? vendorName : null,
+      supplierName,
+      outsourcedStages,
       changedBy: user.employee_id,
     }, client);
 
+    const updatedFixture = await findFixtureByIdForUser(fixture.fixture_id, user, fixture.department_id, client);
     await touchProject(updatedFixture.project_id, client);
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
-      actionType: nextIsOutsourced ? "DESIGN_FIXTURE_OUTSOURCED" : "DESIGN_FIXTURE_BROUGHT_IN_HOUSE",
+      actionType: "DESIGN_FIXTURE_OUTSOURCED",
       targetType: "design_fixture",
       targetId: updatedFixture.fixture_id,
       metadata: {
@@ -575,6 +598,8 @@ async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
         next_is_outsourced: updatedFixture.is_outsourced === true,
         previous_vendor_name: fixture.vendor_name || null,
         next_vendor_name: updatedFixture.vendor_name || null,
+        outsourced_stages: outsourcedStages,
+        outsource_status: OUTSOURCE_STATUSES.OUTSOURCED,
       },
     }, client);
 
@@ -588,6 +613,156 @@ async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
   }
 }
 
+async function bringOutsourcedFixtureInHouseForUser(user, fixtureId, payload = {}) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { fixture } = await resolveVisibleFixtureForOutsource(user, fixtureId, payload.department_id, client);
+    const record = await markFixtureOutsourceBroughtInHouse({
+      fixtureId: fixture.fixture_id,
+      changedBy: user.employee_id,
+    }, client);
+
+    if (!record && fixture.is_outsourced !== true) {
+      throw new AppError(409, "Fixture is not currently outsourced");
+    }
+
+    const updatedFixture = await findFixtureByIdForUser(fixture.fixture_id, user, fixture.department_id, client);
+    await touchProject(updatedFixture.project_id, client);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "DESIGN_FIXTURE_BROUGHT_IN_HOUSE",
+      targetType: "design_fixture",
+      targetId: updatedFixture.fixture_id,
+      metadata: {
+        project_id: updatedFixture.project_id,
+        fixture_no: updatedFixture.fixture_no,
+        previous_is_outsourced: fixture.is_outsourced === true,
+        next_is_outsourced: updatedFixture.is_outsourced === true,
+        previous_vendor_name: fixture.vendor_name || null,
+        outsource_status: OUTSOURCE_STATUSES.BROUGHT_IN_HOUSE,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+    return updatedFixture;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function completeOutsourcedFixtureForUser(user, fixtureId, payload = {}) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { fixture, departmentId } = await resolveVisibleFixtureForOutsource(user, fixtureId, payload.department_id, client);
+    const record = await markFixtureOutsourceCompleted({
+      fixtureId: fixture.fixture_id,
+      changedBy: user.employee_id,
+    }, client);
+
+    if (!record) {
+      throw new AppError(409, "Fixture does not have an active outsourced workflow");
+    }
+
+    const workflowMarkedComplete = await markFixtureWorkflowCompleteIfSatisfied(
+      fixture.fixture_id,
+      departmentId,
+      record.outsourced_stages || [],
+      client,
+    );
+    const updatedFixture = await findFixtureByIdForUser(fixture.fixture_id, user, fixture.department_id, client);
+    await touchProject(updatedFixture.project_id, client);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "DESIGN_FIXTURE_OUTSOURCE_COMPLETED",
+      targetType: "design_fixture",
+      targetId: updatedFixture.fixture_id,
+      metadata: {
+        project_id: updatedFixture.project_id,
+        fixture_no: updatedFixture.fixture_no,
+        supplier_name: record.supplier_name,
+        outsourced_stages: record.outsourced_stages,
+        outsource_status: OUTSOURCE_STATUSES.COMPLETED,
+        workflow_marked_complete: workflowMarkedComplete,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+    return {
+      ...updatedFixture,
+      workflow_marked_complete: workflowMarkedComplete,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
+  if (!Object.prototype.hasOwnProperty.call(payload, "is_outsourced")) {
+    throw new AppError(400, "is_outsourced is required");
+  }
+
+  if (payload.is_outsourced === true) {
+    return outsourceFixtureForUser(user, fixtureId, {
+      ...payload,
+      supplier_name: payload.supplier_name ?? payload.vendor_name,
+    });
+  }
+
+  return bringOutsourcedFixtureInHouseForUser(user, fixtureId, payload);
+}
+
+async function listOutsourcedFixturesForProjectForUser(user, projectId, requestedDepartmentId, options = {}) {
+  const normalizedProjectId = String(projectId || "").trim();
+  if (!normalizedProjectId) {
+    throw new AppError(400, "project_id is required");
+  }
+
+  const { resolveProjectDepartmentForUser } = require("./visibilityResolutionService");
+  const requested = String(requestedDepartmentId || "").trim();
+  const requestedDepartmentContext = requested
+    ? resolveAccessibleDepartmentId(user, requested, "A department is required for project data access")
+    : null;
+  const departmentId = await resolveProjectDepartmentForUser(
+    user,
+    normalizedProjectId,
+    requestedDepartmentContext,
+  );
+
+  const project = await findProjectByIdForUser(normalizedProjectId, user, departmentId, { activeOnly: false });
+  if (!project) {
+    throw new AppError(404, "Project not found for the selected department");
+  }
+
+  const fixtures = await listFixturesByProjectForUser(
+    normalizedProjectId,
+    user,
+    departmentId,
+    { activeOnly: options.activeOnly === true },
+  );
+
+  return fixtures.filter((fixture) => (
+    fixture.outsource_status === OUTSOURCE_STATUSES.OUTSOURCED
+    || (
+      fixture.outsource_status === OUTSOURCE_STATUSES.COMPLETED
+      && fixture.is_workflow_complete !== true
+    )
+  ));
+}
+
 async function listRecentOutsourceSuppliersForUser(user, requestedDepartmentId = null) {
   const requested = String(requestedDepartmentId || "").trim();
   const departmentId = requested
@@ -598,12 +773,16 @@ async function listRecentOutsourceSuppliersForUser(user, requestedDepartmentId =
 }
 
 module.exports = instrumentModuleExports("service.projectCatalogService", {
+  bringOutsourcedFixtureInHouseForUser,
+  completeOutsourcedFixtureForUser,
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
+  listOutsourcedFixturesForProjectForUser,
   listProjectDashboardForUser,
   listRecentOutsourceSuppliersForUser,
+  outsourceFixtureForUser,
   updateFixtureOutsourcingForUser,
   updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,

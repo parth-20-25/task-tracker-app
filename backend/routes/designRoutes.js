@@ -29,12 +29,16 @@ const {
 } = require("../services/designCompletion/designCompletionEngine");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
+  bringOutsourcedFixtureInHouseForUser,
+  completeOutsourcedFixtureForUser,
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
   listDesignFixturesForUser,
   listDesignProjectsForUser,
+  listOutsourcedFixturesForProjectForUser,
   listProjectDashboardForUser,
   listRecentOutsourceSuppliersForUser,
+  outsourceFixtureForUser,
   updateFixtureOutsourcingForUser,
   updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,
@@ -133,6 +137,37 @@ function rejectRetiredNativePreviewFlow() {
   );
 }
 
+function resolveFixtureIdFromRequest(req) {
+  return String(req.params.fixtureId || req.body?.fixture_id || "").trim();
+}
+
+async function handleOutsourceFixtureRequest(req, res) {
+  const fixtureId = resolveFixtureIdFromRequest(req);
+  const fixture = await outsourceFixtureForUser(req.user, fixtureId, {
+    ...req.body,
+    department_id: req.body?.department_id ?? req.query.department_id,
+  });
+  return sendSuccess(res, fixture, 200);
+}
+
+async function handleBringFixtureInHouseRequest(req, res) {
+  const fixtureId = resolveFixtureIdFromRequest(req);
+  const fixture = await bringOutsourcedFixtureInHouseForUser(req.user, fixtureId, {
+    ...req.body,
+    department_id: req.body?.department_id ?? req.query.department_id,
+  });
+  return sendSuccess(res, fixture, 200);
+}
+
+async function handleCompleteOutsourcedFixtureRequest(req, res) {
+  const fixtureId = resolveFixtureIdFromRequest(req);
+  const fixture = await completeOutsourcedFixtureForUser(req.user, fixtureId, {
+    ...req.body,
+    department_id: req.body?.department_id ?? req.query.department_id,
+  });
+  return sendSuccess(res, fixture, 200);
+}
+
 router.get(
   "/department-projects",
   requireOperationalController,
@@ -180,6 +215,62 @@ router.get(
     const suppliers = await listRecentOutsourceSuppliersForUser(req.user, req.query.department_id);
     return sendSuccess(res, suppliers);
   }),
+);
+
+router.get(
+  "/design/projects/:projectId/outsourced-fixtures",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const fixtures = await listOutsourcedFixturesForProjectForUser(
+      req.user,
+      req.params.projectId,
+      req.query.department_id,
+      { activeOnly: req.query.active_only === "true" },
+    );
+    return sendSuccess(res, fixtures);
+  }),
+);
+
+router.post(
+  "/design/fixtures/outsource",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleOutsourceFixtureRequest),
+);
+
+router.post(
+  "/design/fixtures/:fixtureId/outsource",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleOutsourceFixtureRequest),
+);
+
+router.post(
+  "/design/fixtures/bring-in-house",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleBringFixtureInHouseRequest),
+);
+
+router.post(
+  "/design/fixtures/:fixtureId/bring-in-house",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleBringFixtureInHouseRequest),
+);
+
+router.post(
+  "/design/fixtures/outsource-complete",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleCompleteOutsourcedFixtureRequest),
+);
+
+router.post(
+  "/design/fixtures/:fixtureId/outsource-complete",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleCompleteOutsourcedFixtureRequest),
 );
 
 router.patch(

@@ -571,6 +571,39 @@ function validateOutsourcePayload(payload = {}) {
   };
 }
 
+function normalizeOutsourcePersistenceError(error) {
+  if (error instanceof AppError) {
+    return error;
+  }
+
+  if (error?.code === "42P01" || error?.code === "42703") {
+    return new AppError(
+      409,
+      "Outsource storage is not ready. Restart the backend so the outsource schema migration can run, then try again.",
+      {
+        code: error.code,
+        relation: error.relation || null,
+        column: error.column || null,
+      },
+      "OUTSOURCE_SCHEMA_NOT_READY",
+    );
+  }
+
+  if (error?.code === "23514") {
+    return new AppError(
+      400,
+      "Outsource request failed validation. Supplier name is required and stages must be Concept, 3D, or 2D.",
+      {
+        code: error.code,
+        constraint: error.constraint || null,
+      },
+      "OUTSOURCE_VALIDATION_FAILED",
+    );
+  }
+
+  return error;
+}
+
 async function outsourceFixtureForUser(user, fixtureId, payload = {}) {
   const { supplierName, outsourcedStages } = validateOutsourcePayload(payload);
   const client = await pool.connect();
@@ -611,7 +644,7 @@ async function outsourceFixtureForUser(user, fixtureId, payload = {}) {
     return updatedFixture;
   } catch (error) {
     await client.query("ROLLBACK");
-    throw error;
+    throw normalizeOutsourcePersistenceError(error);
   } finally {
     client.release();
   }
@@ -655,7 +688,7 @@ async function bringOutsourcedFixtureInHouseForUser(user, fixtureId, payload = {
     return updatedFixture;
   } catch (error) {
     await client.query("ROLLBACK");
-    throw error;
+    throw normalizeOutsourcePersistenceError(error);
   } finally {
     client.release();
   }
@@ -708,7 +741,7 @@ async function completeOutsourcedFixtureForUser(user, fixtureId, payload = {}) {
     };
   } catch (error) {
     await client.query("ROLLBACK");
-    throw error;
+    throw normalizeOutsourcePersistenceError(error);
   } finally {
     client.release();
   }

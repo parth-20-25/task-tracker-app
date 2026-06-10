@@ -170,8 +170,36 @@ function getAssignableWorkflowOptions(progress: FixtureFullProgress | null | und
     return [];
   }
 
-  return progress.stages
+  const sortedStages = [...progress.stages]
     .sort((left, right) => Number(left.stage_order) - Number(right.stage_order));
+
+  if (sortedStages.some((stage) => isReleaseStageName(stage.stage_name))) {
+    return sortedStages;
+  }
+
+  const lastStageOrder = sortedStages.reduce(
+    (max, stage) => Math.max(max, Number(stage.stage_order) || 0),
+    0,
+  );
+
+  return [
+    ...sortedStages,
+    {
+      stage_name: "Release",
+      stage_label: "Release",
+      stage_version: 0,
+      revision_code: "REL 00",
+      stage_order: lastStageOrder + 1,
+      status: "PENDING",
+      assigned_to: null,
+      assigned_at: null,
+      started_at: null,
+      completed_at: null,
+      duration_minutes: null,
+      updated_at: new Date(0).toISOString(),
+      contributions: [],
+    },
+  ];
 }
 
 function normalizeDeadlineToEndOfDayIso(dateValue: string) {

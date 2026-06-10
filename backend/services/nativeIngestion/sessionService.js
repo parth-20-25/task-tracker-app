@@ -15,6 +15,7 @@ const { getActiveWorkflowForDepartment } = require("../../repositories/fixtureWo
 const {
   buildVisibleUsersCte,
   visibleFixturePredicate,
+  visibleProjectPredicate,
 } = require("../../repositories/projectVisibility");
 const {
   createIngestionSession,
@@ -244,6 +245,62 @@ function buildRowsFromExistingFixtures(fixtures = []) {
   }));
 }
 
+async function resolveVisibleProjectForNativeEdit(user, projectReference, requestedDepartmentId, client = pool) {
+  const normalizedReference = collapseWhitespace(projectReference);
+  if (!normalizedReference) {
+    throw new AppError(400, "project_id is required for native project editing");
+  }
+
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        p.project_no,
+        p.project_name,
+        p.customer_name,
+        p.department_id,
+        d.name AS department_name,
+        p.status,
+        CASE WHEN p.id::text = $2 THEN 0 ELSE 1 END AS match_rank
+      FROM design.projects p
+      LEFT JOIN departments d
+        ON d.id = p.department_id
+      WHERE (p.id::text = $2 OR p.project_no = $2)
+        AND ${visibleProjectPredicate("p")}
+      ORDER BY match_rank ASC, p.updated_at DESC NULLS LAST, p.created_at DESC NULLS LAST
+      LIMIT 1
+    `,
+    [user.employee_id, normalizedReference],
+  );
+
+  const project = result.rows[0] || null;
+  if (!project) {
+    throw new AppError(404, "Project not found for native editing");
+  }
+
+  const projectDepartmentId = collapseWhitespace(project.department_id);
+  if (!projectDepartmentId) {
+    throw new AppError(409, "Project is missing a department and cannot be opened in the native edit workspace.");
+  }
+
+  const requestedDepartment = collapseWhitespace(requestedDepartmentId);
+  if (requestedDepartment && requestedDepartment !== projectDepartmentId) {
+    logger.warn("Native edit ignored stale department context from project card", {
+      project_id: project.project_id,
+      requested_department_id: requestedDepartment,
+      project_department_id: projectDepartmentId,
+    });
+  }
+
+  resolveNativeDepartmentId(user, projectDepartmentId, {
+    requireDepartment: true,
+    message: "Invalid native project edit department context",
+  });
+
+  return project;
+}
+
 async function createNativeProjectEditSession(user, projectId, payload = {}) {
   const normalizedProjectId = collapseWhitespace(projectId);
   if (!normalizedProjectId) {
@@ -251,18 +308,18 @@ async function createNativeProjectEditSession(user, projectId, payload = {}) {
   }
 
   const requestedDepartmentId = collapseWhitespace(payload.department_id || payload.departmentId);
+  const resolvedProject = await resolveVisibleProjectForNativeEdit(user, normalizedProjectId, requestedDepartmentId, pool);
   const seedContext = normalizeNativeContext({
-    project_id: normalizedProjectId,
-    department_id: requestedDepartmentId,
+    project_id: resolvedProject.project_id,
+    project_code: resolvedProject.project_no,
+    project_name: resolvedProject.project_name,
+    customer_name: resolvedProject.customer_name,
+    department_id: resolvedProject.department_id,
     upload_mode: "fixture_delta",
   }, user);
-  const departmentId = resolveNativeDepartmentId(user, seedContext.department_id, {
-    requireDepartment: true,
-    message: "Invalid native project edit department context",
-  });
   const truth = await loadProjectTruthForNative(user, {
     ...seedContext,
-    department_id: departmentId,
+    department_id: resolvedProject.department_id,
   }, pool);
 
   if (!truth.project) {

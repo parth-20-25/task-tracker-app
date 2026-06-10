@@ -5,7 +5,10 @@ const XLSX = require("xlsx");
 process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
 
 const { pool } = require("../db");
-const { createNativeIngestionSession } = require("../services/nativeIngestion/sessionService");
+const {
+  createNativeIngestionSession,
+  createNativeProjectEditSession,
+} = require("../services/nativeIngestion/sessionService");
 const { buildNativeTemplateWorkbook, TEMPLATE_HEADERS } = require("../services/nativeIngestion/excelParser");
 const { normalizeNativeContext, parseProjectIdentity } = require("../services/nativeIngestion/normalization");
 const { resolveNativeDepartmentId, validateNativeRows } = require("../services/nativeIngestion/validation");
@@ -84,6 +87,76 @@ test("native workspace bootstrap creates organization-scope sessions for authori
       assert.equal(insertCall.params[0], null, `${roleName} session department_id should be null`);
       assert.equal(session.context.department_id, "");
     }
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+test("native project edit opens visible project without request department context", async () => {
+  const originalQuery = pool.query;
+  const calls = [];
+  const projectRow = {
+    project_id: "project-1",
+    project_no: "PARC001",
+    project_name: "Fuel Tank Weld Line",
+    customer_name: "ACME",
+    department_id: "design",
+    department_name: "Design",
+    status: "active",
+  };
+  const fixtureRow = {
+    fixture_id: "fixture-1",
+    project_id: "project-1",
+    fixture_no: "F001",
+    part_name: "Existing Fixture",
+    fixture_type: "Checking Fixture",
+    remark: null,
+    qty: 1,
+    image_1_url: null,
+    assigned_team: "Design Team",
+    is_workflow_complete: false,
+    is_legacy_workflow: false,
+    is_outsourced: false,
+    vendor_name: null,
+    removed_from_latest_ingestion: false,
+  };
+
+  pool.query = async (sql, params) => {
+    calls.push({ sql, params });
+    if (calls.length === 1) {
+      return { rows: [projectRow] };
+    }
+    if (calls.length === 2) {
+      return { rows: [] };
+    }
+    if (calls.length === 3) {
+      return { rows: [projectRow] };
+    }
+    if (calls.length === 4) {
+      return { rows: [fixtureRow] };
+    }
+    if (calls.length === 5) {
+      return {
+        rows: [{
+          id: "edit-session-1",
+          expires_at: "2026-05-25T00:00:00.000Z",
+          created_at: "2026-05-22T00:00:00.000Z",
+        }],
+      };
+    }
+    throw new Error(`Unexpected fake query call ${calls.length}`);
+  };
+
+  try {
+    const session = await createNativeProjectEditSession(authorityUser("Admin"), "PARC001", {});
+
+    assert.equal(session.session_id, "edit-session-1");
+    assert.equal(session.context.project_id, "project-1");
+    assert.equal(session.context.department_id, "design");
+    assert.equal(session.context.project_code, "PARC001");
+    assert.equal(session.rows.length, 1);
+    assert.equal(session.rows[0].fixture_no, "F001");
+    assert.equal(calls[4].params[0], "design");
   } finally {
     pool.query = originalQuery;
   }

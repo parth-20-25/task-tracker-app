@@ -1,6 +1,7 @@
 const { PERMISSIONS } = require("../config/constants");
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
+const { userIdentifierMatchSql } = require("../repositories/sqlFragments");
 const {
   getVisibleUserIds,
   hasPermission,
@@ -357,7 +358,7 @@ async function loadTaskRows(scope, client = pool) {
        AND contribution.superseded_by IS NULL
        AND contribution.metadata->>'task_id' = t.id::text
       LEFT JOIN users user_account
-        ON user_account.employee_id = ${contributionUserExpr}
+        ON ${userIdentifierMatchSql("user_account", contributionUserExpr)}
       LEFT JOIN workflow_stages current_stage
         ON current_stage.id = t.current_stage_id
       WHERE ${whereClauses.join(" AND ")}

@@ -15,6 +15,16 @@ export function createNativeIngestionSession(context: NativeIngestionContext) {
   });
 }
 
+export function createNativeProjectEditSession(projectId: string, departmentId?: string | null) {
+  return apiRequest<NativeSessionResponse>(
+    `/design/native-ingestion/projects/${encodeURIComponent(projectId)}/edit-session`,
+    {
+      method: "POST",
+      body: JSON.stringify({ department_id: departmentId || undefined }),
+    },
+  );
+}
+
 export function importNativeIngestionExcel(
   sessionId: string,
   context: NativeIngestionContext,

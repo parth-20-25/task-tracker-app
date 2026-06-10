@@ -97,7 +97,9 @@ async function listTasksForUser(user) {
 }
 
 async function listVerificationTasksForUser(user) {
-  return listVerificationTasksByAccess(getTaskAccess(user), user.employee_id);
+  return listVerificationTasksByAccess(getTaskAccess(user), user.employee_id, pool, {
+    excludeCurrentUser: !hasPermission(user, PERMISSIONS.SELF_APPROVE),
+  });
 }
 
 async function getTaskForUser(user, taskId) {

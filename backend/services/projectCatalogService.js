@@ -73,6 +73,10 @@ function shouldHideProjectFromActiveSelection(project) {
     return true;
   }
 
+  if (project?.is_modified === true || project?.project_is_modified === true) {
+    return false;
+  }
+
   const completionPercent = Number(project?.completion_percent ?? project?.project_completion_percent);
   if (Number.isFinite(completionPercent) && completionPercent >= 100) {
     return true;
@@ -783,6 +787,7 @@ module.exports = instrumentModuleExports("service.projectCatalogService", {
   listProjectDashboardForUser,
   listRecentOutsourceSuppliersForUser,
   outsourceFixtureForUser,
+  shouldHideProjectFromActiveSelection,
   updateFixtureOutsourcingForUser,
   updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,

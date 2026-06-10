@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Pencil, Trash2, XCircle } from "lucide-react";
 import { Department, Role, User } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ interface UsersTabProps {
     name: string;
     password?: string;
     role_id: string;
+    parent_id?: string | null;
     department_id?: string;
     subdivision_id?: string;
     is_active: boolean;
@@ -27,10 +28,12 @@ interface UsersTabProps {
 }
 
 const EMPTY_FORM = {
+  id: "",
   employee_id: "",
   name: "",
   password: "",
   role_id: "",
+  parent_id: "",
   department_id: "",
   subdivision_id: "",
   is_active: true,
@@ -43,6 +46,36 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
   const availableDepartments = departments.filter(
     (department) => department.id === form.department_id || department.is_active !== false,
   );
+  const roleLevelById = useMemo(
+    () => new Map(roles.map((role) => [role.id, Number(role.hierarchy_level)])),
+    [roles],
+  );
+  const selectedRole = roles.find((role) => role.id === form.role_id);
+  const selectedRoleLevel = Number(selectedRole?.hierarchy_level);
+  const parentUserOptions = useMemo(() => {
+    if (!form.role_id || !Number.isFinite(selectedRoleLevel)) {
+      return [];
+    }
+
+    return users
+      .filter((candidate) => {
+        const candidateLevel = Number(candidate.role?.hierarchy_level ?? roleLevelById.get(candidate.role_id));
+        const candidateValue = candidate.id || candidate.employee_id;
+        return candidate.is_active !== false
+          && candidate.employee_id !== form.employee_id
+          && candidateValue !== form.id
+          && Number.isFinite(candidateLevel)
+          && candidateLevel < selectedRoleLevel;
+      })
+      .sort((left, right) => {
+        const leftLevel = Number(left.role?.hierarchy_level ?? roleLevelById.get(left.role_id));
+        const rightLevel = Number(right.role?.hierarchy_level ?? roleLevelById.get(right.role_id));
+        if (leftLevel !== rightLevel) {
+          return leftLevel - rightLevel;
+        }
+        return left.name.localeCompare(right.name);
+      });
+  }, [form.employee_id, form.id, form.role_id, roleLevelById, selectedRoleLevel, users]);
   const selectedDepartment = departments.find((department) => department.id === form.department_id);
   const availableSubdivisions = selectedDepartment?.subdivisions ?? [];
 
@@ -51,6 +84,24 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
       setForm(EMPTY_FORM);
     }
   }, [isEditing]);
+
+  useEffect(() => {
+    if (!form.parent_id) {
+      return;
+    }
+
+    const parentStillValid = parentUserOptions.some((candidate) => (
+      (candidate.id || candidate.employee_id) === form.parent_id
+    ));
+
+    if (!parentStillValid) {
+      setForm((current) => ({ ...current, parent_id: "" }));
+    }
+  }, [form.parent_id, parentUserOptions]);
+
+  const formatParentUserOption = (parentUser: User) => (
+    `${parentUser.employee_id} - ${parentUser.name} - ${parentUser.role?.name || parentUser.role_id}`
+  );
 
   return (
     <div className="space-y-4">
@@ -86,7 +137,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
             </div>
             <div className="space-y-2">
               <Label>Role</Label>
-              <Select value={form.role_id} onValueChange={(value) => setForm((current) => ({ ...current, role_id: value }))}>
+              <Select value={form.role_id} onValueChange={(value) => setForm((current) => ({ ...current, role_id: value, parent_id: "" }))}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>
@@ -96,6 +147,29 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                       {role.name}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Parent User</Label>
+              <Select
+                value={form.parent_id || "__none__"}
+                onValueChange={(value) => setForm((current) => ({ ...current, parent_id: value === "__none__" ? "" : value }))}
+                disabled={!form.role_id}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select parent user" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No parent user</SelectItem>
+                  {parentUserOptions.map((parentUser) => {
+                    const parentValue = parentUser.id || parentUser.employee_id;
+                    return (
+                      <SelectItem key={parentValue} value={parentValue}>
+                        {formatParentUserOption(parentUser)}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -159,6 +233,7 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                   employee_id: form.employee_id.trim(),
                   name: form.name.trim(),
                   role_id: form.role_id,
+                  parent_id: form.parent_id || null,
                   department_id: form.department_id || undefined,
                   subdivision_id: form.subdivision_id || undefined,
                   is_active: form.is_active,
@@ -220,10 +295,12 @@ export default function UsersTab({ users, roles, departments, onSave, onToggleSt
                         onClick={() => {
                           setIsEditing(true);
                           setForm({
+                            id: user.id || "",
                             employee_id: user.employee_id,
                             name: user.name,
                             password: "",
                             role_id: user.role_id,
+                            parent_id: user.parent_id || "",
                             department_id: user.department_id || "",
                             subdivision_id: user.subdivision_id || "",
                             is_active: user.is_active,

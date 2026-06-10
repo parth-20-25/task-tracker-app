@@ -8,6 +8,7 @@ const { generateUUID } = require("../../lib/uuid");
 const { createAuditLog } = require("../../repositories/auditRepository");
 const {
   createUploadBatch,
+  updateProjectIdentityById,
   upsertProjectByNumber,
 } = require("../../repositories/designProjectCatalogRepository");
 const { getActiveWorkflowForDepartment } = require("../../repositories/fixtureWorkflowRepository");
@@ -41,9 +42,11 @@ const {
 } = require("./excelParser");
 const {
   collapseWhitespace,
+  formatProjectIdentity,
   normalizeNativeContext,
 } = require("./normalization");
 const {
+  loadProjectTruthForNative,
   resolveNativeDepartmentId,
   validateNativeRows,
 } = require("./validation");
@@ -215,6 +218,90 @@ async function createNativeIngestionSession(user, payload = {}) {
     expires_at: session.expires_at,
     context: sessionContext,
     rows: Array.isArray(payload.rows) ? payload.rows : [],
+  };
+}
+
+function buildRowsFromExistingFixtures(fixtures = []) {
+  return fixtures.map((fixture, index) => ({
+    row_id: `native-existing-${fixture.fixture_id || index + 1}`,
+    row_number: index + 1,
+    status: "EXISTING",
+    classification: "EXISTING",
+    severity: "safe",
+    fixture_no: fixture.fixture_no || "",
+    part_name: fixture.part_name || "",
+    fixture_type: fixture.fixture_type || "",
+    remark: fixture.remark || "",
+    qty: fixture.qty === null || fixture.qty === undefined ? "" : String(fixture.qty),
+    assigned_team: fixture.assigned_team || "",
+    is_outsourced: fixture.is_outsourced === true,
+    vendor_name: fixture.vendor_name || "",
+    reference_image_url: fixture.reference_image_url || fixture.image_1_url || "",
+    validation_state: "Loaded from existing project",
+    cell_states: {},
+    issues: [],
+    existing: fixture,
+  }));
+}
+
+async function createNativeProjectEditSession(user, projectId, payload = {}) {
+  const normalizedProjectId = collapseWhitespace(projectId);
+  if (!normalizedProjectId) {
+    throw new AppError(400, "project_id is required for native project editing");
+  }
+
+  const requestedDepartmentId = collapseWhitespace(payload.department_id || payload.departmentId);
+  const seedContext = normalizeNativeContext({
+    project_id: normalizedProjectId,
+    department_id: requestedDepartmentId,
+    upload_mode: "fixture_delta",
+  }, user);
+  const departmentId = resolveNativeDepartmentId(user, seedContext.department_id, {
+    requireDepartment: true,
+    message: "Invalid native project edit department context",
+  });
+  const truth = await loadProjectTruthForNative(user, {
+    ...seedContext,
+    department_id: departmentId,
+  }, pool);
+
+  if (!truth.project) {
+    throw new AppError(404, "Project not found for native editing");
+  }
+
+  const context = normalizeNativeContext({
+    project_id: truth.project.project_id,
+    project_code: truth.project.project_no,
+    project_name: truth.project.project_name,
+    customer_name: truth.project.customer_name,
+    department_id: truth.project.department_id,
+    department_name: truth.project.department_name || truth.project.department_id,
+    upload_mode: "fixture_delta",
+  }, user);
+  const sessionContext = {
+    ...context,
+    project_identity: formatProjectIdentity(context),
+  };
+  const rows = buildRowsFromExistingFixtures(truth.existing);
+  const session = await createIngestionSession({
+    department_id: sessionContext.department_id,
+    created_by_employee_id: user.employee_id,
+    file_info: buildNativeFileInfo(sessionContext),
+    snapshot: {
+      subsystem: NATIVE_SUBSYSTEM,
+      version: 2,
+      context: sessionContext,
+      rows,
+      source: "project_edit_open",
+      staging_object_paths: [],
+    },
+  }, pool);
+
+  return {
+    session_id: session.id,
+    expires_at: session.expires_at,
+    context: sessionContext,
+    rows,
   };
 }
 
@@ -472,6 +559,33 @@ async function assertNoHiddenFixtureConflicts(user, projectId, fixtureNos, clien
   }
 }
 
+async function resolveNativeCommitProject(user, validation, client) {
+  const context = validation.context || {};
+  if (context.project_id) {
+    if (!validation.project) {
+      throw new AppError(404, "Project not found for native editing");
+    }
+
+    return updateProjectIdentityById({
+      project_id: context.project_id,
+      project_no: context.project_code,
+      project_name: context.project_name,
+      customer_name: context.customer_name,
+      department_id: context.department_id,
+      uploaded_by: user.employee_id,
+    }, client);
+  }
+
+  return upsertProjectByNumber({
+    project_no: context.project_code,
+    project_name: context.project_name,
+    customer_name: context.customer_name,
+    department_id: context.department_id,
+    uploaded_by: user.employee_id,
+    created_by_user_id: user.employee_id,
+  }, client);
+}
+
 async function commitNativeSession(user, sessionId, payload = {}) {
   const context = normalizeNativeContext(payload.context || {}, user);
   const { sessionRow, snapshot, context: resolvedContext } = await getNativeDraftSession(user, sessionId, context, pool, {
@@ -523,14 +637,7 @@ async function commitNativeSession(user, sessionId, payload = {}) {
       throw new AppError(409, `No workflow configured for department ${validation.context.department_id}`);
     }
 
-    const project = await upsertProjectByNumber({
-      project_no: validation.context.project_code,
-      project_name: validation.context.project_name,
-      customer_name: validation.context.customer_name,
-      department_id: validation.context.department_id,
-      uploaded_by: user.employee_id,
-      created_by_user_id: user.employee_id,
-    }, client);
+    const project = await resolveNativeCommitProject(user, validation, client);
 
     await assertNoHiddenFixtureConflicts(
       user,
@@ -706,6 +813,7 @@ module.exports = {
   buildNativeTemplateWorkbook,
   commitNativeSession,
   createNativeIngestionSession,
+  createNativeProjectEditSession,
   importNativeExcel,
   pasteNativeClipboardRows,
   saveNativeDraft,

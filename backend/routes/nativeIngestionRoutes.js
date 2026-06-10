@@ -10,6 +10,7 @@ const {
   buildNativeTemplateWorkbook,
   commitNativeSession,
   createNativeIngestionSession,
+  createNativeProjectEditSession,
   importNativeExcel,
   pasteNativeClipboardRows,
   saveNativeDraft,
@@ -47,6 +48,15 @@ router.post(
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
   asyncHandler(async (req, res) => {
     const result = await createNativeIngestionSession(req.user, req.body);
+    return sendSuccess(res, result, 201);
+  }),
+);
+
+router.post(
+  "/design/native-ingestion/projects/:projectId/edit-session",
+  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  asyncHandler(async (req, res) => {
+    const result = await createNativeProjectEditSession(req.user, req.params.projectId, req.body || {});
     return sendSuccess(res, result, 201);
   }),
 );

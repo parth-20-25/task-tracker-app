@@ -5,6 +5,7 @@ const { loadStageWeightRowsForDepartment } = require("../../repositories/designC
 const { getConfiguredWorkflowForDepartment } = require("../../repositories/fixtureWorkflowRepository");
 const { getProjectCompletionTruthById } = require("../designCompletion/designCompletionEngine");
 const { collectDesignReportTruthLayerErrors } = require("./designReportValidation");
+const { userIdentifierMatchSql } = require("../../repositories/sqlFragments");
 
 async function getFixtureProgressRows(fixtureIds) {
   if (!fixtureIds.length) {
@@ -28,7 +29,7 @@ async function getFixtureProgressRows(fixtureIds) {
         users.name AS assigned_to_name
       FROM fixture_workflow_progress progress
       LEFT JOIN users
-        ON users.employee_id = progress.assigned_to
+        ON ${userIdentifierMatchSql("users", "progress.assigned_to")}
       WHERE progress.fixture_id = ANY($1::uuid[])
       ORDER BY progress.fixture_id ASC, progress.stage_order ASC, progress.stage_name ASC
     `,
@@ -73,9 +74,9 @@ async function getFixtureStageTaskRows(fixtureIds) {
       LEFT JOIN workflow_stages stage
         ON stage.id = t.current_stage_id
       LEFT JOIN users assignee
-        ON assignee.employee_id = t.assigned_to
+        ON ${userIdentifierMatchSql("assignee", "t.assigned_to")}
       LEFT JOIN users assigner
-        ON assigner.employee_id = t.assigned_by
+        ON ${userIdentifierMatchSql("assigner", "t.assigned_by")}
       WHERE t.fixture_id = ANY($1::uuid[])
         AND t.status <> 'cancelled'
       ORDER BY t.fixture_id ASC, t.created_at ASC, t.id ASC
@@ -107,7 +108,7 @@ async function getTaskAttachmentsByTaskIds(taskIds) {
         ta.uploaded_at
       FROM task_attachments ta
       LEFT JOIN users uploader
-        ON uploader.employee_id = ta.uploaded_by
+        ON ${userIdentifierMatchSql("uploader", "ta.uploaded_by")}
       WHERE ta.task_id = ANY($1::int[])
       ORDER BY ta.task_id ASC, ta.uploaded_at ASC, ta.id ASC
     `,
@@ -142,7 +143,7 @@ async function getTaskActivitiesByTaskIds(taskIds) {
         users.name AS user_name
       FROM task_activity_logs activity
       LEFT JOIN users
-        ON users.employee_id = activity.user_employee_id
+        ON ${userIdentifierMatchSql("users", "activity.user_employee_id")}
       WHERE activity.task_id = ANY($1::int[])
       ORDER BY activity.task_id ASC, activity.created_at ASC, activity.id ASC
     `,
@@ -171,9 +172,9 @@ async function listRevisionsForFixtures(fixtureIds, departmentId) {
         approver.name AS approved_by_name,
         changer.name AS changed_by_name
       FROM fixture_workflow_revisions fwr
-      LEFT JOIN users requester ON requester.employee_id = fwr.requested_by
-      LEFT JOIN users approver ON approver.employee_id = fwr.approved_by
-      LEFT JOIN users changer ON changer.employee_id = fwr.changed_by
+      LEFT JOIN users requester ON ${userIdentifierMatchSql("requester", "fwr.requested_by")}
+      LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "fwr.approved_by")}
+      LEFT JOIN users changer ON ${userIdentifierMatchSql("changer", "fwr.changed_by")}
       WHERE fwr.fixture_id = ANY($1::uuid[])
         AND fwr.department_id = $2
       ORDER BY fwr.fixture_id ASC, fwr.stage_version DESC, fwr.changed_at DESC

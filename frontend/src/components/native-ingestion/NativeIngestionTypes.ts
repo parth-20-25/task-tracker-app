@@ -9,6 +9,7 @@ export type NativeSeverity = "safe" | "warning" | "error" | "idle";
 export type NativeUploadMode = "full_project_update" | "fixture_delta";
 
 export interface NativeIngestionContext {
+  project_id?: string | null;
   project_identity: string;
   project_code: string;
   project_name: string;

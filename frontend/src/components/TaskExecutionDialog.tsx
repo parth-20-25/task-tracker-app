@@ -101,7 +101,7 @@ function getClipboardImageFile(clipboardData: DataTransfer | null) {
 
 export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const { access, user } = useAuth();
-  const { refreshTasks } = useTasks();
+  const { executeTaskAction, refreshTasks } = useTasks();
   const queryClient = useQueryClient();
   const taskDisplay = getTaskCardDisplay(task);
   const [open, setOpen] = useState(false);
@@ -262,15 +262,38 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
 
     try {
       await uploadTaskAttachment(task.id, pendingProofFile);
+      let autoSubmitted = false;
+
+      if (isAssignee && task.status === "in_progress") {
+        try {
+          await executeTaskAction(task.id, "submit");
+          autoSubmitted = true;
+        } catch (submitError) {
+          await Promise.all([loadExecutionData(), refreshTasks()]);
+          clearPendingProof();
+          toast({
+            title: "Proof uploaded, task not submitted",
+            description: submitError instanceof Error ? submitError.message : "Use the task Submit button to try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
       await Promise.all([loadExecutionData(), refreshTasks()]);
       clearPendingProof();
-      toast({ title: "Proof uploaded", description: "The proof image is ready for the task submission flow." });
+      toast({
+        title: autoSubmitted ? "Proof uploaded and task submitted" : "Proof uploaded",
+        description: autoSubmitted
+          ? "The task moved into verification automatically."
+          : "The proof image is ready for the task submission flow.",
+      });
     } catch (error) {
       toast({ title: "Could not upload proof", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
     } finally {
       setUploading(false);
     }
-  }, [clearPendingProof, loadExecutionData, pendingProofFile, refreshTasks, task.id]);
+  }, [clearPendingProof, executeTaskAction, isAssignee, loadExecutionData, pendingProofFile, refreshTasks, task.id, task.status]);
 
   const handleFileUpload = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     stageProofSelection(event.target.files?.[0] || null);

@@ -10,6 +10,7 @@ const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
   getAccessibleProjectIds,
+  identifierInVisibleUsersSql,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("./projectVisibility");
@@ -18,6 +19,10 @@ const {
   currentProgressLateral,
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
+const {
+  userIdentifierMatchSql,
+  userResolutionLateralSql,
+} = require("./sqlFragments");
 const {
   canCompleteWorkflowAfterOutsource,
   getOutsourceCompletionAutoApproveStageNames,
@@ -61,6 +66,55 @@ const FIXTURE_OUTSOURCE_SELECT = `
         outsource.brought_in_house_at,
         outsource.created_at AS outsource_created_at,
         outsource.updated_at AS outsource_updated_at
+`;
+
+const FIXTURE_REVISION_PROGRESS_JOIN = `
+      LEFT JOIN LATERAL (
+        SELECT
+          fwp.stage_name,
+          fwp.stage_version
+        FROM fixture_workflow_progress fwp
+        WHERE fwp.fixture_id = di.id
+          AND fwp.department_id = dp.department_id
+          AND LOWER(BTRIM(REGEXP_REPLACE(COALESCE(fwp.stage_name, ''), '[^[:alnum:]]+', '_', 'g'), '_')) NOT IN ('release', 'released')
+        ORDER BY fwp.stage_order DESC NULLS LAST
+        LIMIT 1
+      ) revision_progress ON TRUE
+`;
+
+const FIXTURE_RELEASE_SNAPSHOT_JOIN = `
+      LEFT JOIN LATERAL (
+        SELECT payload, captured_at
+        FROM design.workflow_completion_snapshots snapshot
+        WHERE snapshot.fixture_id = di.id
+          AND snapshot.scope = 'fixture'
+          AND snapshot.trigger = 'workflow_release'
+        ORDER BY snapshot.captured_at DESC, snapshot.id DESC
+        LIMIT 1
+      ) release_snapshot ON TRUE
+      LEFT JOIN users workflow_release_actor
+        ON ${userIdentifierMatchSql(
+          "workflow_release_actor",
+          "COALESCE(release_snapshot.payload #>> '{release,released_by}', release_snapshot.payload ->> 'released_by')",
+        )}
+`;
+
+const FIXTURE_RELEASE_SELECT = `
+        CASE
+          WHEN di.is_workflow_complete IS TRUE
+            OR LOWER(BTRIM(REGEXP_REPLACE(COALESCE(current_progress.stage_name, ''), '[^[:alnum:]]+', '_', 'g'), '_')) IN ('release', 'released')
+          THEN revision_progress.stage_name
+          ELSE current_progress.stage_name
+        END AS workflow_revision_stage,
+        CASE
+          WHEN di.is_workflow_complete IS TRUE
+            OR LOWER(BTRIM(REGEXP_REPLACE(COALESCE(current_progress.stage_name, ''), '[^[:alnum:]]+', '_', 'g'), '_')) IN ('release', 'released')
+          THEN revision_progress.stage_version
+          ELSE current_progress.stage_version
+        END AS workflow_revision_stage_version,
+        release_snapshot.captured_at AS workflow_released_at,
+        COALESCE(release_snapshot.payload #>> '{release,released_by}', release_snapshot.payload ->> 'released_by') AS workflow_released_by,
+        workflow_release_actor.name AS workflow_released_by_name
 `;
 
 const DEPARTMENT_PROJECT_SELECT = `
@@ -243,8 +297,12 @@ function mapFixtureOptionRow(row) {
   }
 
   const stageVersion = normalizeStageVersion(row.workflow_stage_version);
+  const revisionStage = row.workflow_revision_stage || row.workflow_stage;
+  const revisionStageVersion = normalizeStageVersion(
+    row.workflow_revision_stage ? row.workflow_revision_stage_version : row.workflow_stage_version,
+  );
   const workflowRevisionCode = row.workflow_revision_code
-    || (row.workflow_stage ? formatStageRevisionCode(row.workflow_stage, stageVersion) : null);
+    || (revisionStage ? formatStageRevisionCode(revisionStage, revisionStageVersion) : null);
   const workflowStatus = row.workflow_status || null;
   const outsourceStatus = row.outsource_status || (row.is_outsourced === true ? OUTSOURCE_STATUSES.OUTSOURCED : null);
 
@@ -288,6 +346,9 @@ function mapFixtureOptionRow(row) {
     operational_state: row.operational_state || "UNASSIGNED",
     workflow_assigned_to: row.workflow_assigned_to || null,
     workflow_assigned_to_name: row.workflow_assigned_to_name || null,
+    workflow_released_at: row.workflow_released_at || null,
+    workflow_released_by: row.workflow_released_by || null,
+    workflow_released_by_name: row.workflow_released_by_name || null,
     workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
       ? null
       : Number(row.workflow_progress_percent),
@@ -328,8 +389,8 @@ function projectModificationPermissionSql(projectAlias = "p", employeeExpression
         WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_KEYS)})
            OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_IDS)})
       )
-      OR COALESCE(${projectAlias}.created_by_user_id = ${employeeExpression}, FALSE)
-      OR COALESCE(${projectAlias}.uploaded_by = ${employeeExpression}, FALSE)
+      OR ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`, "root_user")}
+      OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`, "root_user")}
       OR (
         EXISTS (
           SELECT 1
@@ -338,8 +399,8 @@ function projectModificationPermissionSql(projectAlias = "p", employeeExpression
              OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
         )
         AND (
-          COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM visible_users), FALSE)
-          OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM visible_users), FALSE)
+          ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`)}
+          OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`)}
         )
       )
     )
@@ -387,8 +448,7 @@ function hierarchyTeamLeaderLateral(projectAlias = "p") {
             ARRAY[u.id::text, u.employee_id]::text[] AS path
           FROM users u
           LEFT JOIN roles r ON r.id = u.role
-          WHERE u.employee_id = ${projectAlias}.created_by_user_id
-            AND COALESCE(u.is_active, TRUE) = TRUE
+          WHERE ${userIdentifierMatchSql("u", `${projectAlias}.created_by_user_id`)}
 
           UNION ALL
 
@@ -405,8 +465,7 @@ function hierarchyTeamLeaderLateral(projectAlias = "p") {
             ON parent.id::text = owner_ancestry.parent_id
             OR parent.employee_id = owner_ancestry.parent_id
           LEFT JOIN roles parent_role ON parent_role.id = parent.role
-          WHERE COALESCE(parent.is_active, TRUE) = TRUE
-            AND owner_ancestry.depth < 32
+          WHERE owner_ancestry.depth < 32
             AND NOT parent.id::text = ANY(owner_ancestry.path)
             AND NOT parent.employee_id = ANY(owner_ancestry.path)
         )
@@ -668,7 +727,7 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         d.name AS department_name,
         COALESCE(p.status, $3) AS project_status,
         COALESCE(p.is_modified, FALSE) AS is_modified,
-        COALESCE(p.uploaded_by, p.created_by_user_id) AS uploaded_by,
+        COALESCE(uploader.employee_id, p.uploaded_by, p.created_by_user_id) AS uploaded_by,
         hierarchy_team_lead.employee_id AS team_lead_id,
         hierarchy_team_lead.name AS team_lead_name,
         uploader.name AS uploaded_by_name,
@@ -683,8 +742,10 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
       FROM design.projects p
       LEFT JOIN departments d
         ON d.id = p.department_id
-      LEFT JOIN users uploader
-        ON uploader.employee_id = COALESCE(p.uploaded_by, p.created_by_user_id)
+      ${userResolutionLateralSql("uploader", [
+        { expression: "p.uploaded_by", source: "project_uploaded_by" },
+        { expression: "p.created_by_user_id", source: "project_created_by_user_id" },
+      ])}
       ${hierarchyTeamLeaderLateral("p")}
       ${fixtureOperationalStatsLateral("p")}
       WHERE ($2::text IS NULL OR p.department_id = $2)
@@ -929,6 +990,64 @@ async function upsertProjectByNumber(project, client = pool) {
   return mapDesignProjectRow(insertedProject.rows[0]);
 }
 
+async function updateProjectIdentityById(project, client = pool) {
+  const projectId = String(project.project_id || "").trim();
+  if (!projectId) {
+    throw new AppError(400, "project_id is required for design project update");
+  }
+
+  const projectNo = normalizeProjectNo(project.project_no);
+  const projectName = normalizeProjectName(project.project_name);
+  const customerName = collapseProjectLabel(project.customer_name);
+
+  try {
+    const result = await client.query(
+      `
+        UPDATE design.projects
+        SET project_no = $2,
+            project_name = $3,
+            customer_name = $4,
+            uploaded_by = $6,
+            updated_at = NOW()
+        WHERE id::text = $1
+          AND department_id = $5
+        RETURNING
+          id AS project_id,
+          project_no,
+          project_name,
+          customer_name,
+          department_id,
+          COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
+          COALESCE(is_modified, FALSE) AS is_modified,
+          uploaded_by,
+          created_by_user_id,
+          created_at,
+          updated_at,
+          FALSE AS was_created
+      `,
+      [
+        projectId,
+        projectNo,
+        projectName,
+        customerName,
+        project.department_id,
+        project.uploaded_by || null,
+      ],
+    );
+
+    if (result.rows.length === 0) {
+      throw new AppError(404, "Project not found for native edit");
+    }
+
+    return mapDesignProjectRow(result.rows[0]);
+  } catch (error) {
+    if (error?.code === "23505") {
+      throw new AppError(409, "Project Number already exists for this department");
+    }
+    throw error;
+  }
+}
+
 async function findActiveUploadBatchIdForProject(projectId, client = pool) {
   const result = await client.query(
     `
@@ -971,6 +1090,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         current_progress.stage_order AS workflow_stage_order,
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
+        ${FIXTURE_RELEASE_SELECT},
         current_progress.status AS workflow_status,
         COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
         COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
@@ -987,8 +1107,10 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       ${FIXTURE_OUTSOURCE_JOIN}
       ${activeTaskLateral("di", "operational_task")}
       ${currentProgressLateral("di", "dp", "current_progress")}
+      ${FIXTURE_REVISION_PROGRESS_JOIN}
+      ${FIXTURE_RELEASE_SNAPSHOT_JOIN}
       LEFT JOIN users workflow_assignee
-        ON workflow_assignee.employee_id = COALESCE(operational_task.assigned_to, current_progress.assigned_to)
+        ON ${userIdentifierMatchSql("workflow_assignee", "COALESCE(operational_task.assigned_to, current_progress.assigned_to)")}
      WHERE dp.id = $1
        AND dp.department_id = $2
        AND ($3::boolean = FALSE OR COALESCE(dp.status, $4) = $4)
@@ -1037,6 +1159,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         current_progress.stage_order AS workflow_stage_order,
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
+        ${FIXTURE_RELEASE_SELECT},
         current_progress.status AS workflow_status,
         COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
         COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
@@ -1053,8 +1176,10 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       ${FIXTURE_OUTSOURCE_JOIN}
       ${activeTaskLateral("di", "operational_task")}
       ${currentProgressLateral("di", "dp", "current_progress")}
+      ${FIXTURE_REVISION_PROGRESS_JOIN}
+      ${FIXTURE_RELEASE_SNAPSHOT_JOIN}
       LEFT JOIN users workflow_assignee
-        ON workflow_assignee.employee_id = COALESCE(operational_task.assigned_to, current_progress.assigned_to)
+        ON ${userIdentifierMatchSql("workflow_assignee", "COALESCE(operational_task.assigned_to, current_progress.assigned_to)")}
       WHERE dp.id = $2
         AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
@@ -1851,6 +1976,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   touchProject,
   updateProjectModificationFlag,
   updateFixtureReferenceImageForDepartment,
+  updateProjectIdentityById,
   upsertFixtureOutsourceRecord,
   updateFixtureOutsourcingState,
   upsertFixture,

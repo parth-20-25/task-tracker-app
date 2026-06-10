@@ -112,8 +112,9 @@ async function run() {
       [{ fixture_id: "fixture-1" }],
     );
 
-    assert.equal(kpiResult.ok, true);
-    assert.equal(kpiResult.kpis.overallProgress, "100%");
+    assert.equal(kpiResult.ok, false);
+    assert.match(kpiResult.error, /outside the supported 0-100 range/);
+    assert.deepEqual(kpiResult.truth_errors, ["completion_percent_out_of_range:1400"]);
   }
 
   {

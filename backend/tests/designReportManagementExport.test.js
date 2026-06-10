@@ -220,16 +220,16 @@ async function run() {
     assert.equal(templateSheet.getCell("AK14").value.hyperlink, "/uploads/task-proofs/fixture-1-final.png");
     assert.ok((templateSheet.views || []).some((view) => view.state === "frozen" && view.ySplit === 13));
     assert.equal(templateSheet.autoFilter, "A13:AM18");
-    assert.equal(templateSheet.getCell("F14").value, "Assigned To: Motilal Kurmi\nAssigned By: Damu Khadthare");
+    assert.equal(templateSheet.getCell("F14").value, "Assigned To: 513 - Motilal Kurmi\nAssigned By: 509 - Damu Khadthare");
     assert.equal(templateSheet.getCell("G14").value, "Status: Closed\nCurrent Stage: Completed");
     assert.equal(templateSheet.getCell("G14").fill.fgColor.argb, "FF616161");
     assert.equal(templateSheet.getCell("G15").fill.fgColor.argb, "FF28A745");
     assert.equal(templateSheet.getCell("G16").fill.fgColor.argb, "FFFF9800");
     assert.equal(templateSheet.getCell("G17").fill.fgColor.argb, "FFD32F2F");
     assert.equal(templateSheet.getCell("G18").fill.fgColor.argb, "FF9C27B0");
-    assert.equal(templateSheet.getCell("L15").value, "Shivam Desai: 55%\nDamu Khadthare: 45%");
-    assert.equal(templateSheet.getCell("F17").value, "Assigned To: Nilesh Pawar\nAssigned By: Damu Khadthare");
-    assert.equal(templateSheet.getCell("W17").value, "Shivam Desai: 35%\nNilesh Pawar: 65%");
+    assert.equal(templateSheet.getCell("L15").value, "512 - Shivam Desai: 55%\n509 - Damu Khadthare: 45%");
+    assert.equal(templateSheet.getCell("F17").value, "Assigned To: 514 - Nilesh Pawar\nAssigned By: 509 - Damu Khadthare");
+    assert.equal(templateSheet.getCell("W17").value, "512 - Shivam Desai: 35%\n514 - Nilesh Pawar: 65%");
     assert.equal(templateSheet.getCell("AH15").value, "No proof uploaded");
     assert.notEqual(templateSheet.getCell("AH15").font?.underline, true);
     assert.equal(templateSheet.getCell("AM14").value, "Actual Hours: 15h 0m\nVariance: -1h 0m");
@@ -273,6 +273,103 @@ async function run() {
     assert.deepEqual(collectRowsContainingValue(emptyTemplate, "FIXTURE INFORMATION"), [11]);
     assert.ok((emptyTemplate.views || []).some((view) => view.state === "frozen" && view.ySplit === 13));
     assert.equal(emptyTemplate.autoFilter, "A13:AM13");
+
+    const incompleteSnapshotPath = path.join(tempDirectory, "incomplete-project-snapshot.xlsx");
+    await generateDesignProjectExecutionTemplateExcel({
+      context: {
+        ...sample.context,
+        project_no: "PARC-INCOMPLETE",
+        project_name: "Incomplete Snapshot",
+        customer_name: "",
+        plant: "",
+        project_leader_id: "509",
+        project_leader_name: "Damu Khadthare",
+        team_lead_id: "",
+        team_lead_name: "",
+      },
+      fixtures: [
+        {
+          fixture_id: "fixture-new",
+          fixture_no: "FX-NEW",
+          task_status: "assigned",
+        },
+      ],
+      reportData: {
+        progressRows: [],
+        attemptRows: [],
+        contributions: [],
+        revisions: [],
+        stageTasks: [],
+        attachmentsByTaskId: new Map(),
+        activitiesByTaskId: new Map(),
+        projectTruth: {
+          truth_status: "COMPLETE",
+          completion_percent: 1400,
+          strict_complete: false,
+          fixtures: [{ fixture_id: "fixture-new" }],
+        },
+        weightRows: [],
+        workflowStages: [],
+      },
+      filePath: incompleteSnapshotPath,
+    });
+    const incompleteWorkbook = new ExcelJS.Workbook();
+    await incompleteWorkbook.xlsx.readFile(incompleteSnapshotPath);
+    const incompleteTemplate = incompleteWorkbook.getWorksheet("Design Project Execution");
+    assert.equal(incompleteTemplate.getCell("A5").value, "PARC-INCOMPLETE");
+    assert.equal(incompleteTemplate.getCell("I5").value, "Not recorded");
+    assert.equal(incompleteTemplate.getCell("Q5").value, "509 - Damu Khadthare");
+    assert.equal(incompleteTemplate.getCell("U5").value, "Not assigned");
+    assert.equal(incompleteTemplate.getCell("A8").value, "Completion: Not available");
+    assert.equal(incompleteTemplate.getCell("B14").value, "FX-NEW");
+    assert.equal(incompleteTemplate.getCell("C14").value, "Not recorded");
+    assert.equal(incompleteTemplate.getCell("D14").value, "Not recorded");
+    assert.equal(incompleteTemplate.getCell("F14").value, "Assigned To: Not assigned\nAssigned By: Not recorded");
+    assert.equal(incompleteTemplate.getCell("G14").value, "Status: Assigned\nCurrent Stage: Not started");
+    assert.equal(incompleteTemplate.getCell("H14").value, "Not started");
+    assert.equal(incompleteTemplate.getCell("AH14").value, "No proof uploaded");
+    assert.equal(incompleteTemplate.getCell("B15").value, null);
+    assert.deepEqual(Object.keys(incompleteTemplate.getCell("B15").style || {}), []);
+
+    const releasedSnapshotPath = path.join(tempDirectory, "released-project-snapshot.xlsx");
+    await generateDesignProjectExecutionTemplateExcel({
+      context: {
+        ...sample.context,
+        status: "released",
+        project_no: "PARC-RELEASED",
+        project_name: "Released Snapshot",
+      },
+      fixtures: sample.fixtures.map((fixture) => ({
+        ...fixture,
+        task_status: "closed",
+      })),
+      reportData: {
+        ...sample.reportData,
+        projectTruth: {
+          ...sample.reportData.projectTruth,
+          truth_status: "COMPLETE",
+          completion_percent: 100,
+          strict_complete: true,
+          fixtures: sample.fixtures.map((fixture) => ({
+            fixture_id: fixture.fixture_id,
+            strict_complete: true,
+            has_blocking_hold: false,
+            has_unresolved_reject: false,
+            has_active_rework: false,
+            is_outsourced: false,
+            is_required_for_project_kpi: true,
+          })),
+        },
+      },
+      filePath: releasedSnapshotPath,
+    });
+    const releasedWorkbook = new ExcelJS.Workbook();
+    await releasedWorkbook.xlsx.readFile(releasedSnapshotPath);
+    const releasedTemplate = releasedWorkbook.getWorksheet("Design Project Execution");
+    assert.equal(releasedTemplate.getCell("A5").value, "PARC-RELEASED");
+    assert.equal(releasedTemplate.getCell("A8").value, "Completion: 100%");
+    assert.equal(releasedTemplate.getCell("G14").value, "Status: Closed\nCurrent Stage: Completed");
+    assert.equal(releasedTemplate.autoFilter, "A13:AM18");
 
     const pdfBuffer = generateDesignManagementPdf(model);
     assert.ok(pdfBuffer.length > 5000);

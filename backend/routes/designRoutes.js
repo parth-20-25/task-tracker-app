@@ -43,6 +43,7 @@ const {
   updateProjectModificationForUser,
   uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
+const { reactivateProjectForModificationById } = require("../services/batchService");
 const {
   assignProject2DLeader,
   getProject2DRouting,
@@ -414,6 +415,15 @@ router.patch(
   asyncHandler(async (req, res) => {
     const project = await updateProjectModificationForUser(req.user, req.params.projectId, req.body);
     return sendSuccess(res, project);
+  }),
+);
+
+router.post(
+  "/design/projects/:projectId/reactivate",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const result = await reactivateProjectForModificationById(req.user, req.params.projectId, req.body);
+    return sendSuccess(res, result);
   }),
 );
 

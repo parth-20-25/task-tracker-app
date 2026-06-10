@@ -1,6 +1,6 @@
 const { pool } = require("../db");
 const { mapUserRow } = require("./mappers");
-const { buildUserColumns } = require("./sqlFragments");
+const { buildUserColumns, userIdentifierMatchSql } = require("./sqlFragments");
 
 function mapIssueRow(row) {
   if (!row) {
@@ -40,11 +40,11 @@ function issueSelect(whereClause = "") {
       ${buildUserColumns({ userAlias: "assignee", roleAlias: "assignee_role", departmentAlias: "assignee_department", subdivisionAlias: "assignee_subdivision", prefix: "assignee_" })}
     FROM issues i
     LEFT JOIN departments d ON d.id = i.department_id
-    LEFT JOIN users creator ON creator.employee_id = i.created_by
+    LEFT JOIN users creator ON ${userIdentifierMatchSql("creator", "i.created_by")}
     LEFT JOIN roles creator_role ON creator_role.id = creator.role
     LEFT JOIN departments creator_department ON creator_department.id = creator.department_id
     LEFT JOIN department_subdivisions creator_subdivision ON creator_subdivision.id = creator.subdivision_id
-    LEFT JOIN users assignee ON assignee.employee_id = i.assigned_to
+    LEFT JOIN users assignee ON ${userIdentifierMatchSql("assignee", "i.assigned_to")}
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id
     LEFT JOIN department_subdivisions assignee_subdivision ON assignee_subdivision.id = assignee.subdivision_id
@@ -192,7 +192,7 @@ async function listIssueComments(issueId, client = pool) {
         ic.created_at,
         u.name AS user_name
       FROM issue_comments ic
-      LEFT JOIN users u ON u.employee_id = ic.user_id
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "ic.user_id")}
       WHERE ic.issue_id = $1
       ORDER BY ic.created_at ASC, ic.id ASC
     `,

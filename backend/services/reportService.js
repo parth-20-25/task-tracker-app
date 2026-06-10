@@ -4,6 +4,7 @@ const { logger } = require("../lib/logger");
 const { instrumentModuleExports } = require("../lib/observability");
 const { TASK_STATUSES } = require("../config/constants");
 const { listTasksByAccess } = require("../repositories/tasksRepository");
+const { userIdentifierMatchSql } = require("../repositories/sqlFragments");
 const {
   buildTaskAccessPredicate,
   getTaskAccess,
@@ -506,9 +507,9 @@ async function listTaskReportRows(user, filters = {}) {
         COALESCE(task_department.name, t.department_id, '') AS department_name
       FROM tasks t
       LEFT JOIN workflow_stages stage ON stage.id = t.current_stage_id
-      LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
+      LEFT JOIN users assignee ON ${userIdentifierMatchSql("assignee", "t.assigned_to")}
       LEFT JOIN departments task_department ON task_department.id = t.department_id
-      LEFT JOIN users assigner ON assigner.employee_id = t.assigned_by
+      LEFT JOIN users assigner ON ${userIdentifierMatchSql("assigner", "t.assigned_by")}
       LEFT JOIN design.projects project
         ON (
           t.project_id IS NOT NULL

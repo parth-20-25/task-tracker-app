@@ -2,7 +2,7 @@ const { pool } = require("../db");
 const { logger } = require("../lib/logger");
 const { getExecutionMetadata, instrumentModuleExports, safeSerialize } = require("../lib/observability");
 const { mapTaskRow } = require("./mappers");
-const { buildUserColumns } = require("./sqlFragments");
+const { buildUserColumns, userIdentifierMatchSql } = require("./sqlFragments");
 
 const OPEN_TASK_STATUSES = ["assigned", "in_progress", "on_hold", "under_review", "rework"];
 const ACTIVE_TASK_STAGE_CONFLICT_CODE = "ACTIVE_TASK_STAGE_CONFLICT";
@@ -71,7 +71,7 @@ function taskSelectQuery(whereClause = "") {
         )
         FROM design.fixture_stage_contributions contribution
         LEFT JOIN users contributor
-          ON contributor.employee_id = contribution.employee_id
+          ON ${userIdentifierMatchSql("contributor", "contribution.employee_id")}
         WHERE contribution.fixture_id = t.fixture_id
           AND contribution.department_id = t.department_id
           AND COALESCE(contribution.stage_name, '') = COALESCE(workflow_progress.stage_name, NULLIF(t.stage, ''), stage.stage_name, stage.name, '')
@@ -116,12 +116,12 @@ function taskSelectQuery(whereClause = "") {
       ORDER BY attachment.uploaded_at DESC, attachment.id DESC
       LIMIT 1
     ) latest_attachment ON TRUE
-    LEFT JOIN users proof_uploader ON proof_uploader.employee_id = latest_attachment.uploaded_by
-    LEFT JOIN users assignee ON assignee.employee_id = t.assigned_to
+    LEFT JOIN users proof_uploader ON ${userIdentifierMatchSql("proof_uploader", "latest_attachment.uploaded_by")}
+    LEFT JOIN users assignee ON ${userIdentifierMatchSql("assignee", "t.assigned_to")}
     LEFT JOIN roles assignee_role ON assignee_role.id = assignee.role
     LEFT JOIN departments assignee_department ON assignee_department.id = assignee.department_id
     LEFT JOIN department_subdivisions assignee_subdivision ON assignee_subdivision.id = assignee.subdivision_id
-    LEFT JOIN users assigner ON assigner.employee_id = t.assigned_by
+    LEFT JOIN users assigner ON ${userIdentifierMatchSql("assigner", "t.assigned_by")}
     LEFT JOIN roles assigner_role ON assigner_role.id = assigner.role
     LEFT JOIN departments assigner_department ON assigner_department.id = assigner.department_id
     LEFT JOIN department_subdivisions assigner_subdivision ON assigner_subdivision.id = assigner.subdivision_id
@@ -199,20 +199,24 @@ async function listActiveProjectTasksByAccess(access, client = pool) {
   }, client);
 }
 
-async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool) {
-  const nextParams = [...params, currentUserEmployeeId];
+async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool, options = {}) {
+  const nextParams = [...params];
   const activeProjectPredicate = "COALESCE(project.status, 'active') = 'active'";
-  const verificationClause = clause
-    ? `${clause} AND ${activeProjectPredicate} AND t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
-        SELECT 1
-        FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
-        WHERE task_assignee.employee_id = $${nextParams.length}
-      )`
-    : `WHERE ${activeProjectPredicate} AND t.status = 'under_review' AND t.verification_status = 'pending' AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
+  const excludeCurrentUser = options.excludeCurrentUser !== false && Boolean(currentUserEmployeeId);
+  let currentUserExclusion = "";
+
+  if (excludeCurrentUser) {
+    nextParams.push(currentUserEmployeeId);
+    currentUserExclusion = ` AND COALESCE(t.assigned_user_id, t.assigned_to) <> $${nextParams.length} AND t.assigned_to <> $${nextParams.length} AND NOT EXISTS (
         SELECT 1
         FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
         WHERE task_assignee.employee_id = $${nextParams.length}
       )`;
+  }
+
+  const verificationClause = clause
+    ? `${clause} AND ${activeProjectPredicate} AND t.status = 'under_review' AND t.verification_status = 'pending'${currentUserExclusion}`
+    : `WHERE ${activeProjectPredicate} AND t.status = 'under_review' AND t.verification_status = 'pending'${currentUserExclusion}`;
 
   const result = await client.query(
     `${taskSelectQuery(verificationClause)} ORDER BY t.created_at DESC, t.id DESC`,
@@ -813,7 +817,7 @@ async function listTaskActivity(taskId, client = pool) {
     `
       SELECT tal.*, u.name AS user_name
       FROM task_activity_logs tal
-      LEFT JOIN users u ON u.employee_id = tal.user_employee_id
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "tal.user_employee_id")}
       WHERE tal.task_id = $1
       ORDER BY tal.created_at DESC, tal.id DESC
     `,
@@ -845,7 +849,7 @@ async function listTaskLogs(taskId, client = pool) {
         u.name AS updated_by_name,
         tl.timestamp
       FROM task_logs tl
-      LEFT JOIN users u ON u.employee_id = COALESCE(tl.updated_by, tl.user_employee_id)
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "COALESCE(tl.updated_by, tl.user_employee_id)")}
       WHERE tl.task_id = $1
       ORDER BY tl.timestamp DESC, tl.id DESC
     `,
@@ -882,7 +886,7 @@ async function listTaskChecklists(taskId, client = pool) {
     `
       SELECT tc.*, u.name AS completed_by_name
       FROM task_checklists tc
-      LEFT JOIN users u ON u.employee_id = tc.completed_by
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "tc.completed_by")}
       WHERE tc.task_id = $1
       ORDER BY tc.created_at ASC
     `,
@@ -966,7 +970,7 @@ async function listTaskAttachments(taskId, client = pool) {
     `
       SELECT ta.*, u.name AS uploaded_by_name
       FROM task_attachments ta
-      LEFT JOIN users u ON u.employee_id = ta.uploaded_by
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "ta.uploaded_by")}
       WHERE ta.task_id = $1
       ORDER BY ta.uploaded_at DESC
     `,
@@ -981,7 +985,7 @@ async function findLatestTaskAttachment(taskId, client = pool) {
     `
       SELECT ta.*, u.name AS uploaded_by_name
       FROM task_attachments ta
-      LEFT JOIN users u ON u.employee_id = ta.uploaded_by
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "ta.uploaded_by")}
       WHERE ta.task_id = $1
       ORDER BY ta.uploaded_at DESC, ta.id DESC
       LIMIT 1

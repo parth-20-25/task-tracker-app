@@ -3,6 +3,7 @@ const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
   getAccessibleProjectIds,
+  identifierInVisibleUsersSql,
   isProjectAuthorityRoleIdentity,
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,
@@ -10,6 +11,7 @@ const {
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
+const { userIdentifierMatchSql } = require("../repositories/sqlFragments");
 function getRoleDetails(user) {
   if (user?.role && typeof user.role === "object") {
     return user.role;
@@ -77,8 +79,8 @@ function projectOwnershipMatchSql(projectAlias = "p", cteName = "visible_users")
   // Canonical ownership: project creator/uploader in the visible hierarchy.
   return `
     (
-      COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
-      OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+      ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`, cteName)}
+      OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`, cteName)}
     )
   `;
 }
@@ -91,7 +93,7 @@ function projectAssignmentMatchSql(projectAlias = "p", cteName = "visible_users"
       JOIN fixture_workflow_progress visible_progress
         ON visible_progress.fixture_id = visible_fixture.id
       WHERE visible_fixture.project_id = ${projectAlias}.id
-        AND visible_progress.assigned_to IN (SELECT employee_id FROM ${cteName})
+        AND ${identifierInVisibleUsersSql("visible_progress.assigned_to", cteName)}
       LIMIT 1
     )
   `;
@@ -257,7 +259,25 @@ async function explainProjectVisibility(user, projectId, client = pool) {
     reasons.push(VISIBILITY_REASONS.ORG_WIDE_AUTHORITY);
   }
 
-  if (project.created_by_user_id && accessibleUserIds.includes(project.created_by_user_id)) {
+  let ownerResolved = false;
+  if (project.created_by_user_id) {
+    const ownerResult = await client.query(
+      `
+        SELECT owner.employee_id
+        FROM users owner
+        WHERE ${userIdentifierMatchSql("owner", "$1")}
+        LIMIT 1
+      `,
+      [project.created_by_user_id],
+    );
+    const ownerEmployeeId = ownerResult.rows[0]?.employee_id || project.created_by_user_id;
+    if (accessibleUserIds.includes(ownerEmployeeId)) {
+      reasons.push(VISIBILITY_REASONS.DESCENDANT_UPLOADER);
+      ownerResolved = true;
+    }
+  }
+
+  if (!ownerResolved && project.created_by_user_id && accessibleUserIds.includes(project.created_by_user_id)) {
     reasons.push(VISIBILITY_REASONS.DESCENDANT_UPLOADER);
   }
 
@@ -269,7 +289,13 @@ async function explainProjectVisibility(user, projectId, client = pool) {
         JOIN fixture_workflow_progress visible_progress
           ON visible_progress.fixture_id = visible_fixture.id
         WHERE visible_fixture.project_id = $1
-          AND visible_progress.assigned_to = ANY($2::text[])
+          AND EXISTS (
+            SELECT 1
+            FROM users assigned_user
+            WHERE ${userIdentifierMatchSql("assigned_user", "visible_progress.assigned_to")}
+              AND assigned_user.employee_id = ANY($2::text[])
+            LIMIT 1
+          )
         LIMIT 1
       `,
       [normalizedProjectId, accessibleUserIds],

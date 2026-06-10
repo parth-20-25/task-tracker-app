@@ -8,12 +8,22 @@ const {
   listBatchesWithSummaryForUser,
   getBatchById,
   getBatchByIdForUser,
+  getProjectLifecycleContextByIdForUser,
   checkBatchDeletionBlocked,
   deleteBatchCascade,
+  reactivateProjectForModification,
   releaseProject,
   setProjectLifecycleStatus,
 } = require("../repositories/batchRepository");
 const { canAccessDepartment, hasPermission, isAdmin, isProjectAuthorityRole } = require("./accessControlService");
+
+const PROJECT_REACTIVATION_REASONS = {
+  customer_modification: "Customer modification",
+  internal_modification: "Internal modification",
+  drawing_update: "Drawing update",
+  fixture_correction: "Fixture correction",
+  other: "Other",
+};
 
 function normalizeProjectStatus(status) {
   return String(status || PROJECT_STATUSES.ACTIVE).trim().toLowerCase();
@@ -21,6 +31,42 @@ function normalizeProjectStatus(status) {
 
 function isTerminalProjectStatus(status) {
   return [PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED].includes(normalizeProjectStatus(status));
+}
+
+function normalizeReasonKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeProjectReactivationPayload(payload = {}) {
+  const rawReason = payload.reason ?? payload.reactivation_reason ?? payload.reason_type ?? "";
+  let reasonKey = normalizeReasonKey(rawReason);
+
+  if (!reasonKey) {
+    reasonKey = "other";
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(PROJECT_REACTIVATION_REASONS, reasonKey)) {
+    const matchingEntry = Object.entries(PROJECT_REACTIVATION_REASONS)
+      .find(([, label]) => normalizeReasonKey(label) === reasonKey);
+    if (!matchingEntry) {
+      throw new AppError(400, "Invalid reactivation reason");
+    }
+    reasonKey = matchingEntry[0];
+  }
+
+  const comment = String(payload.comment ?? payload.reactivation_comment ?? payload.remarks ?? "")
+    .trim()
+    .slice(0, 1000);
+
+  return {
+    reason: reasonKey,
+    reason_label: PROJECT_REACTIVATION_REASONS[reasonKey],
+    comment: comment || null,
+  };
 }
 
 function isBatchOwner(user, batch) {
@@ -267,6 +313,89 @@ async function activateProjectForBatch(user, batchId) {
   };
 }
 
+async function reactivateProjectForModificationById(user, projectId, payload = {}) {
+  const normalizedProjectId = String(projectId || "").trim();
+  if (!normalizedProjectId) {
+    throw new AppError(400, "project_id is required");
+  }
+
+  const project = await getProjectLifecycleContextByIdForUser(normalizedProjectId, user);
+  if (!project) {
+    throw new AppError(404, "Project not found");
+  }
+
+  if (!canManageProjectLifecycle(user, project)) {
+    throw new AppError(403, "You do not have permission to reactivate this project");
+  }
+
+  if (!isTerminalProjectStatus(project.project_status)) {
+    throw new AppError(409, "Only released or completed projects can be reactivated");
+  }
+
+  const reactivation = normalizeProjectReactivationPayload(payload);
+  const reactivatedAt = new Date().toISOString();
+  let updatedProject = null;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    updatedProject = await reactivateProjectForModification(project.project_id, client);
+
+    if (!updatedProject) {
+      throw new AppError(409, "Only released or completed projects can be reactivated");
+    }
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "PROJECT_REACTIVATED",
+      targetType: "design_project",
+      targetId: project.project_id,
+      metadata: {
+        batch_id: project.batch_id || null,
+        project_no: project.project_no,
+        reactivated_by: user.employee_id,
+        reactivated_at: reactivatedAt,
+        reactivation_reason: reactivation.reason,
+        reactivation_reason_label: reactivation.reason_label,
+        reactivation_comment: reactivation.comment,
+        previous_status: project.project_status,
+        next_status: PROJECT_STATUSES.ACTIVE,
+        previous_is_modified: project.is_modified === true,
+        next_is_modified: updatedProject.is_modified === true,
+        preserved_completed_at: project.completed_at || null,
+      },
+    }, client);
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return {
+    project_id: project.project_id,
+    batch_id: project.batch_id || null,
+    status: PROJECT_STATUSES.ACTIVE,
+    previous_status: project.project_status,
+    is_modified: updatedProject?.is_modified === true,
+    reactivation_reason: reactivation.reason,
+    reactivation_reason_label: reactivation.reason_label,
+    reactivation_comment: reactivation.comment,
+    message: `Project ${project.project_no} has been reactivated for modification work.`,
+  };
+}
+
+async function reactivateProjectForBatch(user, batchId, payload = {}) {
+  const batch = await getBatchByIdForUser(batchId, user);
+  if (!batch) {
+    throw new AppError(404, "Project not found");
+  }
+
+  return reactivateProjectForModificationById(user, batch.project_id, payload);
+}
+
 async function releaseProjectForBatch(user, batchId) {
   const batch = await getBatchByIdForUser(batchId, user);
   if (!batch) {
@@ -324,5 +453,8 @@ module.exports = instrumentModuleExports("service.batchService", {
   getBatches,
   deleteBatch,
   holdProjectForBatch,
+  normalizeProjectReactivationPayload,
+  reactivateProjectForBatch,
+  reactivateProjectForModificationById,
   releaseProjectForBatch,
 });

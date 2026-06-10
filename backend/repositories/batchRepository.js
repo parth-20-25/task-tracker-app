@@ -1,12 +1,18 @@
 const { pool } = require("../db");
 const { PROJECT_STATUSES } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
-const { buildVisibleUsersCte, visibleProjectPredicate, GetAccessibleUserIds } = require("./projectVisibility");
+const {
+  buildVisibleUsersCte,
+  identifierInVisibleUsersSql,
+  visibleProjectPredicate,
+  GetAccessibleUserIds,
+} = require("./projectVisibility");
 const {
   activeTaskLateral,
   currentProgressLateral,
   operationalStateSqlCase,
 } = require("../services/operationalStateResolver");
+const { userResolutionLateralSql } = require("./sqlFragments");
 
 const BATCH_DELETE_BLOCK_REASON = "Cannot delete project. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
@@ -88,8 +94,8 @@ function projectModificationPermissionSql(projectAlias = "dp", employeeExpressio
         WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_KEYS)})
            OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_IDS)})
       )
-      OR COALESCE(${projectAlias}.created_by_user_id = ${employeeExpression}, FALSE)
-      OR COALESCE(${projectAlias}.uploaded_by = ${employeeExpression}, FALSE)
+      OR ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`, "root_user")}
+      OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`, "root_user")}
       OR (
         EXISTS (
           SELECT 1
@@ -98,8 +104,8 @@ function projectModificationPermissionSql(projectAlias = "dp", employeeExpressio
              OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
         )
         AND (
-          COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM visible_users), FALSE)
-          OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM visible_users), FALSE)
+          ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`)}
+          OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`)}
         )
       )
     )
@@ -289,7 +295,7 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
-        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
+        COALESCE(uploader.employee_id, ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -318,8 +324,12 @@ async function listBatchesWithSummary(departmentId, client = pool) {
           id DESC
         LIMIT 1
       ) ub ON TRUE
-      LEFT JOIN users uploader
-        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
+      ${userResolutionLateralSql("uploader", [
+        { expression: "ub.uploaded_by_user_id", source: "upload_batch_uploaded_by_user_id" },
+        { expression: "ub.uploaded_by", source: "upload_batch_uploaded_by" },
+        { expression: "dp.uploaded_by", source: "project_uploaded_by" },
+        { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
+      ])}
       ${fixtureOperationalStatsLateral("dp")}
       ${departmentFilter}
       ORDER BY COALESCE(ub.uploaded_at, dp.updated_at, dp.created_at) DESC
@@ -355,7 +365,7 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
-        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
+        COALESCE(uploader.employee_id, ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -371,14 +381,10 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
             WHERE root.role_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
                OR root.role_id_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
           )
-          OR dp.created_by_user_id = $1
-          OR dp.uploaded_by = $1
-          OR ub.uploaded_by_user_id = $1
-          OR ub.uploaded_by = $1
-          OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
-          OR dp.uploaded_by IN (SELECT employee_id FROM visible_users)
-          OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
-          OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
+          OR ${identifierInVisibleUsersSql("dp.created_by_user_id")}
+          OR ${identifierInVisibleUsersSql("dp.uploaded_by")}
+          OR ${identifierInVisibleUsersSql("ub.uploaded_by_user_id")}
+          OR ${identifierInVisibleUsersSql("ub.uploaded_by")}
         ) AS can_manage_2d_routing,
         ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
       FROM design.projects dp
@@ -399,8 +405,12 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           id DESC
         LIMIT 1
       ) ub ON TRUE
-      LEFT JOIN users uploader
-        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
+      ${userResolutionLateralSql("uploader", [
+        { expression: "ub.uploaded_by_user_id", source: "upload_batch_uploaded_by_user_id" },
+        { expression: "ub.uploaded_by", source: "upload_batch_uploaded_by" },
+        { expression: "dp.uploaded_by", source: "project_uploaded_by" },
+        { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
+      ])}
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ($2::text IS NULL OR dp.department_id = $2)
         AND ${visibleProjectPredicate("dp")}
@@ -463,7 +473,7 @@ async function getBatchById(batchId, client = pool) {
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
-        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
+        COALESCE(uploader.employee_id, ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -476,8 +486,12 @@ async function getBatchById(batchId, client = pool) {
         FALSE AS can_toggle_modification
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN users uploader
-        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
+      ${userResolutionLateralSql("uploader", [
+        { expression: "ub.uploaded_by_user_id", source: "upload_batch_uploaded_by_user_id" },
+        { expression: "ub.uploaded_by", source: "upload_batch_uploaded_by" },
+        { expression: "dp.uploaded_by", source: "project_uploaded_by" },
+        { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
+      ])}
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $1
     `,
@@ -509,7 +523,7 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         NULL::text AS completion_truth_status,
         ARRAY[]::text[] AS completion_truth_errors,
         COALESCE(ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by,
-        COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
+        COALESCE(uploader.employee_id, ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id) AS uploaded_by_user_id,
         uploader.name AS uploaded_by_name,
         ub.uploaded_at,
         ub.accepted_rows,
@@ -525,20 +539,20 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
             WHERE root.role_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
                OR root.role_id_key = ANY(ARRAY['admin', 'ceo', 'director', 'director_ceo']::text[])
           )
-          OR dp.created_by_user_id = $1
-          OR dp.uploaded_by = $1
-          OR ub.uploaded_by_user_id = $1
-          OR ub.uploaded_by = $1
-          OR dp.created_by_user_id IN (SELECT employee_id FROM visible_users)
-          OR dp.uploaded_by IN (SELECT employee_id FROM visible_users)
-          OR ub.uploaded_by_user_id IN (SELECT employee_id FROM visible_users)
-          OR ub.uploaded_by IN (SELECT employee_id FROM visible_users)
+          OR ${identifierInVisibleUsersSql("dp.created_by_user_id")}
+          OR ${identifierInVisibleUsersSql("dp.uploaded_by")}
+          OR ${identifierInVisibleUsersSql("ub.uploaded_by_user_id")}
+          OR ${identifierInVisibleUsersSql("ub.uploaded_by")}
         ) AS can_manage_2d_routing,
         ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
-      LEFT JOIN users uploader
-        ON uploader.employee_id = COALESCE(ub.uploaded_by_user_id, ub.uploaded_by, dp.uploaded_by, dp.created_by_user_id)
+      ${userResolutionLateralSql("uploader", [
+        { expression: "ub.uploaded_by_user_id", source: "upload_batch_uploaded_by_user_id" },
+        { expression: "ub.uploaded_by", source: "upload_batch_uploaded_by" },
+        { expression: "dp.uploaded_by", source: "project_uploaded_by" },
+        { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
+      ])}
       ${fixtureOperationalStatsLateral("dp")}
       WHERE ub.id = $2
         AND ${visibleProjectPredicate("dp")}
@@ -553,6 +567,44 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
   await _debugLogBatchQueryForUser("getBatchByIdForUser", user, null, result.rows, client);
   const summaries = await enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
   return summaries[0] || null;
+}
+
+async function getProjectLifecycleContextByIdForUser(projectId, user, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        p.id AS project_id,
+        active_batch.id AS batch_id,
+        p.project_no,
+        p.created_by_user_id AS project_created_by_user_id,
+        p.uploaded_by AS project_uploaded_by,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        p.customer_name,
+        p.department_id,
+        COALESCE(p.status, $3) AS project_status,
+        COALESCE(p.is_modified, FALSE) AS is_modified,
+        p.completed_at,
+        p.status_changed_at,
+        p.created_at AS project_created_at,
+        p.updated_at AS project_updated_at
+      FROM design.projects p
+      LEFT JOIN LATERAL (
+        SELECT id
+        FROM design.upload_batches
+        WHERE project_id = p.id
+          AND COALESCE(status, 'active') = 'active'
+        ORDER BY uploaded_at DESC, id DESC
+        LIMIT 1
+      ) active_batch ON TRUE
+      WHERE p.id = $2
+        AND ${visibleProjectPredicate("p")}
+      LIMIT 1
+    `,
+    [user.employee_id, projectId, PROJECT_STATUSES.ACTIVE],
+  );
+
+  return result.rows[0] || null;
 }
 
 async function checkBatchDeletionBlocked(batchId, client = pool) {
@@ -591,6 +643,34 @@ async function setProjectLifecycleStatus(projectId, status, client = pool) {
   );
 
   return result.rowCount > 0;
+}
+
+async function reactivateProjectForModification(projectId, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE design.projects
+      SET status = $2,
+          is_modified = TRUE,
+          status_changed_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+        AND status IN ($3, $4)
+      RETURNING
+        id AS project_id,
+        project_no,
+        COALESCE(NULLIF(BTRIM(project_name), ''), project_no) AS project_name,
+        customer_name,
+        department_id,
+        COALESCE(status, $2) AS project_status,
+        COALESCE(is_modified, FALSE) AS is_modified,
+        completed_at,
+        status_changed_at,
+        updated_at
+    `,
+    [projectId, PROJECT_STATUSES.ACTIVE, PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED],
+  );
+
+  return result.rows[0] || null;
 }
 
 async function releaseProject(projectId, releasedBy, client = pool) {
@@ -715,8 +795,10 @@ module.exports = instrumentModuleExports("repository.batchRepository", {
   deleteBatchCascade,
   getBatchById,
   getBatchByIdForUser,
+  getProjectLifecycleContextByIdForUser,
   listBatchesWithSummary,
   listBatchesWithSummaryForUser,
+  reactivateProjectForModification,
   releaseProject,
   setProjectLifecycleStatus,
 });

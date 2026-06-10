@@ -1,6 +1,7 @@
 "use strict";
 
 const { pool } = require("../db");
+const { userIdentifierMatchSql } = require("../repositories/sqlFragments");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RECENT_THROUGHPUT_DAYS = 7;
@@ -108,7 +109,7 @@ const ATTEMPT_ROWS_QUERY = `
   LEFT JOIN stage_expectations
     ON stage_expectations.stage_key = LOWER(BTRIM(attempts.stage_name))
   LEFT JOIN users
-    ON users.employee_id = attempts.assigned_to
+    ON ${userIdentifierMatchSql("users", "attempts.assigned_to")}
   WHERE NULLIF(BTRIM(attempts.stage_name), '') IS NOT NULL
   ORDER BY attempts.fixture_id ASC, LOWER(BTRIM(attempts.stage_name)) ASC, attempts.attempt_no ASC
 `;

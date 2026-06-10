@@ -1,4 +1,8 @@
 const { pool } = require("../db");
+const {
+  userIdentifierMatchSql,
+  visibleUserIdentifierMatchSql,
+} = require("./sqlFragments");
 
 // Absolute authority roles (hard bypass). Only these identities bypass filtering.
 const PROJECT_AUTHORITY_ROLE_KEYS = [
@@ -43,6 +47,17 @@ function roleKeySql(expression) {
   return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
 }
 
+function identifierInVisibleUsersSql(identifierExpression, cteName = "visible_users") {
+  return `
+    EXISTS (
+      SELECT 1
+      FROM ${cteName} visible_identifier_user
+      WHERE ${visibleUserIdentifierMatchSql(identifierExpression, "visible_identifier_user")}
+      LIMIT 1
+    )
+  `;
+}
+
 function projectAuthoritySqlPredicate(rootAlias = "root") {
   // Absolute identity-based check only. General Manager or hierarchy level
   // never bypasses canonical project ownership filtering.
@@ -74,7 +89,7 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
         ${roleKeySql("u.role")} AS role_id_key
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
-      WHERE (u.id::text = ${rootUserParam} OR u.employee_id = ${rootUserParam})
+      WHERE ${userIdentifierMatchSql("u", rootUserParam)}
         AND COALESCE(u.is_active, TRUE) = TRUE
       LIMIT 1
     ),
@@ -178,10 +193,11 @@ function buildVisibleUsersCte(rootUserParam = "$1", cteName = "visible_users") {
 
 function projectOwnershipInVisibleUsersSql(projectAlias = "p", cteName = "visible_users") {
   // Canonical ownership: project creator/uploader in the visible hierarchy.
+  // Legacy rows may store users.id instead of users.employee_id, so match both.
   return `
     (
-      COALESCE(${projectAlias}.created_by_user_id IN (SELECT employee_id FROM ${cteName}), FALSE)
-      OR COALESCE(${projectAlias}.uploaded_by IN (SELECT employee_id FROM ${cteName}), FALSE)
+      ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`, cteName)}
+      OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`, cteName)}
     )
   `;
 }
@@ -194,7 +210,7 @@ function projectAssignmentInVisibleUsersSql(projectAlias = "p", cteName = "visib
       JOIN fixture_workflow_progress visible_progress
         ON visible_progress.fixture_id = visible_fixture.id
       WHERE visible_fixture.project_id = ${projectAlias}.id
-        AND visible_progress.assigned_to IN (SELECT employee_id FROM ${cteName})
+        AND ${identifierInVisibleUsersSql("visible_progress.assigned_to", cteName)}
       LIMIT 1
     )
   `;
@@ -370,7 +386,7 @@ async function getAccessibleProjectIds(currentUserId, departmentId = null, clien
       SELECT 1
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
-      WHERE (u.id::text = $1 OR u.employee_id = $1)
+      WHERE ${userIdentifierMatchSql("u", "$1")}
         AND COALESCE(u.is_active, TRUE) = TRUE
         AND (
           ${roleKeySql("r.name")} = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
@@ -435,6 +451,7 @@ module.exports = {
   buildVisibleUsersCte,
   getAccessibleProjectIds,
   getAccessibleUserIds: GetAccessibleUserIds,
+  identifierInVisibleUsersSql,
   isProjectAuthorityRoleIdentity,
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,

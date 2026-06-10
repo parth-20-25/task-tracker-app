@@ -5,11 +5,16 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 
 const {
   buildVisibleUsersCte,
+  identifierInVisibleUsersSql,
   isProjectAuthorityRoleIdentity,
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
+const {
+  userIdentifierMatchSql,
+  userResolutionLateralSql,
+} = require("../repositories/sqlFragments");
 
 test("role keys normalize Director/CEO variants for project authority checks", () => {
   assert.equal(normalizeRoleKey("Director/CEO"), "director_ceo");
@@ -51,5 +56,39 @@ test("project visibility predicate gives project authority roles full project vi
   const sql = visibleProjectPredicate("p");
 
   assert.match(sql, /FROM root_user root/);
-  assert.match(sql, /created_by_user_id IN \(SELECT employee_id FROM visible_users\)/);
+  assert.match(sql, /p\.created_by_user_id/);
+  assert.match(sql, /visible_identifier_user\.employee_id/);
+  assert.match(sql, /visible_identifier_user\.user_uuid/);
+});
+
+test("identifier visibility helper matches employee ids, user UUIDs, and numeric text variants", () => {
+  const sql = identifierInVisibleUsersSql("p.created_by_user_id");
+
+  assert.match(sql, /visible_identifier_user\.employee_id = NULLIF/);
+  assert.match(sql, /visible_identifier_user\.user_uuid = NULLIF/);
+  assert.match(sql, /REGEXP_REPLACE/);
+});
+
+test("user identifier join helper attempts non-employee-id keys before falling back to Unknown User", () => {
+  const sql = userIdentifierMatchSql("u", "candidate.identifier");
+
+  assert.match(sql, /u\.employee_id = NULLIF/);
+  assert.match(sql, /u\.id::text = NULLIF/);
+  assert.match(sql, /LOWER\(u\.email\) = LOWER/);
+  assert.match(sql, /REGEXP_REPLACE/);
+});
+
+test("user resolution lateral tries later candidates when a legacy uploader key is stale", () => {
+  const sql = userResolutionLateralSql("uploader", [
+    { expression: "ub.uploaded_by_user_id", source: "upload_batch_uploaded_by_user_id" },
+    { expression: "ub.uploaded_by", source: "upload_batch_uploaded_by" },
+    { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
+  ]);
+
+  assert.match(sql, /VALUES/);
+  assert.match(sql, /upload_batch_uploaded_by_user_id/);
+  assert.match(sql, /upload_batch_uploaded_by/);
+  assert.match(sql, /project_created_by_user_id/);
+  assert.match(sql, /ORDER BY candidate\.priority ASC/);
+  assert.doesNotMatch(sql, /COALESCE\(ub\.uploaded_by_user_id/);
 });

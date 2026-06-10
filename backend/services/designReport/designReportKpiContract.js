@@ -16,20 +16,30 @@ function clampPercent(value) {
     return null;
   }
 
-  return Math.max(0, Math.min(100, percent));
+  if (percent < 0 || percent > 100) {
+    return null;
+  }
+
+  return percent;
 }
 
 function resolveFixtureGlobalStatus(fixtureTruth, fixtureRow) {
+  const taskStatus = String(fixtureRow?.task_status || "").trim().toLowerCase();
+
   if (fixtureTruth?.strict_complete) {
     return STATUS_LABELS.CLOSED;
   }
 
-  if (fixtureTruth?.has_blocking_hold || fixtureRow?.task_status === "on_hold") {
+  if (fixtureTruth?.has_blocking_hold || taskStatus === "on_hold") {
     return STATUS_LABELS.ON_HOLD;
   }
 
-  if (fixtureTruth?.has_unresolved_reject || fixtureTruth?.has_active_rework) {
+  if (fixtureTruth?.has_unresolved_reject || fixtureTruth?.has_active_rework || taskStatus === "rework") {
     return STATUS_LABELS.REWORK;
+  }
+
+  if (["closed", "approved", "completed", "complete", "released"].includes(taskStatus)) {
+    return STATUS_LABELS.CLOSED;
   }
 
   if (fixtureRow?.task_deadline) {
@@ -39,11 +49,11 @@ function resolveFixtureGlobalStatus(fixtureTruth, fixtureRow) {
     }
   }
 
-  if (fixtureRow?.task_status === "under_review") {
+  if (taskStatus === "under_review" || taskStatus === "review") {
     return STATUS_LABELS.REVIEW;
   }
 
-  if (fixtureRow?.task_status === "in_progress" || fixtureTruth?.current_approval_state === "in_progress") {
+  if (taskStatus === "in_progress" || fixtureTruth?.current_approval_state === "in_progress") {
     return STATUS_LABELS.IN_PROGRESS;
   }
 
@@ -114,10 +124,19 @@ function resolveReportKpisFromCompletionTruth(projectTruth, fixtureRows = []) {
     : clampPercent(projectTruth.completion_percent);
 
   if (overallPercent === null) {
+    const rawPercent = Number(projectTruth.completion_percent);
+    const outOfRange = Number.isFinite(rawPercent) && (rawPercent < 0 || rawPercent > 100);
     return {
       ok: false,
-      error: "project completion truth is unavailable",
-      truth_errors: projectTruth.truth_errors || [],
+      error: outOfRange
+        ? "project completion truth is outside the supported 0-100 range"
+        : "project completion truth is unavailable",
+      truth_errors: outOfRange
+        ? [
+          ...(projectTruth.truth_errors || []),
+          `completion_percent_out_of_range:${projectTruth.completion_percent}`,
+        ]
+        : projectTruth.truth_errors || [],
     };
   }
 

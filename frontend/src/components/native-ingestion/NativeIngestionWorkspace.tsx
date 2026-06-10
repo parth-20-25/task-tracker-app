@@ -13,6 +13,7 @@ import { fetchAllDepartments } from "@/api/adminApi";
 import {
   commitNativeIngestion,
   createNativeIngestionSession,
+  createNativeProjectEditSession,
   downloadNativeIngestionTemplate,
   importNativeIngestionExcel,
   pasteNativeIngestionClipboard,
@@ -102,6 +103,23 @@ export function NativeFixtureIngestionLauncher() {
   );
 }
 
+interface NativeProjectEditWorkspaceProps {
+  projectId: string;
+  departmentId?: string | null;
+  onClose: () => void;
+}
+
+export function NativeProjectEditWorkspace({ projectId, departmentId, onClose }: NativeProjectEditWorkspaceProps) {
+  return (
+    <WorkspaceSurface
+      mode="edit"
+      projectId={projectId}
+      departmentId={departmentId}
+      onClose={onClose}
+    />
+  );
+}
+
 function ContextInput({
   label,
   value,
@@ -131,9 +149,12 @@ function ContextInput({
 
 interface WorkspaceSurfaceProps {
   onClose: () => void;
+  mode?: "upload" | "edit";
+  projectId?: string;
+  departmentId?: string | null;
 }
 
-function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
+function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }: WorkspaceSurfaceProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -159,15 +180,20 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
 
     let mounted = true;
     setBusy("open");
-    void createNativeIngestionSession(context)
+    const openSession = mode === "edit" && projectId
+      ? createNativeProjectEditSession(projectId, departmentId)
+      : createNativeIngestionSession(context);
+
+    void openSession
       .then((session) => {
         if (!mounted) return;
         setSessionId(session.session_id);
         setContext((current) => ({
           ...current,
           ...session.context,
-          project_identity: current.project_identity || session.context.project_identity || formatProjectIdentity(session.context),
-          upload_mode: normalizeUploadMode(current.upload_mode || session.context.upload_mode),
+          project_id: session.context.project_id ?? current.project_id ?? null,
+          project_identity: session.context.project_identity || current.project_identity || formatProjectIdentity(session.context),
+          upload_mode: normalizeUploadMode(session.context.upload_mode || current.upload_mode),
         }));
         setRows(padRows(session.rows?.length ? session.rows : rows));
       })
@@ -378,7 +404,9 @@ function WorkspaceSurface({ onClose }: WorkspaceSurfaceProps) {
             <FileSpreadsheet className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold">Native Fixture Ingestion Workspace</h2>
+            <h2 className="truncate text-base font-semibold">
+              {mode === "edit" ? "Native Project Edit Workspace" : "Native Fixture Ingestion Workspace"}
+            </h2>
             <p className="truncate text-xs text-slate-500">
               Session {sessionId ? sessionId.slice(0, 8) : "not started"}
             </p>

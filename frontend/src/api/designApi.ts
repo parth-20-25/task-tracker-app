@@ -194,6 +194,30 @@ export interface OutsourceFixturePayload {
   department_id?: string;
 }
 
+export type ProjectReactivationReason =
+  | "customer_modification"
+  | "internal_modification"
+  | "drawing_update"
+  | "fixture_correction"
+  | "other";
+
+export interface ReactivateProjectPayload {
+  reason?: ProjectReactivationReason;
+  comment?: string;
+}
+
+export interface ReactivateProjectResponse {
+  project_id: string;
+  batch_id: string | null;
+  status: "active";
+  previous_status: string;
+  is_modified: boolean;
+  reactivation_reason: ProjectReactivationReason;
+  reactivation_reason_label: string;
+  reactivation_comment: string | null;
+  message: string;
+}
+
 function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => value !== undefined),
@@ -313,6 +337,13 @@ export function updateProjectModification(projectId: string, isModified: boolean
   return apiRequest<DesignProjectOption>(`/design/projects/${encodeURIComponent(projectId)}/modification`, {
     method: "PATCH",
     body: JSON.stringify({ is_modified: isModified }),
+  });
+}
+
+export function reactivateProject(projectId: string, payload: ReactivateProjectPayload = {}) {
+  return apiRequest<ReactivateProjectResponse>(`/design/projects/${encodeURIComponent(projectId)}/reactivate`, {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
   });
 }
 

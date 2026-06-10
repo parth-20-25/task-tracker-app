@@ -1,7 +1,7 @@
 const { generateUUID } = require("../lib/uuid");
 const { pool } = require("../db");
 const { mapAuditLogRow } = require("./mappers");
-const { buildUserColumns } = require("./sqlFragments");
+const { buildUserColumns, userIdentifierMatchSql } = require("./sqlFragments");
 
 async function createAuditLog({ userEmployeeId, actionType, targetType, targetId, metadata = {} }, client = pool) {
   await client.query(
@@ -27,7 +27,7 @@ async function listAuditLogs(client = pool) {
         a.*,
         ${buildUserColumns({ userAlias: "u", roleAlias: "r", departmentAlias: "d", prefix: "user_" })}
       FROM audit_logs a
-      LEFT JOIN users u ON u.employee_id = a.user_employee_id
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "a.user_employee_id")}
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
       LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id

@@ -213,7 +213,7 @@ function fixtureStageStatusLabel(status: string | null | undefined) {
     case "ASSIGNED":
       return "Assigned";
     case "WORKFLOW_COMPLETE":
-      return "Workflow Complete";
+      return "Released";
     case "UNASSIGNED":
       return "Unassigned";
     default:
@@ -269,9 +269,21 @@ function formatDisplayDate(value: string | null | undefined, fallback = "Not set
   });
 }
 
+function getFixtureReleaseDate(fixture: DesignFixtureOption) {
+  return fixture.workflow_released_at || null;
+}
+
+function getFixtureReleasedBy(fixture: DesignFixtureOption) {
+  if (!fixture.workflow_released_by && !fixture.workflow_released_by_name) {
+    return "Not recorded";
+  }
+
+  return formatEmployeeDisplay(fixture.workflow_released_by || null, fixture.workflow_released_by_name);
+}
+
 function getCurrentFixtureStageLabel(fixture: DesignFixtureOption) {
   if (fixture.is_workflow_complete === true) {
-    return "Workflow Complete";
+    return "Release";
   }
 
   return fixture.workflow_stage_label || fixture.workflow_stage || "Pending";
@@ -284,7 +296,7 @@ function isDapStageName(value: string | null | undefined) {
 
 function getOutsourcedCurrentStatusLabel(fixture: DesignFixtureOption) {
   if (fixture.is_workflow_complete === true) {
-    return "Workflow Complete";
+    return "Released";
   }
 
   const status = getFixtureOutsourceStatus(fixture);
@@ -507,7 +519,7 @@ const FIXTURE_SECTION_ORDER = [
   { key: "UNASSIGNED", label: "Unassigned" },
   { key: "IN_PROGRESS", label: "In Progress" },
   { key: "ASSIGNED", label: "Assigned" },
-  { key: "WORKFLOW_COMPLETE", label: "Workflow Complete" },
+  { key: "WORKFLOW_COMPLETE", label: "Workflow Completed" },
 ] as const;
 
 function compareFixtureNo(left: DesignFixtureOption, right: DesignFixtureOption) {
@@ -546,8 +558,8 @@ function sortSectionFixtures(
     }
 
     if (state === "WORKFLOW_COMPLETE") {
-      return new Date(rightTask?.approved_at || rightTask?.closed_at || 0).getTime()
-        - new Date(leftTask?.approved_at || leftTask?.closed_at || 0).getTime()
+      return new Date(right.workflow_released_at || rightTask?.approved_at || rightTask?.closed_at || 0).getTime()
+        - new Date(left.workflow_released_at || leftTask?.approved_at || leftTask?.closed_at || 0).getTime()
         || compareFixtureNo(left, right);
     }
 
@@ -1379,6 +1391,7 @@ function BulkFixtureAssignmentPanel({
   invalidateOperationalState,
   onCancel,
 }: BulkFixtureAssignmentPanelProps) {
+  const { access } = useAuth();
   const [assignedTo, setAssignedTo] = useState("");
   const [deadline, setDeadline] = useState("");
   const [priority, setPriority] = useState<Priority>("high");
@@ -1430,9 +1443,14 @@ function BulkFixtureAssignmentPanel({
     return Boolean(workflowTarget && fixtureCurrent?.stage_name && workflowTarget !== fixtureCurrent.stage_name);
   });
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
+  const releaseSelected = isReleaseStageName(selectedWorkflowStage?.stage_name || workflowTarget);
+  const canSubmitWorkflowAction = releaseSelected
+    ? access.canChangeFixtureStage
+    : access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
   const workflowChangeAllowed = !workflowChanged || reasonType === "MANUAL_OVERRIDE" || selectedWorkflowStage?.status === "APPROVED";
   const progressLoading = progressQueries.some((query) => query.isLoading);
   const selectedScopeEmpty = scope === "selected" && targetFixtures.length === 0;
+  const requiresReasonType = workflowChanged && !releaseSelected;
 
   const resetForm = () => {
     setAssignedTo("");
@@ -1448,11 +1466,15 @@ function BulkFixtureAssignmentPanel({
         throw new Error(scope === "selected" ? "Select fixtures before assigning" : "No unassigned fixtures are available");
       }
 
-      if (!assignedTo || !deadline || !workflowTarget) {
+      if (!workflowTarget) {
+        throw new Error("Workflow is required");
+      }
+
+      if (!releaseSelected && (!assignedTo || !deadline)) {
         throw new Error("Employee, deadline, priority, and workflow are required");
       }
 
-      if (workflowChanged && !reasonType) {
+      if (requiresReasonType && !reasonType) {
         throw new Error("Reason Type is required when workflow is changed");
       }
 
@@ -1492,6 +1514,15 @@ function BulkFixtureAssignmentPanel({
           }
         }
 
+        if (releaseSelected) {
+          await releaseFixtureWorkflow({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+          });
+          assignedCount += 1;
+          continue;
+        }
+
         await createDesignTask({
           department_id: departmentId,
           project_id: projectId,
@@ -1513,7 +1544,12 @@ function BulkFixtureAssignmentPanel({
       await invalidateOperationalState();
       resetForm();
       onCancel();
-      toast({ title: "Fixtures assigned", description: "Assign All reused the existing assignment flow for each fixture." });
+      toast({
+        title: releaseSelected ? "Fixtures released" : "Fixtures assigned",
+        description: releaseSelected
+          ? "Release completed without creating task assignments."
+          : "Assign All reused the existing assignment flow for each fixture.",
+      });
     },
     onError: (error) => {
       toast({
@@ -1524,53 +1560,57 @@ function BulkFixtureAssignmentPanel({
     },
   });
 
-  const disabled = !assignedTo
-    || !deadline
+  const disabled = (!releaseSelected && (!assignedTo || !deadline))
+    || !canSubmitWorkflowAction
     || !workflowTarget
     || progressLoading
     || selectedScopeEmpty
     || !workflowChangeAllowed
-    || (workflowChanged && !reasonType)
+    || (requiresReasonType && !reasonType)
     || bulkAssignMutation.isPending;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
       <div className="grid gap-2 lg:grid-cols-4">
-        <div className="space-y-1">
-          <Label className="text-xs">Employee</Label>
-          <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
-            <SelectTrigger className="h-9 bg-white text-xs" disabled={isLoadingUsers || bulkAssignMutation.isPending}>
-              <SelectValue placeholder={isLoadingUsers ? "Loading..." : "Employee"} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">Employee</SelectItem>
-              {assignableUsers.map((employee) => (
-                <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                  {formatEmployeeDisplay(employee)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {!releaseSelected ? (
+          <>
+            <div className="space-y-1">
+              <Label className="text-xs">Employee</Label>
+              <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
+                <SelectTrigger className="h-9 bg-white text-xs" disabled={isLoadingUsers || bulkAssignMutation.isPending}>
+                  <SelectValue placeholder={isLoadingUsers ? "Loading..." : "Employee"} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Employee</SelectItem>
+                  {assignableUsers.map((employee) => (
+                    <SelectItem key={employee.employee_id} value={employee.employee_id}>
+                      {formatEmployeeDisplay(employee)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-        <div className="space-y-1">
-          <Label className="text-xs">Deadline</Label>
-          <DateOnlyDeadlinePicker value={deadline} onChange={setDeadline} disabled={bulkAssignMutation.isPending} />
-        </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Deadline</Label>
+              <DateOnlyDeadlinePicker value={deadline} onChange={setDeadline} disabled={bulkAssignMutation.isPending} />
+            </div>
 
-        <div className="space-y-1">
-          <Label className="text-xs">Priority</Label>
-          <Select value={priority} onValueChange={(value) => setPriority(value as Priority)}>
-            <SelectTrigger className="h-9 bg-white text-xs" disabled={bulkAssignMutation.isPending}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {priorityOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Priority</Label>
+              <Select value={priority} onValueChange={(value) => setPriority(value as Priority)}>
+                <SelectTrigger className="h-9 bg-white text-xs" disabled={bulkAssignMutation.isPending}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {priorityOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </>
+        ) : null}
 
         <div className="space-y-1">
           <Label className="text-xs">Workflow</Label>
@@ -1589,7 +1629,7 @@ function BulkFixtureAssignmentPanel({
               <SelectItem value="__none__">Workflow</SelectItem>
               {workflowOptions.map((stage) => (
                 <SelectItem key={`${stage.stage_name}-${stage.stage_version}`} value={stage.stage_name}>
-                  {getStageWorkflowCode(stage)} - {fixtureStageStatusLabel(stage.status)}
+                  {stage.stage_label || stage.stage_name} ({getStageWorkflowCode(stage)}) - {fixtureStageStatusLabel(stage.status)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1597,7 +1637,7 @@ function BulkFixtureAssignmentPanel({
         </div>
       </div>
 
-      {workflowChanged ? (
+      {requiresReasonType ? (
         <div className="mt-2 max-w-sm space-y-1">
           <Label className="text-xs">Reason Type</Label>
           <Select value={reasonType || "__none__"} onValueChange={(value) => setReasonType(value === "__none__" ? "" : value as FixtureRevisionType)}>
@@ -1641,7 +1681,7 @@ function BulkFixtureAssignmentPanel({
           </Button>
           <Button type="button" size="sm" onClick={() => bulkAssignMutation.mutate()} disabled={disabled}>
             {bulkAssignMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-            Assign All
+            {releaseSelected ? "Release" : "Assign All"}
           </Button>
         </div>
       </div>
@@ -1702,6 +1742,7 @@ function ProjectFixtureCard({
   const [outsourceValidationMessage, setOutsourceValidationMessage] = useState<string | null>(null);
 
   const canDeployDesignTask = access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
+  const fixtureAtReleaseStage = isReleaseStageName(fixture.workflow_stage || fixture.workflow_stage_label);
   const completedPercent = Math.max(0, Math.min(100, Number(task?.completion_percent ?? 0)));
   const remainingPercent = Math.max(0, 100 - completedPercent);
   const canTransferTask = Boolean(
@@ -1758,11 +1799,18 @@ function ProjectFixtureCard({
 
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
   const releaseSelected = isReleaseStageName(selectedWorkflowStage?.stage_name || workflowTarget);
+  const canOpenWorkflowAction = isWorkflowCompleteReassign
+    ? canDeployDesignTask
+    : fixtureAtReleaseStage
+      ? access.canChangeFixtureStage
+      : canDeployDesignTask;
+  const canSubmitWorkflowAction = releaseSelected ? access.canChangeFixtureStage : canDeployDesignTask;
   const workflowChanged = Boolean(workflowTarget && workflowTarget !== currentProgressStage?.stage_name);
   const canAssignCurrent = validationQuery.data?.canAssign === true;
   const assignmentBlockedReason = validationQuery.data?.reason || null;
   const workflowChangeAllowed = workflowChanged && Boolean(selectedWorkflowStage);
   const canSubmitAssignment = releaseSelected || (workflowChanged ? workflowChangeAllowed : canAssignCurrent);
+  const requiresReasonType = workflowChanged && !releaseSelected && !isWorkflowCompleteReassign;
 
   const proofImage = getProofImage(task);
   const outsourceStatus = getFixtureOutsourceStatus(fixture);
@@ -1772,6 +1820,8 @@ function ProjectFixtureCard({
   const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
   const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
+  const releaseDateLabel = formatDisplayDate(getFixtureReleaseDate(fixture), "Not recorded");
+  const releasedByLabel = getFixtureReleasedBy(fixture);
   const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
   const canCancelTask = canCancelFixtureOperationalTask(task, canonicalOperationalState, user, access);
   const canToggleOutsourcing = access.canAccessProjectFixtures && access.canChangeFixtureStage;
@@ -1834,11 +1884,13 @@ function ProjectFixtureCard({
       }
 
       if (workflowChanged) {
-        if (!reasonType) {
+        const resolvedReasonType = reasonType || (isWorkflowCompleteReassign ? "CUSTOMER_REVISION" : "");
+
+        if (!resolvedReasonType) {
           throw new Error("Reason Type is required when workflow is changed");
         }
 
-        if (reasonType === "MANUAL_OVERRIDE") {
+        if (resolvedReasonType === "MANUAL_OVERRIDE") {
           await manipulateFixtureStage({
             fixture_id: fixture.fixture_id,
             department_id: departmentId,
@@ -1854,7 +1906,9 @@ function ProjectFixtureCard({
             fixture_id: fixture.fixture_id,
             department_id: departmentId,
             target_stage_name: workflowTarget,
-            revision_type: reasonType,
+            revision_type: resolvedReasonType as FixtureRevisionType,
+            revision_reason: isWorkflowCompleteReassign ? "Post-release reassignment" : undefined,
+            remarks: isWorkflowCompleteReassign ? "Customer-requested change after Release" : undefined,
           });
         }
       }
@@ -2018,13 +2072,13 @@ function ProjectFixtureCard({
     },
   });
 
-  const assignmentDisabled = !canDeployDesignTask
+  const assignmentDisabled = !canSubmitWorkflowAction
     || (!releaseSelected && (!assignedTo || !deadline))
     || !workflowTarget
     || progressQuery.isLoading
     || validationQuery.isLoading
     || !canSubmitAssignment
-    || (!releaseSelected && workflowChanged && !reasonType)
+    || (requiresReasonType && !reasonType)
     || assignMutation.isPending;
 
   const transferDisabled = !task
@@ -2220,7 +2274,7 @@ function ProjectFixtureCard({
                     </Button>
                   ) : null}
                 </>
-              ) : (operationalResolution.assignable || isWorkflowCompleteReassign) && canDeployDesignTask ? (
+              ) : (operationalResolution.assignable || isWorkflowCompleteReassign) && canOpenWorkflowAction ? (
                 <Button
                   type="button"
                   size="sm"
@@ -2292,6 +2346,27 @@ function ProjectFixtureCard({
         {inlineOperationalReason ? (
           <p className="text-xs font-medium text-amber-700">{inlineOperationalReason}</p>
         ) : null}
+
+        {isWorkflowCompleteReassign ? (
+          <div className="grid gap-2 rounded-md border border-emerald-100 bg-emerald-50/60 p-2 text-[11px] sm:grid-cols-4">
+            <div>
+              <p className="font-semibold uppercase tracking-wide text-emerald-800">Current Revision</p>
+              <p className="mt-0.5 text-slate-700">{workflowCode || "Not recorded"}</p>
+            </div>
+            <div>
+              <p className="font-semibold uppercase tracking-wide text-emerald-800">Release Date</p>
+              <p className="mt-0.5 text-slate-700">{releaseDateLabel}</p>
+            </div>
+            <div>
+              <p className="font-semibold uppercase tracking-wide text-emerald-800">Released By</p>
+              <p className="mt-0.5 break-words text-slate-700">{releasedByLabel}</p>
+            </div>
+            <div>
+              <p className="font-semibold uppercase tracking-wide text-emerald-800">Current Status</p>
+              <p className="mt-0.5 text-slate-700">Released</p>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {expanded === "assign" ? (
@@ -2362,14 +2437,14 @@ function ProjectFixtureCard({
                 <SelectItem value="__none__">Workflow</SelectItem>
                 {workflowOptions.map((stage) => (
                   <SelectItem key={`${stage.stage_name}-${stage.stage_version}`} value={stage.stage_name}>
-                    {getStageWorkflowCode(stage)} - {fixtureStageStatusLabel(stage.status)}
+                    {stage.stage_label || stage.stage_name} ({getStageWorkflowCode(stage)}) - {fixtureStageStatusLabel(stage.status)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
-          {workflowChanged && !releaseSelected ? (
+          {requiresReasonType ? (
             <div className="space-y-1">
               <Label className="text-xs">Reason Type</Label>
               <Select value={reasonType || "__none__"} onValueChange={(value) => setReasonType(value === "__none__" ? "" : value as FixtureRevisionType)}>

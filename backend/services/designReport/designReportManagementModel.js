@@ -160,7 +160,11 @@ function clampPercent(value) {
     return null;
   }
 
-  return Math.max(0, Math.min(100, Math.round(percent)));
+  if (percent < 0 || percent > 100) {
+    return null;
+  }
+
+  return Math.round(percent);
 }
 
 function dateMin(values) {
@@ -207,7 +211,7 @@ function formatEmployeeDisplay(employeeId, employeeName) {
   }
 
   if (id) {
-    return `${id} - Unknown`;
+    return `${id} - Not recorded`;
   }
 
   return name;
@@ -970,7 +974,7 @@ function buildStageAuditEntry({
     priority: formatPriority(stageTasks[0]?.priority || fixtureRow.raw.fixture.task_priority),
     transferred: hasTransfer ? "Yes" : "No",
     proofLinks,
-    proofSummary: proofLinks.length ? `View Proof (${proofLinks.length})` : "No proof recorded for this stage/revision",
+    proofSummary: proofLinks.length ? `View Proof (${proofLinks.length})` : "No proof uploaded",
     workers,
   };
 }

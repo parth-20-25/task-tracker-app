@@ -1,3 +1,82 @@
+function sqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function trimmedTextSql(expression) {
+  return `NULLIF(BTRIM((${expression})::text), '')`;
+}
+
+function numericIdentifierSql(expression) {
+  return `NULLIF(REGEXP_REPLACE(${trimmedTextSql(expression)}, '^0+', ''), '')`;
+}
+
+function numericIdentifierPredicateSql(expression) {
+  return `${trimmedTextSql(expression)} ~ '^[0-9]+$'`;
+}
+
+function userIdentifierMatchSql(userAlias, identifierExpression) {
+  const identifier = trimmedTextSql(identifierExpression);
+
+  return `(
+    ${identifier} IS NOT NULL
+    AND (
+      ${userAlias}.employee_id = ${identifier}
+      OR ${userAlias}.id::text = ${identifier}
+      OR LOWER(${userAlias}.email) = LOWER(${identifier})
+      OR (
+        ${numericIdentifierPredicateSql(`${userAlias}.employee_id`)}
+        AND ${numericIdentifierPredicateSql(identifierExpression)}
+        AND ${numericIdentifierSql(`${userAlias}.employee_id`)} = ${numericIdentifierSql(identifierExpression)}
+      )
+    )
+  )`;
+}
+
+function visibleUserIdentifierMatchSql(identifierExpression, visibleUserAlias = "visible_user") {
+  const identifier = trimmedTextSql(identifierExpression);
+
+  return `(
+    ${identifier} IS NOT NULL
+    AND (
+      ${visibleUserAlias}.employee_id = ${identifier}
+      OR ${visibleUserAlias}.user_uuid = ${identifier}
+      OR (
+        ${numericIdentifierPredicateSql(`${visibleUserAlias}.employee_id`)}
+        AND ${numericIdentifierPredicateSql(identifierExpression)}
+        AND ${numericIdentifierSql(`${visibleUserAlias}.employee_id`)} = ${numericIdentifierSql(identifierExpression)}
+      )
+    )
+  )`;
+}
+
+function userResolutionLateralSql(alias, candidates) {
+  const candidateRows = candidates
+    .map((candidate, index) => {
+      const priority = Number.isFinite(Number(candidate.priority)) ? Number(candidate.priority) : index + 1;
+      return `(${priority}, (${candidate.expression})::text, ${sqlLiteral(candidate.source || `candidate_${priority}`)})`;
+    })
+    .join(",\n          ");
+
+  return `
+      LEFT JOIN LATERAL (
+        SELECT
+          matched_user.employee_id,
+          matched_user.name,
+          matched_user.is_active,
+          candidate.identifier AS matched_identifier,
+          candidate.source AS matched_source
+        FROM (
+          VALUES
+          ${candidateRows}
+        ) AS candidate(priority, identifier, source)
+        JOIN users matched_user
+          ON ${userIdentifierMatchSql("matched_user", "candidate.identifier")}
+        ORDER BY candidate.priority ASC
+        LIMIT 1
+      ) ${alias} ON TRUE
+  `;
+}
+
 function buildUserColumns({ userAlias, roleAlias, departmentAlias, subdivisionAlias = "subdivision", prefix = "" }) {
   return `
     ${userAlias}.id AS ${prefix}id,
@@ -33,4 +112,9 @@ function buildUserColumns({ userAlias, roleAlias, departmentAlias, subdivisionAl
 
 module.exports = {
   buildUserColumns,
+  sqlLiteral,
+  trimmedTextSql,
+  userIdentifierMatchSql,
+  userResolutionLateralSql,
+  visibleUserIdentifierMatchSql,
 };

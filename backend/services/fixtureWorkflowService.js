@@ -38,6 +38,7 @@ const {
   markRemainingContributionActual,
   supersedeContribution,
 } = require("../repositories/designStageContributionRepository");
+const { insertCompletionSnapshot } = require("../repositories/designCompletionRepository");
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
 const { canAssignTo } = require("./accessControlService");
 const { getDepartmentWorkflowStagesResponse } = require("./workflowRecoveryService");
@@ -237,6 +238,12 @@ function isReleaseStageName(stageName) {
 
 function getReleaseStage(progressRows = []) {
   return progressRows.find((stage) => isReleaseStageName(stage.stage_name)) || null;
+}
+
+function getLatestDesignStageBeforeRelease(progressRows = []) {
+  return [...progressRows]
+    .filter((stage) => !isReleaseStageName(stage.stage_name))
+    .sort((left, right) => Number(right.stage_order || 0) - Number(left.stage_order || 0))[0] || null;
 }
 
 function normalizeRevisionType(value, fallback = "OTHER") {
@@ -612,6 +619,10 @@ async function assignFixtureStage(fixtureId, departmentId, assignedTo, actor = n
   const { canAssign, reason, currentStage } = await validateAssignment(fixtureId, departmentId);
   if (!canAssign) {
     throw new AppError(reason === "Stage already assigned" ? 400 : 409, reason);
+  }
+
+  if (isReleaseStageName(currentStage?.stage_name)) {
+    throw new AppError(400, "Release is not a task assignment stage. Use the workflow release action.");
   }
 
   const timestamp = new Date();
@@ -1089,6 +1100,9 @@ async function releaseFixtureWorkflow({ actor = null, fixtureId, departmentId })
     }
 
     const timestamp = new Date();
+    const latestDesignStage = getLatestDesignStageBeforeRelease(progress);
+    const fixtureContext = await getFixtureWorkflowContext(fixtureId, client);
+
     await updateProgressRow(fixtureId, lockedReleaseStage.stage_name, {
       status: WORKFLOW_STATUSES.APPROVED,
       assigned_to: null,
@@ -1098,6 +1112,39 @@ async function releaseFixtureWorkflow({ actor = null, fixtureId, departmentId })
       duration_minutes: null,
     }, client);
     await markFixtureComplete(fixtureId, client);
+
+    await insertCompletionSnapshot({
+      fixture_id: fixtureId,
+      project_id: fixtureContext?.project_id || null,
+      scope: "fixture",
+      trigger: "workflow_release",
+      payload: {
+        fixture_id: fixtureId,
+        project_id: fixtureContext?.project_id || null,
+        department_id: departmentId,
+        release: {
+          released_at: timestamp.toISOString(),
+          released_by: actor?.employee_id || null,
+          release_stage_name: lockedReleaseStage.stage_name,
+          current_revision_code: latestDesignStage ? getProgressRevisionCode(latestDesignStage) : null,
+          current_revision_stage: latestDesignStage?.stage_name || null,
+          current_stage_version: latestDesignStage ? normalizeStageVersion(latestDesignStage.stage_version) : null,
+        },
+        progress: progress.map((stage) => ({
+          stage_name: stage.stage_name,
+          stage_order: stage.stage_order,
+          stage_version: normalizeStageVersion(stage.stage_version),
+          revision_code: getProgressRevisionCode(stage),
+          status: isReleaseStageName(stage.stage_name) ? WORKFLOW_STATUSES.APPROVED : stage.status,
+          assigned_to: stage.assigned_to || null,
+          assigned_at: stage.assigned_at || null,
+          started_at: stage.started_at || null,
+          completed_at: isReleaseStageName(stage.stage_name)
+            ? timestamp.toISOString()
+            : stage.completed_at || null,
+        })),
+      },
+    }, client);
 
     await client.query("COMMIT");
   } catch (error) {

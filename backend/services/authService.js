@@ -30,6 +30,7 @@ function logPermissionHydration(user, source) {
     current_role_name: user?.role?.name || null,
     resolved_permissions: resolvedPermissions,
     change_fixture_stage: resolvedPermissions.includes(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+    self_approve: resolvedPermissions.includes(PERMISSIONS.SELF_APPROVE),
   });
 }
 

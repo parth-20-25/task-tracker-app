@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, PauseCircle, PlayCircle, RefreshCw, Rocket, Route, Trash2, Wrench } from "lucide-react";
+import { Eye, PauseCircle, Pencil, PlayCircle, RefreshCw, Rocket, RotateCcw, Route, Trash2, Wrench } from "lucide-react";
 import { activateBatchProject, deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
-import { assignProjectTo2D, fetchProject2DRouting, updateProject2DAssignment, updateProjectModification } from "@/api/designApi";
+import { assignProjectTo2D, fetchProject2DRouting, reactivateProject, updateProject2DAssignment, updateProjectModification } from "@/api/designApi";
+import type { ReactivateProjectPayload } from "@/api/designApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { NativeProjectEditWorkspace } from "@/components/native-ingestion/NativeIngestionWorkspace";
+import { ProjectReactivationDialog } from "@/components/ProjectReactivationDialog";
 import {
   Dialog,
   DialogContent,
@@ -125,6 +128,8 @@ export default function Batches() {
   const isAdmin = isAdminUser(user);
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
   const [routingBatch, setRoutingBatch] = useState<UploadBatch | null>(null);
+  const [editingBatch, setEditingBatch] = useState<UploadBatch | null>(null);
+  const [reactivatingBatch, setReactivatingBatch] = useState<UploadBatch | null>(null);
   const [selected2DLeader, setSelected2DLeader] = useState("");
 
   const batchesQuery = useQuery({
@@ -137,6 +142,11 @@ export default function Batches() {
     queryFn: () => fetchProject2DRouting(routingBatch?.project_id || ""),
     enabled: Boolean(routingBatch?.project_id),
   });
+
+  const canManageBatchLifecycle = (batch: UploadBatch) => {
+    const isOwner = Boolean(user?.employee_id && batch.project_created_by_user_id === user.employee_id);
+    return isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
+  };
 
   const assign2DMutation = useMutation({
     mutationFn: () => assignProjectTo2D(routingBatch?.project_id || "", selected2DLeader),
@@ -243,6 +253,34 @@ export default function Batches() {
     },
   });
 
+  const reactivateMutation = useMutation({
+    mutationFn: ({ projectId, payload }: { projectId: string; payload: ReactivateProjectPayload }) =>
+      reactivateProject(projectId, payload),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "fixtures"] }),
+      ]);
+      setSelectedBatch((current) => (
+        current?.project_id === result.project_id
+          ? { ...current, project_status: "active", is_modified: result.is_modified }
+          : current
+      ));
+      setReactivatingBatch(null);
+      toast({ title: "Project reactivated", description: result.message });
+    },
+    onError: (error) => {
+      toast({
+        title: "Reactivation failed",
+        description: error instanceof Error ? error.message : "Could not reactivate the project.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const modificationMutation = useMutation({
     mutationFn: ({ projectId, isModified }: { projectId: string; isModified: boolean }) =>
       updateProjectModification(projectId, isModified),
@@ -330,6 +368,17 @@ export default function Batches() {
     });
   };
 
+  const handleConfirmReactivation = (payload: ReactivateProjectPayload) => {
+    if (!reactivatingBatch) {
+      return;
+    }
+
+    reactivateMutation.mutate({
+      projectId: reactivatingBatch.project_id,
+      payload,
+    });
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -382,16 +431,29 @@ export default function Batches() {
                 );
                 const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
                 const hasOperationalBatch = Boolean(batch.batch_id);
-                const canManageProject = hasOperationalBatch && (isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner));
+                const canManageLifecycle = canManageBatchLifecycle(batch);
+                const canManageProject = hasOperationalBatch && canManageLifecycle;
                 const canManage2DRouting = batch.can_manage_2d_routing === true;
                 const projectTerminal = batch.project_status === "completed" || batch.project_status === "released";
                 const projectOnHold = batch.project_status === "on_hold";
-                const lifecyclePending = holdMutation.isPending || activateMutation.isPending || releaseMutation.isPending;
+                const lifecyclePending = holdMutation.isPending || activateMutation.isPending || releaseMutation.isPending || reactivateMutation.isPending;
 
                 return (
                   <TableRow key={batch.project_id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
+                        {access.canUploadNativeDesignData ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => setEditingBatch(batch)}
+                            title="Edit project in native workspace"
+                          >
+                            <Pencil className="h-4 w-4 text-muted-foreground" />
+                          </Button>
+                        ) : null}
                         {batch.can_toggle_modification ? (
                           <Button
                             type="button"
@@ -493,6 +555,18 @@ export default function Batches() {
                           <Rocket className="h-4 w-4 mr-2" />
                           Release
                         </Button>
+                        {projectTerminal && canManageLifecycle ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={lifecyclePending}
+                            onClick={() => setReactivatingBatch(batch)}
+                          >
+                            <RotateCcw className="h-4 w-4 mr-2" />
+                            Reactivate
+                          </Button>
+                        ) : null}
                         <DeleteAction
                           batch={batch}
                           canDelete={canDelete}
@@ -563,10 +637,31 @@ export default function Batches() {
                 <span className="text-muted-foreground">Deletion</span>
                 <span>{selectedBatch.deletion_blocked ? selectedBatch.delete_blocked_reason : "Allowed"}</span>
               </div>
+              {(selectedBatch.project_status === "completed" || selectedBatch.project_status === "released") && canManageBatchLifecycle(selectedBatch) ? (
+                <div className="flex justify-end border-t pt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={reactivateMutation.isPending}
+                    onClick={() => setReactivatingBatch(selectedBatch)}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Reactivate / Reopen for Modification
+                  </Button>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </DialogContent>
       </Dialog>
+
+      {editingBatch ? (
+        <NativeProjectEditWorkspace
+          projectId={editingBatch.project_id}
+          departmentId={editingBatch.department_id}
+          onClose={() => setEditingBatch(null)}
+        />
+      ) : null}
 
       <Dialog open={Boolean(routingBatch)} onOpenChange={(open) => !open && setRoutingBatch(null)}>
         <DialogContent>
@@ -634,6 +729,19 @@ export default function Batches() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ProjectReactivationDialog
+        open={Boolean(reactivatingBatch)}
+        projectLabel={reactivatingBatch ? formatProjectNumber(reactivatingBatch) : ""}
+        projectName={reactivatingBatch?.project_name}
+        isPending={reactivateMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReactivatingBatch(null);
+          }
+        }}
+        onConfirm={handleConfirmReactivation}
+      />
     </div>
   );
 }

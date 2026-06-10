@@ -3,6 +3,7 @@ const { PERMISSIONS } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 const { listDepartments } = require("../repositories/departmentsRepository");
 const { listUsers } = require("../repositories/usersRepository");
+const { userIdentifierMatchSql } = require("../repositories/sqlFragments");
 const { hasPermission, isAdmin } = require("./accessControlService");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -546,7 +547,7 @@ async function queryTaskFacts({ scopeContext, startDate, endDate, departmentId =
         DATE_TRUNC('month', t.created_at)          AS period_month
       FROM tasks t
       LEFT JOIN departments d ON d.id = t.department_id
-      LEFT JOIN users u ON u.employee_id = COALESCE(t.assigned_user_id, t.assigned_to)
+      LEFT JOIN users u ON ${userIdentifierMatchSql("u", "COALESCE(t.assigned_user_id, t.assigned_to)")}
       WHERE ${where.join(" AND ")}
     `,
     params,

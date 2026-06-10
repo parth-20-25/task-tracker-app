@@ -18,6 +18,7 @@ import {
   fetchDesignProjects,
   fetchFixtureCurrentStage,
   fetchFixtureFullProgress,
+  releaseFixtureWorkflow,
   validateFixtureAssignment,
   type FixtureCurrentStage,
   type FixtureFullProgress,
@@ -121,6 +122,16 @@ function formatStageDuration(minutes: number | null | undefined) {
   const hours = Math.floor(safeMinutes / 60);
   const remainder = safeMinutes % 60;
   return `${hours}h ${remainder}m`;
+}
+
+function isReleaseStageName(value: string | null | undefined) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return normalized === "release" || normalized === "released";
 }
 
 function StageStatusBadge({ status }: { status: FixtureStageStatus }) {
@@ -330,7 +341,9 @@ export function DesignTaskAssignmentBar({
   const isReassignmentBlocked = blockingReason === "Stage already assigned";
   const visibleBlockingReason = blockingReason === "Stage already assigned" ? null : blockingReason;
   const canAssign = hasWorkflow && (validation?.canAssign ?? false);
-  const canSubmitAssignment = canAssign || isReassignmentBlocked;
+  const isReleaseAction = Boolean(hasWorkflow && !currentStage?.is_complete && isReleaseStageName(resolvedStageName || currentStage?.stage));
+  const canSubmitWorkflowAction = isReleaseAction ? canChangeFixtureStage : true;
+  const canSubmitAssignment = isReleaseAction || canAssign || isReassignmentBlocked;
   const workflowProgress = progressQuery.data;
 
   useEffect(() => {
@@ -421,13 +434,35 @@ export function DesignTaskAssignmentBar({
   // ── Assign Workflow Stage mutation (gates stage, then creates task) ────────
 
   const assignStageMutation = useMutation({
-    mutationFn: () =>
-      assignFixtureStage({ fixture_id: fixtureId, assigned_to: assignedTo, department_id: contextDepartmentId }),
+    mutationFn: () => (
+      isReleaseAction
+        ? releaseFixtureWorkflow({ fixture_id: fixtureId, department_id: contextDepartmentId })
+        : assignFixtureStage({ fixture_id: fixtureId, assigned_to: assignedTo, department_id: contextDepartmentId })
+    ),
     onSuccess: () => {
       refreshWorkflowState();
       queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage"] });
       queryClient.invalidateQueries({ queryKey: ["workflow", "validate"] });
       queryClient.invalidateQueries({ queryKey: ["workflow", "progress"] });
+
+      if (isReleaseAction) {
+        queryClient.invalidateQueries({ queryKey: ["designFixtures", designDepartmentKey, projectId || "unselected"] });
+        setProjectId("");
+        setFixtureId("");
+        resetWorkflowState();
+        setDescription("");
+        setAssignedTo("");
+        setPriority("P2");
+        setDeadline("");
+        setSearchQuery("");
+        setOpen(false);
+        toast({
+          title: "Fixture released",
+          description: "The fixture moved to Workflow Completed without creating a task assignment.",
+        });
+        return;
+      }
+
       // Also create the underlying task
       createTaskMutation.mutate({
         department_id: contextDepartmentId,
@@ -469,7 +504,9 @@ export function DesignTaskAssignmentBar({
   };
 
   const handleSubmit = () => {
-    if (!projectId || !fixtureId || !assignedTo || !deadline) return;
+    if (!projectId || !fixtureId) return;
+    if (!isReleaseAction && (!assignedTo || !deadline)) return;
+    if (!canSubmitWorkflowAction) return;
     if (!canSubmitAssignment) return;
     assignStageMutation.mutate();
   };
@@ -555,21 +592,23 @@ export function DesignTaskAssignmentBar({
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Priority *</Label>
-              <Select value={priority} onValueChange={(value) => setPriority(value as DesignPriority)}>
-                <SelectTrigger className="h-9 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {priorityOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {!isReleaseAction ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Priority *</Label>
+                <Select value={priority} onValueChange={(value) => setPriority(value as DesignPriority)}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {priorityOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
 
           {/* ── Fixture Details Card ── */}
@@ -697,69 +736,73 @@ export function DesignTaskAssignmentBar({
 
           <Separator />
 
-          {/* ── Row 2: Deadline / Assign To ── */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Deadline *</Label>
-              <Input
-                type="datetime-local"
-                value={deadline}
-                onChange={(e) => setDeadline(e.target.value)}
-                className="h-9 text-sm"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Assign To *</Label>
-              <Popover open={showSearch} onOpenChange={setShowSearch}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="h-9 w-full justify-start text-sm font-normal">
-                    <Search className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                    {selectedUser ? formatEmployeeDisplay(selectedUser) : "Search employee..."}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-72 p-2" align="start">
+          {!isReleaseAction ? (
+            <>
+              {/* ── Row 2: Deadline / Assign To ── */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Deadline *</Label>
                   <Input
-                    placeholder="Search by name or ID..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="mb-2 h-8 text-sm"
+                    type="datetime-local"
+                    value={deadline}
+                    onChange={(e) => setDeadline(e.target.value)}
+                    className="h-9 text-sm"
                   />
-                  <div className="max-h-40 space-y-0.5 overflow-y-auto">
-                    {filteredUsers.map((user) => (
-                      <button
-                        key={user.employee_id}
-                        type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-primary/10"
-                        onClick={() => {
-                          setAssignedTo(user.employee_id);
-                          setShowSearch(false);
-                          setSearchQuery("");
-                        }}
-                      >
-                        <span className="font-medium">{formatEmployeeDisplay(user)}</span>
-                      </button>
-                    ))}
-                    {filteredUsers.length === 0 && (
-                      <p className="py-2 text-center text-xs text-muted-foreground">No matches</p>
-                    )}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
+                </div>
 
-          {/* ── Description ── */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold">Task Description (Optional)</Label>
-            <Textarea
-              placeholder="Add execution notes for the design team..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              className="text-sm resize-none"
-            />
-          </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Assign To *</Label>
+                  <Popover open={showSearch} onOpenChange={setShowSearch}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="h-9 w-full justify-start text-sm font-normal">
+                        <Search className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                        {selectedUser ? formatEmployeeDisplay(selectedUser) : "Search employee..."}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-72 p-2" align="start">
+                      <Input
+                        placeholder="Search by name or ID..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="mb-2 h-8 text-sm"
+                      />
+                      <div className="max-h-40 space-y-0.5 overflow-y-auto">
+                        {filteredUsers.map((user) => (
+                          <button
+                            key={user.employee_id}
+                            type="button"
+                            className="w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-primary/10"
+                            onClick={() => {
+                              setAssignedTo(user.employee_id);
+                              setShowSearch(false);
+                              setSearchQuery("");
+                            }}
+                          >
+                            <span className="font-medium">{formatEmployeeDisplay(user)}</span>
+                          </button>
+                        ))}
+                        {filteredUsers.length === 0 && (
+                          <p className="py-2 text-center text-xs text-muted-foreground">No matches</p>
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
+
+              {/* ── Description ── */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Task Description (Optional)</Label>
+                <Textarea
+                  placeholder="Add execution notes for the design team..."
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={2}
+                  className="text-sm resize-none"
+                />
+              </div>
+            </>
+          ) : null}
 
           {/* ── Submit Button ── */}
           <div className="flex flex-col gap-2 pt-2 border-t mt-4">
@@ -775,16 +818,16 @@ export function DesignTaskAssignmentBar({
                 disabled={
                   !projectId ||
                   !fixtureId ||
-                  !assignedTo ||
-                  !deadline ||
+                  (!isReleaseAction && (!assignedTo || !deadline)) ||
                   !hasWorkflow ||
                   isWorkflowLoading ||
+                  !canSubmitWorkflowAction ||
                   !canSubmitAssignment ||
                   isSubmitting
                 }
               >
                 <Plus className="mr-2 h-4 w-4 text-white" />
-                {isSubmitting ? "Deploying..." : "Deploy Design Task"}
+                {isSubmitting ? "Working..." : isReleaseAction ? "Release Fixture" : "Deploy Design Task"}
               </Button>
             </div>
           </div>

@@ -317,7 +317,22 @@ function normalizeText(value) {
 }
 
 function formatEmployeeName(employeeId, employeeName) {
-  return normalizeText(employeeName) || normalizeText(employeeId);
+  const id = normalizeText(employeeId);
+  const name = normalizeText(employeeName);
+
+  if (id && name && name !== id) {
+    return `${id} - ${name}`;
+  }
+
+  if (id) {
+    return `${id} - ${NOT_RECORDED}`;
+  }
+
+  return name;
+}
+
+function requiredText(value, placeholder = NOT_RECORDED) {
+  return normalizeText(value) || placeholder;
 }
 
 function formatAllocationPercent(value) {
@@ -706,9 +721,11 @@ function buildTemplateFixtureRows({
     }
 
     if (!currentStageName) {
-      const firstOpenStage = REPORT_STAGES.find((stage) => (
-        normalizeStatus(fixtureProgress.get(stage.key)?.status) !== "APPROVED"
-      ));
+      const firstOpenStage = fixtureProgress.size
+        ? REPORT_STAGES.find((stage) => (
+          normalizeStatus(fixtureProgress.get(stage.key)?.status) !== "APPROVED"
+        ))
+        : null;
       currentStageName = firstOpenStage?.label || (fixtureProgress.size ? "Completed" : NOT_STARTED);
     }
 
@@ -723,10 +740,10 @@ function buildTemplateFixtureRows({
 
     return {
       srNo: index + 1,
-      fixtureNo: fixture.fixture_no,
-      opNo: fixture.op_no,
-      partName: fixture.part_name,
-      priority: fixture.task_priority || NOT_RECORDED,
+      fixtureNo: requiredText(fixture.fixture_no),
+      opNo: requiredText(fixture.op_no),
+      partName: requiredText(fixture.part_name),
+      priority: requiredText(fixture.task_priority),
       assigned: formatAssignmentSummary({ assignedTo, assignedBy }),
       globalStatus: resolveFixtureGlobalStatus(fixtureTruth, fixture),
       currentStage: currentStageName,
@@ -870,14 +887,13 @@ function removeTemplateDataRows(worksheet, startRow) {
 }
 
 function clearUnusedRows(worksheet, startRow, columnCount) {
-  if (worksheet.rowCount < startRow) {
-    return;
-  }
+  const endRow = Math.max(worksheet.rowCount, startRow);
 
-  for (let rowNumber = startRow; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
     row.height = undefined;
     row.hidden = false;
+    row.style = {};
 
     for (let columnIndex = 1; columnIndex <= columnCount; columnIndex += 1) {
       const cell = row.getCell(columnIndex);
@@ -983,12 +999,12 @@ async function generateDesignProjectExecutionTemplateExcel({
     ? kpiResult.kpis
     : calculateLiveStatusKpis(rows);
   writeMergedValue(worksheet, "A2", `Report Date: ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`);
-  writeMergedValue(worksheet, "A5", context.project_no || "");
-  writeMergedValue(worksheet, "E5", context.project_name || "");
-  writeMergedValue(worksheet, "I5", context.customer_name || "");
-  writeMergedValue(worksheet, "M5", context.plant || "");
-  writeMergedValue(worksheet, "Q5", context.project_leader_name || context.project_leader_id || "");
-  writeMergedValue(worksheet, "U5", context.team_lead_name || context.team_lead_id || "");
+  writeMergedValue(worksheet, "A5", requiredText(context.project_no));
+  writeMergedValue(worksheet, "E5", requiredText(context.project_name));
+  writeMergedValue(worksheet, "I5", requiredText(context.customer_name));
+  writeMergedValue(worksheet, "M5", requiredText(context.plant));
+  writeMergedValue(worksheet, "Q5", formatEmployeeName(context.project_leader_id, context.project_leader_name) || NOT_ASSIGNED);
+  writeMergedValue(worksheet, "U5", formatEmployeeName(context.team_lead_id, context.team_lead_name) || NOT_ASSIGNED);
   writeMergedValue(worksheet, "A7", "Completion");
   writeMergedValue(worksheet, "E7", "Total Fixtures");
   writeMergedValue(worksheet, "I7", "Completed Fixtures");

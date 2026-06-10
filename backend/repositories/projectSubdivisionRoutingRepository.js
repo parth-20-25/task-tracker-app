@@ -3,8 +3,10 @@ const { AppError } = require("../lib/AppError");
 const {
   PROJECT_AUTHORITY_ROLE_KEYS,
   buildVisibleUsersCte,
+  identifierInVisibleUsersSql,
   normalizeRoleKey,
 } = require("./projectVisibility");
+const { userIdentifierMatchSql } = require("./sqlFragments");
 
 const DESIGN_2D_SUBDIVISION_NAME = "2D";
 const DESIGN_DEPARTMENT_KEYS = ["design"];
@@ -165,9 +167,8 @@ async function canManageProject2DRouting(user, projectId, client = pool) {
             WHERE root.role_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
                OR root.role_id_key = ANY(${sqlTextArray(PROJECT_AUTHORITY_ROLE_KEYS)})
           )
-          OR COALESCE(p.created_by_user_id, p.uploaded_by) = $1
-          OR p.created_by_user_id IN (SELECT employee_id FROM visible_users)
-          OR p.uploaded_by IN (SELECT employee_id FROM visible_users)
+          OR ${identifierInVisibleUsersSql("p.created_by_user_id")}
+          OR ${identifierInVisibleUsersSql("p.uploaded_by")}
         )
       LIMIT 1
     `,
@@ -265,9 +266,9 @@ async function listProjectSubdivisionAssignments(projectId, client = pool) {
       JOIN department_subdivisions ds
         ON ds.id = psa.subdivision_id
       LEFT JOIN users assigned_leader
-        ON assigned_leader.employee_id = psa.assigned_leader_id
+        ON ${userIdentifierMatchSql("assigned_leader", "psa.assigned_leader_id")}
       LEFT JOIN users assigner
-        ON assigner.employee_id = psa.assigned_by
+        ON ${userIdentifierMatchSql("assigner", "psa.assigned_by")}
       WHERE psa.project_id = $1
       ORDER BY psa.is_active DESC, psa.created_at DESC
     `,

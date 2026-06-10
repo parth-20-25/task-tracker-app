@@ -29,7 +29,7 @@ function formatStageLabel(fixture: DesignFixtureOption) {
     return fixture.workflow_stage;
   }
 
-  return fixture.is_workflow_complete ? "Completed" : "Workflow Pending";
+  return fixture.is_workflow_complete ? "Release" : "Workflow Pending";
 }
 
 function resolveWorkflowState(fixture: DesignFixtureOption) {
@@ -37,7 +37,7 @@ function resolveWorkflowState(fixture: DesignFixtureOption) {
   const status = String(fixture.workflow_status || "").toUpperCase();
 
   if (operationalState === "WORKFLOW_COMPLETE" || fixture.is_workflow_complete) {
-    return { label: "Completed", tone: "complete" };
+    return { label: "Released", tone: "complete" };
   }
 
   if (operationalState === "VERIFICATION" || fixture.review_pending) {
@@ -61,7 +61,7 @@ function resolveWorkflowState(fixture: DesignFixtureOption) {
 
 function getOwnerLabel(fixture: DesignFixtureOption) {
   if (fixture.is_workflow_complete) {
-    return "Complete";
+    return "Released";
   }
 
   if (fixture.workflow_assigned_to || fixture.workflow_assigned_to_name) {

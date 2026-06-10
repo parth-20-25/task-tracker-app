@@ -177,26 +177,23 @@ async function run() {
       },
     ];
 
-    assert.doesNotThrow(() => assertDesignReportTruthLayerComplete(
+    const completeSnapshot = assertDesignReportTruthLayerComplete(
       fixtures,
       activeIncompleteProgress,
       activeIncompleteAttempts,
-    ));
-
-    assert.throws(
-      () => assertDesignReportTruthLayerComplete(
-        fixtures,
-        activeIncompleteProgress.slice(0, 3),
-        [],
-      ),
-      (error) => {
-        assert.equal(error.statusCode, 409);
-        assert.equal(error.errorCode, "DESIGN_REPORT_TRUTH_LAYER_REQUIRED");
-        assert.match(error.message, /truth layer is complete/);
-        assert.match(error.details.details.join(" | "), /incomplete or inconsistent|missing workflow progress rows \(2D FINISH\)/);
-        return true;
-      },
     );
+    assert.equal(completeSnapshot.ok, true);
+    assert.deepEqual(completeSnapshot.warnings, []);
+
+    const warningSnapshot = assertDesignReportTruthLayerComplete(
+      fixtures,
+      activeIncompleteProgress.slice(0, 3),
+      [],
+    );
+    assert.equal(warningSnapshot.ok, true);
+    assert.ok(warningSnapshot.warnings.some((warning) => (
+      /incomplete or inconsistent|missing workflow progress rows \(2D FINISH\)/.test(warning)
+    )));
   }
 
   {

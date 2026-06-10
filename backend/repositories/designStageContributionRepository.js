@@ -1,5 +1,6 @@
 const { pool } = require("../db");
 const { instrumentModuleExports } = require("../lib/observability");
+const { userIdentifierMatchSql } = require("./sqlFragments");
 
 function mapContributionRow(row) {
   if (!row) {
@@ -48,11 +49,11 @@ async function listStageContributions(fixtureId, stageName, revisionCode, client
         changer.name AS changed_by_name
       FROM design.fixture_stage_contributions contribution
       LEFT JOIN users contributor
-        ON contributor.employee_id = contribution.employee_id
+        ON ${userIdentifierMatchSql("contributor", "contribution.employee_id")}
       LEFT JOIN users transfer_actor
-        ON transfer_actor.employee_id = contribution.transferred_by
+        ON ${userIdentifierMatchSql("transfer_actor", "contribution.transferred_by")}
       LEFT JOIN users changer
-        ON changer.employee_id = contribution.changed_by
+        ON ${userIdentifierMatchSql("changer", "contribution.changed_by")}
       WHERE contribution.fixture_id = $1
         AND contribution.stage_name = $2
         AND contribution.revision_code = $3
@@ -82,11 +83,11 @@ async function listContributionsForFixtures(fixtureIds, client = pool) {
         changer.name AS changed_by_name
       FROM design.fixture_stage_contributions contribution
       LEFT JOIN users contributor
-        ON contributor.employee_id = contribution.employee_id
+        ON ${userIdentifierMatchSql("contributor", "contribution.employee_id")}
       LEFT JOIN users transfer_actor
-        ON transfer_actor.employee_id = contribution.transferred_by
+        ON ${userIdentifierMatchSql("transfer_actor", "contribution.transferred_by")}
       LEFT JOIN users changer
-        ON changer.employee_id = contribution.changed_by
+        ON ${userIdentifierMatchSql("changer", "contribution.changed_by")}
       WHERE contribution.fixture_id = ANY($1::uuid[])
         AND contribution.superseded_by IS NULL
       ORDER BY

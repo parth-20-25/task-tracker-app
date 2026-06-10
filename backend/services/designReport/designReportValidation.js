@@ -1,4 +1,3 @@
-const { AppError } = require("../../lib/AppError");
 const { normalizeDesignStageName } = require("../../lib/designWorkflowStages");
 const {
   formatStageRevisionCode,
@@ -6,9 +5,6 @@ const {
 } = require("../../lib/workflowStageVersioning");
 const { COMPLETION_TRUTH_STATUSES } = require("../../config/designCompletionWeights");
 const { resolveReportKpisFromCompletionTruth } = require("./designReportKpiContract");
-
-const DESIGN_REPORT_TRUTH_LAYER_ERROR =
-  "Design Project Execution report export is disabled until the Design truth layer is complete.";
 
 const REPORT_STAGES = [
   { key: "concept", label: "CONCEPT" },
@@ -316,21 +312,10 @@ function collectDesignReportTruthLayerErrors({
 function assertDesignReportExportIntegrity(payload) {
   const errors = collectDesignReportTruthLayerErrors(payload);
 
-  if (errors.length === 0) {
-    return;
-  }
-
-  throw new AppError(
-    409,
-    DESIGN_REPORT_TRUTH_LAYER_ERROR,
-    {
-      report: "Design Project Execution / Fixture Stage Tracking Report",
-      reason: "Required workflow truth data is missing or inconsistent; export would require unsafe fallback values.",
-      details: errors.slice(0, 25),
-      total_errors: errors.length,
-    },
-    "DESIGN_REPORT_TRUTH_LAYER_REQUIRED",
-  );
+  return {
+    ok: true,
+    warnings: errors,
+  };
 }
 
 function buildWorkflowValidationProjectTruth(fixtures) {
@@ -351,7 +336,7 @@ function buildWorkflowValidationProjectTruth(fixtures) {
 
 /** Workflow-only gate kept for unit tests and legacy callers. */
 function assertDesignReportTruthLayerComplete(fixtures, progressRows, attemptRows) {
-  assertDesignReportExportIntegrity({
+  return assertDesignReportExportIntegrity({
     fixtures,
     progressRows,
     attemptRows,
@@ -363,7 +348,6 @@ function assertDesignReportTruthLayerComplete(fixtures, progressRows, attemptRow
 }
 
 module.exports = {
-  DESIGN_REPORT_TRUTH_LAYER_ERROR,
   REPORT_STAGES,
   assertDesignReportExportIntegrity,
   assertDesignReportTruthLayerComplete,

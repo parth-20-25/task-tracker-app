@@ -26,6 +26,9 @@ runTest("keeps stage labels fixed and formats separate revision codes", () => {
   assert.equal(getStageVersionFromCompletedCount(1), 1);
   assert.equal(formatStageVersionLabel("Concept", 1), "Concept");
   assert.equal(formatStageRevisionCode("Concept", 1), "CON 01");
+  assert.equal(formatStageRevisionCode("DAP", 1), "DAP 01");
+  assert.equal(formatStageRevisionCode("3D Finish", 1), "3D 01");
+  assert.equal(formatStageRevisionCode("2D Finish", 1), "2D 01");
   assert.equal(formatStageRevisionCode("3D Finish", 2), "3D 02");
   assert.equal(formatStageRevisionCode("DAP", 12), "DAP 12");
   assert.equal(formatStageRevisionCode("2D Finish", 2), "2D 02");

@@ -164,6 +164,7 @@ function normalizeUploadMode(value) {
 
 function normalizeNativeContext(context = {}, user = {}) {
   const parsedIdentity = parseProjectIdentity(context.project_identity || context.projectIdentity || "");
+  const projectId = collapseWhitespace(context.project_id || context.projectId);
   const projectCode = normalizeProjectCode(
     context.project_code
     || context.project_no
@@ -186,6 +187,7 @@ function normalizeNativeContext(context = {}, user = {}) {
   };
 
   return {
+    project_id: projectId || null,
     project_identity: stripLegacyWbsPrefix(context.project_identity || context.projectIdentity) || formatProjectIdentity(normalized),
     project_code: projectCode,
     project_name: projectName,

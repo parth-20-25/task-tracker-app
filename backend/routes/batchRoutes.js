@@ -7,6 +7,7 @@ const {
   deleteBatch,
   getBatches,
   holdProjectForBatch,
+  reactivateProjectForBatch,
   releaseProjectForBatch,
 } = require("../services/batchService");
 
@@ -42,6 +43,14 @@ router.post(
   "/batches/:id/activate",
   asyncHandler(async (req, res) => {
     const result = await activateProjectForBatch(req.user, req.params.id);
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/batches/:id/reactivate",
+  asyncHandler(async (req, res) => {
+    const result = await reactivateProjectForBatch(req.user, req.params.id, req.body);
     return sendSuccess(res, result);
   }),
 );

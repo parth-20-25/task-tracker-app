@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const { userIdentifierMatchSql } = require("./sqlFragments");
 
 function roundNumber(value, decimals = 2) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
@@ -455,7 +456,7 @@ async function listUserPerformance(departmentId, visibleUserIds = null, client =
         up.last_updated
       FROM user_performance up
       JOIN users u
-        ON u.employee_id = up.user_id
+        ON ${userIdentifierMatchSql("u", "up.user_id")}
       JOIN departments d
         ON d.id = up.department_id
       WHERE ($1::text IS NULL OR up.department_id = $1::text)
@@ -497,7 +498,7 @@ async function findUserPerformance(userId, client = pool) {
         up.last_updated
       FROM user_performance up
       JOIN users u
-        ON u.employee_id = up.user_id
+        ON ${userIdentifierMatchSql("u", "up.user_id")}
       JOIN departments d
         ON d.id = up.department_id
       WHERE up.user_id = $1::text
@@ -573,7 +574,13 @@ async function getPerformanceOverviewForUsers(departmentId = null, visibleUserId
         )::int AS overdue_tasks,
         MAX(COALESCE(t.approved_at, t.closed_at, t.verified_at, t.updated_at, t.created_at)) AS last_updated
       FROM tasks t
-      WHERE COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to) = ANY($1::text[])
+      WHERE EXISTS (
+          SELECT 1
+          FROM users assigned_user
+          WHERE ${userIdentifierMatchSql("assigned_user", "COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)")}
+            AND assigned_user.employee_id = ANY($1::text[])
+          LIMIT 1
+        )
         AND ($2::text IS NULL OR t.department_id = $2::text)
         AND t.status <> 'cancelled'
         AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'
@@ -729,8 +736,8 @@ async function getUserDrilldownFacts(userId, client = pool) {
         END AS delay_hours
       FROM tasks t
       JOIN users u
-        ON u.employee_id = COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)
-      WHERE u.employee_id = $1::text
+        ON ${userIdentifierMatchSql("u", "COALESCE(NULLIF(t.assigned_user_id, ''), t.assigned_to)")}
+      WHERE ${userIdentifierMatchSql("u", "$1")}
         AND COALESCE(u.is_active, TRUE) = TRUE
         AND t.status <> 'cancelled'
         AND COALESCE(t.task_type, 'department_workflow') = 'department_workflow'

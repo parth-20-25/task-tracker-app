@@ -7,6 +7,7 @@ const {
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../../repositories/projectVisibility");
+const { userIdentifierMatchSql } = require("../../repositories/sqlFragments");
 const {
   collapseWhitespace,
   normalizeComparable,
@@ -102,9 +103,10 @@ function normalizeExistingFixture(row) {
 
 async function loadProjectTruthForNative(user, context, client = pool) {
   const departmentId = resolveNativeDepartmentId(user, context.department_id);
+  const projectId = collapseWhitespace(context.project_id);
   const projectCode = normalizeProjectCode(context.project_code);
 
-  if (!projectCode) {
+  if (!projectId && !projectCode) {
     return {
       department_id: departmentId,
       project: null,
@@ -112,17 +114,20 @@ async function loadProjectTruthForNative(user, context, client = pool) {
     };
   }
 
+  const projectLookupValue = projectId || projectCode;
+  const projectLookupPredicate = projectId ? "p.id::text = $2" : "p.project_no = $2";
+
   const hidden = await client.query(
     `
       ${buildVisibleUsersCte("$1")}
       SELECT p.id
       FROM design.projects p
-      WHERE p.project_no = $2
+      WHERE ${projectLookupPredicate}
         AND p.department_id = $3
         AND NOT (${visibleProjectPredicate("p")})
       LIMIT 1
     `,
-    [user.employee_id, projectCode, departmentId],
+    [user.employee_id, projectLookupValue, departmentId],
   );
 
   if (hidden.rows.length > 0) {
@@ -138,14 +143,17 @@ async function loadProjectTruthForNative(user, context, client = pool) {
         p.project_name,
         p.customer_name,
         p.department_id,
+        d.name AS department_name,
         p.status
       FROM design.projects p
-      WHERE p.project_no = $2
+      LEFT JOIN departments d
+        ON d.id = p.department_id
+      WHERE ${projectLookupPredicate}
         AND p.department_id = $3
         AND ${visibleProjectPredicate("p")}
       LIMIT 1
     `,
-    [user.employee_id, projectCode, departmentId],
+    [user.employee_id, projectLookupValue, departmentId],
   );
 
   const project = projectResult.rows[0] || null;
@@ -184,7 +192,7 @@ async function loadProjectTruthForNative(user, context, client = pool) {
           assignee.name AS assigned_team
         FROM fixture_workflow_progress fwp
         LEFT JOIN users assignee
-          ON assignee.employee_id = fwp.assigned_to
+          ON ${userIdentifierMatchSql("assignee", "fwp.assigned_to")}
         WHERE fwp.fixture_id = f.id
           AND fwp.department_id = p.department_id
         ORDER BY
@@ -195,6 +203,7 @@ async function loadProjectTruthForNative(user, context, client = pool) {
       ) current_progress ON TRUE
       WHERE f.project_id = $2
         AND ${visibleFixturePredicate("f", "p")}
+      ORDER BY f.fixture_no ASC, f.created_at ASC, f.id ASC
     `,
     [user.employee_id, project.project_id],
   );

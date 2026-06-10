@@ -39,6 +39,7 @@ export interface DepartmentSubdivision {
 }
 
 export interface User {
+  id?: string | null;
   employee_id: string;
   name: string;
   display_name?: string;
@@ -54,6 +55,7 @@ export interface User {
   role_id: string;
   permissions?: string[];
   role?: Role;
+  parent_id?: string | null;
   department_id: string | null;
   department?: Department;
   subdivision_id?: string | null;
@@ -612,6 +614,9 @@ export interface DesignFixtureOption {
   operational_state?: "VERIFICATION" | "REWORK" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE" | string | null;
   workflow_assigned_to?: string | null;
   workflow_assigned_to_name?: string | null;
+  workflow_released_at?: string | null;
+  workflow_released_by?: string | null;
+  workflow_released_by_name?: string | null;
   workflow_progress_percent?: number | null;
   workflow_stage_active?: boolean;
   review_pending?: boolean;

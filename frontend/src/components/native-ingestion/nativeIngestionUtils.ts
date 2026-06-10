@@ -282,6 +282,7 @@ export function hydrateProjectIdentityContext(
 export function defaultNativeContext(user: User | null): NativeIngestionContext {
   const departmentId = user?.department_id || "";
   return {
+    project_id: null,
     project_identity: "",
     project_code: "",
     project_name: "",

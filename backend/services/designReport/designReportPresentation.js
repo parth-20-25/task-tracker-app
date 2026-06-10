@@ -109,7 +109,12 @@ function formatStageContributors(contributions) {
       const percent = contribution.contribution_percent === null || contribution.contribution_percent === undefined
         ? "Contribution % Not Recorded"
         : `${Number(contribution.contribution_percent)}%`;
-      return `${contribution.employee_name || contribution.employee_id}: ${percent}`;
+      const employeeId = String(contribution.employee_id || "").trim();
+      const employeeName = String(contribution.employee_name || "").trim();
+      const employee = employeeId && employeeName && employeeName !== employeeId
+        ? `${employeeId} - ${employeeName}`
+        : employeeId || employeeName || "Not assigned";
+      return `${employee}: ${percent}`;
     })
     .join("\n");
 }
@@ -177,7 +182,7 @@ function formatHoldHistory(stageTasks = []) {
     .map((activity) => {
       const metadata = activity.metadata && typeof activity.metadata === "object" ? activity.metadata : {};
       const timestamp = formatTimelineTimestamp(activity.created_at);
-      const actor = activity.user_name || "Unknown";
+      const actor = activity.user_name || "Not recorded";
       const stageLabel = metadata.stage || metadata.stage_name || "";
       const holdState = metadata.to === "on_hold" ? "On Hold" : metadata.from === "on_hold" ? "Resumed" : "Hold";
       return [timestamp, stageLabel, holdState, actor, activity.notes].filter(Boolean).join(" - ");

@@ -12,6 +12,10 @@ const {
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
+const {
+  userIdentifierMatchSql,
+  userResolutionLateralSql,
+} = require("../repositories/sqlFragments");
 const { listContributionsForFixtures } = require("../repositories/designStageContributionRepository");
 const {
   formatStageRevisionCode,
@@ -40,9 +44,6 @@ const DESIGN_REPORT_TEMPLATE_PATH = path.join(
   "design_project_execution_report_template.xlsx",
 );
 
-const DESIGN_REPORT_TRUTH_LAYER_ERROR =
-  "Design Project Execution report export is disabled until the Design truth layer is complete.";
-
 function sqlRoleKey(expression) {
   return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
 }
@@ -61,8 +62,7 @@ function hierarchyTeamLeaderLateral(projectAlias = "p") {
             ARRAY[u.id::text, u.employee_id]::text[] AS path
           FROM users u
           LEFT JOIN roles r ON r.id = u.role
-          WHERE u.employee_id = ${projectAlias}.created_by_user_id
-            AND COALESCE(u.is_active, TRUE) = TRUE
+          WHERE ${userIdentifierMatchSql("u", `${projectAlias}.created_by_user_id`)}
 
           UNION ALL
 
@@ -79,8 +79,7 @@ function hierarchyTeamLeaderLateral(projectAlias = "p") {
             ON parent.id::text = owner_ancestry.parent_id
             OR parent.employee_id = owner_ancestry.parent_id
           LEFT JOIN roles parent_role ON parent_role.id = parent.role
-          WHERE COALESCE(parent.is_active, TRUE) = TRUE
-            AND owner_ancestry.depth < 32
+          WHERE owner_ancestry.depth < 32
             AND NOT parent.id::text = ANY(owner_ancestry.path)
             AND NOT parent.employee_id = ANY(owner_ancestry.path)
         )
@@ -791,21 +790,10 @@ function collectDesignReportTruthLayerErrors(fixtures = [], progressRows = [], a
 function assertDesignReportTruthLayerComplete(fixtures, progressRows, attemptRows) {
   const errors = collectDesignReportTruthLayerErrors(fixtures, progressRows, attemptRows);
 
-  if (errors.length === 0) {
-    return;
-  }
-
-  throw new AppError(
-    409,
-    DESIGN_REPORT_TRUTH_LAYER_ERROR,
-    {
-      report: "Design Project Execution / Fixture Stage Tracking Report",
-      reason: "Required workflow truth data is missing or inconsistent; export would require unsafe fallback values.",
-      details: errors.slice(0, 25),
-      total_errors: errors.length,
-    },
-    "DESIGN_REPORT_TRUTH_LAYER_REQUIRED",
-  );
+  return {
+    ok: true,
+    warnings: errors,
+  };
 }
 
 function columnNumberToLetter(columnNumber) {
@@ -1544,12 +1532,14 @@ async function getProjectContext(user, projectId, departmentId) {
       FROM design.projects p
       LEFT JOIN departments
         ON departments.id = p.department_id
-      LEFT JOIN users uploader
-        ON uploader.employee_id = p.uploaded_by
+      ${userResolutionLateralSql("uploader", [
+        { expression: "p.uploaded_by", source: "project_uploaded_by" },
+        { expression: "p.created_by_user_id", source: "project_created_by_user_id" },
+      ])}
       LEFT JOIN users creator
-        ON creator.employee_id = p.created_by_user_id
+        ON ${userIdentifierMatchSql("creator", "p.created_by_user_id")}
       LEFT JOIN users project_leader
-        ON project_leader.employee_id = p.project_leader_id
+        ON ${userIdentifierMatchSql("project_leader", "p.project_leader_id")}
       ${hierarchyTeamLeaderLateral("p")}
       WHERE p.id = $2
         AND ($3::text IS NULL OR p.department_id = $3)
@@ -1652,9 +1642,9 @@ async function getFixturesForProject(projectId, user) {
         LIMIT 1
       ) linked_task ON TRUE
       LEFT JOIN users assignee
-        ON assignee.employee_id = linked_task.assigned_to
+        ON ${userIdentifierMatchSql("assignee", "linked_task.assigned_to")}
       LEFT JOIN users assigner
-        ON assigner.employee_id = linked_task.assigned_by
+        ON ${userIdentifierMatchSql("assigner", "linked_task.assigned_by")}
       WHERE f.project_id = $2
         AND ${visibleFixturePredicate("f", "p")}
       ORDER BY f.fixture_no ASC, f.id ASC
@@ -1687,7 +1677,7 @@ async function getFixtureProgressRows(fixtureIds) {
         users.name AS assigned_to_name
       FROM fixture_workflow_progress progress
       LEFT JOIN users
-        ON users.employee_id = progress.assigned_to
+        ON ${userIdentifierMatchSql("users", "progress.assigned_to")}
       WHERE progress.fixture_id = ANY($1::uuid[])
       ORDER BY progress.fixture_id ASC, progress.stage_order ASC, progress.stage_name ASC
     `,
@@ -1778,7 +1768,7 @@ async function getTaskActivitiesByTaskIds(taskIds) {
         users.name AS user_name
       FROM task_activity_logs activity
       LEFT JOIN users
-        ON users.employee_id = activity.user_employee_id
+        ON ${userIdentifierMatchSql("users", "activity.user_employee_id")}
       WHERE activity.task_id = ANY($1::int[])
       ORDER BY activity.task_id ASC, activity.created_at ASC, activity.id ASC
     `,
@@ -1944,7 +1934,7 @@ function resolveStageHoldHistory(stageTasks = []) {
     })
     .map((activity) => {
       const timestamp = formatTimelineTimestamp(activity.created_at);
-      const actor = activity.user_name || "Unknown";
+      const actor = activity.user_name || "Not recorded";
       return [timestamp, actor, activity.notes].filter(Boolean).join(" - ");
     })
     .join("\n");

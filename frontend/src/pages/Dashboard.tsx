@@ -2,13 +2,15 @@ import { useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchProjectDashboardSummary, fetchDesignFixtures, updateProjectModification } from '@/api/designApi';
+import { fetchProjectDashboardSummary, fetchDesignFixtures, reactivateProject, updateProjectModification } from '@/api/designApi';
+import type { ReactivateProjectPayload } from '@/api/designApi';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
-import { NativeFixtureIngestionLauncher } from '@/components/native-ingestion/NativeIngestionWorkspace';
+import { NativeFixtureIngestionLauncher, NativeProjectEditWorkspace } from '@/components/native-ingestion/NativeIngestionWorkspace';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
-import { ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, User, UserCheck, UserX, Wrench } from 'lucide-react';
+import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
+import { ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
 import { isProjectAuthorityUser } from '@/lib/permissions';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
 import { formatProjectNumber } from '@/lib/projectDisplay';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
+import { toast } from '@/hooks/use-toast';
 import { ProjectDashboardSummary, ProjectStatus } from '@/types';
 
 function statusLabel(status: ProjectStatus) {
@@ -36,12 +39,22 @@ function statusClass(status: ProjectStatus) {
 
 function ProjectCard({
   project,
+  canEditProject,
+  canReactivateProject,
+  onEditProject,
+  onReactivateProject,
   onToggleModification,
   isToggling,
+  isReactivating,
 }: {
   project: ProjectDashboardSummary;
+  canEditProject: boolean;
+  canReactivateProject: boolean;
+  onEditProject: (project: ProjectDashboardSummary) => void;
+  onReactivateProject: (project: ProjectDashboardSummary) => void;
   onToggleModification: (project: ProjectDashboardSummary) => void;
   isToggling: boolean;
+  isReactivating: boolean;
 }) {
   const hasCompletionTruth = typeof project.completion_percent === "number";
   const projectTerminal = project.project_status === "completed" || project.project_status === "released";
@@ -49,7 +62,19 @@ function ProjectCard({
 
   return (
     <Card className="relative overflow-hidden border-slate-200 shadow-sm">
-      <div className="absolute left-2 top-2 z-10">
+      <div className="absolute left-2 top-2 z-10 flex items-center gap-1">
+        {canEditProject ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => onEditProject(project)}
+            title="Edit project in native workspace"
+          >
+            <Pencil className="h-4 w-4 text-muted-foreground" />
+          </Button>
+        ) : null}
         {canToggleModification ? (
           <Button
             type="button"
@@ -66,7 +91,7 @@ function ProjectCard({
           <Wrench className={cn("m-1.5 h-4 w-4", project.is_modified ? "text-primary" : "text-muted-foreground/50")} />
         )}
       </div>
-      <CardHeader className="space-y-2 p-4 pb-3 pl-10">
+      <CardHeader className="space-y-2 p-4 pb-3 pl-16">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="font-semibold leading-tight">{project.project_name}</p>
@@ -110,6 +135,20 @@ function ProjectCard({
           <User className="h-3 w-3" />
           <span>Team Leader: {formatEmployeeDisplay(project.team_lead_id || null, project.team_lead_name)}</span>
         </div>
+        {projectTerminal && canReactivateProject ? (
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isReactivating}
+              onClick={() => onReactivateProject(project)}
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Reactivate
+            </Button>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -119,6 +158,8 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const { user, role, access } = useAuth();
   const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [editingProject, setEditingProject] = useState<ProjectDashboardSummary | null>(null);
+  const [reactivatingProject, setReactivatingProject] = useState<ProjectDashboardSummary | null>(null);
 
   const canUploadDesignLegacy = access.canUploadLegacyDesignData;
   const canUploadDesignNative = access.canUploadNativeDesignData;
@@ -158,6 +199,29 @@ export default function Dashboard() {
     },
   });
 
+  const reactivateMutation = useMutation({
+    mutationFn: ({ projectId, payload }: { projectId: string; payload: ReactivateProjectPayload }) =>
+      reactivateProject(projectId, payload),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "fixtures"] }),
+      ]);
+      setReactivatingProject(null);
+      toast({ title: "Project reactivated", description: result.message });
+    },
+    onError: (error) => {
+      toast({
+        title: "Reactivation failed",
+        description: error instanceof Error ? error.message : "Could not reactivate the project.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleToggleProjectModification = (project: ProjectDashboardSummary) => {
     modificationMutation.mutate({
       projectId: project.project_id,
@@ -165,11 +229,28 @@ export default function Dashboard() {
     });
   };
 
-  // ── Task data — only for project-authority users who need task-level metrics ─
-  const taskContext = isProjectFirstRole ? null : undefined;
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const { tasks: rawTasks, isLoading: _tasksLoading } = isProjectFirstRole ? { tasks: [] as never[], isLoading: false } : useTasks();
-  const safeTasks = rawTasks ?? [];
+  const canManageProjectLifecycle = (project: ProjectDashboardSummary | null | undefined) => {
+    if (!project) {
+      return false;
+    }
+
+    return isProjectAuthorityUser(user) || access.canAssignTasks;
+  };
+
+  const handleConfirmReactivation = (payload: ReactivateProjectPayload) => {
+    if (!reactivatingProject) {
+      return;
+    }
+
+    reactivateMutation.mutate({
+      projectId: reactivatingProject.project_id,
+      payload,
+    });
+  };
+
+  // ── Task data — project-authority users keep the project-first dashboard.
+  const { tasks: rawTasks, isLoading: _tasksLoading } = useTasks();
+  const safeTasks = isProjectFirstRole ? [] : rawTasks ?? [];
 
   const myTasks = safeTasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
   const viewTasks = access.canViewAllTasks ? safeTasks : myTasks;
@@ -339,12 +420,23 @@ export default function Dashboard() {
           </Card>
         ) : selectedProject && !selectedProjectActive ? (
           <Card>
-            <CardContent className="p-8 text-center text-muted-foreground">
+            <CardContent className="space-y-4 p-8 text-center text-muted-foreground">
               <p className="text-sm">
                 {selectedProject.project_status === "on_hold"
                   ? "This project is on hold. Fixtures are hidden from active workflows until it is activated."
                   : "This project is released or completed. Fixtures are hidden from active workflows."}
               </p>
+              {(selectedProject.project_status === "completed" || selectedProject.project_status === "released") && canManageProjectLifecycle(selectedProject) ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={reactivateMutation.isPending}
+                  onClick={() => setReactivatingProject(selectedProject)}
+                >
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Reactivate / Reopen for Modification
+                </Button>
+              ) : null}
             </CardContent>
           </Card>
         ) : fixtureQuery.isLoading ? (
@@ -404,8 +496,13 @@ export default function Dashboard() {
                       <ProjectCard
                         key={project.project_id}
                         project={project}
+                        canEditProject={canUploadDesignNative}
+                        canReactivateProject={canManageProjectLifecycle(project)}
+                        onEditProject={setEditingProject}
+                        onReactivateProject={setReactivatingProject}
                         onToggleModification={handleToggleProjectModification}
                         isToggling={modificationMutation.isPending}
+                        isReactivating={reactivateMutation.isPending}
                       />
                     ))}
                   </div>
@@ -415,6 +512,27 @@ export default function Dashboard() {
           )}
         </div>
       ) : null}
+
+      {editingProject ? (
+        <NativeProjectEditWorkspace
+          projectId={editingProject.project_id}
+          departmentId={editingProject.department_id}
+          onClose={() => setEditingProject(null)}
+        />
+      ) : null}
+
+      <ProjectReactivationDialog
+        open={Boolean(reactivatingProject)}
+        projectLabel={reactivatingProject ? formatProjectNumber(reactivatingProject) : ""}
+        projectName={reactivatingProject?.project_name}
+        isPending={reactivateMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReactivatingProject(null);
+          }
+        }}
+        onConfirm={handleConfirmReactivation}
+      />
 
     </div>
   );

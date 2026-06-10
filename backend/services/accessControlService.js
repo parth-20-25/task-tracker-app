@@ -412,6 +412,10 @@ function buildTaskSelfScopePredicate(params, user, {
 
   if (projectAlias) {
     ownerPredicates.push(`COALESCE(${projectAlias}.created_by_user_id = ${employeeIdParam}, FALSE)`);
+    if (user?.id) {
+      params.push(String(user.id));
+      ownerPredicates.push(`COALESCE(${projectAlias}.created_by_user_id = $${params.length}, FALSE)`);
+    }
   }
 
   return `

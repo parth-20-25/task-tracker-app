@@ -6,6 +6,7 @@ const {
   repairProjectDepartmentForFixture,
 } = require("../services/workflowRecoveryService");
 const { getStageVersionFromCompletedCount } = require("../lib/workflowStageVersioning");
+const { userIdentifierMatchSql } = require("./sqlFragments");
 
 function mapWorkflowStageRows(stageRows) {
   return stageRows.map((stage, index) => ({
@@ -219,7 +220,7 @@ async function listStageAttemptsForFixtures(fixtureIds, client = pool) {
        attempts.updated_at
      FROM fixture_workflow_stage_attempts attempts
      LEFT JOIN users assignee
-       ON assignee.employee_id = attempts.assigned_to
+       ON ${userIdentifierMatchSql("assignee", "attempts.assigned_to")}
      WHERE attempts.fixture_id = ANY($1::uuid[])
      ORDER BY attempts.fixture_id ASC, attempts.stage_name ASC, attempts.attempt_no ASC`,
     [fixtureIds],
@@ -248,7 +249,7 @@ async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
        attempts.updated_at
      FROM fixture_workflow_stage_attempts attempts
      LEFT JOIN users assignee
-       ON assignee.employee_id = attempts.assigned_to
+       ON ${userIdentifierMatchSql("assignee", "attempts.assigned_to")}
      WHERE attempts.fixture_id = $1
        AND attempts.stage_name = $2
      ORDER BY attempts.attempt_no DESC
@@ -516,9 +517,9 @@ async function listFixtureRevisions(fixtureId, departmentId, client = pool) {
         approver.name AS approved_by_name,
         changer.name AS changed_by_name
       FROM fixture_workflow_revisions fwr
-      LEFT JOIN users requester ON requester.employee_id = fwr.requested_by
-      LEFT JOIN users approver ON approver.employee_id = fwr.approved_by
-      LEFT JOIN users changer ON changer.employee_id = fwr.changed_by
+      LEFT JOIN users requester ON ${userIdentifierMatchSql("requester", "fwr.requested_by")}
+      LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "fwr.approved_by")}
+      LEFT JOIN users changer ON ${userIdentifierMatchSql("changer", "fwr.changed_by")}
       WHERE fwr.fixture_id = $1
         AND fwr.department_id = $2
       ORDER BY fwr.revision_no DESC, fwr.changed_at DESC

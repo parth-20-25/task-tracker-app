@@ -231,21 +231,21 @@ async function listStageAttemptsForFixtures(fixtureIds, client = pool) {
 
 async function getLatestStageAttempt(fixtureId, stageName, client = pool) {
   const result = await client.query(
-     `SELECT
-       id,
-       fixture_id,
-       department_id,
-       stage_name,
-       attempt_no,
-       stage_version,
-       status,
+    `SELECT
+       attempts.id,
+       attempts.fixture_id,
+       attempts.department_id,
+       attempts.stage_name,
+       attempts.attempt_no,
+       attempts.stage_version,
+       attempts.status,
        attempts.assigned_to,
        assignee.name AS assigned_to_name,
-       assigned_at,
-       started_at,
-       completed_at,
-       duration_minutes,
-       approved_at,
+       attempts.assigned_at,
+       attempts.started_at,
+       attempts.completed_at,
+       attempts.duration_minutes,
+       attempts.approved_at,
        attempts.updated_at
      FROM fixture_workflow_stage_attempts attempts
      LEFT JOIN users assignee

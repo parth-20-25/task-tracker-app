@@ -13,6 +13,9 @@ const {
 const {
   listBatchesWithSummaryForUser,
 } = require("../repositories/batchRepository");
+const {
+  insertCompletionSnapshot,
+} = require("../repositories/designCompletionRepository");
 
 test("fixture outsource upsert does not depend on a fixture_id unique constraint", async () => {
   const queries = [];
@@ -292,4 +295,32 @@ test("remembering recent outsource suppliers is optional when supplier table is 
   assert.deepEqual(suppliers, []);
   assert.equal(queries.length, 1);
   assert.match(queries[0], /INSERT INTO design\.recent_outsource_suppliers/i);
+});
+
+test("workflow completion snapshots are optional for release actions", async () => {
+  const queries = [];
+  const client = {
+    query: async (sql) => {
+      const text = String(sql);
+      queries.push(text);
+
+      if (/to_regclass/i.test(text)) {
+        return { rows: [{ exists: null }] };
+      }
+
+      throw new Error("snapshot insert should be skipped when the table is missing");
+    },
+  };
+
+  const snapshot = await insertCompletionSnapshot({
+    fixture_id: "fixture-1",
+    project_id: "project-1",
+    scope: "fixture",
+    trigger: "workflow_release",
+    payload: { fixture_id: "fixture-1" },
+  }, client);
+
+  assert.equal(snapshot, null);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /to_regclass/i);
 });

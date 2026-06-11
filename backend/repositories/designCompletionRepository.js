@@ -18,6 +18,11 @@ function mapFixtureBundleRow(row) {
   };
 }
 
+async function tableExists(qualifiedName, client = pool) {
+  const result = await client.query("SELECT to_regclass($1) AS exists", [qualifiedName]);
+  return Boolean(result.rows[0]?.exists);
+}
+
 async function loadStageWeightRowsForDepartment(departmentId, client = pool) {
   if (!departmentId) {
     return [];
@@ -233,6 +238,10 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
 }
 
 async function insertCompletionSnapshot(snapshot, client = pool) {
+  if (!(await tableExists("design.workflow_completion_snapshots", client))) {
+    return null;
+  }
+
   const result = await client.query(
     `
       INSERT INTO design.workflow_completion_snapshots (

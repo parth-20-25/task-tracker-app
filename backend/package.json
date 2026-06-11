@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node --test tests/databaseConfig.test.js tests/databaseSsl.test.js tests/outsourceWorkflow.test.js tests/projectCatalogRepository.test.js tests/projectCatalogService.test.js tests/projectReactivation.test.js && node tests/designIngestionDiffer.test.js && node --test tests/nativeIngestionValidation.test.js && node tests/designCompletionEngine.test.js",
+    "test": "node --test tests/bootstrapUsersSchema.test.js tests/databaseConfig.test.js tests/databaseSsl.test.js tests/outsourceWorkflow.test.js tests/projectCatalogRepository.test.js tests/projectCatalogService.test.js tests/projectReactivation.test.js && node tests/designIngestionDiffer.test.js && node --test tests/nativeIngestionValidation.test.js && node tests/designCompletionEngine.test.js",
     "test:completion": "node tests/designCompletionEngine.test.js"
   },
   "dependencies": {

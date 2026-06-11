@@ -79,6 +79,12 @@ async function ensureUsersTable(client) {
   `);
 
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS username_changed_at TIMESTAMP`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_bucket TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_path TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_updated_at TIMESTAMP`);
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id VARCHAR(50)`);
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
 

@@ -68,16 +68,20 @@ function activeTaskStatusSqlArray() {
   return `ARRAY[${ACTIVE_TASK_STATUSES.map((status) => `'${status}'`).join(", ")}]::text[]`;
 }
 
-function fixtureWorkflowCompleteSql(fixtureAlias = "f", projectAlias = "p") {
-  return `(
-    (
-      ${fixtureAlias}.is_workflow_complete IS TRUE
-      AND NOT EXISTS (
+function fixtureWorkflowCompleteSql(fixtureAlias = "f", projectAlias = "p", { includeOutsourceCheck = true } = {}) {
+  const noActiveOutsourceSql = includeOutsourceCheck
+    ? `AND NOT EXISTS (
         SELECT 1
         FROM design.fixture_outsource_records active_outsource
         WHERE active_outsource.fixture_id = ${fixtureAlias}.id
           AND active_outsource.outsource_status = 'outsourced'
-      )
+      )`
+    : `AND COALESCE(${fixtureAlias}.is_outsourced, FALSE) IS FALSE`;
+
+  return `(
+    (
+      ${fixtureAlias}.is_workflow_complete IS TRUE
+      ${noActiveOutsourceSql}
     )
     OR (
       EXISTS (
@@ -93,12 +97,7 @@ function fixtureWorkflowCompleteSql(fixtureAlias = "f", projectAlias = "p") {
           AND incomplete_progress.department_id = ${projectAlias}.department_id
           AND UPPER(COALESCE(incomplete_progress.status, '')) <> 'APPROVED'
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM design.fixture_outsource_records active_outsource
-        WHERE active_outsource.fixture_id = ${fixtureAlias}.id
-          AND active_outsource.outsource_status = 'outsourced'
-      )
+      ${noActiveOutsourceSql}
     )
   )`;
 }
@@ -168,13 +167,14 @@ function operationalStateSqlCase({
   projectAlias = "p",
   taskAlias = "operational_task",
   progressAlias = "current_progress",
+  includeOutsourceCompletionCheck = true,
 } = {}) {
   return `CASE
     WHEN ${taskAlias}.status = 'under_review' AND ${taskAlias}.verification_status = 'pending' THEN '${OPERATIONAL_STATES.VERIFICATION}'
     WHEN ${progressAlias}.status = 'SUBMITTED_FOR_VERIFICATION' THEN '${OPERATIONAL_STATES.VERIFICATION}'
     WHEN ${taskAlias}.status = 'rework' THEN '${OPERATIONAL_STATES.REWORK}'
     WHEN ${progressAlias}.status = 'REJECTED' THEN '${OPERATIONAL_STATES.REWORK}'
-    WHEN ${fixtureWorkflowCompleteSql(fixtureAlias, projectAlias)} THEN '${OPERATIONAL_STATES.WORKFLOW_COMPLETE}'
+    WHEN ${fixtureWorkflowCompleteSql(fixtureAlias, projectAlias, { includeOutsourceCheck: includeOutsourceCompletionCheck })} THEN '${OPERATIONAL_STATES.WORKFLOW_COMPLETE}'
     WHEN ${taskAlias}.id IS NOT NULL AND COALESCE(${taskAlias}.completion_percent, 0) > 0 THEN '${OPERATIONAL_STATES.IN_PROGRESS}'
     WHEN ${taskAlias}.id IS NOT NULL THEN '${OPERATIONAL_STATES.ASSIGNED}'
     WHEN ${progressAlias}.assigned_to IS NOT NULL OR ${progressAlias}.status IN ('IN_PROGRESS', 'SUBMITTED_FOR_VERIFICATION') THEN '${OPERATIONAL_STATES.ASSIGNED}'

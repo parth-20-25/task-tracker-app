@@ -53,6 +53,17 @@ import { analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskQueryKeys } f
 import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { cn } from "@/lib/utils";
 import { resolveImageUrl } from "@/lib/imageUrl";
+import {
+  compactWorkflowCode,
+  getCurrentFixtureStageLabel,
+  getFixtureCurrentRevisionLabel,
+  getFixtureOutsourceStatus,
+  getFixtureWorkflowCode,
+  isFixtureActiveOutsourcedSection,
+  isFixtureCurrentStageOutsourced,
+  isFixtureOutsourcePlanActive,
+  normalizeStageKey,
+} from "@/lib/outsourceWorkflowDisplay";
 import type { DesignFixtureOption, OutsourceStage, Priority, Task, User as AppUser } from "@/types";
 
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
@@ -94,19 +105,6 @@ const revisionReasonOptions: Array<{ value: FixtureRevisionType; label: string }
   { value: "MANUAL_OVERRIDE", label: "Manual Override" },
   { value: "OTHER", label: "Other" },
 ];
-
-function compactWorkflowCode(value: string | null | undefined) {
-  const normalized = String(value || "").trim();
-  return normalized ? normalized.replace(/\s+/g, "") : null;
-}
-
-function normalizeStageKey(value: string | null | undefined) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
 
 function isReleaseStageName(value: string | null | undefined) {
   const normalized = normalizeStageKey(value);
@@ -150,10 +148,6 @@ function saveRecentSupplierName(supplierName: string, current: string[] = []) {
     window.localStorage.setItem(RECENT_SUPPLIERS_STORAGE_KEY, JSON.stringify(next));
   }
   return next;
-}
-
-function getFixtureWorkflowCode(fixture: DesignFixtureOption) {
-  return compactWorkflowCode(fixture.workflow_revision_code);
 }
 
 function getStageWorkflowCode(stage: FixtureFullProgress["stages"][number] | null | undefined) {
@@ -249,71 +243,6 @@ function fixtureStageStatusLabel(status: string | null | undefined) {
   }
 }
 
-function fixtureStageStatusColor(status: string | null | undefined) {
-  switch (status?.toUpperCase()) {
-    case "IN_PROGRESS":
-      return "border-sky-300 bg-sky-50 text-sky-800";
-    case "PENDING":
-      return "border-amber-300 bg-amber-50 text-amber-800";
-    case "APPROVED":
-      return "border-emerald-300 bg-emerald-50 text-emerald-800";
-    case "WORKFLOW_COMPLETE":
-      return "border-emerald-300 bg-emerald-50 text-emerald-800";
-    case "REJECTED":
-    case "REWORK":
-      return "border-red-300 bg-red-50 text-red-800";
-    case "VERIFICATION":
-      return "border-violet-300 bg-violet-50 text-violet-800";
-    case "UNASSIGNED":
-      return "border-slate-300 bg-slate-50 text-slate-700";
-    default:
-      return "border-slate-300 bg-slate-50 text-slate-700";
-  }
-}
-
-function getFixtureOutsourceStatus(fixture: DesignFixtureOption) {
-  return fixture.outsource_status || (fixture.is_outsourced === true ? "outsourced" : null);
-}
-
-function canonicalOutsourceStageFromWorkflowStage(value: string | null | undefined): OutsourceStage | null {
-  const normalized = normalizeStageKey(value);
-  if (normalized === "concept" || normalized === "concept_stage") {
-    return "Concept";
-  }
-  if (normalized === "3d" || normalized === "3d_finish" || normalized === "three_d" || normalized === "three_d_finish") {
-    return "3D";
-  }
-  if (normalized === "2d" || normalized === "2d_finish" || normalized === "two_d" || normalized === "two_d_finish") {
-    return "2D";
-  }
-  return null;
-}
-
-function isFixtureOutsourcePlanActive(fixture: DesignFixtureOption) {
-  const status = getFixtureOutsourceStatus(fixture);
-  return status === "outsourced";
-}
-
-function hasFixtureOutsourcePlan(fixture: DesignFixtureOption) {
-  const status = getFixtureOutsourceStatus(fixture);
-  return fixture.is_outsourced === true
-    && status !== "brought_in_house"
-    && (fixture.outsourced_stages || []).length > 0;
-}
-
-function isFixtureCurrentStageOutsourced(fixture: DesignFixtureOption) {
-  if (fixture.is_workflow_complete === true || !hasFixtureOutsourcePlan(fixture)) {
-    return false;
-  }
-
-  const currentStage = canonicalOutsourceStageFromWorkflowStage(getCurrentFixtureStageLabel(fixture));
-  return Boolean(currentStage && fixture.outsourced_stages?.includes(currentStage));
-}
-
-function isFixtureActiveOutsourcedSection(fixture: DesignFixtureOption) {
-  return isFixtureCurrentStageOutsourced(fixture);
-}
-
 function formatDisplayDate(value: string | null | undefined, fallback = "Not set") {
   if (!value) {
     return fallback;
@@ -343,35 +272,9 @@ function getFixtureReleasedBy(fixture: DesignFixtureOption) {
   return formatEmployeeDisplay(fixture.workflow_released_by || null, fixture.workflow_released_by_name);
 }
 
-function getCurrentFixtureStageLabel(fixture: DesignFixtureOption) {
-  if (fixture.is_workflow_complete === true) {
-    return "Release";
-  }
-
-  return fixture.workflow_stage_label || fixture.workflow_stage || "Pending";
-}
-
 function isDapStageName(value: string | null | undefined) {
   const normalized = normalizeStageKey(value);
   return normalized === "dap" || normalized === "d_a_p";
-}
-
-function getOutsourcedCurrentStatusLabel(fixture: DesignFixtureOption) {
-  if (fixture.is_workflow_complete === true) {
-    return "Released";
-  }
-
-  const status = getFixtureOutsourceStatus(fixture);
-  const workflowStatus = fixtureStageStatusLabel(fixture.workflow_status || fixture.operational_state);
-  if (status === "completed" && isDapStageName(getCurrentFixtureStageLabel(fixture))) {
-    return `Supplier Complete / DAP ${workflowStatus}`;
-  }
-
-  if (status === "completed") {
-    return `Supplier Complete / ${workflowStatus}`;
-  }
-
-  return workflowStatus;
 }
 
 function formatSubmittedDate(value: string | null | undefined) {
@@ -614,7 +517,7 @@ const FIXTURE_SECTION_STYLES: Record<FixtureSectionKey, {
     background: "#FAEEDA",
     text: "#9A5A00",
     accent: "#D88900",
-    description: "Delegated to an external party",
+    description: "Delegated to external supplier",
   },
   VERIFICATION: {
     background: "#E1F5EE",
@@ -860,11 +763,14 @@ export function ProjectFixtureOperationsGrid({
               key={section.key}
               open={openSections[section.key] ?? true}
               onOpenChange={(open) => setOpenSections((current) => ({ ...current, [section.key]: open }))}
-              className="overflow-hidden rounded-lg border bg-background"
-              style={{ borderColor: sectionStyle.accent }}
+              className="overflow-hidden rounded-lg border"
+              style={{
+                backgroundColor: sectionStyle.background,
+                borderColor: sectionStyle.accent,
+              }}
             >
               <CollapsibleTrigger
-                className="flex w-full items-center justify-between gap-3 border-l-4 px-3 py-2.5 text-left"
+                className="flex w-full items-center justify-between gap-3 border-l-4 px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 style={{
                   backgroundColor: sectionStyle.background,
                   borderLeftColor: sectionStyle.accent,
@@ -878,22 +784,26 @@ export function ProjectFixtureOperationsGrid({
                     style={{ backgroundColor: sectionStyle.accent }}
                   />
                   <span className="min-w-0">
-                    <span className="block text-sm font-semibold leading-tight">{section.label}</span>
+                    <span className="block text-sm font-semibold leading-tight" style={{ color: sectionStyle.text }}>{section.label}</span>
                     <span className="block text-xs leading-snug opacity-90">{sectionStyle.description}</span>
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-xs">
                   <Badge
                     variant="outline"
-                    className="bg-white/55 font-semibold"
-                    style={{ borderColor: sectionStyle.accent, color: sectionStyle.text }}
+                    className="font-semibold"
+                    style={{
+                      backgroundColor: sectionStyle.background,
+                      borderColor: sectionStyle.accent,
+                      color: sectionStyle.text,
+                    }}
                   >
                     {section.fixtures.length} fixture{section.fixtures.length === 1 ? "" : "s"}
                   </Badge>
                   <ChevronDown className={cn("h-4 w-4 transition-transform", openSections[section.key] ? "rotate-180" : "")} />
                 </span>
               </CollapsibleTrigger>
-              <CollapsibleContent className="border-t p-3">
+              <CollapsibleContent className="border-t bg-background p-3" style={{ borderTopColor: sectionStyle.accent }}>
                 {section.fixtures.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
                 ) : section.key === "OUTSOURCED" ? (
@@ -967,8 +877,7 @@ function OutsourcedFixturesTable({
             <TableHead className="w-[130px]">Fixture No</TableHead>
             <TableHead className="min-w-[200px]">Fixture Name</TableHead>
             <TableHead className="min-w-[160px]">Supplier</TableHead>
-            <TableHead className="min-w-[160px]">Outsourced Stages</TableHead>
-            <TableHead className="min-w-[150px]">Current Stage</TableHead>
+            <TableHead className="min-w-[150px]">Current Revision</TableHead>
             <TableHead className="min-w-[170px]">Current Status</TableHead>
             <TableHead className="min-w-[130px]">Outsourced Date</TableHead>
             <TableHead className="min-w-[260px] text-right">Actions</TableHead>
@@ -1073,19 +982,6 @@ function OutsourcedFixtureRow({
           <div className="max-w-[220px] whitespace-normal text-xs font-medium">{fixture.vendor_name || "Not set"}</div>
         </TableCell>
         <TableCell className="align-top">
-          <div className="flex max-w-[220px] flex-wrap gap-1">
-            {(fixture.outsourced_stages || []).length > 0 ? (
-              fixture.outsourced_stages?.map((stage) => (
-                <Badge key={stage} variant="outline" className="border-cyan-300 bg-cyan-50 text-[11px] text-cyan-800">
-                  {stage}
-                </Badge>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground">Not set</span>
-            )}
-          </div>
-        </TableCell>
-        <TableCell className="align-top">
           <Badge
             variant="outline"
             className={cn(
@@ -1095,14 +991,14 @@ function OutsourcedFixtureRow({
                 : "border-indigo-300 bg-indigo-50 text-indigo-800",
             )}
           >
-            {getCurrentFixtureStageLabel(fixture)}
+            {getFixtureCurrentRevisionLabel(fixture)}
           </Badge>
         </TableCell>
         <TableCell className="align-top">
           <div className="flex flex-col gap-1">
-            <Badge variant="outline" className={cn("w-fit text-[11px] font-medium", fixtureStageStatusColor(fixture.workflow_status || fixture.operational_state))}>
-              {getOutsourcedCurrentStatusLabel(fixture)}
-            </Badge>
+            <span className="w-fit text-xs font-medium text-slate-700">
+              {fixtureStageStatusLabel(fixture.workflow_status || fixture.operational_state)}
+            </span>
             {operationalResolution.activeAssigneeName ? (
               <span className="text-[11px] text-muted-foreground">{operationalResolution.activeAssigneeName}</span>
             ) : null}
@@ -1933,16 +1829,12 @@ function ProjectFixtureCard({
   const requiresReasonType = workflowChanged && !releaseSelected && !isWorkflowCompleteReassign;
 
   const proofImage = getProofImage(task);
-  const outsourceStatus = getFixtureOutsourceStatus(fixture);
-  const isOutsourceCompleted = outsourceStatus === "completed";
   const hasActiveOutsourcePlan = isFixtureOutsourcePlanActive(fixture);
-  const isOutsourced = hasFixtureOutsourcePlan(fixture);
   const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
   const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
   const releaseDateLabel = formatDisplayDate(getFixtureReleaseDate(fixture), "Not recorded");
   const releasedByLabel = getFixtureReleasedBy(fixture);
-  const operationalStatus = fixtureStageStatusLabel(canonicalOperationalState);
   const canCancelTask = canCancelFixtureOperationalTask(task, canonicalOperationalState, user, access);
   const canToggleOutsourcing = access.canAccessProjectFixtures && access.canChangeFixtureStage;
 
@@ -2271,28 +2163,6 @@ function ProjectFixtureCard({
                 {workflowCode}
               </Badge>
             ) : null}
-            {isOutsourced ? (
-              <Badge
-                variant="outline"
-                className={cn(
-                  "gap-0.5 text-xs font-semibold",
-                  isOutsourceCompleted
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : "border-slate-300 bg-slate-50 text-slate-700",
-                )}
-              >
-                <Factory className="h-3 w-3" />
-                {isOutsourceCompleted ? "Outsource Completed" : "Outsourced"}
-              </Badge>
-            ) : null}
-            {fixture.outsourced_stages && fixture.outsourced_stages.length > 0 ? (
-              <Badge variant="outline" className="max-w-[12rem] truncate border-cyan-300 bg-cyan-50 text-xs font-medium text-cyan-800">
-                {fixture.outsourced_stages.join(", ")}
-              </Badge>
-            ) : null}
-            <Badge variant="outline" className={cn("text-xs font-medium", fixtureStageStatusColor(canonicalOperationalState))}>
-              {operationalStatus}
-            </Badge>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
@@ -2408,12 +2278,7 @@ function ProjectFixtureCard({
                 </Button>
               ) : null}
             </div>
-            {isOutsourceCompleted ? (
-              <Badge variant="outline" className="h-7 gap-1 border-emerald-300 bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700">
-                <CheckSquare className="h-3 w-3" />
-                Completed
-              </Badge>
-            ) : canToggleOutsourcing ? (
+            {canToggleOutsourcing ? (
               <Button
                 type="button"
                 size="sm"

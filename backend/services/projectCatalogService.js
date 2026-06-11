@@ -9,6 +9,7 @@ const {
 } = require("../lib/departmentContext");
 const { isDesignDepartment } = require("../lib/designDepartment");
 const {
+  findFixtureAssignmentContextByIdForUser,
   findFixtureByIdForUser,
   findProjectByIdForUser,
   getProjectModificationContextForUser,
@@ -362,7 +363,7 @@ async function createDesignTaskFromProject(user, payload = {}) {
     throw new AppError(409, "Project is not active for assignment");
   }
 
-  const fixture = await findFixtureByIdForUser(fixtureId, user, departmentId);
+  const fixture = await findFixtureAssignmentContextByIdForUser(fixtureId, user, departmentId);
   if (!fixture) {
     throw new AppError(404, "Fixture not found");
   }

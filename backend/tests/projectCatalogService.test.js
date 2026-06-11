@@ -108,6 +108,159 @@ function installOutsourceMocks() {
   };
 }
 
+function installAssignmentMocks(stageName) {
+  const db = require("../db");
+  const projectRepository = require("../repositories/designProjectCatalogRepository");
+  const workflowRepository = require("../repositories/fixtureWorkflowRepository");
+  const contributionRepository = require("../repositories/designStageContributionRepository");
+  const auditRepository = require("../repositories/auditRepository");
+  const taskService = require("../services/taskService");
+  const fixtureWorkflowService = require("../services/fixtureWorkflowService");
+  const subdivisionRoutingRepository = require("../repositories/projectSubdivisionRoutingRepository");
+
+  const originals = {
+    connect: db.pool.connect,
+    findProjectByIdForUser: projectRepository.findProjectByIdForUser,
+    listProjectSummariesForUser: projectRepository.listProjectSummariesForUser,
+    findFixtureAssignmentContextByIdForUser: projectRepository.findFixtureAssignmentContextByIdForUser,
+    findFixtureByIdForUser: projectRepository.findFixtureByIdForUser,
+    getConfiguredWorkflowForDepartment: workflowRepository.getConfiguredWorkflowForDepartment,
+    getProgressForFixture: workflowRepository.getProgressForFixture,
+    updateProgressRow: workflowRepository.updateProgressRow,
+    startStageAttempt: workflowRepository.startStageAttempt,
+    listStageContributions: contributionRepository.listStageContributions,
+    insertStageContribution: contributionRepository.insertStageContribution,
+    createAuditLog: auditRepository.createAuditLog,
+    createTaskForUser: taskService.createTaskForUser,
+    getCurrentStage: fixtureWorkflowService.getCurrentStage,
+    projectHasActive2DRouting: subdivisionRoutingRepository.projectHasActive2DRouting,
+  };
+
+  const calls = {
+    assignmentFixtureLookup: 0,
+    outsourceFixtureLookup: 0,
+    progressUpdates: [],
+    stageAttempts: [],
+    contributions: [],
+    tasks: [],
+    audits: [],
+    tx: [],
+  };
+
+  const client = {
+    query: async (sql) => {
+      const normalizedSql = String(sql).trim();
+      calls.tx.push(normalizedSql);
+      return { rows: [], rowCount: 0 };
+    },
+    release: () => calls.tx.push("RELEASE"),
+  };
+
+  const project = {
+    project_id: "project-1",
+    project_code: "PRJ-1",
+    project_name: "Project One",
+    company_name: "Customer One",
+    department_id: "design",
+  };
+  const fixture = {
+    fixture_id: "11111111-1111-1111-1111-111111111111",
+    project_id: project.project_id,
+    department_id: "design",
+    fixture_no: "FX-001",
+    part_name: "Fixture One",
+    qty: 1,
+  };
+  const workflowStage = { id: `stage-${stageName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, name: stageName };
+  const progressRow = {
+    fixture_id: fixture.fixture_id,
+    department_id: "design",
+    stage_name: stageName,
+    stage_order: 1,
+    stage_version: 0,
+    status: "PENDING",
+  };
+
+  db.pool.connect = async () => client;
+  projectRepository.findProjectByIdForUser = async () => project;
+  projectRepository.listProjectSummariesForUser = async () => [{
+    project_id: project.project_id,
+    project_status: "active",
+    is_modified: false,
+    completion_percent: 0,
+    total_fixtures: 1,
+    completed_tasks: 0,
+  }];
+  projectRepository.findFixtureAssignmentContextByIdForUser = async () => {
+    calls.assignmentFixtureLookup += 1;
+    return fixture;
+  };
+  projectRepository.findFixtureByIdForUser = async () => {
+    calls.outsourceFixtureLookup += 1;
+    const error = new Error('relation "design.fixture_outsource_records" does not exist');
+    error.code = "42P01";
+    throw error;
+  };
+  workflowRepository.getConfiguredWorkflowForDepartment = async () => ({
+    id: "workflow-design",
+    stages: [workflowStage],
+  });
+  workflowRepository.getProgressForFixture = async () => [progressRow];
+  workflowRepository.updateProgressRow = async (fixtureId, updatedStageName, fields, txClient) => {
+    assert.equal(txClient, client);
+    calls.progressUpdates.push({ fixtureId, stageName: updatedStageName, fields });
+  };
+  workflowRepository.startStageAttempt = async (fixtureId, departmentId, updatedStageName, assignedTo, timestamp, txClient) => {
+    assert.equal(txClient, client);
+    calls.stageAttempts.push({ fixtureId, departmentId, stageName: updatedStageName, assignedTo, timestamp });
+  };
+  contributionRepository.listStageContributions = async () => [];
+  contributionRepository.insertStageContribution = async (entry, txClient) => {
+    assert.equal(txClient, client);
+    calls.contributions.push(entry);
+  };
+  taskService.createTaskForUser = async (_user, payload, options) => {
+    assert.equal(options.client, client);
+    calls.tasks.push(payload);
+    return { id: calls.tasks.length, ...payload, status: "assigned" };
+  };
+  auditRepository.createAuditLog = async (entry, txClient) => {
+    assert.equal(txClient, client);
+    calls.audits.push(entry);
+  };
+  fixtureWorkflowService.getCurrentStage = async () => ({
+    stage: stageName,
+    stage_order: 1,
+    status: "PENDING",
+    is_complete: false,
+  });
+  subdivisionRoutingRepository.projectHasActive2DRouting = async () => false;
+
+  clearProjectCatalogServiceCache();
+
+  return {
+    calls,
+    restore() {
+      db.pool.connect = originals.connect;
+      projectRepository.findProjectByIdForUser = originals.findProjectByIdForUser;
+      projectRepository.listProjectSummariesForUser = originals.listProjectSummariesForUser;
+      projectRepository.findFixtureAssignmentContextByIdForUser = originals.findFixtureAssignmentContextByIdForUser;
+      projectRepository.findFixtureByIdForUser = originals.findFixtureByIdForUser;
+      workflowRepository.getConfiguredWorkflowForDepartment = originals.getConfiguredWorkflowForDepartment;
+      workflowRepository.getProgressForFixture = originals.getProgressForFixture;
+      workflowRepository.updateProgressRow = originals.updateProgressRow;
+      workflowRepository.startStageAttempt = originals.startStageAttempt;
+      contributionRepository.listStageContributions = originals.listStageContributions;
+      contributionRepository.insertStageContribution = originals.insertStageContribution;
+      auditRepository.createAuditLog = originals.createAuditLog;
+      taskService.createTaskForUser = originals.createTaskForUser;
+      fixtureWorkflowService.getCurrentStage = originals.getCurrentStage;
+      subdivisionRoutingRepository.projectHasActive2DRouting = originals.projectHasActive2DRouting;
+      clearProjectCatalogServiceCache();
+    },
+  };
+}
+
 test("active modified projects remain available for project fixture assignment", async () => {
   const { shouldHideProjectFromActiveSelection } = loadProjectCatalogService();
 
@@ -120,6 +273,51 @@ test("active modified projects remain available for project fixture assignment",
     completed_tasks: 5,
   }), false);
 });
+
+for (const stageName of ["Concept", "DAP", "3D Finish", "2D Finish"]) {
+  test(`design assignment creates ${stageName} task without requiring outsource display tables`, async () => {
+    const mocks = installAssignmentMocks(stageName);
+
+    try {
+      const { createDesignTaskFromProject } = require("../services/projectCatalogService");
+      const task = await createDesignTaskFromProject(
+        {
+          employee_id: "MGR-1",
+          department_id: "design",
+          role: { id: "r1", role_key: "admin" },
+        },
+        {
+          department_id: "design",
+          project_id: "project-1",
+          fixture_id: "11111111-1111-1111-1111-111111111111",
+          description: "Fixture One",
+          assigned_to: "DES-1",
+          assignee_ids: ["DES-1"],
+          priority: "high",
+          deadline: "2026-06-12T23:59:59.999Z",
+        },
+      );
+
+      assert.equal(task.id, 1);
+      assert.equal(mocks.calls.assignmentFixtureLookup, 1);
+      assert.equal(mocks.calls.outsourceFixtureLookup, 0);
+      assert.equal(mocks.calls.progressUpdates.length, 1);
+      assert.equal(mocks.calls.progressUpdates[0].stageName, stageName);
+      assert.equal(mocks.calls.progressUpdates[0].fields.status, "IN_PROGRESS");
+      assert.equal(mocks.calls.stageAttempts.length, 1);
+      assert.equal(mocks.calls.stageAttempts[0].stageName, stageName);
+      assert.equal(mocks.calls.contributions.length, 1);
+      assert.equal(mocks.calls.tasks.length, 1);
+      assert.equal(mocks.calls.tasks[0].current_stage_id, `stage-${stageName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+      assert.equal(mocks.calls.audits.length, 1);
+      assert.ok(mocks.calls.tx.includes("BEGIN"));
+      assert.ok(mocks.calls.tx.includes("COMMIT"));
+      assert.equal(mocks.calls.tx.includes("ROLLBACK"), false);
+    } finally {
+      mocks.restore();
+    }
+  });
+}
 
 test("unmodified completed active projects stay hidden from active assignment", async () => {
   const { shouldHideProjectFromActiveSelection } = loadProjectCatalogService();

@@ -135,6 +135,44 @@ test("2D outsourced completion closes the workflow when it is the final design s
   assert.equal(canCompleteWorkflowAfterOutsource(progressRows, ["2D"]), true);
 });
 
+test("concept plus 3D outsourced leaves DAP internal and advances 3D to internal 2D", () => {
+  const conceptTransition = resolveOutsourceStageCompletion([
+    { stage_name: "Concept", stage_order: 1, status: "PENDING" },
+    { stage_name: "DAP", stage_order: 2, status: "PENDING" },
+    { stage_name: "3D Finish", stage_order: 3, status: "PENDING" },
+    { stage_name: "2D Finish", stage_order: 4, status: "PENDING" },
+  ], ["Concept", "3D"]);
+  assert.equal(conceptTransition.canComplete, true);
+  assert.equal(conceptTransition.currentStageName, "Concept");
+  assert.equal(conceptTransition.nextStageName, "DAP");
+  assert.deepEqual(conceptTransition.stageNamesToApprove, ["Concept"]);
+  assert.deepEqual(conceptTransition.remainingOutsourcedStageNames, ["3D Finish"]);
+
+  const dapTransition = resolveOutsourceStageCompletion([
+    { stage_name: "Concept", stage_order: 1, status: "APPROVED" },
+    { stage_name: "DAP", stage_order: 2, status: "PENDING" },
+    { stage_name: "3D Finish", stage_order: 3, status: "PENDING" },
+    { stage_name: "2D Finish", stage_order: 4, status: "PENDING" },
+  ], ["Concept", "3D"]);
+  assert.equal(dapTransition.canComplete, false);
+  assert.equal(dapTransition.currentStageName, "DAP");
+  assert.equal(dapTransition.currentStageIsOutsourced, false);
+  assert.deepEqual(dapTransition.remainingOutsourcedStageNames, ["3D Finish"]);
+
+  const threeDTransition = resolveOutsourceStageCompletion([
+    { stage_name: "Concept", stage_order: 1, status: "APPROVED" },
+    { stage_name: "DAP", stage_order: 2, status: "APPROVED" },
+    { stage_name: "3D Finish", stage_order: 3, status: "PENDING" },
+    { stage_name: "2D Finish", stage_order: 4, status: "PENDING" },
+  ], ["Concept", "3D"]);
+  assert.equal(threeDTransition.canComplete, true);
+  assert.equal(threeDTransition.currentStageName, "3D Finish");
+  assert.equal(threeDTransition.nextStageName, "2D Finish");
+  assert.deepEqual(threeDTransition.stageNamesToApprove, ["3D Finish"]);
+  assert.deepEqual(threeDTransition.remainingOutsourcedStageNames, []);
+  assert.equal(threeDTransition.workflowMarkedComplete, false);
+});
+
 test("concept plus 3D plus 2D outsourced follows the expected staged sequence", () => {
   const conceptTransition = resolveOutsourceStageCompletion([
     { stage_name: "Concept", stage_order: 1, status: "PENDING" },

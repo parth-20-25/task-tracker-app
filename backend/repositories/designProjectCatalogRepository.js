@@ -132,6 +132,57 @@ const FIXTURE_RELEASE_SELECT = `
         workflow_release_actor.name AS workflow_released_by_name
 `;
 
+const FIXTURE_OUTSOURCE_FALLBACK_SELECT = `
+        COALESCE(di.is_outsourced, FALSE) AS is_outsourced,
+        di.vendor_name AS vendor_name,
+        CASE WHEN COALESCE(di.is_outsourced, FALSE) THEN '${OUTSOURCE_STATUSES.OUTSOURCED}' ELSE NULL END AS outsource_status,
+        NULL::text[] AS outsourced_stages,
+        di.outsourced_at,
+        di.outsourced_by,
+        NULL::varchar(50) AS completed_by,
+        NULL::timestamptz AS completed_at,
+        NULL::varchar(50) AS brought_in_house_by,
+        NULL::timestamptz AS brought_in_house_at,
+        NULL::timestamptz AS outsource_created_at,
+        NULL::timestamptz AS outsource_updated_at
+`;
+
+const FIXTURE_RELEASE_FALLBACK_SELECT = `
+        NULL::text AS workflow_revision_stage,
+        NULL::integer AS workflow_revision_stage_version,
+        NULL::timestamptz AS workflow_released_at,
+        NULL::varchar(50) AS workflow_released_by,
+        NULL::text AS workflow_released_by_name
+`;
+
+function fixtureOptionalFragments(includeOptionalTables = true) {
+  return includeOptionalTables
+    ? {
+        outsourceSelect: FIXTURE_OUTSOURCE_SELECT,
+        outsourceJoin: FIXTURE_OUTSOURCE_JOIN,
+        releaseSelect: FIXTURE_RELEASE_SELECT,
+        revisionProgressJoin: FIXTURE_REVISION_PROGRESS_JOIN,
+        releaseSnapshotJoin: FIXTURE_RELEASE_SNAPSHOT_JOIN,
+      }
+    : {
+        outsourceSelect: FIXTURE_OUTSOURCE_FALLBACK_SELECT,
+        outsourceJoin: "",
+        releaseSelect: FIXTURE_RELEASE_FALLBACK_SELECT,
+        revisionProgressJoin: "",
+        releaseSnapshotJoin: "",
+      };
+}
+
+function isMissingOptionalFixtureRelation(error) {
+  if (error?.code !== "42P01") {
+    return false;
+  }
+
+  const relation = String(error.relation || error.message || "");
+  return relation.includes("fixture_outsource_records")
+    || relation.includes("workflow_completion_snapshots");
+}
+
 const DEPARTMENT_PROJECT_SELECT = `
   SELECT
     p.id AS project_id,
@@ -425,11 +476,12 @@ function projectModificationPermissionSql(projectAlias = "p", employeeExpression
   `;
 }
 
-function fixtureOperationalStatsLateral(projectAlias = "p") {
+function fixtureOperationalStatsLateral(projectAlias = "p", { includeOptionalTables = true } = {}) {
   const stateCase = operationalStateSqlCase({
     fixtureAlias: "f",
     projectAlias,
     taskAlias: "operational_task",
+    includeOutsourceCompletionCheck: includeOptionalTables,
   });
 
   return `
@@ -733,8 +785,9 @@ async function updateProjectModificationFlag(projectId, isModified, client = poo
 }
 
 async function listProjectSummariesForUser(user, { departmentId = null } = {}, client = pool) {
-  const result = await client.query(
-    `
+  const querySummaries = async (includeOptionalTables) => {
+    const result = await client.query(
+      `
       ${buildVisibleUsersCte("$1")}
       SELECT
         p.id AS project_id,
@@ -768,7 +821,7 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         { expression: "p.created_by_user_id", source: "project_created_by_user_id" },
       ])}
       ${hierarchyTeamLeaderLateral("p")}
-      ${fixtureOperationalStatsLateral("p")}
+      ${fixtureOperationalStatsLateral("p", { includeOptionalTables })}
       WHERE ($2::text IS NULL OR p.department_id = $2)
         AND ${visibleProjectPredicate("p")}
       ORDER BY
@@ -782,18 +835,31 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         p.created_at DESC,
         p.project_no ASC
     `,
-    [
-      user.employee_id,
-      departmentId || null,
-      PROJECT_STATUSES.ACTIVE,
-      PROJECT_STATUSES.COMPLETED,
-      PROJECT_STATUSES.ON_HOLD,
-    ],
-  );
+      [
+        user.employee_id,
+        departmentId || null,
+        PROJECT_STATUSES.ACTIVE,
+        PROJECT_STATUSES.COMPLETED,
+        PROJECT_STATUSES.ON_HOLD,
+      ],
+    );
+
+    return result.rows;
+  };
+
+  let rows = null;
+  try {
+    rows = await querySummaries(true);
+  } catch (error) {
+    if (!isMissingOptionalFixtureRelation(error)) {
+      throw error;
+    }
+    rows = await querySummaries(false);
+  }
 
   const { enrichProjectSummariesWithCompletionTruth } = require("../services/designCompletion/designCompletionEngine");
   const enrichedRows = await enrichProjectSummariesWithCompletionTruth(
-    result.rows.map(mapProjectSummaryRow).filter(Boolean),
+    rows.map(mapProjectSummaryRow).filter(Boolean),
     client,
   );
 
@@ -1087,8 +1153,16 @@ async function findActiveUploadBatchIdForProject(projectId, client = pool) {
 }
 
 async function listFixturesByProjectForDepartment(projectId, departmentId, { activeOnly = false } = {}, client = pool) {
-  const result = await client.query(
-    `
+  const queryFixtures = async (includeOptionalTables) => {
+    const fragments = fixtureOptionalFragments(includeOptionalTables);
+    const stateCase = operationalStateSqlCase({
+      fixtureAlias: "di",
+      projectAlias: "dp",
+      taskAlias: "operational_task",
+      includeOutsourceCompletionCheck: includeOptionalTables,
+    });
+    const result = await client.query(
+      `
       SELECT
         di.id AS fixture_id,
         di.project_id,
@@ -1102,7 +1176,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        ${FIXTURE_OUTSOURCE_SELECT},
+        ${fragments.outsourceSelect},
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete,
@@ -1111,11 +1185,11 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         current_progress.stage_order AS workflow_stage_order,
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
-        ${FIXTURE_RELEASE_SELECT},
+        ${fragments.releaseSelect},
         current_progress.status AS workflow_status,
         COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
         COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
-        ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })} AS operational_state,
+        ${stateCase} AS operational_state,
         operational_task.id AS operational_task_id,
         operational_task.status AS operational_task_status,
         operational_task.completion_percent AS operational_task_completion_percent,
@@ -1125,18 +1199,18 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
-      ${FIXTURE_OUTSOURCE_JOIN}
+      ${fragments.outsourceJoin}
       ${activeTaskLateral("di", "operational_task")}
       ${currentProgressLateral("di", "dp", "current_progress")}
-      ${FIXTURE_REVISION_PROGRESS_JOIN}
-      ${FIXTURE_RELEASE_SNAPSHOT_JOIN}
+      ${fragments.revisionProgressJoin}
+      ${fragments.releaseSnapshotJoin}
       LEFT JOIN users workflow_assignee
         ON ${userIdentifierMatchSql("workflow_assignee", "COALESCE(operational_task.assigned_to, current_progress.assigned_to)")}
      WHERE dp.id = $1
        AND dp.department_id = $2
        AND ($3::boolean = FALSE OR COALESCE(dp.status, $4) = $4)
       ORDER BY
-        CASE ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })}
+        CASE ${stateCase}
           WHEN 'VERIFICATION' THEN 1
           WHEN 'REWORK' THEN 2
           WHEN 'UNASSIGNED' THEN 3
@@ -1148,15 +1222,33 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
        di.fixture_no ASC,
        di.id ASC
     `,
-    [projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
-  );
+      [projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
+    );
 
-  return result.rows.map(mapFixtureOptionRow);
+    return result.rows.map(mapFixtureOptionRow);
+  };
+
+  try {
+    return await queryFixtures(true);
+  } catch (error) {
+    if (isMissingOptionalFixtureRelation(error)) {
+      return queryFixtures(false);
+    }
+    throw error;
+  }
 }
 
 async function listFixturesByProjectForUser(projectId, user, departmentId, { activeOnly = false } = {}, client = pool) {
-  const result = await client.query(
-    `
+  const queryFixtures = async (includeOptionalTables) => {
+    const fragments = fixtureOptionalFragments(includeOptionalTables);
+    const stateCase = operationalStateSqlCase({
+      fixtureAlias: "di",
+      projectAlias: "dp",
+      taskAlias: "operational_task",
+      includeOutsourceCompletionCheck: includeOptionalTables,
+    });
+    const result = await client.query(
+      `
       ${buildVisibleUsersCte("$1")}
       SELECT
         di.id AS fixture_id,
@@ -1171,7 +1263,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        ${FIXTURE_OUTSOURCE_SELECT},
+        ${fragments.outsourceSelect},
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete,
@@ -1180,11 +1272,11 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         current_progress.stage_order AS workflow_stage_order,
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
-        ${FIXTURE_RELEASE_SELECT},
+        ${fragments.releaseSelect},
         current_progress.status AS workflow_status,
         COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
         COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
-        ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })} AS operational_state,
+        ${stateCase} AS operational_state,
         operational_task.id AS operational_task_id,
         operational_task.status AS operational_task_status,
         operational_task.completion_percent AS operational_task_completion_percent,
@@ -1194,11 +1286,11 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
-      ${FIXTURE_OUTSOURCE_JOIN}
+      ${fragments.outsourceJoin}
       ${activeTaskLateral("di", "operational_task")}
       ${currentProgressLateral("di", "dp", "current_progress")}
-      ${FIXTURE_REVISION_PROGRESS_JOIN}
-      ${FIXTURE_RELEASE_SNAPSHOT_JOIN}
+      ${fragments.revisionProgressJoin}
+      ${fragments.releaseSnapshotJoin}
       LEFT JOIN users workflow_assignee
         ON ${userIdentifierMatchSql("workflow_assignee", "COALESCE(operational_task.assigned_to, current_progress.assigned_to)")}
       WHERE dp.id = $2
@@ -1206,7 +1298,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         AND ${visibleFixturePredicate("di", "dp")}
         AND ($4::boolean = FALSE OR COALESCE(dp.status, $5) = $5)
       ORDER BY
-        CASE ${operationalStateSqlCase({ fixtureAlias: "di", projectAlias: "dp", taskAlias: "operational_task" })}
+        CASE ${stateCase}
           WHEN 'VERIFICATION' THEN 1
           WHEN 'REWORK' THEN 2
           WHEN 'UNASSIGNED' THEN 3
@@ -1218,15 +1310,27 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         di.fixture_no ASC,
         di.id ASC
     `,
-    [user.employee_id, projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
-  );
+      [user.employee_id, projectId, departmentId, activeOnly === true, PROJECT_STATUSES.ACTIVE],
+    );
 
-  return result.rows.map(mapFixtureOptionRow);
+    return result.rows.map(mapFixtureOptionRow);
+  };
+
+  try {
+    return await queryFixtures(true);
+  } catch (error) {
+    if (isMissingOptionalFixtureRelation(error)) {
+      return queryFixtures(false);
+    }
+    throw error;
+  }
 }
 
 async function findFixtureByIdForDepartment(fixtureId, departmentId, client = pool) {
-  const result = await client.query(
-    `
+  const queryFixture = async (includeOptionalTables) => {
+    const fragments = fixtureOptionalFragments(includeOptionalTables);
+    const result = await client.query(
+      `
       SELECT
         di.id AS fixture_id,
         di.project_id,
@@ -1240,27 +1344,39 @@ async function findFixtureByIdForDepartment(fixtureId, departmentId, client = po
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        ${FIXTURE_OUTSOURCE_SELECT},
+        ${fragments.outsourceSelect},
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
-      ${FIXTURE_OUTSOURCE_JOIN}
+      ${fragments.outsourceJoin}
       WHERE di.id = $1
         AND dp.department_id = $2
       LIMIT 1
     `,
-    [fixtureId, departmentId],
-  );
+      [fixtureId, departmentId],
+    );
 
-  return mapFixtureOptionRow(result.rows[0]);
+    return mapFixtureOptionRow(result.rows[0]);
+  };
+
+  try {
+    return await queryFixture(true);
+  } catch (error) {
+    if (isMissingOptionalFixtureRelation(error)) {
+      return queryFixture(false);
+    }
+    throw error;
+  }
 }
 
 async function findFixtureByIdForUser(fixtureId, user, departmentId, client = pool) {
-  const result = await client.query(
-    `
+  const queryFixture = async (includeOptionalTables) => {
+    const fragments = fixtureOptionalFragments(includeOptionalTables);
+    const result = await client.query(
+      `
       ${buildVisibleUsersCte("$1")}
       SELECT
         di.id AS fixture_id,
@@ -1275,14 +1391,64 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
         di.image_1_url,
         di.image_2_url,
         di.ingestion_source,
-        ${FIXTURE_OUTSOURCE_SELECT},
+        ${fragments.outsourceSelect},
         di.revision_no,
         di.is_legacy_workflow,
         di.is_workflow_complete
       FROM design.fixtures di
       JOIN design.projects dp
         ON dp.id = di.project_id
-      ${FIXTURE_OUTSOURCE_JOIN}
+      ${fragments.outsourceJoin}
+      WHERE di.id = $2
+        AND ($3::text IS NULL OR dp.department_id = $3)
+        AND ${visibleFixturePredicate("di", "dp")}
+      LIMIT 1
+    `,
+      [user.employee_id, fixtureId, departmentId],
+    );
+
+    return mapFixtureOptionRow(result.rows[0]);
+  };
+
+  let fixture = null;
+  try {
+    fixture = await queryFixture(true);
+  } catch (error) {
+    if (!isMissingOptionalFixtureRelation(error)) {
+      throw error;
+    }
+    fixture = await queryFixture(false);
+  }
+  await logVisibilityDecision({
+    event: "find_fixture_by_id_for_user",
+    user,
+    requestedFixtureId: fixtureId,
+    requestedDepartmentId: departmentId,
+    queryFilter: "di.id = $2 AND ($3 IS NULL OR dp.department_id = $3) AND dp.created_by_user_id IN GetAccessibleUserIds($1)",
+    permissionResult: Boolean(fixture),
+    client,
+  });
+
+  return fixture;
+}
+
+async function findFixtureAssignmentContextByIdForUser(fixtureId, user, departmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT
+        di.id AS fixture_id,
+        di.project_id,
+        dp.department_id,
+        di.fixture_no,
+        di.part_name,
+        di.qty,
+        di.revision_no,
+        di.is_legacy_workflow,
+        di.is_workflow_complete
+      FROM design.fixtures di
+      JOIN design.projects dp
+        ON dp.id = di.project_id
       WHERE di.id = $2
         AND ($3::text IS NULL OR dp.department_id = $3)
         AND ${visibleFixturePredicate("di", "dp")}
@@ -1291,9 +1457,9 @@ async function findFixtureByIdForUser(fixtureId, user, departmentId, client = po
     [user.employee_id, fixtureId, departmentId],
   );
 
-  const fixture = mapFixtureOptionRow(result.rows[0]);
+  const fixture = result.rows[0] || null;
   await logVisibilityDecision({
-    event: "find_fixture_by_id_for_user",
+    event: "find_fixture_assignment_context_by_id_for_user",
     user,
     requestedFixtureId: fixtureId,
     requestedDepartmentId: departmentId,
@@ -2141,6 +2307,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   createUploadRowCorrections,
   findDepartmentProjectByIdForDepartment,
   findActiveUploadBatchIdForProject,
+  findFixtureAssignmentContextByIdForUser,
   findFixtureByIdForDepartment,
   findFixtureByIdForUser,
   findFixturesByProjectForDedupe,

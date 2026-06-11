@@ -275,9 +275,43 @@ function getFixtureOutsourceStatus(fixture: DesignFixtureOption) {
   return fixture.outsource_status || (fixture.is_outsourced === true ? "outsourced" : null);
 }
 
-function isFixtureActiveOutsourcedSection(fixture: DesignFixtureOption) {
+function canonicalOutsourceStageFromWorkflowStage(value: string | null | undefined): OutsourceStage | null {
+  const normalized = normalizeStageKey(value);
+  if (normalized === "concept" || normalized === "concept_stage") {
+    return "Concept";
+  }
+  if (normalized === "3d" || normalized === "3d_finish" || normalized === "three_d" || normalized === "three_d_finish") {
+    return "3D";
+  }
+  if (normalized === "2d" || normalized === "2d_finish" || normalized === "two_d" || normalized === "two_d_finish") {
+    return "2D";
+  }
+  return null;
+}
+
+function isFixtureOutsourcePlanActive(fixture: DesignFixtureOption) {
   const status = getFixtureOutsourceStatus(fixture);
-  return status === "outsourced" || (status === "completed" && fixture.is_workflow_complete !== true);
+  return status === "outsourced";
+}
+
+function hasFixtureOutsourcePlan(fixture: DesignFixtureOption) {
+  const status = getFixtureOutsourceStatus(fixture);
+  return fixture.is_outsourced === true
+    && status !== "brought_in_house"
+    && (fixture.outsourced_stages || []).length > 0;
+}
+
+function isFixtureCurrentStageOutsourced(fixture: DesignFixtureOption) {
+  if (fixture.is_workflow_complete === true || !hasFixtureOutsourcePlan(fixture)) {
+    return false;
+  }
+
+  const currentStage = canonicalOutsourceStageFromWorkflowStage(getCurrentFixtureStageLabel(fixture));
+  return Boolean(currentStage && fixture.outsourced_stages?.includes(currentStage));
+}
+
+function isFixtureActiveOutsourcedSection(fixture: DesignFixtureOption) {
+  return isFixtureCurrentStageOutsourced(fixture);
 }
 
 function formatDisplayDate(value: string | null | undefined, fallback = "Not set") {
@@ -541,14 +575,66 @@ interface ProjectFixtureOperationsGridProps {
 }
 
 const FIXTURE_SECTION_ORDER = [
+  { key: "UNASSIGNED", label: "Unassigned" },
+  { key: "ASSIGNED", label: "Assigned" },
+  { key: "IN_PROGRESS", label: "In Progress" },
+  { key: "OUTSOURCED", label: "Outsourced" },
   { key: "VERIFICATION", label: "Verification" },
   { key: "REWORK", label: "Rework" },
-  { key: "OUTSOURCED", label: "Outsourced" },
-  { key: "UNASSIGNED", label: "Unassigned" },
-  { key: "IN_PROGRESS", label: "In Progress" },
-  { key: "ASSIGNED", label: "Assigned" },
   { key: "WORKFLOW_COMPLETE", label: "Workflow Completed" },
 ] as const;
+
+type FixtureSectionKey = (typeof FIXTURE_SECTION_ORDER)[number]["key"];
+
+const FIXTURE_SECTION_STYLES: Record<FixtureSectionKey, {
+  background: string;
+  text: string;
+  accent: string;
+  description: string;
+}> = {
+  UNASSIGNED: {
+    background: "#F1EFE8",
+    text: "#444444",
+    accent: "#666666",
+    description: "No owner yet · waiting to be picked up",
+  },
+  ASSIGNED: {
+    background: "#E6F1FB",
+    text: "#0B4F9C",
+    accent: "#1E6FBB",
+    description: "Ownership confirmed · not yet started",
+  },
+  IN_PROGRESS: {
+    background: "#EEEDFE",
+    text: "#4B3FBF",
+    accent: "#6A5ACD",
+    description: "Actively being worked on",
+  },
+  OUTSOURCED: {
+    background: "#FAEEDA",
+    text: "#9A5A00",
+    accent: "#D88900",
+    description: "Delegated to an external party",
+  },
+  VERIFICATION: {
+    background: "#E1F5EE",
+    text: "#006B5B",
+    accent: "#009688",
+    description: "Done · waiting for sign-off",
+  },
+  REWORK: {
+    background: "#FCEBEB",
+    text: "#B32626",
+    accent: "#D32F2F",
+    description: "Returned · needs correction",
+  },
+  WORKFLOW_COMPLETE: {
+    background: "#EAF3DE",
+    text: "#2F6B16",
+    accent: "#5E9F2B",
+    description: "Fully done · signed off",
+  },
+};
 
 function compareFixtureNo(left: DesignFixtureOption, right: DesignFixtureOption) {
   return String(left.fixture_no || "").localeCompare(String(right.fixture_no || ""), undefined, {
@@ -608,12 +694,12 @@ export function ProjectFixtureOperationsGrid({
   const [selectedFixtureIds, setSelectedFixtureIds] = useState<string[]>([]);
   const [localRecentSupplierNames, setLocalRecentSupplierNames] = useState<string[]>(() => readRecentSupplierNames());
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    UNASSIGNED: true,
+    ASSIGNED: true,
+    IN_PROGRESS: true,
+    OUTSOURCED: true,
     VERIFICATION: true,
     REWORK: true,
-    OUTSOURCED: true,
-    UNASSIGNED: true,
-    IN_PROGRESS: true,
-    ASSIGNED: true,
     WORKFLOW_COMPLETE: false,
   });
 
@@ -766,59 +852,87 @@ export function ProjectFixtureOperationsGrid({
       ) : null}
 
       <div className="space-y-3">
-        {fixtureSections.map((section) => (
-          <Collapsible
-            key={section.key}
-            open={openSections[section.key] ?? true}
-            onOpenChange={(open) => setOpenSections((current) => ({ ...current, [section.key]: open }))}
-            className="rounded-lg border bg-background"
-          >
-            <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-left">
-              <span className="text-sm font-semibold">{section.label}</span>
-              <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="outline">{section.fixtures.length}</Badge>
-                <ChevronDown className={cn("h-4 w-4 transition-transform", openSections[section.key] ? "rotate-180" : "")} />
-              </span>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="border-t p-3">
-              {section.fixtures.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
-              ) : section.key === "OUTSOURCED" ? (
-                <OutsourcedFixturesTable
-                  fixtures={section.fixtures}
-                  fixtureTaskById={fixtureTaskById}
-                  projectId={projectId}
-                  departmentId={departmentId || undefined}
-                  assignableUsers={assignableUsersQuery.data ?? []}
-                  isLoadingUsers={assignableUsersQuery.isLoading}
-                  invalidateOperationalState={invalidateOperationalState}
-                  operationalResolutionByFixtureId={operationalResolutionByFixtureId}
-                />
-              ) : (
-                <div className="space-y-2">
-                  {section.fixtures.map((fixture) => (
-                    <ProjectFixtureCard
-                      key={fixture.fixture_id}
-                      fixture={fixture}
-                      task={fixtureTaskById.get(fixture.fixture_id) || null}
-                      projectId={projectId}
-                      departmentId={departmentId || undefined}
-                      assignableUsers={assignableUsersQuery.data ?? []}
-                      isLoadingUsers={assignableUsersQuery.isLoading}
-                      invalidateOperationalState={invalidateOperationalState}
-                      operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
-                      recentSupplierNames={recentSupplierNames}
-                      onSupplierUsed={rememberSupplierName}
-                      selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
-                      selected={selectedFixtureIds.includes(fixture.fixture_id)}
-                      onSelectedChange={toggleSelectedFixture}
-                    />
-                  ))}
-                </div>
-              )}
-            </CollapsibleContent>
-          </Collapsible>
-        ))}
+        {fixtureSections.map((section) => {
+          const sectionStyle = FIXTURE_SECTION_STYLES[section.key];
+
+          return (
+            <Collapsible
+              key={section.key}
+              open={openSections[section.key] ?? true}
+              onOpenChange={(open) => setOpenSections((current) => ({ ...current, [section.key]: open }))}
+              className="overflow-hidden rounded-lg border bg-background"
+              style={{ borderColor: sectionStyle.accent }}
+            >
+              <CollapsibleTrigger
+                className="flex w-full items-center justify-between gap-3 border-l-4 px-3 py-2.5 text-left"
+                style={{
+                  backgroundColor: sectionStyle.background,
+                  borderLeftColor: sectionStyle.accent,
+                  color: sectionStyle.text,
+                }}
+              >
+                <span className="flex min-w-0 items-start gap-2">
+                  <span
+                    aria-hidden="true"
+                    className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: sectionStyle.accent }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold leading-tight">{section.label}</span>
+                    <span className="block text-xs leading-snug opacity-90">{sectionStyle.description}</span>
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-xs">
+                  <Badge
+                    variant="outline"
+                    className="bg-white/55 font-semibold"
+                    style={{ borderColor: sectionStyle.accent, color: sectionStyle.text }}
+                  >
+                    {section.fixtures.length} fixture{section.fixtures.length === 1 ? "" : "s"}
+                  </Badge>
+                  <ChevronDown className={cn("h-4 w-4 transition-transform", openSections[section.key] ? "rotate-180" : "")} />
+                </span>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="border-t p-3">
+                {section.fixtures.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
+                ) : section.key === "OUTSOURCED" ? (
+                  <OutsourcedFixturesTable
+                    fixtures={section.fixtures}
+                    fixtureTaskById={fixtureTaskById}
+                    projectId={projectId}
+                    departmentId={departmentId || undefined}
+                    assignableUsers={assignableUsersQuery.data ?? []}
+                    isLoadingUsers={assignableUsersQuery.isLoading}
+                    invalidateOperationalState={invalidateOperationalState}
+                    operationalResolutionByFixtureId={operationalResolutionByFixtureId}
+                  />
+                ) : (
+                  <div className="space-y-2">
+                    {section.fixtures.map((fixture) => (
+                      <ProjectFixtureCard
+                        key={fixture.fixture_id}
+                        fixture={fixture}
+                        task={fixtureTaskById.get(fixture.fixture_id) || null}
+                        projectId={projectId}
+                        departmentId={departmentId || undefined}
+                        assignableUsers={assignableUsersQuery.data ?? []}
+                        isLoadingUsers={assignableUsersQuery.isLoading}
+                        invalidateOperationalState={invalidateOperationalState}
+                        operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
+                        recentSupplierNames={recentSupplierNames}
+                        onSupplierUsed={rememberSupplierName}
+                        selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
+                        selected={selectedFixtureIds.includes(fixture.fixture_id)}
+                        onSelectedChange={toggleSelectedFixture}
+                      />
+                    ))}
+                  </div>
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+          );
+        })}
       </div>
     </div>
   );
@@ -899,12 +1013,11 @@ function OutsourcedFixtureRow({
   operationalResolution,
 }: OutsourcedFixtureRowProps) {
   const { access } = useAuth();
-  const [dapPanelOpen, setDapPanelOpen] = useState(false);
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
   const [inHouseDialogOpen, setInHouseDialogOpen] = useState(false);
   const outsourceStatus = getFixtureOutsourceStatus(fixture);
-  const supplierCompleted = outsourceStatus === "completed";
-  const canDeployDesignTask = access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
+  const currentStageOutsourced = isFixtureCurrentStageOutsourced(fixture);
+  const supplierCompleted = outsourceStatus === "completed" && !currentStageOutsourced;
   const canToggleOutsourcing = access.canAccessProjectFixtures && access.canChangeFixtureStage;
 
   const completeMutation = useMutation({
@@ -912,12 +1025,11 @@ function OutsourcedFixtureRow({
     onSuccess: async (updatedFixture) => {
       await invalidateOperationalState();
       setCompleteDialogOpen(false);
-      setDapPanelOpen(false);
       toast({
-        title: updatedFixture.workflow_marked_complete ? "Workflow completed" : "Outsource completed",
+        title: updatedFixture.workflow_marked_complete ? "Workflow completed" : "Outsourced stage completed",
         description: updatedFixture.workflow_marked_complete
-          ? "Supplier work is completed and no internal workflow work remains."
-          : "Supplier work is completed. Internal workflow work remains visible.",
+          ? "The final outsourced workflow stage was completed."
+          : "The fixture advanced to the next workflow stage.",
       });
     },
     onError: (error) => {
@@ -934,7 +1046,6 @@ function OutsourcedFixtureRow({
     onSuccess: async () => {
       await invalidateOperationalState();
       setInHouseDialogOpen(false);
-      setDapPanelOpen(false);
       toast({
         title: "Fixture brought in-house",
         description: "Outsource history remains attached to the same fixture record.",
@@ -975,7 +1086,15 @@ function OutsourcedFixtureRow({
           </div>
         </TableCell>
         <TableCell className="align-top">
-          <Badge variant="outline" className="border-indigo-300 bg-indigo-50 text-[11px] font-semibold text-indigo-800">
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-[11px] font-semibold",
+              currentStageOutsourced
+                ? "border-cyan-300 bg-cyan-50 text-cyan-800"
+                : "border-indigo-300 bg-indigo-50 text-indigo-800",
+            )}
+          >
             {getCurrentFixtureStageLabel(fixture)}
           </Badge>
         </TableCell>
@@ -994,17 +1113,6 @@ function OutsourcedFixtureRow({
         </TableCell>
         <TableCell className="align-top">
           <div className="flex flex-wrap justify-end gap-1.5">
-            <Button
-              type="button"
-              size="sm"
-              variant={dapPanelOpen ? "secondary" : "outline"}
-              className="h-7 px-2 text-[11px]"
-              disabled={!canDeployDesignTask || actionsDisabled}
-              onClick={() => setDapPanelOpen((open) => !open)}
-            >
-              <UserCheck className="mr-1 h-3 w-3" />
-              Assign DAP
-            </Button>
             <Button
               type="button"
               size="sm"
@@ -1030,22 +1138,6 @@ function OutsourcedFixtureRow({
           </div>
         </TableCell>
       </TableRow>
-      {dapPanelOpen ? (
-        <TableRow>
-          <TableCell colSpan={8} className="bg-slate-50/70 p-3">
-            <OutsourcedDapAssignmentPanel
-              fixture={fixture}
-              projectId={projectId}
-              departmentId={departmentId}
-              assignableUsers={assignableUsers}
-              isLoadingUsers={isLoadingUsers}
-              invalidateOperationalState={invalidateOperationalState}
-              onDone={() => setDapPanelOpen(false)}
-              onCancel={() => setDapPanelOpen(false)}
-            />
-          </TableCell>
-        </TableRow>
-      ) : null}
 
       <Dialog open={completeDialogOpen} onOpenChange={(open) => {
         if (!open && !completeMutation.isPending) {
@@ -1056,7 +1148,7 @@ function OutsourcedFixtureRow({
           <DialogHeader>
             <DialogTitle>Mark Outsourced Work Completed</DialogTitle>
             <DialogDescription>
-              Confirm supplier completion for {fixture.fixture_no} from {fixture.vendor_name || "supplier"}.
+              Confirm completion for the current outsourced stage, {getCurrentFixtureStageLabel(fixture)}, from {fixture.vendor_name || "supplier"}.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1843,8 +1935,8 @@ function ProjectFixtureCard({
   const proofImage = getProofImage(task);
   const outsourceStatus = getFixtureOutsourceStatus(fixture);
   const isOutsourceCompleted = outsourceStatus === "completed";
-  const isActiveOutsourced = isFixtureActiveOutsourcedSection(fixture);
-  const isOutsourced = outsourceStatus === "outsourced" || isOutsourceCompleted;
+  const hasActiveOutsourcePlan = isFixtureOutsourcePlanActive(fixture);
+  const isOutsourced = hasFixtureOutsourcePlan(fixture);
   const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
   const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
@@ -2093,7 +2185,7 @@ function ProjectFixtureCard({
     },
     onError: (error) => {
       toast({
-        title: isActiveOutsourced ? "Bring in-house failed" : "Outsource failed",
+        title: hasActiveOutsourcePlan ? "Bring in-house failed" : "Outsource failed",
         description: error instanceof Error ? error.message : "Could not update fixture outsourcing state",
         variant: "destructive",
       });
@@ -2329,7 +2421,7 @@ function ProjectFixtureCard({
                 className="h-7 px-2 text-[11px]"
                 disabled={outsourceMutation.isPending}
                 onClick={() => {
-                  if (isActiveOutsourced) {
+                  if (hasActiveOutsourcePlan) {
                     setInHouseDialogOpen(true);
                   } else {
                     setSupplierName(fixture.vendor_name || "");
@@ -2340,7 +2432,7 @@ function ProjectFixtureCard({
                 }}
               >
                 {outsourceMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Factory className="mr-1 h-3 w-3" />}
-                {isActiveOutsourced ? "Bring In-House" : "Outsource"}
+                {hasActiveOutsourcePlan ? "Bring In-House" : "Outsource"}
               </Button>
             ) : null}
           </div>

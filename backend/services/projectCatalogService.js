@@ -16,9 +16,8 @@ const {
   listFixturesByProjectForUser,
   listProjectSummariesForUser: listProjectSummariesByUserVisibility,
   listRecentOutsourceSuppliersForUser: listRecentOutsourceSuppliersByUserVisibility,
+  completeCurrentOutsourcedWorkflowStage,
   markFixtureOutsourceBroughtInHouse,
-  markFixtureOutsourceCompleted,
-  markFixtureWorkflowCompleteIfSatisfied,
   touchProject,
   upsertFixtureOutsourceRecord,
   updateProjectModificationFlag,
@@ -36,6 +35,7 @@ const { formatStageRevisionCode, normalizeStageVersion } = require("../lib/workf
 const {
   ALLOWED_OUTSOURCE_STAGES,
   OUTSOURCE_STATUSES,
+  isOutsourcedWorkflowStage,
   normalizeOutsourceStages,
   normalizeSupplierName,
 } = require("../lib/outsourceWorkflow");
@@ -722,21 +722,23 @@ async function completeOutsourcedFixtureForUser(user, fixtureId, payload = {}) {
     await client.query("BEGIN");
 
     const { fixture, departmentId } = await resolveVisibleFixtureForOutsource(user, fixtureId, payload.department_id, client);
-    const record = await markFixtureOutsourceCompleted({
+    const completion = await completeCurrentOutsourcedWorkflowStage({
       fixtureId: fixture.fixture_id,
+      departmentId,
       changedBy: user.employee_id,
     }, client);
 
-    if (!record) {
+    if (!completion.record) {
       throw new AppError(409, "Fixture does not have an active outsourced workflow");
     }
 
-    const workflowMarkedComplete = await markFixtureWorkflowCompleteIfSatisfied(
-      fixture.fixture_id,
-      departmentId,
-      record.outsourced_stages || [],
-      client,
-    );
+    if (!completion.transition?.canComplete) {
+      throw new AppError(
+        409,
+        completion.transition?.reason || "Current workflow stage is not actively outsourced",
+      );
+    }
+
     const updatedFixture = await findFixtureByIdForUser(fixture.fixture_id, user, fixture.department_id, client);
     await touchProject(updatedFixture.project_id, client);
 
@@ -748,17 +750,22 @@ async function completeOutsourcedFixtureForUser(user, fixtureId, payload = {}) {
       metadata: {
         project_id: updatedFixture.project_id,
         fixture_no: updatedFixture.fixture_no,
-        supplier_name: record.supplier_name,
-        outsourced_stages: record.outsourced_stages,
-        outsource_status: OUTSOURCE_STATUSES.COMPLETED,
-        workflow_marked_complete: workflowMarkedComplete,
+        supplier_name: completion.updatedRecord?.supplier_name || completion.record.supplier_name,
+        outsourced_stages: completion.updatedRecord?.outsourced_stages || completion.record.outsourced_stages,
+        completed_stage: completion.transition.currentStageName,
+        next_stage: completion.transition.nextStageName,
+        remaining_outsourced_stages: completion.transition.remainingOutsourcedStageNames,
+        outsource_status: completion.updatedRecord?.outsource_status || null,
+        workflow_marked_complete: completion.workflowMarkedComplete,
       },
     }, client);
 
     await client.query("COMMIT");
     return {
       ...updatedFixture,
-      workflow_marked_complete: workflowMarkedComplete,
+      workflow_marked_complete: completion.workflowMarkedComplete,
+      outsourced_stage_completed: completion.transition.currentStageName,
+      next_workflow_stage: completion.transition.nextStageName,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -818,10 +825,11 @@ async function listOutsourcedFixturesForProjectForUser(user, projectId, requeste
   );
 
   return fixtures.filter((fixture) => (
-    fixture.outsource_status === OUTSOURCE_STATUSES.OUTSOURCED
-    || (
-      fixture.outsource_status === OUTSOURCE_STATUSES.COMPLETED
-      && fixture.is_workflow_complete !== true
+    fixture.is_workflow_complete !== true
+    && fixture.outsource_status !== OUTSOURCE_STATUSES.BROUGHT_IN_HOUSE
+    && isOutsourcedWorkflowStage(
+      fixture.workflow_stage || fixture.workflow_stage_label,
+      fixture.outsourced_stages || [],
     )
   ));
 }

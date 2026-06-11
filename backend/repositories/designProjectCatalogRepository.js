@@ -28,6 +28,7 @@ const {
   getOutsourceCompletionAutoApproveStageNames,
   OUTSOURCE_STATUSES,
   normalizeSupplierName,
+  resolveOutsourceStageCompletion,
 } = require("../lib/outsourceWorkflow");
 
 const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
@@ -1804,6 +1805,160 @@ async function markFixtureOutsourceCompleted({
   return record;
 }
 
+async function getFixtureOutsourceRecordForCompletion(fixtureId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM design.fixture_outsource_records
+      WHERE fixture_id = $1
+        AND outsource_status IN ($2, $3)
+      ORDER BY
+        CASE outsource_status
+          WHEN $2 THEN 0
+          WHEN $3 THEN 1
+          ELSE 2
+        END,
+        updated_at DESC NULLS LAST,
+        outsourced_at DESC NULLS LAST,
+        created_at DESC NULLS LAST
+      LIMIT 1
+    `,
+    [
+      fixtureId,
+      OUTSOURCE_STATUSES.OUTSOURCED,
+      OUTSOURCE_STATUSES.COMPLETED,
+    ],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function completeCurrentOutsourcedWorkflowStage({
+  fixtureId,
+  departmentId,
+  changedBy,
+}, client = pool) {
+  const record = await getFixtureOutsourceRecordForCompletion(fixtureId, client);
+  if (!record) {
+    return {
+      record: null,
+      transition: null,
+      updatedRecord: null,
+      workflowMarkedComplete: false,
+      outsourceRecordCompleted: false,
+    };
+  }
+
+  const progressResult = await client.query(
+    `
+      SELECT
+        stage_name,
+        stage_order,
+        status
+      FROM fixture_workflow_progress
+      WHERE fixture_id = $1
+        AND department_id = $2
+      ORDER BY stage_order ASC
+    `,
+    [fixtureId, departmentId],
+  );
+  const progressRows = progressResult.rows || [];
+  const transition = resolveOutsourceStageCompletion(progressRows, record.outsourced_stages || []);
+
+  if (!transition.canComplete) {
+    return {
+      record,
+      transition,
+      updatedRecord: record,
+      workflowMarkedComplete: false,
+      outsourceRecordCompleted: false,
+    };
+  }
+
+  for (const stageName of transition.stageNamesToApprove) {
+    await client.query(
+      `
+        UPDATE fixture_workflow_progress
+        SET status = 'APPROVED',
+            assigned_to = NULL,
+            assigned_at = NULL,
+            started_at = NULL,
+            completed_at = COALESCE(completed_at, NOW()),
+            duration_minutes = NULL,
+            updated_at = NOW()
+        WHERE fixture_id = $1
+          AND department_id = $2
+          AND stage_name = $3
+          AND UPPER(COALESCE(status, '')) <> 'APPROVED'
+      `,
+      [fixtureId, departmentId, stageName],
+    );
+  }
+
+  if (transition.nextStageName) {
+    await client.query(
+      `
+        UPDATE fixture_workflow_progress
+        SET status = 'PENDING',
+            assigned_to = NULL,
+            assigned_at = NULL,
+            started_at = NULL,
+            completed_at = NULL,
+            duration_minutes = NULL,
+            updated_at = NOW()
+        WHERE fixture_id = $1
+          AND department_id = $2
+          AND stage_name = $3
+          AND UPPER(COALESCE(status, '')) <> 'APPROVED'
+      `,
+      [fixtureId, departmentId, transition.nextStageName],
+    );
+  }
+
+  await client.query(
+    `
+      UPDATE design.fixtures
+      SET is_workflow_complete = $2,
+          is_outsourced = TRUE,
+          vendor_name = $3,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [
+      fixtureId,
+      transition.workflowMarkedComplete === true,
+      record.supplier_name || null,
+    ],
+  );
+
+  const outsourceRecordCompleted = transition.remainingOutsourcedStageNames.length === 0;
+  const updatedRecordResult = await client.query(
+    `
+      UPDATE design.fixture_outsource_records
+      SET outsource_status = $2,
+          completed_by = CASE WHEN $2 = $4 THEN COALESCE(completed_by, $3) ELSE NULL END,
+          completed_at = CASE WHEN $2 = $4 THEN COALESCE(completed_at, NOW()) ELSE NULL END,
+          updated_at = NOW()
+      WHERE fixture_id = $1
+      RETURNING *
+    `,
+    [
+      fixtureId,
+      outsourceRecordCompleted ? OUTSOURCE_STATUSES.COMPLETED : OUTSOURCE_STATUSES.OUTSOURCED,
+      changedBy || null,
+      OUTSOURCE_STATUSES.COMPLETED,
+    ],
+  );
+
+  return {
+    record,
+    transition,
+    updatedRecord: updatedRecordResult.rows[0] || record,
+    workflowMarkedComplete: transition.workflowMarkedComplete === true,
+    outsourceRecordCompleted,
+  };
+}
+
 async function markFixtureWorkflowCompleteIfSatisfied(fixtureId, departmentId, outsourcedStages = [], client = pool) {
   const result = await client.query(
     `
@@ -1979,6 +2134,7 @@ async function upsertFixture(fixtureData, client = pool) {
 }
 
 module.exports = instrumentModuleExports("repository.designProjectCatalogRepository", {
+  completeCurrentOutsourcedWorkflowStage,
   countProjectsByDepartment,
   createUploadBatch,
   createUploadErrors,

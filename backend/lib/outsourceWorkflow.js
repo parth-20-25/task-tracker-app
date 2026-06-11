@@ -150,40 +150,172 @@ function isOutsourcedWorkflowStage(stageName, outsourcedStages = []) {
   return Boolean(stageKey && getOutsourcedWorkflowStageKeys(outsourcedStages).has(stageKey));
 }
 
-function getOutsourceCompletionAutoApproveStageNames(progressRows = [], outsourcedStages = []) {
-  const outsourcedStageKeys = getOutsourcedWorkflowStageKeys(outsourcedStages);
+function isApprovedWorkflowStatus(status) {
+  return String(status || "").toUpperCase() === "APPROVED";
+}
 
-  return progressRows
-    .filter((stage) => String(stage?.status || "").toUpperCase() !== "APPROVED")
+function isReleaseWorkflowStage(stageName) {
+  const stageKey = normalizeWorkflowStageKey(stageName);
+  return Boolean(stageKey && OUTSOURCE_COMPLETION_IGNORED_STAGE_KEYS.has(stageKey));
+}
+
+function sortWorkflowProgressRows(progressRows = []) {
+  return (Array.isArray(progressRows) ? progressRows : [])
+    .map((stage, index) => ({ stage, index }))
+    .sort((leftEntry, rightEntry) => {
+      const leftOrder = Number(leftEntry.stage?.stage_order);
+      const rightOrder = Number(rightEntry.stage?.stage_order);
+      if (Number.isFinite(leftOrder) && Number.isFinite(rightOrder) && leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+      if (Number.isFinite(leftOrder)) {
+        return -1;
+      }
+      if (Number.isFinite(rightOrder)) {
+        return 1;
+      }
+      return leftEntry.index - rightEntry.index;
+    })
+    .map((entry) => entry.stage);
+}
+
+function getCurrentDesignWorkflowStage(progressRows = []) {
+  const sortedRows = sortWorkflowProgressRows(progressRows);
+  return sortedRows.find((stage) => !isApprovedWorkflowStatus(stage?.status) && !isReleaseWorkflowStage(stage?.stage_name))
+    || sortedRows.find((stage) => !isApprovedWorkflowStatus(stage?.status))
+    || null;
+}
+
+function getNextDesignWorkflowStage(progressRows = [], currentStage = null) {
+  if (!currentStage) {
+    return null;
+  }
+
+  const sortedRows = sortWorkflowProgressRows(progressRows);
+  const currentIndex = sortedRows.findIndex((stage) => stage === currentStage);
+  const startIndex = currentIndex >= 0 ? currentIndex + 1 : 0;
+
+  for (let index = startIndex; index < sortedRows.length; index += 1) {
+    const stage = sortedRows[index];
+    if (!isApprovedWorkflowStatus(stage?.status) && !isReleaseWorkflowStage(stage?.stage_name)) {
+      return stage;
+    }
+  }
+
+  for (let index = startIndex; index < sortedRows.length; index += 1) {
+    const stage = sortedRows[index];
+    if (!isApprovedWorkflowStatus(stage?.status)) {
+      return stage;
+    }
+  }
+
+  return null;
+}
+
+function resolveOutsourceStageCompletion(progressRows = [], outsourcedStages = []) {
+  const sortedRows = sortWorkflowProgressRows(progressRows);
+  const outsourcedStageKeys = getOutsourcedWorkflowStageKeys(outsourcedStages);
+  const currentStage = getCurrentDesignWorkflowStage(sortedRows);
+
+  if (!currentStage) {
+    return {
+      canComplete: false,
+      reason: "No active workflow stage is available",
+      currentStage: null,
+      currentStageName: null,
+      currentStageKey: null,
+      currentStageIsOutsourced: false,
+      stageNamesToApprove: [],
+      nextStage: null,
+      nextStageName: null,
+      remainingOutsourcedStageNames: [],
+      workflowMarkedComplete: false,
+    };
+  }
+
+  const currentStageKey = normalizeWorkflowStageKey(currentStage.stage_name);
+  const currentStageIsOutsourced = Boolean(currentStageKey && outsourcedStageKeys.has(currentStageKey));
+  if (!currentStageIsOutsourced) {
+    return {
+      canComplete: false,
+      reason: `Current workflow stage "${currentStage.stage_name || "Unknown"}" is not outsourced`,
+      currentStage,
+      currentStageName: currentStage.stage_name || null,
+      currentStageKey,
+      currentStageIsOutsourced: false,
+      stageNamesToApprove: [],
+      nextStage: null,
+      nextStageName: null,
+      remainingOutsourcedStageNames: sortedRows
+        .filter((stage) => !isApprovedWorkflowStatus(stage?.status))
+        .filter((stage) => {
+          const stageKey = normalizeWorkflowStageKey(stage?.stage_name);
+          return Boolean(stageKey && outsourcedStageKeys.has(stageKey));
+        })
+        .map((stage) => stage.stage_name)
+        .filter(Boolean),
+      workflowMarkedComplete: false,
+    };
+  }
+
+  const rowsAfterCurrentCompletion = sortedRows.map((stage) => (
+    stage === currentStage
+      ? { ...stage, status: "APPROVED" }
+      : stage
+  ));
+  const hasPendingDesignStage = rowsAfterCurrentCompletion.some((stage) => (
+    !isApprovedWorkflowStatus(stage?.status) && !isReleaseWorkflowStage(stage?.stage_name)
+  ));
+  const stageNamesToApprove = [currentStage.stage_name].filter(Boolean);
+
+  if (!hasPendingDesignStage) {
+    rowsAfterCurrentCompletion
+      .filter((stage) => !isApprovedWorkflowStatus(stage?.status))
+      .filter((stage) => isReleaseWorkflowStage(stage?.stage_name))
+      .forEach((stage) => {
+        if (stage.stage_name) {
+          stageNamesToApprove.push(stage.stage_name);
+        }
+      });
+  }
+
+  const rowsAfterAutoApproval = rowsAfterCurrentCompletion.map((stage) => (
+    stageNamesToApprove.includes(stage.stage_name)
+      ? { ...stage, status: "APPROVED" }
+      : stage
+  ));
+  const remainingOutsourcedStageNames = rowsAfterAutoApproval
+    .filter((stage) => !isApprovedWorkflowStatus(stage?.status))
     .filter((stage) => {
       const stageKey = normalizeWorkflowStageKey(stage?.stage_name);
-      return Boolean(stageKey && (
-        outsourcedStageKeys.has(stageKey)
-        || OUTSOURCE_COMPLETION_IGNORED_STAGE_KEYS.has(stageKey)
-      ));
+      return Boolean(stageKey && outsourcedStageKeys.has(stageKey));
     })
     .map((stage) => stage.stage_name)
     .filter(Boolean);
+  const nextStage = getNextDesignWorkflowStage(rowsAfterAutoApproval, currentStage);
+
+  return {
+    canComplete: true,
+    reason: null,
+    currentStage,
+    currentStageName: currentStage.stage_name || null,
+    currentStageKey,
+    currentStageIsOutsourced: true,
+    stageNamesToApprove,
+    nextStage,
+    nextStageName: nextStage?.stage_name || null,
+    remainingOutsourcedStageNames,
+    workflowMarkedComplete: !hasPendingDesignStage,
+  };
+}
+
+function getOutsourceCompletionAutoApproveStageNames(progressRows = [], outsourcedStages = []) {
+  return resolveOutsourceStageCompletion(progressRows, outsourcedStages).stageNamesToApprove;
 }
 
 function canCompleteWorkflowAfterOutsource(progressRows = [], outsourcedStages = []) {
-  if (!Array.isArray(progressRows) || progressRows.length === 0) {
-    return false;
-  }
-
-  const outsourcedStageKeys = getOutsourcedWorkflowStageKeys(outsourcedStages);
-
-  return progressRows.every((stage) => {
-    if (String(stage?.status || "").toUpperCase() === "APPROVED") {
-      return true;
-    }
-
-    const stageKey = normalizeWorkflowStageKey(stage?.stage_name);
-    return Boolean(stageKey && (
-      outsourcedStageKeys.has(stageKey)
-      || OUTSOURCE_COMPLETION_IGNORED_STAGE_KEYS.has(stageKey)
-    ));
-  });
+  const transition = resolveOutsourceStageCompletion(progressRows, outsourcedStages);
+  return transition.canComplete && transition.workflowMarkedComplete;
 }
 
 module.exports = {
@@ -191,12 +323,17 @@ module.exports = {
   OUTSOURCE_STATUSES,
   canCompleteWorkflowAfterOutsource,
   canonicalizeOutsourceStage,
+  getCurrentDesignWorkflowStage,
   getOutsourceCompletionAutoApproveStageNames,
   getOutsourcedWorkflowStageKeys,
+  isApprovedWorkflowStatus,
   isOutsourcedWorkflowStage,
+  isReleaseWorkflowStage,
   mergeRecentSupplierNames,
   normalizeOutsourceStages,
   normalizeWorkflowStageKey,
   normalizeOutsourceStatus,
   normalizeSupplierName,
+  resolveOutsourceStageCompletion,
+  sortWorkflowProgressRows,
 };

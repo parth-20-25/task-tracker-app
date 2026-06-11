@@ -691,15 +691,23 @@ async function listRecentOutsourceSuppliersForUser(user, departmentId = null, li
   void user;
   void departmentId;
   const boundedLimit = Math.max(1, Math.min(6, Number(limit) || 6));
-  const result = await client.query(
-    `
-      SELECT supplier_name
-      FROM design.recent_outsource_suppliers
-      ORDER BY last_used_at DESC, supplier_name ASC
-      LIMIT $1
-    `,
-    [boundedLimit],
-  );
+  let result;
+  try {
+    result = await client.query(
+      `
+        SELECT supplier_name
+        FROM design.recent_outsource_suppliers
+        ORDER BY last_used_at DESC, supplier_name ASC
+        LIMIT $1
+      `,
+      [boundedLimit],
+    );
+  } catch (error) {
+    if (error?.code === "42P01" && String(error.relation || error.message || "").includes("recent_outsource_suppliers")) {
+      return [];
+    }
+    throw error;
+  }
 
   return result.rows.map((row) => row.supplier_name).filter(Boolean);
 }
@@ -1785,23 +1793,30 @@ async function rememberRecentOutsourceSupplier(supplierName, client = pool) {
     return [];
   }
 
-  await client.query(
-    `
-      INSERT INTO design.recent_outsource_suppliers (
-        supplier_key,
-        supplier_name,
-        last_used_at,
-        created_at,
-        updated_at
-      )
-      VALUES (LOWER($1), $1, NOW(), NOW(), NOW())
-      ON CONFLICT (supplier_key) DO UPDATE
-      SET supplier_name = EXCLUDED.supplier_name,
-          last_used_at = NOW(),
-          updated_at = NOW()
-    `,
-    [normalizedSupplierName],
-  );
+  try {
+    await client.query(
+      `
+        INSERT INTO design.recent_outsource_suppliers (
+          supplier_key,
+          supplier_name,
+          last_used_at,
+          created_at,
+          updated_at
+        )
+        VALUES (LOWER($1), $1, NOW(), NOW(), NOW())
+        ON CONFLICT (supplier_key) DO UPDATE
+        SET supplier_name = EXCLUDED.supplier_name,
+            last_used_at = NOW(),
+            updated_at = NOW()
+      `,
+      [normalizedSupplierName],
+    );
+  } catch (error) {
+    if (error?.code === "42P01" && String(error.relation || error.message || "").includes("recent_outsource_suppliers")) {
+      return [];
+    }
+    throw error;
+  }
 
   await client.query(
     `

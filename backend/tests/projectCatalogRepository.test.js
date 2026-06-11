@@ -6,8 +6,13 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 const {
   listFixturesByProjectForUser,
   listProjectSummariesForUser,
+  listRecentOutsourceSuppliersForUser,
+  rememberRecentOutsourceSupplier,
   upsertFixtureOutsourceRecord,
 } = require("../repositories/designProjectCatalogRepository");
+const {
+  listBatchesWithSummaryForUser,
+} = require("../repositories/batchRepository");
 
 test("fixture outsource upsert does not depend on a fixture_id unique constraint", async () => {
   const queries = [];
@@ -175,4 +180,116 @@ test("project summary list falls back when recent outsource tables are not migra
   } finally {
     completionEngine.enrichProjectSummariesWithCompletionTruth = originalEnrichProjectSummariesWithCompletionTruth;
   }
+});
+
+test("batch summary list falls back when recent outsource tables are not migrated", async () => {
+  const completionEngine = require("../services/designCompletion/designCompletionEngine");
+  const originalEnrichProjectSummariesWithCompletionTruth = completionEngine.enrichProjectSummariesWithCompletionTruth;
+  const queries = [];
+  const client = {
+    query: async (sql) => {
+      const text = String(sql);
+      queries.push(text);
+
+      if (/design\.fixture_outsource_records/i.test(text)) {
+        const error = new Error('relation "design.fixture_outsource_records" does not exist');
+        error.code = "42P01";
+        throw error;
+      }
+
+      return {
+        rows: [{
+          id: "project-1",
+          batch_id: null,
+          project_id: "project-1",
+          project_no: "PRJ-1",
+          project_created_by_user_id: "MGR-1",
+          project_uploaded_by: "MGR-1",
+          project_created_at: "2026-06-11T00:00:00.000Z",
+          project_updated_at: "2026-06-11T00:00:00.000Z",
+          project_name: "Project One",
+          customer_name: "Customer One",
+          department_id: "design",
+          project_status: "active",
+          is_modified: false,
+          project_completion_percent: null,
+          completion_truth_status: null,
+          completion_truth_errors: [],
+          uploaded_by: "MGR-1",
+          uploaded_by_user_id: "MGR-1",
+          uploaded_by_name: "Manager One",
+          uploaded_at: null,
+          accepted_rows: 0,
+          rejected_rows: 0,
+          total_fixtures: 1,
+          pending_fixtures: 1,
+          completed_fixtures: 0,
+          active_count: 0,
+          can_manage_2d_routing: true,
+          can_toggle_modification: true,
+        }],
+      };
+    },
+  };
+
+  completionEngine.enrichProjectSummariesWithCompletionTruth = async (rows) => rows;
+  try {
+    const rows = await listBatchesWithSummaryForUser(
+      { employee_id: "MGR-1" },
+      "design",
+      client,
+    );
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].project_id, "project-1");
+    assert.equal(rows[0].pending_fixtures, 1);
+    assert.equal(queries.length, 2);
+    assert.match(queries[0], /design\.fixture_outsource_records/i);
+    assert.doesNotMatch(queries[1], /design\.fixture_outsource_records/i);
+  } finally {
+    completionEngine.enrichProjectSummariesWithCompletionTruth = originalEnrichProjectSummariesWithCompletionTruth;
+  }
+});
+
+test("recent outsource suppliers are optional for normal project fixture screens", async () => {
+  const queries = [];
+  const client = {
+    query: async (sql) => {
+      const text = String(sql);
+      queries.push(text);
+      const error = new Error('relation "design.recent_outsource_suppliers" does not exist');
+      error.code = "42P01";
+      throw error;
+    },
+  };
+
+  const suppliers = await listRecentOutsourceSuppliersForUser(
+    { employee_id: "MGR-1" },
+    "design",
+    6,
+    client,
+  );
+
+  assert.deepEqual(suppliers, []);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /design\.recent_outsource_suppliers/i);
+});
+
+test("remembering recent outsource suppliers is optional when supplier table is not migrated", async () => {
+  const queries = [];
+  const client = {
+    query: async (sql) => {
+      const text = String(sql);
+      queries.push(text);
+      const error = new Error('relation "design.recent_outsource_suppliers" does not exist');
+      error.code = "42P01";
+      throw error;
+    },
+  };
+
+  const suppliers = await rememberRecentOutsourceSupplier("Supplier X", client);
+
+  assert.deepEqual(suppliers, []);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /INSERT INTO design\.recent_outsource_suppliers/i);
 });

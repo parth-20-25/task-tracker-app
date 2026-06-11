@@ -121,11 +121,22 @@ function projectModificationPermissionSql(projectAlias = "dp", employeeExpressio
   `;
 }
 
-function fixtureOperationalStatsLateral(projectAlias = "dp") {
+function isMissingOptionalFixtureRelation(error) {
+  if (error?.code !== "42P01") {
+    return false;
+  }
+
+  const relation = String(error.relation || error.message || "");
+  return relation.includes("fixture_outsource_records")
+    || relation.includes("workflow_completion_snapshots");
+}
+
+function fixtureOperationalStatsLateral(projectAlias = "dp", { includeOptionalTables = true } = {}) {
   const stateCase = operationalStateSqlCase({
     fixtureAlias: "f",
     projectAlias,
     taskAlias: "operational_task",
+    includeOutsourceCompletionCheck: includeOptionalTables,
   });
 
   return `
@@ -284,9 +295,10 @@ async function listBatchesWithSummary(departmentId, client = pool) {
     params.push(departmentId);
   }
 
-  // Select a single active operational batch per project (latest active), and compute project-level fixture/task aggregates.
-  const result = await client.query(
-    `
+  const queryBatches = async (includeOptionalTables) => {
+    // Select a single active operational batch per project (latest active), and compute project-level fixture/task aggregates.
+    const result = await client.query(
+      `
       SELECT
         COALESCE(ub.id::text, dp.id::text) AS id,
         ub.id AS batch_id,
@@ -340,22 +352,36 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         { expression: "dp.uploaded_by", source: "project_uploaded_by" },
         { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
       ])}
-      ${fixtureOperationalStatsLateral("dp")}
+      ${fixtureOperationalStatsLateral("dp", { includeOptionalTables })}
       ${departmentFilter}
       ORDER BY COALESCE(ub.uploaded_at, dp.updated_at, dp.created_at) DESC
     `,
-    [...params, PROJECT_STATUSES.ACTIVE],
-  );
+      [...params, PROJECT_STATUSES.ACTIVE],
+    );
 
-  return enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
+    return result.rows.map(mapBatchSummary);
+  };
+
+  let rows;
+  try {
+    rows = await queryBatches(true);
+  } catch (error) {
+    if (!isMissingOptionalFixtureRelation(error)) {
+      throw error;
+    }
+    rows = await queryBatches(false);
+  }
+
+  return enrichBatchSummariesWithCompletionTruth(rows, client);
 }
 
 
   // NOTE: debug logging for per-user batch listing
 
 async function listBatchesWithSummaryForUser(user, departmentId, client = pool) {
-  const result = await client.query(
-    `
+  const queryBatches = async (includeOptionalTables) => {
+    const result = await client.query(
+      `
       ${buildVisibleUsersCte("$1")}
       SELECT
         COALESCE(ub.id::text, dp.id::text) AS id,
@@ -421,7 +447,7 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
         { expression: "dp.uploaded_by", source: "project_uploaded_by" },
         { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
       ])}
-      ${fixtureOperationalStatsLateral("dp")}
+      ${fixtureOperationalStatsLateral("dp", { includeOptionalTables })}
       WHERE ($2::text IS NULL OR dp.department_id = $2)
         AND ${visibleProjectPredicate("dp")}
       ORDER BY
@@ -440,9 +466,22 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
       PROJECT_STATUSES.COMPLETED,
       PROJECT_STATUSES.ON_HOLD,
     ],
-  );
+    );
 
-  return enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
+    return result.rows.map(mapBatchSummary);
+  };
+
+  let rows;
+  try {
+    rows = await queryBatches(true);
+  } catch (error) {
+    if (!isMissingOptionalFixtureRelation(error)) {
+      throw error;
+    }
+    rows = await queryBatches(false);
+  }
+
+  return enrichBatchSummariesWithCompletionTruth(rows, client);
 }
 
 async function _debugLogBatchQueryForUser(event, user, departmentId, rows, client) {
@@ -465,8 +504,9 @@ async function _debugLogBatchQueryForUser(event, user, departmentId, rows, clien
 }
 
 async function getBatchById(batchId, client = pool) {
-  const result = await client.query(
-    `
+  const queryBatch = async (includeOptionalTables) => {
+    const result = await client.query(
+      `
       SELECT
         ub.id,
         ub.id AS batch_id,
@@ -502,20 +542,34 @@ async function getBatchById(batchId, client = pool) {
         { expression: "dp.uploaded_by", source: "project_uploaded_by" },
         { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
       ])}
-      ${fixtureOperationalStatsLateral("dp")}
+      ${fixtureOperationalStatsLateral("dp", { includeOptionalTables })}
       WHERE ub.id = $1
     `,
-    [batchId, PROJECT_STATUSES.ACTIVE],
-  );
+      [batchId, PROJECT_STATUSES.ACTIVE],
+    );
 
-  const summaries = await enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
+    return result.rows.map(mapBatchSummary);
+  };
+
+  let rows;
+  try {
+    rows = await queryBatch(true);
+  } catch (error) {
+    if (!isMissingOptionalFixtureRelation(error)) {
+      throw error;
+    }
+    rows = await queryBatch(false);
+  }
+
+  const summaries = await enrichBatchSummariesWithCompletionTruth(rows, client);
   return summaries[0] || null;
 }
 
 
 async function getBatchByIdForUser(batchId, user, client = pool) {
-  const result = await client.query(
-    `
+  const queryBatch = async (includeOptionalTables) => {
+    const result = await client.query(
+      `
       ${buildVisibleUsersCte("$1")}
       SELECT
         ub.id,
@@ -563,7 +617,7 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
         { expression: "dp.uploaded_by", source: "project_uploaded_by" },
         { expression: "dp.created_by_user_id", source: "project_created_by_user_id" },
       ])}
-      ${fixtureOperationalStatsLateral("dp")}
+      ${fixtureOperationalStatsLateral("dp", { includeOptionalTables })}
       WHERE ub.id = $2
         AND ${visibleProjectPredicate("dp")}
     `,
@@ -572,10 +626,23 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
       batchId,
       PROJECT_STATUSES.ACTIVE,
     ],
-  );
+    );
 
-  await _debugLogBatchQueryForUser("getBatchByIdForUser", user, null, result.rows, client);
-  const summaries = await enrichBatchSummariesWithCompletionTruth(result.rows.map(mapBatchSummary), client);
+    return result.rows.map(mapBatchSummary);
+  };
+
+  let rows;
+  try {
+    rows = await queryBatch(true);
+  } catch (error) {
+    if (!isMissingOptionalFixtureRelation(error)) {
+      throw error;
+    }
+    rows = await queryBatch(false);
+  }
+
+  await _debugLogBatchQueryForUser("getBatchByIdForUser", user, null, rows, client);
+  const summaries = await enrichBatchSummariesWithCompletionTruth(rows, client);
   return summaries[0] || null;
 }
 

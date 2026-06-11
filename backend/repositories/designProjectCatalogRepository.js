@@ -45,8 +45,22 @@ const MODIFICATION_UPLOADER_LEADER_ROLE_KEYS = [
 ];
 
 const FIXTURE_OUTSOURCE_JOIN = `
-      LEFT JOIN design.fixture_outsource_records outsource
-        ON outsource.fixture_id = di.id
+      LEFT JOIN LATERAL (
+        SELECT *
+        FROM design.fixture_outsource_records outsource_record
+        WHERE outsource_record.fixture_id = di.id
+        ORDER BY
+          CASE outsource_record.outsource_status
+            WHEN '${OUTSOURCE_STATUSES.OUTSOURCED}' THEN 0
+            WHEN '${OUTSOURCE_STATUSES.COMPLETED}' THEN 1
+            WHEN '${OUTSOURCE_STATUSES.BROUGHT_IN_HOUSE}' THEN 2
+            ELSE 3
+          END,
+          outsource_record.updated_at DESC NULLS LAST,
+          outsource_record.outsourced_at DESC NULLS LAST,
+          outsource_record.created_at DESC NULLS LAST
+        LIMIT 1
+      ) outsource ON TRUE
 `;
 
 const FIXTURE_OUTSOURCE_SELECT = `
@@ -1646,9 +1660,38 @@ async function upsertFixtureOutsourceRecord({
   outsourcedStages,
   changedBy,
 }, client = pool) {
-  const result = await client.query(
+  const values = [
+    fixtureId,
+    supplierName,
+    outsourcedStages,
+    OUTSOURCE_STATUSES.OUTSOURCED,
+    changedBy || null,
+  ];
+  const updateResult = await client.query(
     `
-      INSERT INTO design.fixture_outsource_records (
+      UPDATE design.fixture_outsource_records
+      SET supplier_name = $2,
+          outsourced_stages = $3::text[],
+          outsource_status = $4,
+          outsourced_by = $5,
+          outsourced_at = NOW(),
+          completed_by = NULL,
+          completed_at = NULL,
+          brought_in_house_by = NULL,
+          brought_in_house_at = NULL,
+          updated_at = NOW()
+      WHERE fixture_id = $1
+      RETURNING *
+    `,
+    values,
+  );
+
+  let record = updateResult.rows[0] || null;
+
+  if (!record) {
+    const insertResult = await client.query(
+      `
+        INSERT INTO design.fixture_outsource_records (
         fixture_id,
         supplier_name,
         outsourced_stages,
@@ -1663,27 +1706,12 @@ async function upsertFixtureOutsourceRecord({
         updated_at
       )
       VALUES ($1, $2, $3::text[], $4, $5, NOW(), NULL, NULL, NULL, NULL, NOW(), NOW())
-      ON CONFLICT (fixture_id) DO UPDATE
-      SET supplier_name = EXCLUDED.supplier_name,
-          outsourced_stages = EXCLUDED.outsourced_stages,
-          outsource_status = EXCLUDED.outsource_status,
-          outsourced_by = EXCLUDED.outsourced_by,
-          outsourced_at = NOW(),
-          completed_by = NULL,
-          completed_at = NULL,
-          brought_in_house_by = NULL,
-          brought_in_house_at = NULL,
-          updated_at = NOW()
       RETURNING *
     `,
-    [
-      fixtureId,
-      supplierName,
-      outsourcedStages,
-      OUTSOURCE_STATUSES.OUTSOURCED,
-      changedBy || null,
-    ],
-  );
+      values,
+    );
+    record = insertResult.rows[0] || null;
+  }
 
   await client.query(
     `
@@ -1700,7 +1728,7 @@ async function upsertFixtureOutsourceRecord({
 
   await rememberRecentOutsourceSupplier(supplierName, client);
 
-  return result.rows[0] || null;
+  return record;
 }
 
 async function markFixtureOutsourceBroughtInHouse({

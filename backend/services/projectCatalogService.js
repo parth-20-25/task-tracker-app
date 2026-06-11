@@ -441,21 +441,32 @@ async function createDesignTaskFromProject(user, payload = {}) {
 
     const revisionNo = normalizeStageVersion(lockedCurrentStage.stage_version);
     const revisionCode = formatStageRevisionCode(lockedCurrentStage.stage_name, revisionNo);
-    const contributions = await listStageContributions(fixture.fixture_id, lockedCurrentStage.stage_name, revisionCode, client);
-    if (contributions.length === 0) {
-      await insertStageContribution({
+    try {
+      const contributions = await listStageContributions(fixture.fixture_id, lockedCurrentStage.stage_name, revisionCode, client);
+      if (contributions.length === 0) {
+        await insertStageContribution({
+          fixture_id: fixture.fixture_id,
+          department_id: departmentId,
+          stage_name: lockedCurrentStage.stage_name,
+          revision_code: revisionCode,
+          stage_revision_no: revisionNo,
+          employee_id: assignedTo,
+          contribution_percent: 100,
+          contribution_kind: "REMAINING",
+          changed_by: user.employee_id,
+          previous_stage: lockedCurrentStage.stage_name,
+          metadata: { source: "assignment_transaction" },
+        }, client);
+      }
+    } catch (error) {
+      console.warn("[design-task] assignment contribution initialization skipped", {
         fixture_id: fixture.fixture_id,
         department_id: departmentId,
         stage_name: lockedCurrentStage.stage_name,
-        revision_code: revisionCode,
-        stage_revision_no: revisionNo,
-        employee_id: assignedTo,
-        contribution_percent: 100,
-        contribution_kind: "REMAINING",
-        changed_by: user.employee_id,
-        previous_stage: lockedCurrentStage.stage_name,
-        metadata: { source: "assignment_transaction" },
-      }, client);
+        error: error?.message || "Unknown contribution initialization error",
+        code: error?.code || error?.errorCode || null,
+        constraint: error?.constraint || null,
+      });
     }
 
     task = await createTaskForUser(user, {

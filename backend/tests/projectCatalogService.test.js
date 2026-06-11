@@ -108,7 +108,7 @@ function installOutsourceMocks() {
   };
 }
 
-function installAssignmentMocks(stageName) {
+function installAssignmentMocks(stageName, options = {}) {
   const db = require("../db");
   const projectRepository = require("../repositories/designProjectCatalogRepository");
   const workflowRepository = require("../repositories/fixtureWorkflowRepository");
@@ -217,6 +217,9 @@ function installAssignmentMocks(stageName) {
   contributionRepository.listStageContributions = async () => [];
   contributionRepository.insertStageContribution = async (entry, txClient) => {
     assert.equal(txClient, client);
+    if (options.failContributionInsert) {
+      throw new Error("contribution storage unavailable");
+    }
     calls.contributions.push(entry);
   };
   taskService.createTaskForUser = async (_user, payload, options) => {
@@ -260,6 +263,40 @@ function installAssignmentMocks(stageName) {
     },
   };
 }
+
+test("design assignment still creates task when contribution tracking fails", async () => {
+  const mocks = installAssignmentMocks("Concept", { failContributionInsert: true });
+
+  try {
+    const { createDesignTaskFromProject } = require("../services/projectCatalogService");
+    const task = await createDesignTaskFromProject(
+      {
+        employee_id: "MGR-1",
+        department_id: "design",
+        role: { id: "r1", role_key: "admin" },
+      },
+      {
+        department_id: "design",
+        project_id: "project-1",
+        fixture_id: "11111111-1111-1111-1111-111111111111",
+        description: "Fixture One",
+        assigned_to: "DES-1",
+        assignee_ids: ["DES-1"],
+        priority: "high",
+        deadline: "2026-06-12T23:59:59.999Z",
+      },
+    );
+
+    assert.equal(task.id, 1);
+    assert.equal(mocks.calls.contributions.length, 0);
+    assert.equal(mocks.calls.tasks.length, 1);
+    assert.equal(mocks.calls.audits.length, 1);
+    assert.ok(mocks.calls.tx.includes("COMMIT"));
+    assert.equal(mocks.calls.tx.includes("ROLLBACK"), false);
+  } finally {
+    mocks.restore();
+  }
+});
 
 test("active modified projects remain available for project fixture assignment", async () => {
   const { shouldHideProjectFromActiveSelection } = loadProjectCatalogService();

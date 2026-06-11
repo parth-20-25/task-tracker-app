@@ -469,6 +469,22 @@ async function finalizeStageContributions({
   return finalContributions;
 }
 
+async function tryFinalizeStageContributions(context) {
+  try {
+    return await finalizeStageContributions(context);
+  } catch (error) {
+    console.warn("[workflow] stage contribution finalization skipped", {
+      fixture_id: context.fixtureId,
+      department_id: context.departmentId,
+      stage_name: context.stage?.stage_name || null,
+      error: error?.message || "Unknown contribution finalization error",
+      code: error?.code || error?.errorCode || null,
+      constraint: error?.constraint || null,
+    });
+    return [];
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public service functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -855,7 +871,7 @@ async function advanceFixtureWorkflowStage(identity) {
       );
     }
 
-    await finalizeStageContributions({
+    await tryFinalizeStageContributions({
       fixtureId,
       departmentId,
       stage: current,

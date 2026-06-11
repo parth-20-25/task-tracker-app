@@ -127,7 +127,16 @@ async function refreshTaskPerformanceAnalytics(taskOrDepartmentId) {
     ? taskOrDepartmentId
     : taskOrDepartmentId?.department_id || null;
 
-  await refreshPerformanceAnalyticsForDepartment(departmentId);
+  try {
+    await refreshPerformanceAnalyticsForDepartment(departmentId);
+  } catch (error) {
+    console.warn("[task] performance analytics refresh skipped", {
+      department_id: departmentId,
+      error: error?.message || "Unknown performance analytics error",
+      code: error?.code || error?.errorCode || null,
+      constraint: error?.constraint || null,
+    });
+  }
 }
 
 function isWorkflowManagedTask(task) {

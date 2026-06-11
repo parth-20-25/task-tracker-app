@@ -22,7 +22,7 @@ import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys
 import { formatProjectNumber } from '@/lib/projectDisplay';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { toast } from '@/hooks/use-toast';
-import { ProjectDashboardSummary, ProjectStatus } from '@/types';
+import type { ProjectDashboardSummary, ProjectStatus, User } from '@/types';
 
 function statusLabel(status: ProjectStatus) {
   if (status === "on_hold") return "On Hold";
@@ -35,6 +35,30 @@ function statusClass(status: ProjectStatus) {
   if (status === "on_hold") return "border-amber-200 bg-amber-50 text-amber-900";
   if (status === "completed" || status === "released") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   return "border-sky-200 bg-sky-50 text-sky-800";
+}
+
+function normalizeIdentifier(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function currentUserMatchesIdentifier(user: User | null | undefined, identifier: unknown) {
+  const normalizedIdentifier = normalizeIdentifier(identifier);
+  if (!normalizedIdentifier) {
+    return false;
+  }
+
+  return [user?.employee_id, user?.id].some(
+    (candidate) => normalizeIdentifier(candidate) === normalizedIdentifier,
+  );
+}
+
+function isProjectUploaderOrCreator(user: User | null | undefined, project: ProjectDashboardSummary | null | undefined) {
+  return [
+    project?.project_created_by_user_id,
+    project?.project_uploaded_by,
+    project?.uploaded_by,
+    project?.uploaded_by_user_id,
+  ].some((identifier) => currentUserMatchesIdentifier(user, identifier));
 }
 
 function ProjectCard({
@@ -237,6 +261,14 @@ export default function Dashboard() {
     return isProjectAuthorityUser(user) || access.canAssignTasks;
   };
 
+  const canReactivateProject = (project: ProjectDashboardSummary | null | undefined) => {
+    if (!project) {
+      return false;
+    }
+
+    return canManageProjectLifecycle(project) || isProjectUploaderOrCreator(user, project);
+  };
+
   const handleConfirmReactivation = (payload: ReactivateProjectPayload) => {
     if (!reactivatingProject) {
       return;
@@ -426,7 +458,7 @@ export default function Dashboard() {
                   ? "This project is on hold. Fixtures are hidden from active workflows until it is activated."
                   : "This project is released or completed. Fixtures are hidden from active workflows."}
               </p>
-              {(selectedProject.project_status === "completed" || selectedProject.project_status === "released") && canManageProjectLifecycle(selectedProject) ? (
+              {(selectedProject.project_status === "completed" || selectedProject.project_status === "released") && canReactivateProject(selectedProject) ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -497,7 +529,7 @@ export default function Dashboard() {
                         key={project.project_id}
                         project={project}
                         canEditProject={canUploadDesignNative}
-                        canReactivateProject={canManageProjectLifecycle(project)}
+                        canReactivateProject={canReactivateProject(project)}
                         onEditProject={setEditingProject}
                         onReactivateProject={setReactivatingProject}
                         onToggleModification={handleToggleProjectModification}

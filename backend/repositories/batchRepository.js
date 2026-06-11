@@ -16,6 +16,15 @@ const { userResolutionLateralSql } = require("./sqlFragments");
 
 const BATCH_DELETE_BLOCK_REASON = "Cannot delete project. Some fixtures have active or pending approval tasks.";
 const DELETABLE_FIXTURE_STATUSES = ["PENDING", "REJECTED"];
+const OPEN_TASK_STATUSES = ["assigned", "in_progress", "on_hold", "under_review", "rework"];
+const RESTORABLE_TASK_STATUSES = [...OPEN_TASK_STATUSES, "closed"];
+const RESTORABLE_WORKFLOW_STATUSES = [
+  "PENDING",
+  "IN_PROGRESS",
+  "SUBMITTED_FOR_VERIFICATION",
+  "APPROVED",
+  "REJECTED",
+];
 const SCHEMA_METADATA_TTL_MS = 60 * 1000;
 const schemaMetadataCache = new Map();
 const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
@@ -576,6 +585,8 @@ async function getProjectLifecycleContextByIdForUser(projectId, user, client = p
       SELECT
         p.id AS project_id,
         active_batch.id AS batch_id,
+        active_batch.uploaded_by AS batch_uploaded_by,
+        active_batch.uploaded_by_user_id AS batch_uploaded_by_user_id,
         p.project_no,
         p.created_by_user_id AS project_created_by_user_id,
         p.uploaded_by AS project_uploaded_by,
@@ -590,7 +601,7 @@ async function getProjectLifecycleContextByIdForUser(projectId, user, client = p
         p.updated_at AS project_updated_at
       FROM design.projects p
       LEFT JOIN LATERAL (
-        SELECT id
+        SELECT id, uploaded_by, uploaded_by_user_id
         FROM design.upload_batches
         WHERE project_id = p.id
           AND COALESCE(status, 'active') = 'active'
@@ -654,7 +665,6 @@ async function reactivateProjectForModification(projectId, client = pool) {
           status_changed_at = NOW(),
           updated_at = NOW()
       WHERE id = $1
-        AND status IN ($3, $4, $5)
       RETURNING
         id AS project_id,
         project_no,
@@ -667,19 +677,501 @@ async function reactivateProjectForModification(projectId, client = pool) {
         status_changed_at,
         updated_at
     `,
-    [
-      projectId,
-      PROJECT_STATUSES.ACTIVE,
-      PROJECT_STATUSES.COMPLETED,
-      PROJECT_STATUSES.RELEASED,
-      PROJECT_STATUSES.ON_HOLD,
-    ],
+    [projectId, PROJECT_STATUSES.ACTIVE],
   );
 
   return result.rows[0] || null;
 }
 
+async function captureProjectReleaseSnapshot(projectId, releasedBy, client = pool) {
+  if (!(await tableExists("design.workflow_completion_snapshots", client))) {
+    return 0;
+  }
+
+  const result = await client.query(
+    `
+      INSERT INTO design.workflow_completion_snapshots (
+        fixture_id,
+        project_id,
+        scope,
+        trigger,
+        payload
+      )
+      SELECT
+        f.id,
+        p.id,
+        'fixture',
+        'project_release',
+        jsonb_build_object(
+          'fixture_id', f.id,
+          'project_id', p.id,
+          'department_id', p.department_id,
+          'released_by', $2::text,
+          'captured_project_status', COALESCE(p.status, $3),
+          'is_workflow_complete', COALESCE(f.is_workflow_complete, FALSE),
+          'progress', COALESCE(progress.rows, '[]'::jsonb),
+          'tasks', COALESCE(tasks.rows, '[]'::jsonb)
+        )
+      FROM design.projects p
+      JOIN design.fixtures f
+        ON f.project_id = p.id
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'stage_name', fwp.stage_name,
+            'stage_order', fwp.stage_order,
+            'stage_version', fwp.stage_version,
+            'status', fwp.status,
+            'assigned_to', fwp.assigned_to,
+            'assigned_at', fwp.assigned_at,
+            'started_at', fwp.started_at,
+            'completed_at', fwp.completed_at,
+            'duration_minutes', fwp.duration_minutes
+          )
+          ORDER BY fwp.stage_order ASC, fwp.stage_name ASC
+        ) AS rows
+        FROM fixture_workflow_progress fwp
+        WHERE fwp.fixture_id = f.id
+          AND fwp.department_id = p.department_id
+      ) progress ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'id', t.id,
+            'status', t.status,
+            'verification_status', t.verification_status,
+            'completion_percent', t.completion_percent,
+            'lifecycle_status', t.lifecycle_status,
+            'approval_stage', t.approval_stage,
+            'completed_at', t.completed_at,
+            'closed_at', t.closed_at,
+            'submitted_at', t.submitted_at,
+            'verified_at', t.verified_at,
+            'approved_at', t.approved_at,
+            'approved_by', t.approved_by,
+            'actual_minutes', t.actual_minutes
+          )
+          ORDER BY t.id ASC
+        ) AS rows
+        FROM tasks t
+        WHERE t.project_id = p.id
+          AND t.fixture_id = f.id
+          AND COALESCE(t.status, '') <> 'cancelled'
+      ) tasks ON TRUE
+      WHERE p.id = $1
+      RETURNING id
+    `,
+    [projectId, releasedBy || null, PROJECT_STATUSES.ACTIVE],
+  );
+
+  return result.rowCount || 0;
+}
+
+async function restoreProjectWorkflowFromSnapshots(projectId, client = pool) {
+  if (!(await tableExists("design.workflow_completion_snapshots", client))) {
+    return {
+      snapshot_fixtures_restored: 0,
+      snapshot_progress_rows_restored: 0,
+      snapshot_tasks_restored: 0,
+    };
+  }
+
+  const fixtureResult = await client.query(
+    `
+      WITH latest_snapshot AS (
+        SELECT DISTINCT ON (snapshot.fixture_id)
+          snapshot.fixture_id,
+          snapshot.payload
+        FROM design.workflow_completion_snapshots snapshot
+        JOIN design.fixtures fixture
+          ON fixture.id = snapshot.fixture_id
+        WHERE snapshot.project_id = $1
+          AND fixture.project_id = $1
+          AND snapshot.scope = 'fixture'
+          AND snapshot.trigger = 'project_release'
+        ORDER BY snapshot.fixture_id, snapshot.captured_at DESC, snapshot.id DESC
+      )
+      UPDATE design.fixtures fixture
+      SET is_workflow_complete = COALESCE((latest_snapshot.payload ->> 'is_workflow_complete')::boolean, fixture.is_workflow_complete),
+          updated_at = NOW()
+      FROM latest_snapshot
+      WHERE fixture.id = latest_snapshot.fixture_id
+      RETURNING fixture.id
+    `,
+    [projectId],
+  );
+
+  const progressResult = await client.query(
+    `
+      WITH latest_snapshot AS (
+        SELECT DISTINCT ON (snapshot.fixture_id)
+          snapshot.fixture_id,
+          snapshot.payload
+        FROM design.workflow_completion_snapshots snapshot
+        JOIN design.fixtures fixture
+          ON fixture.id = snapshot.fixture_id
+        WHERE snapshot.project_id = $1
+          AND fixture.project_id = $1
+          AND snapshot.scope = 'fixture'
+          AND snapshot.trigger = 'project_release'
+        ORDER BY snapshot.fixture_id, snapshot.captured_at DESC, snapshot.id DESC
+      ),
+      snapshot_progress AS (
+        SELECT
+          latest_snapshot.fixture_id,
+          progress.stage_name,
+          progress.stage_version,
+          progress.status,
+          progress.assigned_to,
+          progress.assigned_at,
+          progress.started_at,
+          progress.completed_at,
+          progress.duration_minutes
+        FROM latest_snapshot
+        CROSS JOIN LATERAL jsonb_to_recordset(COALESCE(latest_snapshot.payload -> 'progress', '[]'::jsonb)) AS progress(
+          stage_name text,
+          stage_order integer,
+          stage_version integer,
+          status text,
+          assigned_to text,
+          assigned_at timestamptz,
+          started_at timestamptz,
+          completed_at timestamptz,
+          duration_minutes integer
+        )
+        WHERE progress.status = ANY($2::text[])
+      )
+      UPDATE fixture_workflow_progress fwp
+      SET status = snapshot_progress.status,
+          stage_version = COALESCE(snapshot_progress.stage_version, fwp.stage_version),
+          assigned_to = snapshot_progress.assigned_to,
+          assigned_at = snapshot_progress.assigned_at,
+          started_at = snapshot_progress.started_at,
+          completed_at = snapshot_progress.completed_at,
+          duration_minutes = snapshot_progress.duration_minutes,
+          updated_at = NOW()
+      FROM snapshot_progress
+      JOIN design.fixtures fixture
+        ON fixture.id = snapshot_progress.fixture_id
+       AND fixture.project_id = $1
+      JOIN design.projects project
+        ON project.id = fixture.project_id
+      WHERE fwp.fixture_id = snapshot_progress.fixture_id
+        AND fwp.department_id = project.department_id
+        AND LOWER(fwp.stage_name) = LOWER(snapshot_progress.stage_name)
+      RETURNING fwp.id
+    `,
+    [projectId, RESTORABLE_WORKFLOW_STATUSES],
+  );
+
+  const taskResult = await client.query(
+    `
+      WITH latest_snapshot AS (
+        SELECT DISTINCT ON (snapshot.fixture_id)
+          snapshot.fixture_id,
+          snapshot.payload
+        FROM design.workflow_completion_snapshots snapshot
+        JOIN design.fixtures fixture
+          ON fixture.id = snapshot.fixture_id
+        WHERE snapshot.project_id = $1
+          AND fixture.project_id = $1
+          AND snapshot.scope = 'fixture'
+          AND snapshot.trigger = 'project_release'
+        ORDER BY snapshot.fixture_id, snapshot.captured_at DESC, snapshot.id DESC
+      ),
+      snapshot_task AS (
+        SELECT task.*
+        FROM latest_snapshot
+        CROSS JOIN LATERAL jsonb_to_recordset(COALESCE(latest_snapshot.payload -> 'tasks', '[]'::jsonb)) AS task(
+          id integer,
+          status text,
+          verification_status text,
+          completion_percent integer,
+          lifecycle_status text,
+          approval_stage text,
+          completed_at timestamptz,
+          closed_at timestamptz,
+          submitted_at timestamptz,
+          verified_at timestamptz,
+          approved_at timestamptz,
+          approved_by text,
+          actual_minutes integer
+        )
+        WHERE LOWER(COALESCE(task.status, '')) = ANY($2::text[])
+      )
+      UPDATE tasks task
+      SET status = snapshot_task.status,
+          verification_status = snapshot_task.verification_status,
+          completion_percent = COALESCE(snapshot_task.completion_percent, task.completion_percent, 0),
+          lifecycle_status = COALESCE(snapshot_task.lifecycle_status, task.lifecycle_status),
+          approval_stage = snapshot_task.approval_stage,
+          completed_at = snapshot_task.completed_at,
+          closed_at = snapshot_task.closed_at,
+          submitted_at = snapshot_task.submitted_at,
+          verified_at = snapshot_task.verified_at,
+          approved_at = snapshot_task.approved_at,
+          approved_by = snapshot_task.approved_by,
+          actual_minutes = COALESCE(snapshot_task.actual_minutes, task.actual_minutes, 0),
+          updated_at = NOW()
+      FROM snapshot_task
+      WHERE task.id = snapshot_task.id
+        AND task.project_id = $1
+      RETURNING task.id
+    `,
+    [projectId, RESTORABLE_TASK_STATUSES],
+  );
+
+  return {
+    snapshot_fixtures_restored: fixtureResult.rowCount || 0,
+    snapshot_progress_rows_restored: progressResult.rowCount || 0,
+    snapshot_tasks_restored: taskResult.rowCount || 0,
+  };
+}
+
+async function restoreProjectWorkflowFromActivity(projectId, client = pool) {
+  const taskResult = await client.query(
+    `
+      WITH restore_candidates AS (
+        SELECT
+          task.id,
+          latest_status.restored_status,
+          latest_percent.completion_percent
+        FROM tasks task
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE
+              WHEN LOWER(activity.metadata ->> 'to') = ANY($2::text[]) THEN LOWER(activity.metadata ->> 'to')
+              WHEN activity.action_type = 'task_submitted_for_verification' THEN 'under_review'
+              WHEN activity.action_type = 'task_auto_started' THEN 'in_progress'
+              WHEN activity.action_type = 'task_rejected' THEN 'rework'
+              WHEN activity.action_type = 'task_manager_approved' THEN 'under_review'
+              WHEN activity.action_type = 'task_created' THEN 'assigned'
+              ELSE NULL
+            END AS restored_status
+          FROM task_activity_logs activity
+          WHERE activity.task_id = task.id
+            AND (
+              LOWER(activity.metadata ->> 'to') = ANY($2::text[])
+              OR activity.action_type IN (
+                'task_created',
+                'task_auto_started',
+                'task_submitted_for_verification',
+                'task_rejected',
+                'task_manager_approved'
+              )
+            )
+          ORDER BY activity.created_at DESC, activity.id DESC
+          LIMIT 1
+        ) latest_status ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT ROUND((activity.metadata ->> 'to')::numeric)::integer AS completion_percent
+          FROM task_activity_logs activity
+          WHERE activity.task_id = task.id
+            AND activity.action_type IN (
+              'task_completion_percent_updated',
+              'task_auto_started',
+              'task_submitted_for_verification'
+            )
+            AND COALESCE(activity.metadata ->> 'to', '') ~ '^[0-9]+(\\.[0-9]+)?$'
+          ORDER BY activity.created_at DESC, activity.id DESC
+          LIMIT 1
+        ) latest_percent ON TRUE
+        WHERE task.project_id = $1
+          AND LOWER(COALESCE(task.status, '')) = 'closed'
+          AND LOWER(COALESCE(task.verification_status, '')) = 'approved'
+          AND latest_status.restored_status = ANY($2::text[])
+          AND NOT EXISTS (
+            SELECT 1
+            FROM task_activity_logs terminal_activity
+            WHERE terminal_activity.task_id = task.id
+              AND (
+                terminal_activity.action_type IN ('task_approved', 'task_quality_approved')
+                OR LOWER(terminal_activity.metadata ->> 'to') IN ('closed', 'cancelled')
+                OR LOWER(terminal_activity.metadata ->> 'verification_status') = 'approved'
+              )
+          )
+      )
+      UPDATE tasks task
+      SET status = restore_candidates.restored_status,
+          verification_status = CASE
+            WHEN restore_candidates.restored_status = 'rework' THEN 'rejected'
+            ELSE 'pending'
+          END,
+          lifecycle_status = CASE
+            WHEN restore_candidates.restored_status = 'assigned' THEN 'assigned'
+            WHEN restore_candidates.restored_status = 'rework' THEN 'rework'
+            ELSE 'in_progress'
+          END,
+          approval_stage = CASE
+            WHEN restore_candidates.restored_status = 'under_review' THEN COALESCE(NULLIF(task.approval_stage, 'closed'), 'manager')
+            WHEN restore_candidates.restored_status = 'rework' THEN 'rework'
+            ELSE 'execution'
+          END,
+          completion_percent = CASE
+            WHEN restore_candidates.restored_status = 'assigned' THEN 0
+            WHEN restore_candidates.restored_status = 'under_review' THEN 100
+            WHEN restore_candidates.completion_percent IS NOT NULL THEN restore_candidates.completion_percent
+            WHEN COALESCE(task.completion_percent, 0) >= 100 THEN 99
+            ELSE COALESCE(task.completion_percent, 0)
+          END,
+          completed_at = CASE
+            WHEN restore_candidates.restored_status = 'under_review' THEN COALESCE(task.submitted_at, task.completed_at)
+            ELSE NULL
+          END,
+          closed_at = NULL,
+          approved_at = NULL,
+          approved_by = NULL,
+          submitted_at = CASE
+            WHEN restore_candidates.restored_status = 'under_review' THEN COALESCE(task.submitted_at, task.completed_at)
+            ELSE task.submitted_at
+          END,
+          actual_minutes = CASE
+            WHEN restore_candidates.restored_status = 'assigned' THEN COALESCE(task.actual_minutes, 0)
+            ELSE task.actual_minutes
+          END,
+          updated_at = NOW()
+      FROM restore_candidates
+      WHERE task.id = restore_candidates.id
+      RETURNING task.id
+    `,
+    [projectId, OPEN_TASK_STATUSES],
+  );
+
+  const progressResult = await client.query(
+    `
+      WITH active_task AS (
+        SELECT DISTINCT ON (task.fixture_id, LOWER(COALESCE(task.stage, '')))
+          task.id,
+          task.fixture_id,
+          task.department_id,
+          task.stage,
+          task.status,
+          task.assigned_to,
+          task.assigned_at,
+          task.started_at,
+          task.completed_at,
+          task.submitted_at,
+          task.updated_at
+        FROM tasks task
+        JOIN design.fixtures fixture
+          ON fixture.id = task.fixture_id
+         AND fixture.project_id = $1
+        WHERE task.project_id = $1
+          AND task.fixture_id IS NOT NULL
+          AND NULLIF(BTRIM(task.stage), '') IS NOT NULL
+          AND LOWER(COALESCE(task.status, '')) = ANY($2::text[])
+        ORDER BY
+          task.fixture_id,
+          LOWER(COALESCE(task.stage, '')),
+          CASE LOWER(task.status)
+            WHEN 'under_review' THEN 0
+            WHEN 'rework' THEN 1
+            WHEN 'in_progress' THEN 2
+            WHEN 'on_hold' THEN 3
+            WHEN 'assigned' THEN 4
+            ELSE 5
+          END,
+          task.updated_at DESC,
+          task.id DESC
+      ),
+      matched_stage AS (
+        SELECT
+          active_task.*,
+          fwp.stage_name,
+          fwp.stage_order
+        FROM active_task
+        JOIN fixture_workflow_progress fwp
+          ON fwp.fixture_id = active_task.fixture_id
+         AND fwp.department_id = active_task.department_id
+         AND LOWER(fwp.stage_name) = LOWER(active_task.stage)
+      ),
+      restored_current_stage AS (
+        UPDATE fixture_workflow_progress fwp
+        SET status = CASE LOWER(matched_stage.status)
+              WHEN 'under_review' THEN 'SUBMITTED_FOR_VERIFICATION'
+              WHEN 'rework' THEN 'REJECTED'
+              ELSE 'IN_PROGRESS'
+            END,
+            assigned_to = COALESCE(matched_stage.assigned_to, fwp.assigned_to),
+            assigned_at = COALESCE(fwp.assigned_at, matched_stage.assigned_at, matched_stage.started_at, matched_stage.updated_at),
+            started_at = CASE
+              WHEN LOWER(matched_stage.status) = 'under_review' THEN COALESCE(fwp.started_at, matched_stage.started_at, matched_stage.assigned_at)
+              ELSE COALESCE(matched_stage.started_at, fwp.started_at, matched_stage.assigned_at)
+            END,
+            completed_at = CASE
+              WHEN LOWER(matched_stage.status) = 'under_review' THEN COALESCE(matched_stage.completed_at, matched_stage.submitted_at, fwp.completed_at)
+              ELSE NULL
+            END,
+            duration_minutes = CASE
+              WHEN LOWER(matched_stage.status) = 'under_review' THEN fwp.duration_minutes
+              ELSE NULL
+            END,
+            updated_at = NOW()
+        FROM matched_stage
+        WHERE fwp.fixture_id = matched_stage.fixture_id
+          AND fwp.department_id = matched_stage.department_id
+          AND fwp.stage_name = matched_stage.stage_name
+        RETURNING fwp.fixture_id, fwp.department_id, fwp.stage_order
+      ),
+      active_stage AS (
+        SELECT fixture_id, department_id, MIN(stage_order) AS stage_order
+        FROM restored_current_stage
+        GROUP BY fixture_id, department_id
+      ),
+      reset_future_stages AS (
+        UPDATE fixture_workflow_progress fwp
+        SET status = 'PENDING',
+            assigned_to = NULL,
+            assigned_at = NULL,
+            started_at = NULL,
+            completed_at = NULL,
+            duration_minutes = NULL,
+            updated_at = NOW()
+        FROM active_stage
+        WHERE fwp.fixture_id = active_stage.fixture_id
+          AND fwp.department_id = active_stage.department_id
+          AND fwp.stage_order > active_stage.stage_order
+          AND fwp.status = 'APPROVED'
+        RETURNING fwp.id
+      ),
+      mark_fixtures_incomplete AS (
+        UPDATE design.fixtures fixture
+        SET is_workflow_complete = FALSE,
+            updated_at = NOW()
+        WHERE fixture.id IN (SELECT DISTINCT fixture_id FROM restored_current_stage)
+          AND fixture.project_id = $1
+        RETURNING fixture.id
+      )
+      SELECT
+        (SELECT COUNT(*)::integer FROM restored_current_stage) AS progress_rows_restored,
+        (SELECT COUNT(*)::integer FROM reset_future_stages) AS future_progress_rows_reset,
+        (SELECT COUNT(*)::integer FROM mark_fixtures_incomplete) AS fixtures_reopened
+    `,
+    [projectId, OPEN_TASK_STATUSES],
+  );
+
+  const progressRow = progressResult.rows[0] || {};
+
+  return {
+    activity_tasks_restored: taskResult.rowCount || 0,
+    activity_progress_rows_restored: Number(progressRow.progress_rows_restored || 0),
+    activity_future_progress_rows_reset: Number(progressRow.future_progress_rows_reset || 0),
+    activity_fixtures_reopened: Number(progressRow.fixtures_reopened || 0),
+  };
+}
+
+async function restoreProjectWorkflowForReactivation(projectId, client = pool) {
+  const snapshotRestore = await restoreProjectWorkflowFromSnapshots(projectId, client);
+  const activityRestore = await restoreProjectWorkflowFromActivity(projectId, client);
+
+  return {
+    ...snapshotRestore,
+    ...activityRestore,
+  };
+}
+
 async function releaseProject(projectId, releasedBy, client = pool) {
+  await captureProjectReleaseSnapshot(projectId, releasedBy, client);
   await setProjectLifecycleStatus(projectId, PROJECT_STATUSES.COMPLETED, client);
 
   await client.query(
@@ -797,6 +1289,7 @@ async function deleteBatchCascade(batchId, client = pool) {
 
 module.exports = instrumentModuleExports("repository.batchRepository", {
   BATCH_DELETE_BLOCK_REASON,
+  captureProjectReleaseSnapshot,
   checkBatchDeletionBlocked,
   deleteBatchCascade,
   getBatchById,
@@ -806,5 +1299,6 @@ module.exports = instrumentModuleExports("repository.batchRepository", {
   listBatchesWithSummaryForUser,
   reactivateProjectForModification,
   releaseProject,
+  restoreProjectWorkflowForReactivation,
   setProjectLifecycleStatus,
 });

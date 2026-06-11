@@ -13,6 +13,7 @@ const {
   deleteBatchCascade,
   reactivateProjectForModification,
   releaseProject,
+  restoreProjectWorkflowForReactivation,
   setProjectLifecycleStatus,
 } = require("../repositories/batchRepository");
 const { canAccessDepartment, hasPermission, isAdmin, isProjectAuthorityRole } = require("./accessControlService");
@@ -31,14 +32,6 @@ function normalizeProjectStatus(status) {
 
 function isTerminalProjectStatus(status) {
   return [PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED].includes(normalizeProjectStatus(status));
-}
-
-function isReactivatableProjectStatus(status) {
-  return [
-    PROJECT_STATUSES.ON_HOLD,
-    PROJECT_STATUSES.COMPLETED,
-    PROJECT_STATUSES.RELEASED,
-  ].includes(normalizeProjectStatus(status));
 }
 
 function normalizeReasonKey(value) {
@@ -84,6 +77,33 @@ function isBatchOwner(user, batch) {
   return Boolean(user?.employee_id && ownerId && user.employee_id === ownerId);
 }
 
+function normalizeIdentifier(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function identifierMatchesCurrentUser(user, identifier) {
+  const normalizedIdentifier = normalizeIdentifier(identifier);
+  if (!normalizedIdentifier) {
+    return false;
+  }
+
+  return [
+    user?.employee_id,
+    user?.id,
+  ].some((candidate) => normalizeIdentifier(candidate) === normalizedIdentifier);
+}
+
+function isProjectUploaderOrCreator(user, project) {
+  return [
+    project?.project_created_by_user_id,
+    project?.project_uploaded_by,
+    project?.uploaded_by,
+    project?.uploaded_by_user_id,
+    project?.batch_uploaded_by,
+    project?.batch_uploaded_by_user_id,
+  ].some((identifier) => identifierMatchesCurrentUser(user, identifier));
+}
+
 async function getBatches(user) {
   const hasGlobalProjectView = isAdmin(user) || isProjectAuthorityRole(user);
 
@@ -108,6 +128,10 @@ function canManageProjectLifecycle(user, batch) {
   }
 
   return hasPermission(user, PERMISSIONS.DELETE_WBS_BATCH) && isBatchOwner(user, batch);
+}
+
+function canReactivateProject(user, project) {
+  return canManageProjectLifecycle(user, project) || isProjectUploaderOrCreator(user, project);
 }
 
 /**
@@ -332,17 +356,14 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     throw new AppError(404, "Project not found");
   }
 
-  if (!canManageProjectLifecycle(user, project)) {
+  if (!canReactivateProject(user, project)) {
     throw new AppError(403, "You do not have permission to reactivate this project");
-  }
-
-  if (!isReactivatableProjectStatus(project.project_status)) {
-    throw new AppError(409, "Only on-hold, released, or completed projects can be reactivated");
   }
 
   const reactivation = normalizeProjectReactivationPayload(payload);
   const reactivatedAt = new Date().toISOString();
   let updatedProject = null;
+  let restoration = {};
   const client = await pool.connect();
 
   try {
@@ -350,8 +371,10 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     updatedProject = await reactivateProjectForModification(project.project_id, client);
 
     if (!updatedProject) {
-      throw new AppError(409, "Only on-hold, released, or completed projects can be reactivated");
+      throw new AppError(404, "Project not found");
     }
+
+    restoration = await restoreProjectWorkflowForReactivation(project.project_id, client);
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
@@ -371,6 +394,7 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
         previous_is_modified: project.is_modified === true,
         next_is_modified: updatedProject.is_modified === true,
         preserved_completed_at: project.completed_at || null,
+        workflow_restoration: restoration,
       },
     }, client);
 
@@ -392,6 +416,7 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     reactivation_reason: reactivation.reason,
     reactivation_reason_label: reactivation.reason_label,
     reactivation_comment: reactivation.comment,
+    workflow_restoration: restoration,
     message: `Project ${project.project_no} has been reactivated for modification work.`,
   };
 }

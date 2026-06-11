@@ -420,7 +420,6 @@ router.patch(
 
 router.post(
   "/design/projects/:projectId/reactivate",
-  requireOperationalController,
   asyncHandler(async (req, res) => {
     const result = await reactivateProjectForModificationById(req.user, req.params.projectId, req.body);
     return sendSuccess(res, result);

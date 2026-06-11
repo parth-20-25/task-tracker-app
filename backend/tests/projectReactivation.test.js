@@ -16,6 +16,7 @@ function installReactivationMocks({ projectContext, reactivatedProject, auditSin
     connect: db.pool.connect,
     getProjectLifecycleContextByIdForUser: batchRepository.getProjectLifecycleContextByIdForUser,
     reactivateProjectForModification: batchRepository.reactivateProjectForModification,
+    restoreProjectWorkflowForReactivation: batchRepository.restoreProjectWorkflowForReactivation,
     createAuditLog: auditRepository.createAuditLog,
   };
 
@@ -37,6 +38,19 @@ function installReactivationMocks({ projectContext, reactivatedProject, auditSin
     assert.equal(txClient, client);
     return reactivatedProject;
   };
+  batchRepository.restoreProjectWorkflowForReactivation = async (projectId, txClient) => {
+    assert.equal(projectId, projectContext?.project_id);
+    assert.equal(txClient, client);
+    return {
+      snapshot_fixtures_restored: 1,
+      snapshot_progress_rows_restored: 4,
+      snapshot_tasks_restored: 1,
+      activity_tasks_restored: 0,
+      activity_progress_rows_restored: 0,
+      activity_future_progress_rows_reset: 0,
+      activity_fixtures_reopened: 0,
+    };
+  };
   auditRepository.createAuditLog = async (entry, txClient) => {
     assert.equal(txClient, client);
     auditSink.push(entry);
@@ -51,6 +65,7 @@ function installReactivationMocks({ projectContext, reactivatedProject, auditSin
       db.pool.connect = originals.connect;
       batchRepository.getProjectLifecycleContextByIdForUser = originals.getProjectLifecycleContextByIdForUser;
       batchRepository.reactivateProjectForModification = originals.reactivateProjectForModification;
+      batchRepository.restoreProjectWorkflowForReactivation = originals.restoreProjectWorkflowForReactivation;
       auditRepository.createAuditLog = originals.createAuditLog;
       clearServiceCache();
     },
@@ -77,6 +92,11 @@ const employeeUser = {
     name: "Employee",
     permissions: { can_view_self_tasks: true },
   },
+};
+
+const uploaderUser = {
+  ...employeeUser,
+  employee_id: "OWNER-1",
 };
 
 const releasedProject = {
@@ -111,6 +131,15 @@ test("reactivating a terminal project sets it active, marks modified, and record
     assert.equal(result.previous_status, "completed");
     assert.equal(result.is_modified, true);
     assert.equal(result.reactivation_reason, "drawing_update");
+    assert.deepEqual(result.workflow_restoration, {
+      snapshot_fixtures_restored: 1,
+      snapshot_progress_rows_restored: 4,
+      snapshot_tasks_restored: 1,
+      activity_tasks_restored: 0,
+      activity_progress_rows_restored: 0,
+      activity_future_progress_rows_reset: 0,
+      activity_fixtures_reopened: 0,
+    });
     assert.match(result.message, /reactivated/);
 
     assert.equal(mocks.auditSink.length, 1);
@@ -128,6 +157,15 @@ test("reactivating a terminal project sets it active, marks modified, and record
       previous_is_modified: false,
       next_is_modified: true,
       preserved_completed_at: "2026-06-01T10:00:00.000Z",
+      workflow_restoration: {
+        snapshot_fixtures_restored: 1,
+        snapshot_progress_rows_restored: 4,
+        snapshot_tasks_restored: 1,
+        activity_tasks_restored: 0,
+        activity_progress_rows_restored: 0,
+        activity_future_progress_rows_reset: 0,
+        activity_fixtures_reopened: 0,
+      },
     });
     assert.ok(Date.parse(mocks.auditSink[0].metadata.reactivated_at));
     assert.ok(mocks.tx.some((entry) => entry === "BEGIN"));
@@ -137,7 +175,30 @@ test("reactivating a terminal project sets it active, marks modified, and record
   }
 });
 
-test("normal employees cannot reactivate released projects", async () => {
+test("project uploader can reactivate without special lifecycle permissions", async () => {
+  const mocks = installReactivationMocks({
+    projectContext: releasedProject,
+    reactivatedProject: {
+      project_id: "project-1",
+      project_status: "active",
+      is_modified: true,
+    },
+  });
+
+  try {
+    const { reactivateProjectForModificationById } = require("../services/batchService");
+    const result = await reactivateProjectForModificationById(uploaderUser, "project-1", { reason: "other" });
+
+    assert.equal(result.status, "active");
+    assert.equal(result.previous_status, "completed");
+    assert.equal(mocks.auditSink.length, 1);
+    assert.equal(mocks.auditSink[0].metadata.reactivated_by, "OWNER-1");
+  } finally {
+    mocks.restore();
+  }
+});
+
+test("unrelated normal employees cannot reactivate somebody else's project", async () => {
   const mocks = installReactivationMocks({
     projectContext: releasedProject,
     reactivatedProject: null,
@@ -188,24 +249,27 @@ test("on-hold projects can be reactivated through the project reactivation path"
   }
 });
 
-test("active projects cannot use the reactivation path", async () => {
+test("active projects can use the reactivation path without lifecycle blocker", async () => {
   const mocks = installReactivationMocks({
     projectContext: {
       ...releasedProject,
       project_status: "active",
       is_modified: true,
     },
-    reactivatedProject: null,
+    reactivatedProject: {
+      project_id: "project-1",
+      project_status: "active",
+      is_modified: true,
+    },
   });
 
   try {
     const { reactivateProjectForModificationById } = require("../services/batchService");
-    await assert.rejects(
-      () => reactivateProjectForModificationById(managerUser, "project-1", { reason: "customer_modification" }),
-      /Only on-hold, released, or completed projects/,
-    );
-    assert.equal(mocks.auditSink.length, 0);
-    assert.equal(mocks.tx.length, 0);
+    const result = await reactivateProjectForModificationById(managerUser, "project-1", { reason: "customer_modification" });
+
+    assert.equal(result.status, "active");
+    assert.equal(result.previous_status, "active");
+    assert.equal(mocks.auditSink.length, 1);
   } finally {
     mocks.restore();
   }

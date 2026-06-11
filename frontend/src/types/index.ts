@@ -250,7 +250,10 @@ export interface ProjectDashboardSummary {
   pending_tasks: number;
   active_tasks: number;
   completed_tasks: number;
+  project_created_by_user_id?: string | null;
+  project_uploaded_by?: string | null;
   uploaded_by?: string | null;
+  uploaded_by_user_id?: string | null;
   team_lead_id?: string | null;
   team_lead_name?: string | null;
   project_leader_id?: string | null;

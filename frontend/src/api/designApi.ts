@@ -227,6 +227,7 @@ export interface ReactivateProjectResponse {
   reactivation_reason: ProjectReactivationReason;
   reactivation_reason_label: string;
   reactivation_comment: string | null;
+  workflow_restoration?: Record<string, number>;
   message: string;
 }
 

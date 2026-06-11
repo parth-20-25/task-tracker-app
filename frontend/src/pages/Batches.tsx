@@ -28,7 +28,7 @@ import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
-import { ProjectStatus, UploadBatch } from "@/types";
+import type { ProjectStatus, UploadBatch, User } from "@/types";
 
 function formatDateTime(value: string) {
   if (!value) {
@@ -64,6 +64,29 @@ function projectStatusClass(status: ProjectStatus | string | undefined) {
     default:
       return "border-sky-200 bg-sky-50 text-sky-800";
   }
+}
+
+function normalizeIdentifier(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function currentUserMatchesIdentifier(user: User | null | undefined, identifier: unknown) {
+  const normalizedIdentifier = normalizeIdentifier(identifier);
+  if (!normalizedIdentifier) {
+    return false;
+  }
+
+  return [user?.employee_id, user?.id].some(
+    (candidate) => normalizeIdentifier(candidate) === normalizedIdentifier,
+  );
+}
+
+function isProjectUploaderOrCreator(user: User | null | undefined, batch: UploadBatch | null | undefined) {
+  return [
+    batch?.project_created_by_user_id,
+    batch?.uploaded_by,
+    batch?.uploaded_by_user_id,
+  ].some((identifier) => currentUserMatchesIdentifier(user, identifier));
 }
 
 function DeleteAction({
@@ -147,6 +170,10 @@ export default function Batches() {
     const isOwner = Boolean(user?.employee_id && batch.project_created_by_user_id === user.employee_id);
     return isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
   };
+
+  const canReactivateBatchProject = (batch: UploadBatch) => (
+    canManageBatchLifecycle(batch) || isProjectUploaderOrCreator(user, batch)
+  );
 
   const assign2DMutation = useMutation({
     mutationFn: () => assignProjectTo2D(routingBatch?.project_id || "", selected2DLeader),
@@ -432,6 +459,7 @@ export default function Batches() {
                 const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
                 const hasOperationalBatch = Boolean(batch.batch_id);
                 const canManageLifecycle = canManageBatchLifecycle(batch);
+                const canReactivateLifecycle = canReactivateBatchProject(batch);
                 const canManageProject = hasOperationalBatch && canManageLifecycle;
                 const canManage2DRouting = batch.can_manage_2d_routing === true;
                 const projectTerminal = batch.project_status === "completed" || batch.project_status === "released";
@@ -555,7 +583,7 @@ export default function Batches() {
                           <Rocket className="h-4 w-4 mr-2" />
                           Release
                         </Button>
-                        {projectTerminal && canManageLifecycle ? (
+                        {projectTerminal && canReactivateLifecycle ? (
                           <Button
                             type="button"
                             variant="outline"
@@ -637,7 +665,7 @@ export default function Batches() {
                 <span className="text-muted-foreground">Deletion</span>
                 <span>{selectedBatch.deletion_blocked ? selectedBatch.delete_blocked_reason : "Allowed"}</span>
               </div>
-              {(selectedBatch.project_status === "completed" || selectedBatch.project_status === "released") && canManageBatchLifecycle(selectedBatch) ? (
+              {(selectedBatch.project_status === "completed" || selectedBatch.project_status === "released") && canReactivateBatchProject(selectedBatch) ? (
                 <div className="flex justify-end border-t pt-3">
                   <Button
                     type="button"

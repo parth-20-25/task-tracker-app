@@ -156,6 +156,38 @@ test("normal employees cannot reactivate released projects", async () => {
   }
 });
 
+test("on-hold projects can be reactivated through the project reactivation path", async () => {
+  const mocks = installReactivationMocks({
+    projectContext: {
+      ...releasedProject,
+      project_status: "on_hold",
+      completed_at: null,
+    },
+    reactivatedProject: {
+      project_id: "project-1",
+      project_status: "active",
+      is_modified: true,
+    },
+  });
+
+  try {
+    const { reactivateProjectForModificationById } = require("../services/batchService");
+    const result = await reactivateProjectForModificationById(managerUser, "project-1", {
+      reason: "internal_modification",
+    });
+
+    assert.equal(result.status, "active");
+    assert.equal(result.previous_status, "on_hold");
+    assert.equal(result.is_modified, true);
+    assert.equal(result.project.project_status, "active");
+    assert.equal(mocks.auditSink.length, 1);
+    assert.equal(mocks.auditSink[0].metadata.previous_status, "on_hold");
+    assert.equal(mocks.auditSink[0].metadata.preserved_completed_at, null);
+  } finally {
+    mocks.restore();
+  }
+});
+
 test("active projects cannot use the reactivation path", async () => {
   const mocks = installReactivationMocks({
     projectContext: {
@@ -170,7 +202,7 @@ test("active projects cannot use the reactivation path", async () => {
     const { reactivateProjectForModificationById } = require("../services/batchService");
     await assert.rejects(
       () => reactivateProjectForModificationById(managerUser, "project-1", { reason: "customer_modification" }),
-      /Only released or completed projects/,
+      /Only on-hold, released, or completed projects/,
     );
     assert.equal(mocks.auditSink.length, 0);
     assert.equal(mocks.tx.length, 0);

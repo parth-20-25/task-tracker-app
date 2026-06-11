@@ -33,6 +33,14 @@ function isTerminalProjectStatus(status) {
   return [PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED].includes(normalizeProjectStatus(status));
 }
 
+function isReactivatableProjectStatus(status) {
+  return [
+    PROJECT_STATUSES.ON_HOLD,
+    PROJECT_STATUSES.COMPLETED,
+    PROJECT_STATUSES.RELEASED,
+  ].includes(normalizeProjectStatus(status));
+}
+
 function normalizeReasonKey(value) {
   return String(value || "")
     .trim()
@@ -328,8 +336,8 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     throw new AppError(403, "You do not have permission to reactivate this project");
   }
 
-  if (!isTerminalProjectStatus(project.project_status)) {
-    throw new AppError(409, "Only released or completed projects can be reactivated");
+  if (!isReactivatableProjectStatus(project.project_status)) {
+    throw new AppError(409, "Only on-hold, released, or completed projects can be reactivated");
   }
 
   const reactivation = normalizeProjectReactivationPayload(payload);
@@ -342,7 +350,7 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     updatedProject = await reactivateProjectForModification(project.project_id, client);
 
     if (!updatedProject) {
-      throw new AppError(409, "Only released or completed projects can be reactivated");
+      throw new AppError(409, "Only on-hold, released, or completed projects can be reactivated");
     }
 
     await createAuditLog({
@@ -380,6 +388,7 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     status: PROJECT_STATUSES.ACTIVE,
     previous_status: project.project_status,
     is_modified: updatedProject?.is_modified === true,
+    project: updatedProject,
     reactivation_reason: reactivation.reason,
     reactivation_reason_label: reactivation.reason_label,
     reactivation_comment: reactivation.comment,

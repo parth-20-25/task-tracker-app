@@ -212,6 +212,18 @@ export interface ReactivateProjectResponse {
   status: "active";
   previous_status: string;
   is_modified: boolean;
+  project: {
+    project_id: string;
+    project_no: string;
+    project_name: string;
+    customer_name: string | null;
+    department_id: string;
+    project_status: "active";
+    is_modified: boolean;
+    completed_at: string | null;
+    status_changed_at: string;
+    updated_at: string;
+  };
   reactivation_reason: ProjectReactivationReason;
   reactivation_reason_label: string;
   reactivation_comment: string | null;

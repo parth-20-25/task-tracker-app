@@ -654,7 +654,7 @@ async function reactivateProjectForModification(projectId, client = pool) {
           status_changed_at = NOW(),
           updated_at = NOW()
       WHERE id = $1
-        AND status IN ($3, $4)
+        AND status IN ($3, $4, $5)
       RETURNING
         id AS project_id,
         project_no,
@@ -667,7 +667,13 @@ async function reactivateProjectForModification(projectId, client = pool) {
         status_changed_at,
         updated_at
     `,
-    [projectId, PROJECT_STATUSES.ACTIVE, PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED],
+    [
+      projectId,
+      PROJECT_STATUSES.ACTIVE,
+      PROJECT_STATUSES.COMPLETED,
+      PROJECT_STATUSES.RELEASED,
+      PROJECT_STATUSES.ON_HOLD,
+    ],
   );
 
   return result.rows[0] || null;

@@ -53,3 +53,21 @@ test("analytics overview API route is mounted by createApp before auth", async (
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("project reactivation API route resolves before auth instead of returning Express 404", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/design/projects/project-1/reactivate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "other" }),
+    });
+
+    assert.equal(response.status, 401);
+    assert.match(await response.text(), /No token provided/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

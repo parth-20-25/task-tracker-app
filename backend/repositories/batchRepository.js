@@ -243,6 +243,7 @@ function mapBatchSummary(row) {
     project_id: row.project_id,
     project_no: normalizeProjectNo(row.project_no),
     project_created_by_user_id: row.project_created_by_user_id || null,
+    project_uploaded_by: row.project_uploaded_by || null,
     project_name: normalizeProjectName(row.project_name),
     customer_name: collapseProjectLabel(row.customer_name),
     department_id: row.department_id,

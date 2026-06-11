@@ -84,6 +84,7 @@ function currentUserMatchesIdentifier(user: User | null | undefined, identifier:
 function isProjectUploaderOrCreator(user: User | null | undefined, batch: UploadBatch | null | undefined) {
   return [
     batch?.project_created_by_user_id,
+    batch?.project_uploaded_by,
     batch?.uploaded_by,
     batch?.uploaded_by_user_id,
   ].some((identifier) => currentUserMatchesIdentifier(user, identifier));

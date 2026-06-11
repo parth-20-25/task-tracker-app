@@ -203,6 +203,7 @@ export interface UploadBatch {
   project_id: string;
   project_no: string;
   project_created_by_user_id?: string | null;
+  project_uploaded_by?: string | null;
   project_name: string;
   customer_name: string;
   department_id: string;

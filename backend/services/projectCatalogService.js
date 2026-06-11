@@ -34,6 +34,7 @@ const {
 const { insertStageContribution, listStageContributions } = require("../repositories/designStageContributionRepository");
 const { formatStageRevisionCode, normalizeStageVersion } = require("../lib/workflowStageVersioning");
 const {
+  ALLOWED_OUTSOURCE_STAGES,
   OUTSOURCE_STATUSES,
   normalizeOutsourceStages,
   normalizeSupplierName,
@@ -560,7 +561,10 @@ function validateOutsourcePayload(payload = {}) {
     throw new AppError(400, "supplier_name is required");
   }
 
-  const { stages, error } = normalizeOutsourceStages(payload.outsourced_stages);
+  const rawStages = Object.prototype.hasOwnProperty.call(payload, "outsourced_stages")
+    ? payload.outsourced_stages
+    : ALLOWED_OUTSOURCE_STAGES;
+  const { stages, error } = normalizeOutsourceStages(rawStages);
   if (error) {
     throw new AppError(400, error);
   }
@@ -569,6 +573,23 @@ function validateOutsourcePayload(payload = {}) {
     supplierName,
     outsourcedStages: stages,
   };
+}
+
+function normalizeOutsourcingFlag(value) {
+  if (value === true || value === false) {
+    return value;
+  }
+
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "0", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return null;
 }
 
 function normalizeOutsourcePersistenceError(error) {
@@ -752,7 +773,12 @@ async function updateFixtureOutsourcingForUser(user, fixtureId, payload = {}) {
     throw new AppError(400, "is_outsourced is required");
   }
 
-  if (payload.is_outsourced === true) {
+  const isOutsourced = normalizeOutsourcingFlag(payload.is_outsourced);
+  if (isOutsourced === null) {
+    throw new AppError(400, "is_outsourced must be a boolean");
+  }
+
+  if (isOutsourced) {
     return outsourceFixtureForUser(user, fixtureId, {
       ...payload,
       supplier_name: payload.supplier_name ?? payload.vendor_name,

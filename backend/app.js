@@ -20,6 +20,7 @@ const predictiveInsightsRoute = require("./routes/analytics/predictiveInsightsRo
 const { reportRoutes } = require("./routes/reportRoutes");
 const { designRoutes } = require("./routes/designRoutes");
 const { nativeIngestionRoutes } = require("./routes/nativeIngestionRoutes");
+const { retiredUploadRoutes } = require("./routes/retiredUploadRoutes");
 const { workflowRoutes } = require("./routes/workflowRoutes");
 const workflowAnalyticsRoutes = require("./routes/workflowAnalyticsRoutes");
 const { batchRoutes } = require("./routes/batchRoutes");
@@ -44,6 +45,7 @@ function createApp() {
     res.send("Backend is running");
   });
 
+  app.use("/api", retiredUploadRoutes);
   app.use("/api", authRoutes);
   app.use("/api", taskRoutes);
   app.use("/api", nativeIngestionRoutes);

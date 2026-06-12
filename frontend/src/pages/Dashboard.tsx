@@ -6,7 +6,6 @@ import { fetchProjectDashboardSummary, fetchDesignFixtures, reactivateProject, u
 import type { ReactivateProjectPayload } from '@/api/designApi';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
-import { DesignExcelUploadModal } from '@/components/DesignExcelUploadModal';
 import { NativeFixtureIngestionLauncher, NativeProjectEditWorkspace } from '@/components/native-ingestion/NativeIngestionWorkspace';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
@@ -185,7 +184,6 @@ export default function Dashboard() {
   const [editingProject, setEditingProject] = useState<ProjectDashboardSummary | null>(null);
   const [reactivatingProject, setReactivatingProject] = useState<ProjectDashboardSummary | null>(null);
 
-  const canUploadDesignLegacy = access.canUploadLegacyDesignData;
   const canUploadDesignNative = access.canUploadNativeDesignData;
   const isProjectFirstRole = isProjectAuthorityUser(user);
   const canAccessProjectFixtures = access.canAccessProjectFixtures;
@@ -365,20 +363,11 @@ export default function Dashboard() {
         </div>
       )}
 
-      {(canUploadDesignLegacy || canUploadDesignNative) && (
+      {canUploadDesignNative ? (
         <div className="grid gap-3 md:grid-cols-2">
-          {canUploadDesignNative ? (
-            <NativeFixtureIngestionLauncher />
-          ) : null}
-          {canUploadDesignLegacy ? (
-            <DesignExcelUploadModal
-              useOperationalSpreadsheet={false}
-              permissionMode="legacy"
-              triggerLabel="Legacy Fixture Upload"
-            />
-          ) : null}
+          <NativeFixtureIngestionLauncher />
         </div>
-      )}
+      ) : null}
 
       {!canAccessProjectFixtures ? (
         <div className="grid gap-3 lg:grid-cols-2">

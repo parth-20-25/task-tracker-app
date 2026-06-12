@@ -4,6 +4,7 @@ import { Image as ImageIcon, UploadCloud } from "lucide-react";
 import { uploadFixtureReferenceImage } from "@/api/designApi";
 import { SafeImage } from "@/components/SafeImage";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { resolveImageUrl } from "@/lib/imageUrl";
 import type { DesignFixtureOption } from "@/types";
@@ -20,11 +21,13 @@ function ReferenceImageCard({
   label,
   imageUrl,
   isUploading,
+  canUpload,
   onUpload,
 }: {
   label: string;
   imageUrl: string | null | undefined;
   isUploading: boolean;
+  canUpload: boolean;
   onUpload: () => void;
 }) {
   const resolvedImageUrl = resolveImageUrl(imageUrl);
@@ -48,16 +51,20 @@ function ReferenceImageCard({
                 <a href={resolvedImageUrl} target="_blank" rel="noreferrer">View Image</a>
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" onClick={onUpload} disabled={isUploading}>
-              Change
-            </Button>
+            {canUpload ? (
+              <Button size="sm" variant="outline" onClick={onUpload} disabled={isUploading}>
+                Change
+              </Button>
+            ) : null}
           </div>
         </div>
       ) : (
-        <Button size="sm" variant="outline" className="mt-3" onClick={onUpload} disabled={isUploading}>
-          <UploadCloud className="mr-2 h-4 w-4" />
-          {label === "Part Image" ? "Upload Part Image" : "Upload Fixture Image"}
-        </Button>
+        canUpload ? (
+          <Button size="sm" variant="outline" className="mt-3" onClick={onUpload} disabled={isUploading}>
+            <UploadCloud className="mr-2 h-4 w-4" />
+            {label === "Part Image" ? "Upload Part Image" : "Upload Fixture Image"}
+          </Button>
+        ) : null
       )}
     </div>
   );
@@ -68,8 +75,10 @@ export function FixtureReferenceImageSupport({
   departmentId,
   onFixtureImagesChange,
 }: FixtureReferenceImageSupportProps) {
+  const { access } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingTarget, setPendingTarget] = useState<ImageType | null>(null);
+  const canUploadReferenceImages = access.canUploadNativeDesignData;
 
   const uploadMutation = useMutation({
     mutationFn: ({ imageType, file }: { imageType: ImageType; file: File }) => (
@@ -136,12 +145,14 @@ export function FixtureReferenceImageSupport({
           label="Part Image"
           imageUrl={fixture.image_1_url}
           isUploading={uploadMutation.isPending && pendingTarget === "part"}
+          canUpload={canUploadReferenceImages}
           onUpload={() => openFilePicker("part")}
         />
         <ReferenceImageCard
           label="Fixture Image"
           imageUrl={fixture.image_2_url}
           isUploading={uploadMutation.isPending && pendingTarget === "fixture"}
+          canUpload={canUploadReferenceImages}
           onUpload={() => openFilePicker("fixture")}
         />
       </div>

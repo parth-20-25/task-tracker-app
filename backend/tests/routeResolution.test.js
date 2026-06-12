@@ -40,6 +40,24 @@ test("native ingestion API routes are mounted by createApp before auth", async (
   }
 });
 
+test("legacy fixture upload route returns retired 410 instead of authorizing legacy upload", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/upload/design-excel`, {
+      method: "POST",
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 410);
+    assert.equal(body.message, "Legacy fixture upload has been retired. Use native fixture upload.");
+    assert.equal(body.details.replacement, "/api/design/native-ingestion/sessions");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("analytics overview API route is mounted by createApp before auth", async () => {
   const server = await listen(createApp());
 

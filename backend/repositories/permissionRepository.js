@@ -1,5 +1,6 @@
 const { env } = require("../config/env");
 const {
+  DEPRECATED_PERMISSION_IDS,
   PERMISSIONS,
   PERMISSION_DEFINITIONS,
 } = require("../config/constants");
@@ -11,15 +12,11 @@ const permissionDefinitionMap = new Map(
 const LEGACY_PERMISSION_MIGRATIONS = {
   can_assign_task: "can_assign_tasks",
   can_verify_task: "approve_completed_task",
-  can_upload_data: "upload_legacy_design_data",
+  can_upload_data: "upload_native_design_data",
 };
 const STALE_PERMISSION_IDS = ["tasks_assign", ...Object.keys(LEGACY_PERMISSION_MIGRATIONS)];
-const UPLOAD_PERMISSION_ROLE_ROUTING = {
-  both: ["r1"],
-  nativeOnly: ["r9"],
-  legacyOnly: ["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r10"],
-  neither: ["r01", "r11", "R11"],
-};
+const LEGACY_UPLOAD_COMPATIBILITY_ROLE_IDS = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10"];
+const deprecatedPermissionIdSet = new Set(DEPRECATED_PERMISSION_IDS);
 
 function normalizePermissionId(permissionId) {
   if (typeof permissionId !== "string") {
@@ -36,6 +33,14 @@ function normalizePermissionIds(permissionIds = []) {
       .map(normalizePermissionId)
       .filter((permissionId) => typeof permissionId === "string" && permissionId.length > 0),
   )];
+}
+
+function isGrantablePermissionId(permissionId) {
+  return !deprecatedPermissionIdSet.has(normalizePermissionId(permissionId));
+}
+
+function normalizeGrantablePermissionIds(permissionIds = []) {
+  return normalizePermissionIds(permissionIds).filter(isGrantablePermissionId);
 }
 
 function buildPermissionDefinition(permissionId) {
@@ -135,7 +140,7 @@ async function ensurePermissionsExist(permissionIds, client, options = {}) {
 }
 
 async function assignPermissionsToRole(roleId, permissionIds, client, options = {}) {
-  const validPermissionIds = await ensurePermissionsExist(permissionIds, client, {
+  const validPermissionIds = await ensurePermissionsExist(normalizeGrantablePermissionIds(permissionIds), client, {
     ...options,
     roleId,
   });
@@ -154,60 +159,41 @@ async function assignPermissionsToRole(roleId, permissionIds, client, options = 
   return validPermissionIds;
 }
 
-async function replaceUploadPermissionsForRoles(roleIds, permissionIds, client) {
-  if (!Array.isArray(roleIds) || roleIds.length === 0) {
-    return;
-  }
+async function syncNativeUploadPermissionFromLegacy(client) {
+  await client.query(
+    `
+      INSERT INTO role_permissions (role_id, permission_id)
+      SELECT role_id, $2
+      FROM role_permissions
+      WHERE permission_id = $1
+      ON CONFLICT (role_id, permission_id) DO NOTHING
+    `,
+    [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA],
+  );
 
   await client.query(
     `
-      DELETE FROM role_permissions
-      WHERE role_id = ANY($1::text[])
-        AND permission_id = ANY($2::text[])
+      INSERT INTO role_permissions (role_id, permission_id)
+      SELECT id, $2
+      FROM roles
+      WHERE id = ANY($1::text[])
+      ON CONFLICT (role_id, permission_id) DO NOTHING
     `,
-    [
-      roleIds,
-      [
-        "upload_legacy_design_data",
-        "upload_native_design_data",
-      ],
-    ],
+    [LEGACY_UPLOAD_COMPATIBILITY_ROLE_IDS, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA],
   );
 
-  const validPermissionIds = normalizePermissionIds(permissionIds);
-  for (const permissionId of validPermissionIds) {
-    await client.query(
-      `
-        INSERT INTO role_permissions (role_id, permission_id)
-        SELECT role_id, $2
-        FROM unnest($1::text[]) AS role_id
-        ON CONFLICT (role_id, permission_id) DO NOTHING
-      `,
-      [roleIds, permissionId],
-    );
-  }
-}
-
-async function applyUploadPermissionRouting(client) {
-  await replaceUploadPermissionsForRoles(
-    UPLOAD_PERMISSION_ROLE_ROUTING.both,
-    ["upload_legacy_design_data", "upload_native_design_data"],
-    client,
-  );
-  await replaceUploadPermissionsForRoles(
-    UPLOAD_PERMISSION_ROLE_ROUTING.nativeOnly,
-    ["upload_native_design_data"],
-    client,
-  );
-  await replaceUploadPermissionsForRoles(
-    UPLOAD_PERMISSION_ROLE_ROUTING.legacyOnly,
-    ["upload_legacy_design_data"],
-    client,
-  );
-  await replaceUploadPermissionsForRoles(
-    UPLOAD_PERMISSION_ROLE_ROUTING.neither,
-    [],
-    client,
+  await client.query(
+    `
+      UPDATE roles
+      SET permissions = CASE
+        WHEN permissions ? $2 THEN permissions - $1
+        WHEN permissions ? $1 THEN jsonb_set(permissions - $1, ARRAY[$2], 'true'::jsonb, true)
+        ELSE permissions - $1
+      END
+      WHERE permissions ? $1
+         OR permissions ? $2
+    `,
+    [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA],
   );
 }
 
@@ -220,7 +206,10 @@ async function syncRolePermissionJson(client) {
         SELECT
           roles.id AS role_id,
           jsonb_object_agg(rp.permission_id, true ORDER BY rp.permission_id)
-            FILTER (WHERE rp.permission_id IS NOT NULL) AS permissions
+            FILTER (
+              WHERE rp.permission_id IS NOT NULL
+                AND NOT (rp.permission_id = ANY($1::text[]))
+            ) AS permissions
         FROM roles
         LEFT JOIN role_permissions rp
           ON rp.role_id = roles.id
@@ -228,6 +217,7 @@ async function syncRolePermissionJson(client) {
       ) permission_map
       WHERE permission_map.role_id = r.id
     `,
+    [DEPRECATED_PERMISSION_IDS],
   );
 }
 
@@ -236,7 +226,8 @@ async function alignPermissionData(client) {
   const canonicalPermissionMap = normalizePermissionIds(
     PERMISSION_DEFINITIONS
       .map(([permissionId]) => permissionId)
-      .filter((permissionId) => permissionId !== PERMISSIONS.SELF_APPROVE),
+      .filter((permissionId) => permissionId !== PERMISSIONS.SELF_APPROVE)
+      .filter(isGrantablePermissionId),
   ).reduce((permissionMap, permissionId) => {
     permissionMap[permissionId] = true;
     return permissionMap;
@@ -357,7 +348,7 @@ async function alignPermissionData(client) {
     [STALE_PERMISSION_IDS],
   );
 
-  await applyUploadPermissionRouting(client);
+  await syncNativeUploadPermissionFromLegacy(client);
   await syncRolePermissionJson(client);
 }
 
@@ -365,7 +356,10 @@ module.exports = {
   alignPermissionData,
   assignPermissionsToRole,
   ensurePermissionsExist,
+  isGrantablePermissionId,
   normalizePermissionId,
+  normalizeGrantablePermissionIds,
   normalizePermissionIds,
   seedPermissions,
+  syncNativeUploadPermissionFromLegacy,
 };

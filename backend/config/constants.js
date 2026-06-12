@@ -74,7 +74,7 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.EDIT_TASK, "Edit Task", "Allows updating task execution and details."],
   [PERMISSIONS.DELETE_TASK, "Delete Task", "Allows deleting tasks."],
   [PERMISSIONS.UPLOAD_PROOFS, "Upload Proofs", "Allows uploading task proof attachments."],
-  [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA, "Upload Legacy Design Data", "Allows Design fixture ingestion via legacy Excel/paste pipeline (temporary during native rollout)."],
+  [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA, "Upload Legacy Design Data (Deprecated)", "Deprecated historical permission. Legacy fixture upload is retired; grant Upload Native Design Data instead."],
   [PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA, "Upload Native Design Data", "Allows Design fixture ingestion via native spreadsheet session pipeline."],
   [PERMISSIONS.MANAGE_USERS, "Manage Users", "Allows managing user accounts."],
   [PERMISSIONS.CREATE_USER, "Create User", "Allows creating user accounts."],
@@ -100,8 +100,13 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.VIEW_PREDICTIVE_ANALYTICS, "View Predictive Insights", "Allows access to predictive delay and risk analysis."],
 ];
 
+const DEPRECATED_PERMISSION_IDS = [
+  PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA,
+];
+
 const DEFAULT_GRANTED_PERMISSION_IDS = Object.values(PERMISSIONS)
-  .filter((permissionId) => permissionId !== PERMISSIONS.SELF_APPROVE);
+  .filter((permissionId) => permissionId !== PERMISSIONS.SELF_APPROVE)
+  .filter((permissionId) => !DEPRECATED_PERMISSION_IDS.includes(permissionId));
 
 const ROLE_DEFAULT_PERMISSIONS = {
   r1: DEFAULT_GRANTED_PERMISSION_IDS,
@@ -243,6 +248,7 @@ const TASK_TRANSITIONS = {
 };
 
 module.exports = {
+  DEPRECATED_PERMISSION_IDS,
   PERMISSION_DEFINITIONS,
   PERMISSIONS,
   PROJECT_STATUSES,

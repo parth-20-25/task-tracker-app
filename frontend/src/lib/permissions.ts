@@ -16,7 +16,6 @@ export const PERMISSIONS = {
   EDIT_TASK: "can_edit_task",
   DELETE_TASK: "can_delete_task",
   UPLOAD_PROOFS: "can_upload_proofs",
-  UPLOAD_LEGACY_DESIGN_DATA: "upload_legacy_design_data",
   UPLOAD_NATIVE_DESIGN_DATA: "upload_native_design_data",
   MANAGE_USERS: "can_manage_users",
   CREATE_USER: "can_create_user",
@@ -96,7 +95,6 @@ export interface UiAccess {
   canManageShifts: boolean;
   canManageMachines: boolean;
   canManageWorkflows: boolean;
-  canUploadLegacyDesignData: boolean;
   canUploadNativeDesignData: boolean;
   canUploadProofs: boolean;
   canViewSelfTasks: boolean;
@@ -249,7 +247,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canManageShifts = hasUserPermission(user, PERMISSIONS.MANAGE_SHIFTS);
   const canManageMachines = hasUserPermission(user, PERMISSIONS.MANAGE_MACHINES);
   const canManageWorkflows = hasUserPermission(user, PERMISSIONS.MANAGE_WORKFLOWS);
-  const canUploadLegacyDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA);
   const canUploadNativeDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
   const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);
@@ -280,7 +277,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canManageShifts,
     canManageMachines,
     canManageWorkflows,
-    canUploadLegacyDesignData,
     canUploadNativeDesignData,
     canUploadProofs,
     canViewSelfTasks,

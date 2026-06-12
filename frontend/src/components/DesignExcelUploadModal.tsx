@@ -790,10 +790,11 @@ interface DesignExcelUploadModalProps {
   triggerLabel?: string;
 }
 
+// Archived legacy preview/upload modal. Active fixture ingestion uses NativeIngestionWorkspace.
 export function DesignExcelUploadModal({
   useOperationalSpreadsheet = false,
   permissionMode = useOperationalSpreadsheet ? "native" : "legacy",
-  triggerLabel = useOperationalSpreadsheet ? "Native Fixture Upload" : "Legacy Fixture Upload",
+  triggerLabel = useOperationalSpreadsheet ? "Native Fixture Upload" : "Retired Fixture Upload",
 }: DesignExcelUploadModalProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);

@@ -658,7 +658,7 @@ export function DesignTaskAssignmentBar({
                 ? projectsQuery.error instanceof Error
                   ? projectsQuery.error.message
                   : "Projects are unavailable for the current department."
-                : "Upload project data first using the Excel ingestion system."}
+                : "Create project data first using the native ingestion workspace."}
             </div>
           )}
 

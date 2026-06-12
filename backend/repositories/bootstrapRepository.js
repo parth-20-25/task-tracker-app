@@ -1,15 +1,18 @@
 const bcrypt = require("bcrypt");
 const { departments, roles } = require("../seedData");
-const { PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
+const { DEPRECATED_PERMISSION_IDS, PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
 const { assignPermissionsToRole, seedPermissions } = require("./permissionRepository");
 const { ensurePerformanceAnalyticsTables } = require("./performanceAnalyticsRepository");
 
 function buildSeedRolePermissions(role) {
   if (role.permissions?.all === true) {
-    return Object.values(PERMISSIONS).reduce((permissionMap, permissionId) => {
-      permissionMap[permissionId] = true;
-      return permissionMap;
-    }, {});
+    const defaultPermissionIds = ROLE_DEFAULT_PERMISSIONS[role.id] || Object.values(PERMISSIONS);
+    return defaultPermissionIds
+      .filter((permissionId) => !DEPRECATED_PERMISSION_IDS.includes(permissionId))
+      .reduce((permissionMap, permissionId) => {
+        permissionMap[permissionId] = true;
+        return permissionMap;
+      }, {});
   }
 
   const defaultPermissionIds = ROLE_DEFAULT_PERMISSIONS[role.id];
@@ -18,10 +21,12 @@ function buildSeedRolePermissions(role) {
     return role.permissions || {};
   }
 
-  return defaultPermissionIds.reduce((permissionMap, permissionId) => {
-    permissionMap[permissionId] = true;
-    return permissionMap;
-  }, {});
+  return defaultPermissionIds
+    .filter((permissionId) => !DEPRECATED_PERMISSION_IDS.includes(permissionId))
+    .reduce((permissionMap, permissionId) => {
+      permissionMap[permissionId] = true;
+      return permissionMap;
+    }, {});
 }
 
 async function safeCreateIndex(client, statement, indexName) {

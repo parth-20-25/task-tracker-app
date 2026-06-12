@@ -8,6 +8,7 @@ const {
   buildTaskAccessPredicate,
   canAccessTask,
   canAccessDepartment,
+  hasPermission,
   isOperationalControllerRole,
   isProjectAuthorityRole,
 } = require("../services/accessControlService");
@@ -91,6 +92,28 @@ test("no task visibility permission denies unrelated and assigned tasks", () => 
   });
 
   assert.equal(canAccessTask(user, assignedTask), false);
+});
+
+test("legacy upload permission alone does not satisfy native upload access", () => {
+  const legacyOnlyUser = makeUser({
+    permissions: [PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA],
+  });
+
+  assert.equal(hasPermission(legacyOnlyUser, PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA), true);
+  assert.equal(hasPermission(legacyOnlyUser, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA), false);
+});
+
+test("migrated legacy upload holder can access native upload after sync", () => {
+  const migratedUser = makeUser({
+    permissions: [
+      PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA,
+      PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA,
+    ],
+  });
+  const noUploadUser = makeUser();
+
+  assert.equal(hasPermission(migratedUser, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA), true);
+  assert.equal(hasPermission(noUploadUser, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA), false);
 });
 
 test("View All Tasks keeps manager scope but includes directly assigned outside scope", () => {

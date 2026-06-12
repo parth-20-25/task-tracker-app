@@ -542,7 +542,7 @@ export function uploadFixtureReferenceImage(
     fixture_no: string;
     previous_image_url: string | null;
     new_image_url: string;
-  }>(`/design/fixtures/${encodeURIComponent(fixtureId)}/reference-image${params.toString() ? `?${params.toString()}` : ""}`, {
+  }>(`/design/native/fixtures/${encodeURIComponent(fixtureId)}/reference-image${params.toString() ? `?${params.toString()}` : ""}`, {
     method: "POST",
     body: formData,
   });

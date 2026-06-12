@@ -2,7 +2,11 @@ const { ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
 const { parsePermissions } = require("./mappers");
-const { assignPermissionsToRole, normalizePermissionIds } = require("./permissionRepository");
+const {
+  assignPermissionsToRole,
+  normalizeGrantablePermissionIds,
+  normalizePermissionIds,
+} = require("./permissionRepository");
 
 function buildPermissionMap(permissionIds = []) {
   return normalizePermissionIds(permissionIds).reduce((permissionMap, permissionId) => {
@@ -15,10 +19,10 @@ function getEnabledPermissionIds(permissions = {}, roleId = null) {
   const parsedPermissions = permissions && typeof permissions === "object" ? permissions : {};
 
   if (parsedPermissions.all === true) {
-    return normalizePermissionIds(ROLE_DEFAULT_PERMISSIONS[roleId] || []);
+    return normalizeGrantablePermissionIds(ROLE_DEFAULT_PERMISSIONS[roleId] || []);
   }
 
-  return normalizePermissionIds(
+  return normalizeGrantablePermissionIds(
     Object.entries(parsedPermissions)
       .filter(([, enabled]) => enabled === true)
       .map(([permission]) => permission),
@@ -68,7 +72,7 @@ function buildRolePermissionMap(storedPermissionsValue, relationalPermissionIds 
   const defaultPermissionIds = storedPermissions.all === true
     ? ROLE_DEFAULT_PERMISSIONS[roleId] || []
     : [];
-  const normalizedPermissionIds = normalizePermissionIds([
+  const normalizedPermissionIds = normalizeGrantablePermissionIds([
     ...relationalPermissionIds,
     ...defaultPermissionIds,
     ...directPermissionIds,

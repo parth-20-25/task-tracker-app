@@ -3,7 +3,6 @@ const { PERMISSIONS } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
-const { handleDesignExcelUpload } = require("../lib/designExcelUpload");
 const { handleReferenceImageUpload } = require("../lib/designFixtureReferenceImageUpload");
 const { uploadFixtureReferenceImageFile } = require("../lib/supabaseStorage");
 const { sendSuccess } = require("../lib/response");
@@ -12,16 +11,11 @@ const { authorize, requireOperationalController } = require("../middleware/autho
 const { resolveWorkflowForDepartment } = require("../services/taskService");
 const { getStageById } = require("../services/workflowService");
 const {
-  parseAndPreviewUpload,
-  parseAndPreviewUploadedWorkbook,
-  confirmUpload,
   uploadFixtureReferenceImage,
-  validateRejectedUploadRow,
 } = require("../services/designExcelService");
 const {
   findFixtureByIdForUser,
   findProjectByIdForUser,
-  listFixturesByUploadBatchForUser,
 } = require("../repositories/designProjectCatalogRepository");
 const {
   getFixtureCompletionTruth,
@@ -41,7 +35,6 @@ const {
   outsourceFixtureForUser,
   updateFixtureOutsourcingForUser,
   updateProjectModificationForUser,
-  uploadDepartmentProjectsForUser,
 } = require("../services/projectCatalogService");
 const { reactivateProjectForModificationById } = require("../services/batchService");
 const {
@@ -53,18 +46,6 @@ const {
 const router = express.Router();
 
 router.use(authenticate);
-
-async function handleListUploadBatchFixtures(req, res) {
-  const requestedDepartmentId = String(req.query.department_id || "").trim();
-  const departmentId = requestedDepartmentId
-    ? resolveAccessibleDepartmentId(req.user, requestedDepartmentId, "Invalid department context")
-    : null;
-
-  const batchId = req.params.batchId;
-  const fixtures = await listFixturesByUploadBatchForUser(batchId, req.user, departmentId);
-
-  return sendSuccess(res, fixtures, 200);
-}
 
 async function handleReferenceImageUploadRequest(req, res) {
   const requestedDepartmentId = String(req.query.department_id || "").trim();
@@ -127,17 +108,6 @@ async function handleReferenceImageUploadRequest(req, res) {
   return sendSuccess(res, result, 200);
 }
 
-function rejectRetiredNativePreviewFlow() {
-  throw new AppError(
-    410,
-    "Native Fixture Upload now uses the native ingestion workspace API. Legacy preview/upload handlers are not available for native ingestion.",
-    {
-      replacement: "/api/design/native-ingestion/sessions",
-    },
-    "NATIVE_INGESTION_WORKSPACE_REQUIRED",
-  );
-}
-
 function resolveFixtureIdFromRequest(req) {
   return String(req.params.fixtureId || req.body?.fixture_id || "").trim();
 }
@@ -175,15 +145,6 @@ router.get(
   asyncHandler(async (req, res) => {
     const projects = await listDepartmentProjectsForUser(req.user);
     return sendSuccess(res, projects);
-  }),
-);
-
-router.post(
-  "/department-projects",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    const result = await uploadDepartmentProjectsForUser(req.user, req.body);
-    return sendSuccess(res, result, 200);
   }),
 );
 
@@ -388,18 +349,6 @@ router.get(
   }),
 );
 
-router.post(
-  "/upload/design-excel",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  handleDesignExcelUpload,
-  asyncHandler(async (req, res) => {
-    const result = await parseAndPreviewUploadedWorkbook(req.user, req.file, {
-      catalogMembershipMode: req.body?.catalog_membership_mode,
-    });
-    return sendSuccess(res, result, 200);
-  }),
-);
-
 router.get(
   "/design/projects/:projectId/2d-routing",
   requireOperationalController,
@@ -455,82 +404,6 @@ router.patch(
 );
 
 router.post(
-  "/upload/design-native-excel",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
-);
-
-router.post(
-  "/upload/design-excel/confirm",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    const result = await confirmUpload(req.user, req.body);
-    return sendSuccess(res, result, 200);
-  }),
-);
-
-router.post(
-  "/upload/design-native-excel/confirm",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
-);
-
-router.post(
-  "/design/upload",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    const result = await parseAndPreviewUpload(req.user, req.body);
-    return sendSuccess(res, result, 200);
-  }),
-);
-
-router.post(
-  "/design/native-upload",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
-);
-
-router.post(
-  "/design/upload/confirm",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    const result = await confirmUpload(req.user, req.body);
-    return sendSuccess(res, result, 200);
-  }),
-);
-
-router.post(
-  "/design/native-upload/confirm",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
-);
-
-router.post(
-  "/design/upload/rejected-row/validate",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    const result = await validateRejectedUploadRow(req.user, req.body);
-    return sendSuccess(res, result, 200);
-  }),
-);
-
-router.post(
-  "/design/native-upload/rejected-row/validate",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
-);
-
-router.post(
   "/design/tasks",
   requireOperationalController,
   authorize(PERMISSIONS.CREATE_TASK),
@@ -540,33 +413,11 @@ router.post(
   }),
 );
 
-router.get(
-  "/design/upload-batches/:batchId/fixtures",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  asyncHandler(handleListUploadBatchFixtures),
-);
-
-router.get(
-  "/design/native-upload-batches/:batchId/fixtures",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
-);
-
-router.post(
-  "/design/fixtures/:fixtureId/reference-image",
-  authorize(PERMISSIONS.UPLOAD_LEGACY_DESIGN_DATA),
-  handleReferenceImageUpload,
-  asyncHandler(handleReferenceImageUploadRequest),
-);
-
 router.post(
   "/design/native/fixtures/:fixtureId/reference-image",
   authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
-  asyncHandler(async (req, res) => {
-    rejectRetiredNativePreviewFlow();
-  }),
+  handleReferenceImageUpload,
+  asyncHandler(handleReferenceImageUploadRequest),
 );
 
 module.exports = {

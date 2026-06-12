@@ -1849,7 +1849,9 @@ interface ProjectFixtureCardProps {
   projectId: string;
   departmentId?: string;
   assignableUsers: Array<{ employee_id: string; name: string }>;
+  twoDAssignableUsers: Array<{ employee_id: string; name: string }>;
   isLoadingUsers: boolean;
+  isLoadingTwoDUsers: boolean;
   invalidateOperationalState: () => Promise<void>;
   operationalResolution: FixtureOperationalResolution;
   recentSupplierNames: string[];
@@ -1865,7 +1867,9 @@ function ProjectFixtureCard({
   projectId,
   departmentId,
   assignableUsers,
+  twoDAssignableUsers,
   isLoadingUsers,
+  isLoadingTwoDUsers,
   invalidateOperationalState,
   operationalResolution,
   recentSupplierNames,
@@ -1877,6 +1881,7 @@ function ProjectFixtureCard({
   const { access, user } = useAuth();
   const [expanded, setExpanded] = useState<"assign" | "transfer" | null>(null);
   const [assignedTo, setAssignedTo] = useState("");
+  const [additionalAssigneeIds, setAdditionalAssigneeIds] = useState<string[]>([]);
   const [deadline, setDeadline] = useState("");
   const [priority, setPriority] = useState<Priority>("high");
   const [workflowTarget, setWorkflowTarget] = useState("");

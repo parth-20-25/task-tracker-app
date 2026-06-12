@@ -15,6 +15,7 @@ const {
 } = require("../repositories/batchRepository");
 const {
   insertCompletionSnapshot,
+  loadProjectBundlesForProjects,
 } = require("../repositories/designCompletionRepository");
 
 test("fixture outsource upsert does not depend on a fixture_id unique constraint", async () => {
@@ -252,6 +253,21 @@ test("batch summary list falls back when recent outsource tables are not migrate
   } finally {
     completionEngine.enrichProjectSummariesWithCompletionTruth = originalEnrichProjectSummariesWithCompletionTruth;
   }
+});
+
+test("project completion bundle SQL normalizes text-array proof URLs into JSON", async () => {
+  let capturedSql = "";
+  const client = {
+    query: async (sql) => {
+      capturedSql = String(sql);
+      return { rows: [] };
+    },
+  };
+
+  await loadProjectBundlesForProjects([{ project_id: "11111111-1111-1111-1111-111111111111" }], client);
+
+  assert.match(capturedSql, /'proof_url',\s*COALESCE\(to_jsonb\(t\.proof_url\),\s*'\[\]'::jsonb\)/i);
+  assert.doesNotMatch(capturedSql, /COALESCE\(t\.proof_url,\s*'\[\]'::jsonb\)/i);
 });
 
 test("recent outsource suppliers are optional for normal project fixture screens", async () => {

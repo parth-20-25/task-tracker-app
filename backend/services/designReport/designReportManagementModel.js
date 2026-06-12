@@ -514,7 +514,7 @@ function collectProofRecords({ fixture, fixtureStageTasks, attachmentsByTaskId }
           taskId: task.task_id || "",
           source: "Stage proof",
           uploadedAt: task.completed_at || task.updated_at || task.created_at,
-          uploadedBy: formatEmployeeDisplay(task.assigned_to, task.assigned_to_name),
+          uploadedBy: formatEmployeeDisplay(task.assigned_to, task.assignee_names || task.assigned_to_name),
         });
       });
 
@@ -838,7 +838,7 @@ function collectAuditWorkers({ contributions, activityWorkers = [], attempts, st
   stageTasks.forEach((task) => {
     addWorker(
       task.assigned_to,
-      task.assigned_to_name,
+      task.assignee_names || task.assigned_to_name,
       task.started_at || task.assigned_at || task.created_at,
       task.approved_at || task.completed_at || task.closed_at || task.updated_at,
     );
@@ -1188,6 +1188,7 @@ function buildKpis({ fixtureRows, projectTruth, context }) {
     reviewCount,
     completionPercent,
     completionDisplay: hasCompletionTruth ? `${completionPercent}%` : "Not available",
+    completionTruthErrors: Array.isArray(projectTruth?.truth_errors) ? projectTruth.truth_errors : [],
     averageCompletionTime: formatDuration(averageMinutes),
   };
 }
@@ -1550,7 +1551,7 @@ function buildAssignmentHistory(fixtureRows) {
         addRow({
           fixtureNumber: fixtureRow.fixtureNumber,
           assignedBy: formatEmployeeDisplay(task.assigned_by, task.assigned_by_name),
-          assignedTo: formatEmployeeDisplay(task.assigned_to, task.assigned_to_name),
+          assignedTo: formatEmployeeDisplay(task.assigned_to, task.assignee_names || task.assigned_to_name),
           assignmentDate: formatDateTime(task.assigned_at || task.created_at),
           stage: stageDisplayName(stageKey, task.stage_name),
           revision: revisionForStage(stageKey),
@@ -1640,12 +1641,15 @@ function buildProjectHealthSummary({ fixtureRows, kpis, reworkAnalytics, holdHis
     ? "Red"
     : (kpis.onHoldFixtures > 0 || reworkRate > 0 || activeHolds > 0 ? "Yellow" : "Green");
   const hasCompletionTruth = kpis.completionDisplay !== "Not available";
+  const completionTruthNote = [
+    ...(Array.isArray(kpis.completionTruthErrors) ? kpis.completionTruthErrors : []),
+  ].find(Boolean) || "Completion truth missing from live workflow tables";
 
   return [
     { indicator: "Overall Status", value: resolveOverallStatus(kpis), level: riskLevel, notes: `${kpis.completedFixtures}/${kpis.totalFixtures} fixtures closed` },
     { indicator: "Project Risk Level", value: riskLevel, level: riskLevel, notes: kpis.overdueFixtures ? `${kpis.overdueFixtures} overdue fixture(s)` : "No overdue fixtures in current report data" },
     { indicator: "Schedule Variance", value: scheduleDays === null ? "No due date" : `${scheduleDays > 0 ? "+" : ""}${scheduleDays} day(s)`, level: scheduleDays && scheduleDays > 0 ? "Red" : "Green", notes: expected ? `Expected ${formatDate(expected)}` : "No expected completion date available" },
-    { indicator: "Completion Trend", value: hasCompletionTruth ? (kpis.completionPercent >= 75 ? "Strong" : kpis.completionPercent >= 40 ? "Moderate" : "Early / Low") : "Not available", level: hasCompletionTruth && kpis.completionPercent >= 75 ? "Green" : "Yellow", notes: hasCompletionTruth ? `${kpis.completionDisplay} complete` : "Completion truth unavailable" },
+    { indicator: "Completion Trend", value: hasCompletionTruth ? (kpis.completionPercent >= 75 ? "Strong" : kpis.completionPercent >= 40 ? "Moderate" : "Early / Low") : "Not available", level: hasCompletionTruth && kpis.completionPercent >= 75 ? "Green" : "Yellow", notes: hasCompletionTruth ? `${kpis.completionDisplay} complete` : completionTruthNote },
     { indicator: "Rework Severity", value: reworkAnalytics.counts.totalReworks ? `${reworkAnalytics.counts.totalReworks} event(s)` : "None", level: reworkRate >= 0.25 ? "Red" : reworkRate > 0 ? "Yellow" : "Green", notes: `Rate ${(reworkRate * 100).toFixed(1)}%` },
     { indicator: "Hold Impact", value: holdHistory.length ? `${holdHistory.length} hold event(s)` : "None", level: activeHolds ? "Yellow" : "Green", notes: activeHolds ? `${activeHolds} active hold(s)` : "No active hold detected" },
   ];

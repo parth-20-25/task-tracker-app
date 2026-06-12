@@ -29,7 +29,7 @@ import {
   type FixtureFullProgress,
   type FixtureRevisionType,
 } from "@/api/designApi";
-import { cancelTask as cancelTaskRequest, fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
+import { cancelTask as cancelTaskRequest, fetchTaskAssignmentUsers, fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
 import { SafeImage } from "@/components/SafeImage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -277,6 +277,23 @@ function isDapStageName(value: string | null | undefined) {
   return normalized === "dap" || normalized === "d_a_p";
 }
 
+function isTwoDStageName(value: string | null | undefined) {
+  const normalized = normalizeStageKey(value);
+  return normalized === "2d" || normalized === "2d_finish" || normalized === "two_d" || normalized === "two_d_finish";
+}
+
+function buildSelectedAssigneeIds(primaryAssigneeId: string, additionalAssigneeIds: string[], allowMultiple: boolean) {
+  const primary = String(primaryAssigneeId || "").trim();
+  if (!primary) {
+    return [];
+  }
+
+  return [
+    primary,
+    ...(allowMultiple ? additionalAssigneeIds : []),
+  ].filter(Boolean).filter((employeeId, index, values) => values.indexOf(employeeId) === index);
+}
+
 function formatSubmittedDate(value: string | null | undefined) {
   if (!value) {
     return "Not submitted";
@@ -350,6 +367,10 @@ function getProofUploadedBy(task: Task | null) {
 }
 
 function getAssigneeName(fixture: DesignFixtureOption, task: Task | null) {
+  if (task?.assignee_names) {
+    return task.assignee_names;
+  }
+
   if (task?.assignee) {
     return formatEmployeeDisplay(task.assignee);
   }
@@ -392,7 +413,9 @@ function resolveFixtureOperationalState(fixture: DesignFixtureOption, task: Task
   const activeTask = isActiveTask(task) ? task : null;
   const state = normalizeOperationalState(fixture.operational_state);
   const activeAssignee = activeTask?.assigned_to || fixture.workflow_assigned_to || null;
-  const activeAssigneeName = activeTask?.assignee
+  const activeAssigneeName = activeTask?.assignee_names
+    ? activeTask.assignee_names
+    : activeTask?.assignee
     ? formatEmployeeDisplay(activeTask.assignee)
     : activeAssignee || fixture.workflow_assigned_to_name
       ? formatEmployeeDisplay(activeAssignee || null, fixture.workflow_assigned_to_name)
@@ -592,7 +615,26 @@ export function ProjectFixtureOperationsGrid({
   const { access, user } = useAuth();
   const { tasks, refreshTasks } = useTasks();
   const queryClient = useQueryClient();
-  const assignableUsersQuery = useAssignableUsersQuery();
+  const fallbackAssignableUsersQuery = useAssignableUsersQuery();
+  const assignmentUsersQuery = useQuery({
+    queryKey: ["task-assignment", "assignable-users", "department-workflow", departmentId || "self", projectId],
+    queryFn: () => fetchTaskAssignmentUsers({
+      task_type: "department_workflow",
+      department_id: departmentId || null,
+      project_id: projectId,
+    }),
+    enabled: Boolean(user?.employee_id && access.canAssignTasks && departmentId),
+  });
+  const twoDAssignmentUsersQuery = useQuery({
+    queryKey: ["task-assignment", "assignable-users", "department-workflow", departmentId || "self", projectId, "2D Finish"],
+    queryFn: () => fetchTaskAssignmentUsers({
+      task_type: "department_workflow",
+      department_id: departmentId || null,
+      project_id: projectId,
+      stage_name: "2D Finish",
+    }),
+    enabled: Boolean(user?.employee_id && access.canAssignTasks && departmentId),
+  });
   const [bulkPanelOpen, setBulkPanelOpen] = useState(false);
   const [selectedFixtureIds, setSelectedFixtureIds] = useState<string[]>([]);
   const [localRecentSupplierNames, setLocalRecentSupplierNames] = useState<string[]>(() => readRecentSupplierNames());
@@ -622,6 +664,10 @@ export function ProjectFixtureOperationsGrid({
     () => mergeRecentSupplierNames(localRecentSupplierNames, recentSuppliersQuery.data ?? []),
     [localRecentSupplierNames, recentSuppliersQuery.data],
   );
+  const assignableUsers = assignmentUsersQuery.data ?? fallbackAssignableUsersQuery.data ?? [];
+  const twoDAssignableUsers = twoDAssignmentUsersQuery.data ?? assignableUsers;
+  const isLoadingAssignableUsers = assignmentUsersQuery.isLoading || (!assignmentUsersQuery.data && fallbackAssignableUsersQuery.isLoading);
+  const isLoadingTwoDAssignableUsers = twoDAssignmentUsersQuery.isLoading || isLoadingAssignableUsers;
 
   const rememberSupplierName = useCallback((supplierName: string) => {
     setLocalRecentSupplierNames((current) => saveRecentSupplierName(supplierName, current));
@@ -747,8 +793,10 @@ export function ProjectFixtureOperationsGrid({
           selectedFixtureIds={eligibleSelectedFixtureIds}
           projectId={projectId}
           departmentId={departmentId || undefined}
-          assignableUsers={assignableUsersQuery.data ?? []}
-          isLoadingUsers={assignableUsersQuery.isLoading}
+          assignableUsers={assignableUsers}
+          twoDAssignableUsers={twoDAssignableUsers}
+          isLoadingUsers={isLoadingAssignableUsers}
+          isLoadingTwoDUsers={isLoadingTwoDAssignableUsers}
           invalidateOperationalState={invalidateOperationalState}
           onCancel={() => setBulkPanelOpen(false)}
         />
@@ -812,8 +860,8 @@ export function ProjectFixtureOperationsGrid({
                     fixtureTaskById={fixtureTaskById}
                     projectId={projectId}
                     departmentId={departmentId || undefined}
-                    assignableUsers={assignableUsersQuery.data ?? []}
-                    isLoadingUsers={assignableUsersQuery.isLoading}
+                    assignableUsers={assignableUsers}
+                    isLoadingUsers={isLoadingAssignableUsers}
                     invalidateOperationalState={invalidateOperationalState}
                     operationalResolutionByFixtureId={operationalResolutionByFixtureId}
                   />
@@ -826,8 +874,10 @@ export function ProjectFixtureOperationsGrid({
                         task={fixtureTaskById.get(fixture.fixture_id) || null}
                         projectId={projectId}
                         departmentId={departmentId || undefined}
-                        assignableUsers={assignableUsersQuery.data ?? []}
-                        isLoadingUsers={assignableUsersQuery.isLoading}
+                        assignableUsers={assignableUsers}
+                        twoDAssignableUsers={twoDAssignableUsers}
+                        isLoadingUsers={isLoadingAssignableUsers}
+                        isLoadingTwoDUsers={isLoadingTwoDAssignableUsers}
                         invalidateOperationalState={invalidateOperationalState}
                         operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
                         recentSupplierNames={recentSupplierNames}
@@ -1014,11 +1064,11 @@ function OutsourcedFixtureRow({
               size="sm"
               variant="outline"
               className="h-7 px-2 text-[11px]"
-              disabled={supplierCompleted || !canToggleOutsourcing || actionsDisabled}
+              disabled={supplierCompleted || !currentStageOutsourced || !canToggleOutsourcing || actionsDisabled}
               onClick={() => setCompleteDialogOpen(true)}
             >
               {completeMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <CheckSquare className="mr-1 h-3 w-3" />}
-              {supplierCompleted ? "Completed" : "Mark Completed"}
+              {supplierCompleted ? "Completed" : currentStageOutsourced ? "Mark Completed" : "Awaiting Stage"}
             </Button>
             <Button
               type="button"
@@ -1334,6 +1384,58 @@ function OutsourcedDapAssignmentPanel({
   );
 }
 
+function AdditionalAssigneePicker({
+  users,
+  primaryAssigneeId,
+  selectedAssigneeIds,
+  onSelectedAssigneeIdsChange,
+  disabled = false,
+}: {
+  users: Array<{ employee_id: string; name: string }>;
+  primaryAssigneeId: string;
+  selectedAssigneeIds: string[];
+  onSelectedAssigneeIdsChange: (assigneeIds: string[]) => void;
+  disabled?: boolean;
+}) {
+  const additionalUsers = users.filter((employee) => employee.employee_id !== primaryAssigneeId);
+
+  if (!primaryAssigneeId) {
+    return (
+      <p className="text-xs text-muted-foreground">Choose a primary 2D assignee before adding more employees.</p>
+    );
+  }
+
+  if (additionalUsers.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">No additional 2D employees are available for this project route.</p>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      {additionalUsers.map((employee) => {
+        const checked = selectedAssigneeIds.includes(employee.employee_id);
+        return (
+          <label key={employee.employee_id} className="flex min-w-0 items-center gap-2 rounded-md border bg-white px-2 py-1.5 text-xs">
+            <Checkbox
+              checked={checked}
+              disabled={disabled}
+              onCheckedChange={(nextChecked) => {
+                onSelectedAssigneeIdsChange(
+                  nextChecked === true
+                    ? Array.from(new Set([...selectedAssigneeIds, employee.employee_id]))
+                    : selectedAssigneeIds.filter((employeeId) => employeeId !== employee.employee_id),
+                );
+              }}
+            />
+            <span className="min-w-0 truncate">{formatEmployeeDisplay(employee)}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 function DateOnlyDeadlinePicker({
   value,
   onChange,
@@ -1392,7 +1494,9 @@ interface BulkFixtureAssignmentPanelProps {
   projectId: string;
   departmentId?: string;
   assignableUsers: Array<{ employee_id: string; name: string }>;
+  twoDAssignableUsers: Array<{ employee_id: string; name: string }>;
   isLoadingUsers: boolean;
+  isLoadingTwoDUsers: boolean;
   invalidateOperationalState: () => Promise<void>;
   onCancel: () => void;
 }
@@ -1403,12 +1507,15 @@ function BulkFixtureAssignmentPanel({
   projectId,
   departmentId,
   assignableUsers,
+  twoDAssignableUsers,
   isLoadingUsers,
+  isLoadingTwoDUsers,
   invalidateOperationalState,
   onCancel,
 }: BulkFixtureAssignmentPanelProps) {
   const { access } = useAuth();
   const [assignedTo, setAssignedTo] = useState("");
+  const [additionalAssigneeIds, setAdditionalAssigneeIds] = useState<string[]>([]);
   const [deadline, setDeadline] = useState("");
   const [priority, setPriority] = useState<Priority>("high");
   const [workflowTarget, setWorkflowTarget] = useState("");
@@ -1460,6 +1567,10 @@ function BulkFixtureAssignmentPanel({
   });
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
   const releaseSelected = isReleaseStageName(selectedWorkflowStage?.stage_name || workflowTarget);
+  const isTwoDWorkflowTarget = isTwoDStageName(selectedWorkflowStage?.stage_name || workflowTarget);
+  const assignmentUsersForTarget = isTwoDWorkflowTarget ? twoDAssignableUsers : assignableUsers;
+  const isLoadingUsersForTarget = isTwoDWorkflowTarget ? isLoadingTwoDUsers : isLoadingUsers;
+  const selectedAssigneeIds = buildSelectedAssigneeIds(assignedTo, additionalAssigneeIds, isTwoDWorkflowTarget);
   const canSubmitWorkflowAction = releaseSelected
     ? access.canChangeFixtureStage
     : access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
@@ -1470,11 +1581,24 @@ function BulkFixtureAssignmentPanel({
 
   const resetForm = () => {
     setAssignedTo("");
+    setAdditionalAssigneeIds([]);
     setDeadline("");
     setPriority("high");
     setWorkflowTarget("");
     setReasonType("");
   };
+
+  useEffect(() => {
+    if (!isTwoDWorkflowTarget) {
+      setAdditionalAssigneeIds([]);
+      return;
+    }
+
+    const availableIds = new Set(twoDAssignableUsers.map((employee) => employee.employee_id));
+    setAdditionalAssigneeIds((current) => current.filter((employeeId) => (
+      employeeId !== assignedTo && availableIds.has(employeeId)
+    )));
+  }, [assignedTo, isTwoDWorkflowTarget, twoDAssignableUsers]);
 
   const bulkAssignMutation = useMutation({
     mutationFn: async () => {
@@ -1544,8 +1668,8 @@ function BulkFixtureAssignmentPanel({
           project_id: projectId,
           fixture_id: fixture.fixture_id,
           description: fixture.part_name || fixture.fixture_no,
-          assigned_to: assignedTo,
-          assignee_ids: [assignedTo],
+          assigned_to: selectedAssigneeIds[0],
+          assignee_ids: selectedAssigneeIds,
           priority,
           deadline: normalizeDeadlineToEndOfDayIso(deadline),
         });
@@ -1583,7 +1707,8 @@ function BulkFixtureAssignmentPanel({
     || selectedScopeEmpty
     || !workflowChangeAllowed
     || (requiresReasonType && !reasonType)
-    || bulkAssignMutation.isPending;
+    || bulkAssignMutation.isPending
+    || (!releaseSelected && isLoadingUsersForTarget);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
@@ -1593,12 +1718,12 @@ function BulkFixtureAssignmentPanel({
             <div className="space-y-1">
               <Label className="text-xs">Employee</Label>
               <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
-                <SelectTrigger className="h-9 bg-white text-xs" disabled={isLoadingUsers || bulkAssignMutation.isPending}>
-                  <SelectValue placeholder={isLoadingUsers ? "Loading..." : "Employee"} />
+                <SelectTrigger className="h-9 bg-white text-xs" disabled={isLoadingUsersForTarget || bulkAssignMutation.isPending}>
+                  <SelectValue placeholder={isLoadingUsersForTarget ? "Loading..." : "Employee"} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">Employee</SelectItem>
-                  {assignableUsers.map((employee) => (
+                  {assignmentUsersForTarget.map((employee) => (
                     <SelectItem key={employee.employee_id} value={employee.employee_id}>
                       {formatEmployeeDisplay(employee)}
                     </SelectItem>
@@ -1626,6 +1751,19 @@ function BulkFixtureAssignmentPanel({
               </Select>
             </div>
           </>
+        ) : null}
+
+        {!releaseSelected && isTwoDWorkflowTarget ? (
+          <div className="space-y-1 lg:col-span-4">
+            <Label className="text-xs">Additional 2D Employees</Label>
+            <AdditionalAssigneePicker
+              users={assignmentUsersForTarget}
+              primaryAssigneeId={assignedTo}
+              selectedAssigneeIds={additionalAssigneeIds}
+              onSelectedAssigneeIdsChange={setAdditionalAssigneeIds}
+              disabled={bulkAssignMutation.isPending}
+            />
+          </div>
         ) : null}
 
         <div className="space-y-1">
@@ -1815,6 +1953,10 @@ function ProjectFixtureCard({
 
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
   const releaseSelected = isReleaseStageName(selectedWorkflowStage?.stage_name || workflowTarget);
+  const isTwoDWorkflowTarget = isTwoDStageName(selectedWorkflowStage?.stage_name || workflowTarget);
+  const assignmentUsersForTarget = isTwoDWorkflowTarget ? twoDAssignableUsers : assignableUsers;
+  const isLoadingUsersForTarget = isTwoDWorkflowTarget ? isLoadingTwoDUsers : isLoadingUsers;
+  const selectedAssigneeIds = buildSelectedAssigneeIds(assignedTo, additionalAssigneeIds, isTwoDWorkflowTarget);
   const canOpenWorkflowAction = isWorkflowCompleteReassign
     ? canDeployDesignTask
     : fixtureAtReleaseStage
@@ -1840,6 +1982,7 @@ function ProjectFixtureCard({
 
   const resetAssignForm = () => {
     setAssignedTo("");
+    setAdditionalAssigneeIds([]);
     setDeadline("");
     setPriority("high");
     setWorkflowTarget("");
@@ -1850,6 +1993,18 @@ function ProjectFixtureCard({
     setTransferTo("");
     setTransferReason("");
   };
+
+  useEffect(() => {
+    if (!isTwoDWorkflowTarget) {
+      setAdditionalAssigneeIds([]);
+      return;
+    }
+
+    const availableIds = new Set(twoDAssignableUsers.map((employee) => employee.employee_id));
+    setAdditionalAssigneeIds((current) => current.filter((employeeId) => (
+      employeeId !== assignedTo && availableIds.has(employeeId)
+    )));
+  }, [assignedTo, isTwoDWorkflowTarget, twoDAssignableUsers]);
 
   const openAssignExpansion = async () => {
     setInlineOperationalReason(null);
@@ -1930,8 +2085,8 @@ function ProjectFixtureCard({
         project_id: projectId,
         fixture_id: fixture.fixture_id,
         description: fixture.part_name || fixture.fixture_no,
-        assigned_to: assignedTo,
-        assignee_ids: [assignedTo],
+        assigned_to: selectedAssigneeIds[0],
+        assignee_ids: selectedAssigneeIds,
         priority,
         deadline: normalizeDeadlineToEndOfDayIso(deadline),
       });
@@ -2091,7 +2246,8 @@ function ProjectFixtureCard({
     || validationQuery.isLoading
     || !canSubmitAssignment
     || (requiresReasonType && !reasonType)
-    || assignMutation.isPending;
+    || assignMutation.isPending
+    || (!releaseSelected && isLoadingUsersForTarget);
 
   const transferDisabled = !task
     || !transferTo
@@ -2366,12 +2522,12 @@ function ProjectFixtureCard({
               <div className="space-y-1">
                 <Label className="text-xs">Assignee</Label>
                 <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
-                  <SelectTrigger className="h-9 text-xs" disabled={isLoadingUsers || assignMutation.isPending}>
-                    <SelectValue placeholder={isLoadingUsers ? "Loading..." : "Assignee"} />
+                  <SelectTrigger className="h-9 text-xs" disabled={isLoadingUsersForTarget || assignMutation.isPending}>
+                    <SelectValue placeholder={isLoadingUsersForTarget ? "Loading..." : "Assignee"} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">Assignee</SelectItem>
-                    {assignableUsers.map((employee) => (
+                    {assignmentUsersForTarget.map((employee) => (
                       <SelectItem key={employee.employee_id} value={employee.employee_id}>
                         {formatEmployeeDisplay(employee)}
                       </SelectItem>
@@ -2402,6 +2558,19 @@ function ProjectFixtureCard({
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          ) : null}
+
+          {!releaseSelected && isTwoDWorkflowTarget ? (
+            <div className="space-y-1">
+              <Label className="text-xs">Additional 2D Employees</Label>
+              <AdditionalAssigneePicker
+                users={assignmentUsersForTarget}
+                primaryAssigneeId={assignedTo}
+                selectedAssigneeIds={additionalAssigneeIds}
+                onSelectedAssigneeIdsChange={setAdditionalAssigneeIds}
+                disabled={assignMutation.isPending}
+              />
             </div>
           ) : null}
 

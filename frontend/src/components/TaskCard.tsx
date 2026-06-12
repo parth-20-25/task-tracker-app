@@ -25,6 +25,15 @@ interface TaskCardProps {
   compact?: boolean;
 }
 
+function isDapTask(task: Task) {
+  const normalized = String(task.workflow_stage || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized === "dap" || normalized === "d_a_p";
+}
+
 export function TaskCard({ task, showActions = true, compact = false }: TaskCardProps) {
   const { user } = useAuth();
   const { cancelTask, executeTaskAction } = useTasks();
@@ -46,7 +55,7 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
   const proofUrls = task.proof_url ?? [];
 
   const handleExecutionAction = async (action: "start" | "resume" | "hold" | "submit") => {
-    if (action === 'submit' && proofUrls.length === 0) {
+    if (action === 'submit' && proofUrls.length === 0 && !isDapTask(task)) {
       toast({
         title: 'Work proof required',
         description: 'Work proof image required before verification submission',
@@ -129,7 +138,7 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <User className="h-3 w-3" />
-            {task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to)}
+            {task.assignee_names || (task.assignee ? formatEmployeeDisplay(task.assignee) : formatEmployeeDisplay(task.assigned_to))}
           </span>
           <span className={cn('flex items-center gap-1', isOverdue && 'text-destructive font-medium')}>
             <Calendar className="h-3 w-3" />

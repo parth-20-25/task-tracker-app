@@ -46,14 +46,32 @@ test("case 3: historical assigned/pending tasks above 0% are backfill candidates
   assert.equal(shouldAutoStartTask(task({ status: "pending", completion_percent: 35 }), 35), true);
 });
 
-test("case 4: 100% without proof remains In Progress and does not enter Verification", () => {
-  const inProgressTask = task({ status: "in_progress", completion_percent: 100, proof_url: [] });
+test("case 4: 100% without proof remains In Progress and does not enter Verification for proof-required stages", () => {
+  for (const stageName of ["Concept", "3D Finish", "2D Finish"]) {
+    const inProgressTask = task({
+      status: "in_progress",
+      completion_percent: 100,
+      proof_url: [],
+      workflow_stage: stageName,
+    });
 
-  assert.equal(shouldSubmitForVerification(inProgressTask, 100), false);
-  assert.equal(
-    resolveFixtureOperationalState({ task: inProgressTask, progress: { status: "IN_PROGRESS" } }),
-    OPERATIONAL_STATES.IN_PROGRESS,
-  );
+    assert.equal(shouldSubmitForVerification(inProgressTask, 100), false);
+    assert.equal(
+      resolveFixtureOperationalState({ task: inProgressTask, progress: { status: "IN_PROGRESS" } }),
+      OPERATIONAL_STATES.IN_PROGRESS,
+    );
+  }
+});
+
+test("case 4b: DAP can submit for verification at 100% without proof", () => {
+  const inProgressTask = task({
+    status: "in_progress",
+    completion_percent: 100,
+    proof_url: [],
+    workflow_stage: "DAP",
+  });
+
+  assert.equal(shouldSubmitForVerification(inProgressTask, 100), true);
 });
 
 test("case 5: 100% with proof is eligible for Verification", () => {

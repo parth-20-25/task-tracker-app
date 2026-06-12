@@ -47,6 +47,23 @@ export function canonicalOutsourceStageFromWorkflowStage(value: string | null | 
   return null;
 }
 
+type OrderedWorkflowStage = OutsourceStage | "DAP";
+
+const WORKFLOW_STAGE_ORDER: OrderedWorkflowStage[] = ["Concept", "DAP", "3D", "2D"];
+
+function canonicalOrderedWorkflowStage(value: string | null | undefined): OrderedWorkflowStage | null {
+  const normalized = normalizeStageKey(value);
+  if (normalized === "dap" || normalized === "d_a_p") {
+    return "DAP";
+  }
+  return canonicalOutsourceStageFromWorkflowStage(value);
+}
+
+function getCurrentOutsourceStageIndex(fixture: DesignFixtureOption) {
+  const currentStage = canonicalOrderedWorkflowStage(getCurrentFixtureStageLabel(fixture));
+  return currentStage ? WORKFLOW_STAGE_ORDER.indexOf(currentStage) : -1;
+}
+
 export function isFixtureOutsourcePlanActive(fixture: DesignFixtureOption) {
   return getFixtureOutsourceStatus(fixture) === "outsourced";
 }
@@ -67,6 +84,20 @@ export function isFixtureCurrentStageOutsourced(fixture: DesignFixtureOption) {
   return Boolean(currentStage && fixture.outsourced_stages?.includes(currentStage));
 }
 
+export function isFixtureNextOutsourcedStagePending(fixture: DesignFixtureOption) {
+  if (fixture.is_workflow_complete === true || !hasFixtureOutsourcePlan(fixture)) {
+    return false;
+  }
+
+  const currentIndex = getCurrentOutsourceStageIndex(fixture);
+  if (currentIndex < 0) {
+    return false;
+  }
+
+  const nextStage = WORKFLOW_STAGE_ORDER[currentIndex + 1] || null;
+  return Boolean(nextStage && fixture.outsourced_stages?.includes(nextStage));
+}
+
 export function isFixtureActiveOutsourcedSection(fixture: DesignFixtureOption) {
-  return isFixtureCurrentStageOutsourced(fixture);
+  return isFixtureCurrentStageOutsourced(fixture) || isFixtureNextOutsourcedStagePending(fixture);
 }

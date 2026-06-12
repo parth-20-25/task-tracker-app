@@ -36,6 +36,18 @@ function statusClass(status: ProjectStatus) {
   return "border-sky-200 bg-sky-50 text-sky-800";
 }
 
+function formatCompletionTruthIssue(errors: string[] | undefined) {
+  const firstError = errors?.find(Boolean);
+  if (!firstError) {
+    return "Completion truth missing";
+  }
+
+  return firstError
+    .replace(/^fixture:/, "Fixture ")
+    .replace(/:/g, ": ")
+    .replace(/_/g, " ");
+}
+
 function normalizeIdentifier(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
@@ -130,7 +142,7 @@ function ProjectCard({
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Completion</span>
             <span className="font-semibold">
-              {hasCompletionTruth ? `${project.completion_percent.toFixed(0)}%` : "Truth unavailable"}
+              {hasCompletionTruth ? `${project.completion_percent.toFixed(0)}%` : formatCompletionTruthIssue(project.completion_truth_errors)}
             </span>
           </div>
           {hasCompletionTruth ? <Progress value={project.completion_percent} className="mt-2 h-2" /> : null}
@@ -184,7 +196,6 @@ export default function Dashboard() {
   const [editingProject, setEditingProject] = useState<ProjectDashboardSummary | null>(null);
   const [reactivatingProject, setReactivatingProject] = useState<ProjectDashboardSummary | null>(null);
 
-  const canUploadDesignNative = access.canUploadNativeDesignData;
   const isProjectFirstRole = isProjectAuthorityUser(user);
   const canAccessProjectFixtures = access.canAccessProjectFixtures;
 
@@ -517,7 +528,7 @@ export default function Dashboard() {
                       <ProjectCard
                         key={project.project_id}
                         project={project}
-                        canEditProject={canUploadDesignNative}
+                        canEditProject={project.can_edit_project === true}
                         canReactivateProject={canReactivateProject(project)}
                         onEditProject={setEditingProject}
                         onReactivateProject={setReactivatingProject}

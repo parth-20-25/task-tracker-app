@@ -56,10 +56,22 @@ describe("outsource workflow display helpers", () => {
 
     expect(getFixtureCurrentRevisionLabel(internalDap)).toBe("DAP00");
     expect(isFixtureCurrentStageOutsourced(internalDap)).toBe(false);
-    expect(isFixtureActiveOutsourcedSection(internalDap)).toBe(false);
+    expect(isFixtureActiveOutsourcedSection(internalDap)).toBe(true);
   });
 
-  it("puts the fixture in Outsourced only when the actual current stage is selected for outsourcing", () => {
+  it("moves out of Outsourced after Concept completes when the next stage is not outsourced", () => {
+    const onlyConceptOutsourced = fixture({
+      outsourced_stages: ["Concept"],
+      workflow_stage: "DAP",
+      workflow_stage_label: "DAP",
+      workflow_revision_code: "DAP 00",
+    });
+
+    expect(isFixtureCurrentStageOutsourced(onlyConceptOutsourced)).toBe(false);
+    expect(isFixtureActiveOutsourcedSection(onlyConceptOutsourced)).toBe(false);
+  });
+
+  it("puts the fixture in Outsourced when the current stage or immediate next stage is selected for outsourcing", () => {
     const active3d = fixture({
       outsourced_stages: ["3D"],
       workflow_stage: "3D Finish",
@@ -74,9 +86,30 @@ describe("outsource workflow display helpers", () => {
       workflow_revision_code: "2D 00",
     });
 
+    const inHouse3dBeforeOutsourced2d = fixture({
+      outsourced_stages: ["2D"],
+      workflow_stage: "3D Finish",
+      workflow_stage_label: "3D Finish",
+      workflow_revision_code: "3D 00",
+    });
+
     expect(getFixtureCurrentRevisionLabel(active3d)).toBe("3D00");
     expect(isFixtureActiveOutsourcedSection(active3d)).toBe(true);
     expect(getFixtureCurrentRevisionLabel(active2d)).toBe("2D00");
     expect(isFixtureActiveOutsourcedSection(active2d)).toBe(true);
+    expect(isFixtureCurrentStageOutsourced(inHouse3dBeforeOutsourced2d)).toBe(false);
+    expect(isFixtureActiveOutsourcedSection(inHouse3dBeforeOutsourced2d)).toBe(true);
+  });
+
+  it("keeps completed fixtures out of Outsourced even if outsource stages remain selected", () => {
+    const completed = fixture({
+      outsourced_stages: ["2D"],
+      workflow_stage: "Release",
+      workflow_stage_label: "Release",
+      is_workflow_complete: true,
+    });
+
+    expect(isFixtureCurrentStageOutsourced(completed)).toBe(false);
+    expect(isFixtureActiveOutsourcedSection(completed)).toBe(false);
   });
 });

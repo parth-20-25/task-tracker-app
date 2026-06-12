@@ -66,6 +66,18 @@ function projectStatusClass(status: ProjectStatus | string | undefined) {
   }
 }
 
+function formatCompletionTruthIssue(errors: string[] | undefined) {
+  const firstError = errors?.find(Boolean);
+  if (!firstError) {
+    return "Completion truth missing";
+  }
+
+  return firstError
+    .replace(/^fixture:/, "Fixture ")
+    .replace(/:/g, ": ")
+    .replace(/_/g, " ");
+}
+
 function normalizeIdentifier(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
@@ -471,7 +483,7 @@ export default function Batches() {
                   <TableRow key={batch.project_id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        {access.canUploadNativeDesignData ? (
+                        {batch.can_edit_project === true ? (
                           <Button
                             type="button"
                             variant="ghost"
@@ -512,7 +524,7 @@ export default function Batches() {
                     <TableCell className="min-w-[160px]">
                       <div className="flex items-center justify-between gap-3 text-xs">
                         <span className="font-semibold">
-                          {hasCompletionTruth ? `${batch.project_completion_percent.toFixed(0)}%` : "Truth unavailable"}
+                          {hasCompletionTruth ? `${batch.project_completion_percent.toFixed(0)}%` : formatCompletionTruthIssue(batch.completion_truth_errors)}
                         </span>
                         <span className="text-muted-foreground">{batch.completed_tasks}/{batch.total_tasks} fixtures</span>
                       </div>
@@ -645,7 +657,7 @@ export default function Batches() {
                 <span>
                   {typeof selectedBatch.project_completion_percent === "number"
                     ? `${selectedBatch.project_completion_percent.toFixed(0)}%`
-                    : "Truth unavailable"}
+                    : formatCompletionTruthIssue(selectedBatch.completion_truth_errors)}
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-3">

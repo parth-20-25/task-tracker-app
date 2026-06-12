@@ -462,7 +462,7 @@ function collectAssignedEmployeeRows({ progressRow, stageAttempts, stageTasks })
     })),
     ...stageTasks.map((task) => ({
       employee_id: task.assigned_to,
-      employee_name: task.assigned_to_name,
+      employee_name: task.assignee_names || task.assigned_to_name,
     })),
     {
       employee_id: progressRow?.assigned_to,
@@ -670,7 +670,7 @@ function buildTemplateFixtureRows({
       const latestStageTask = getLatestStageTask(stageTasks);
       const stageAssignedTo = formatPerson(
         latestStageTask?.assigned_to || progressRow?.assigned_to,
-        latestStageTask?.assigned_to_name || progressRow?.assigned_to_name,
+        latestStageTask?.assignee_names || latestStageTask?.assigned_to_name || progressRow?.assigned_to_name,
       );
       const stageAssignedBy = formatPerson(
         latestStageTask?.assigned_by,

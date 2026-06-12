@@ -7,6 +7,11 @@ const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
 const {
+  HasPermission,
+  isAdmin,
+  isOperationalControllerRole,
+} = require("../services/accessControlService");
+const {
   buildNativeTemplateWorkbook,
   commitNativeSession,
   createNativeIngestionSession,
@@ -28,6 +33,26 @@ const nativeUpload = multer({
 });
 
 router.use(authenticate);
+
+async function authorizeNativeWorkspaceCommand(req, _res, next) {
+  try {
+    if (!req.user) {
+      return next(new AppError(401, "Unauthorized: User not authenticated"));
+    }
+
+    if (
+      isAdmin(req.user)
+      || isOperationalControllerRole(req.user)
+      || await HasPermission(req.user, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA)
+    ) {
+      return next();
+    }
+
+    return next(new AppError(403, "Native project editing is limited to visible project controllers"));
+  } catch (error) {
+    return next(error);
+  }
+}
 
 function parseFormJson(value) {
   if (!value) {
@@ -54,7 +79,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/projects/:projectId/edit-session",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   asyncHandler(async (req, res) => {
     const result = await createNativeProjectEditSession(req.user, req.params.projectId, req.body || {});
     return sendSuccess(res, result, 201);
@@ -63,7 +88,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/sessions/:sessionId/draft",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   asyncHandler(async (req, res) => {
     const result = await saveNativeDraft(req.user, req.params.sessionId, req.body);
     return sendSuccess(res, result, 200);
@@ -72,7 +97,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/sessions/:sessionId/import-excel",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   nativeUpload.single("file"),
   asyncHandler(async (req, res) => {
     const result = await importNativeExcel(req.user, req.params.sessionId, req.file, {
@@ -84,7 +109,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/sessions/:sessionId/paste",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   asyncHandler(async (req, res) => {
     const result = await pasteNativeClipboardRows(req.user, req.params.sessionId, req.body);
     return sendSuccess(res, result, 200);
@@ -93,7 +118,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/sessions/:sessionId/validate",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   asyncHandler(async (req, res) => {
     const result = await validateNativeSession(req.user, req.params.sessionId, req.body);
     return sendSuccess(res, result, 200);
@@ -102,7 +127,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/sessions/:sessionId/images/stage",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   nativeUpload.single("file"),
   asyncHandler(async (req, res) => {
     const result = await stageNativeIngestionImage(req.user, req.params.sessionId, req.file, {
@@ -117,7 +142,7 @@ router.post(
 
 router.post(
   "/design/native-ingestion/sessions/:sessionId/commit",
-  authorize(PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA),
+  authorizeNativeWorkspaceCommand,
   asyncHandler(async (req, res) => {
     const result = await commitNativeSession(req.user, req.params.sessionId, req.body);
     return sendSuccess(res, result, 200);

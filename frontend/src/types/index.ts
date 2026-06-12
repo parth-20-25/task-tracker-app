@@ -74,6 +74,7 @@ export interface Task {
   assigned_to: string;
   assigned_user_id?: string;
   assignee_ids: string[];
+  assignee_names?: string | null;
   assigned_by: string;
   created_by?: string | null;
   department_id: string;
@@ -231,6 +232,7 @@ export interface UploadBatch {
   can_manage_2d_routing?: boolean;
   is_modified?: boolean;
   can_toggle_modification?: boolean;
+  can_edit_project?: boolean;
 }
 
 export interface ProjectDashboardSummary {
@@ -261,6 +263,7 @@ export interface ProjectDashboardSummary {
   project_leader_name?: string | null;
   uploaded_by_name?: string | null;
   can_toggle_modification?: boolean;
+  can_edit_project?: boolean;
   created_at: string;
   updated_at: string;
 }

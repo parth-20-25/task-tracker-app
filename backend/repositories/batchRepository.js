@@ -180,7 +180,7 @@ async function enrichBatchSummariesWithCompletionTruth(summaries, client = pool)
       ...summary,
       project_completion_percent: truth?.completion_percent ?? null,
       completion_truth_status: truth?.completion_truth_status || "incomplete_truth",
-      completion_truth_errors: truth?.completion_truth_errors || ["completion_truth_unavailable"],
+      completion_truth_errors: truth?.completion_truth_errors || [`missing_project_completion_truth:${summary.project_id}`],
     };
   });
 }
@@ -284,6 +284,7 @@ function mapBatchSummary(row) {
     delete_blocked_reason: activeCount > 0 ? BATCH_DELETE_BLOCK_REASON : null,
     can_manage_2d_routing: row.can_manage_2d_routing === true,
     can_toggle_modification: row.can_toggle_modification === true,
+    can_edit_project: row.can_edit_project === true,
   };
 }
 
@@ -327,7 +328,8 @@ async function listBatchesWithSummary(departmentId, client = pool) {
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
         COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
         TRUE AS can_manage_2d_routing,
-        FALSE AS can_toggle_modification
+        FALSE AS can_toggle_modification,
+        FALSE AS can_edit_project
       FROM design.projects dp
       LEFT JOIN LATERAL (
         SELECT
@@ -422,7 +424,8 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           OR ${identifierInVisibleUsersSql("ub.uploaded_by_user_id")}
           OR ${identifierInVisibleUsersSql("ub.uploaded_by")}
         ) AS can_manage_2d_routing,
-        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
+        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification,
+        TRUE AS can_edit_project
       FROM design.projects dp
       LEFT JOIN LATERAL (
         SELECT
@@ -533,7 +536,8 @@ async function getBatchById(batchId, client = pool) {
         COALESCE(fixture_stats.completed_fixtures, 0)::integer AS completed_fixtures,
         COALESCE(fixture_stats.active_fixtures, 0)::integer AS active_count,
         TRUE AS can_manage_2d_routing,
-        FALSE AS can_toggle_modification
+        FALSE AS can_toggle_modification,
+        FALSE AS can_edit_project
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
       ${userResolutionLateralSql("uploader", [
@@ -608,7 +612,8 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
           OR ${identifierInVisibleUsersSql("ub.uploaded_by_user_id")}
           OR ${identifierInVisibleUsersSql("ub.uploaded_by")}
         ) AS can_manage_2d_routing,
-        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification
+        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification,
+        TRUE AS can_edit_project
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
       ${userResolutionLateralSql("uploader", [

@@ -46,6 +46,7 @@ const {
   DESIGN_2D_SUBDIVISION_NAME,
   is2DLeaderUser,
   isProjectAssignedTo2DLeader,
+  listAssigned2DLeaderTeamEmployeeIds,
   projectHasActive2DRouting,
 } = require("../repositories/projectSubdivisionRoutingRepository");
 
@@ -142,6 +143,7 @@ function is2DStage(stageName) {
 
 async function assertSubdivisionRoutingAssignmentAllowed({
   actor,
+  assigneeEmployeeIds,
   assigneeEmployeeId,
   projectId,
   currentStageName,
@@ -151,8 +153,18 @@ async function assertSubdivisionRoutingAssignmentAllowed({
     return;
   }
 
+  const employeeIds = [...new Set([
+    ...(Array.isArray(assigneeEmployeeIds) ? assigneeEmployeeIds : []),
+    assigneeEmployeeId,
+  ].filter(Boolean))];
   const has2DRouting = await projectHasActive2DRouting(projectId, client);
-  const assignee = await require("../repositories/usersRepository").findUserByEmployeeId(assigneeEmployeeId, client);
+  const assignees = await Promise.all(employeeIds.map((employeeId) => (
+    require("../repositories/usersRepository").findUserByEmployeeId(employeeId, client)
+  )));
+
+  if (employeeIds.length === 0 || assignees.some((assignee) => !assignee)) {
+    throw new AppError(400, "Assigned user not found");
+  }
 
   if (has2DRouting) {
     if (!is2DLeaderUser(actor)) {
@@ -164,8 +176,15 @@ async function assertSubdivisionRoutingAssignmentAllowed({
       throw new AppError(403, "Only assigned 2D routing leaders can assign routed 2D-stage fixtures");
     }
 
-    if (String(assignee?.subdivision?.subdivision_name || "").trim().toLowerCase() !== DESIGN_2D_SUBDIVISION_NAME.toLowerCase()) {
+    if (assignees.some((assignee) => (
+      String(assignee?.subdivision?.subdivision_name || "").trim().toLowerCase() !== DESIGN_2D_SUBDIVISION_NAME.toLowerCase()
+    ))) {
       throw new AppError(400, "Routed 2D-stage fixtures can only be assigned to Design 2D subdivision users");
+    }
+
+    const routedTeamEmployeeIds = new Set(await listAssigned2DLeaderTeamEmployeeIds(projectId, client));
+    if (assignees.some((assignee) => !routedTeamEmployeeIds.has(assignee.employee_id))) {
+      throw new AppError(403, "Routed 2D-stage fixtures can only be assigned to the assigned 2D leader team");
     }
   }
 }
@@ -419,10 +438,22 @@ async function createDesignTaskFromProject(user, payload = {}) {
       throw new AppError(409, `Stage is not assignable in status ${lockedCurrentStage.status}`);
     }
 
-    const assignedTo = String(payload.assigned_to || "").trim();
+    const requestedAssigneeIds = [...new Set([
+      String(payload.assigned_to || "").trim(),
+      ...(Array.isArray(payload.assignee_ids) ? payload.assignee_ids.map((employeeId) => String(employeeId || "").trim()) : []),
+    ].filter(Boolean))];
+    const assignedTo = requestedAssigneeIds[0] || "";
+    if (!assignedTo) {
+      throw new AppError(400, "Assignee is required");
+    }
+
+    if (requestedAssigneeIds.length > 1 && !is2DStage(lockedCurrentStage.stage_name)) {
+      throw new AppError(400, "Multiple assignees are only supported for 2D task assignments");
+    }
+
     await assertSubdivisionRoutingAssignmentAllowed({
       actor: user,
-      assigneeEmployeeId: assignedTo,
+      assigneeEmployeeIds: requestedAssigneeIds,
       projectId: project.project_id,
       currentStageName: lockedCurrentStage.stage_name,
       client,
@@ -444,19 +475,30 @@ async function createDesignTaskFromProject(user, payload = {}) {
     try {
       const contributions = await listStageContributions(fixture.fixture_id, lockedCurrentStage.stage_name, revisionCode, client);
       if (contributions.length === 0) {
-        await insertStageContribution({
-          fixture_id: fixture.fixture_id,
-          department_id: departmentId,
-          stage_name: lockedCurrentStage.stage_name,
-          revision_code: revisionCode,
-          stage_revision_no: revisionNo,
-          employee_id: assignedTo,
-          contribution_percent: 100,
-          contribution_kind: "REMAINING",
-          changed_by: user.employee_id,
-          previous_stage: lockedCurrentStage.stage_name,
-          metadata: { source: "assignment_transaction" },
-        }, client);
+        const baseShare = Math.floor((100 / requestedAssigneeIds.length) * 100) / 100;
+        let allocatedPercent = 0;
+        for (const [index, employeeId] of requestedAssigneeIds.entries()) {
+          const contributionPercent = index === requestedAssigneeIds.length - 1
+            ? Math.round((100 - allocatedPercent) * 100) / 100
+            : baseShare;
+          allocatedPercent += contributionPercent;
+          await insertStageContribution({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+            stage_name: lockedCurrentStage.stage_name,
+            revision_code: revisionCode,
+            stage_revision_no: revisionNo,
+            employee_id: employeeId,
+            contribution_percent: contributionPercent,
+            contribution_kind: "REMAINING",
+            changed_by: user.employee_id,
+            previous_stage: lockedCurrentStage.stage_name,
+            metadata: {
+              source: "assignment_transaction",
+              assignee_ids: requestedAssigneeIds,
+            },
+          }, client);
+        }
       }
     } catch (error) {
       console.warn("[design-task] assignment contribution initialization skipped", {
@@ -474,6 +516,8 @@ async function createDesignTaskFromProject(user, payload = {}) {
       project_id: project.project_id,
       fixture_id: fixture.fixture_id,
       fixture_no: fixture.fixture_no,
+      assigned_to: assignedTo,
+      assignee_ids: requestedAssigneeIds,
       project_no: project.project_code,
       project_name: project.project_name,
       customer_name: project.company_name,
@@ -492,6 +536,7 @@ async function createDesignTaskFromProject(user, payload = {}) {
       metadata: {
         task_id: task.id,
         assigned_to: assignedTo,
+        assignee_ids: requestedAssigneeIds,
         stage_name: lockedCurrentStage.stage_name,
         workflow_status: "IN_PROGRESS",
       },

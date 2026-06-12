@@ -26,13 +26,16 @@ function aggregateProjectCompletionTruth(projectBundle, options = {}) {
   const truthErrors = [];
 
   if (fixtureTruths.some((truth) => truth.completion_percent === null)) {
+    const fixtureTruthErrors = fixtureTruths.flatMap((truth) => (
+      (truth.truth_errors || []).map((error) => `fixture:${truth.fixture_no || truth.fixture_id}:${error}`)
+    ));
     return buildProjectTruth({
       projectBundle,
       fixtureTruths,
       completionPercent: null,
       truthStatus: COMPLETION_TRUTH_STATUSES.INCOMPLETE_TRUTH,
       strictComplete: false,
-      truthErrors: ["fixture_truth_incomplete"],
+      truthErrors: fixtureTruthErrors.length > 0 ? fixtureTruthErrors : ["fixture_truth_incomplete"],
     });
   }
 

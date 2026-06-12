@@ -1,4 +1,5 @@
 const ASSIGNED_TASK_STATUSES = new Set(["assigned", "pending"]);
+const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 
 function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
@@ -21,10 +22,18 @@ function hasTaskProofForState(task) {
   return Boolean(String(task?.proof_url || "").trim() || task?.latest_proof?.file_url);
 }
 
+function isDapWorkflowTask(task) {
+  return normalizeDesignStageName(task?.workflow_stage || task?.stage || task?.current_stage_name) === "dap";
+}
+
+function isWorkProofRequiredForState(task) {
+  return !isDapWorkflowTask(task);
+}
+
 function shouldSubmitForVerification(task, completionPercent) {
   return completionPercent === 100
     && normalizeStatus(task?.status) === "in_progress"
-    && hasTaskProofForState(task);
+    && (!isWorkProofRequiredForState(task) || hasTaskProofForState(task));
 }
 
 function canCancelAssignedTask(task) {
@@ -45,6 +54,8 @@ module.exports = {
   canCancelAssignedTask,
   canCancelOperationalTask,
   hasTaskProofForState,
+  isDapWorkflowTask,
+  isWorkProofRequiredForState,
   shouldAutoStartTask,
   shouldSubmitForVerification,
 };

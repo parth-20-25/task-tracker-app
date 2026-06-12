@@ -355,6 +355,7 @@ function mapProjectSummaryRow(row) {
     team_lead_name: row.team_lead_name || null,
     uploaded_by_name: row.uploaded_by_name || null,
     can_toggle_modification: row.can_toggle_modification === true,
+    can_edit_project: row.can_edit_project === true,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -754,7 +755,8 @@ async function getProjectModificationContextForUser(projectId, user, client = po
         p.created_by_user_id,
         COALESCE(p.status, $3) AS project_status,
         COALESCE(p.is_modified, FALSE) AS is_modified,
-        ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification
+        ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification,
+        TRUE AS can_edit_project
       FROM design.projects p
       WHERE p.id = $2
         AND ${visibleProjectPredicate("p")}
@@ -814,6 +816,7 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         hierarchy_team_lead.name AS team_lead_name,
         uploader.name AS uploaded_by_name,
         ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification,
+        TRUE AS can_edit_project,
         p.created_at,
         p.updated_at,
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,

@@ -65,6 +65,16 @@ function taskSelectQuery(whereClause = "") {
       latest_attachment.uploaded_at AS latest_proof_uploaded_at,
       (
         SELECT STRING_AGG(
+          COALESCE(task_assignee_user.name, task_assignee.employee_id),
+          ', '
+          ORDER BY COALESCE(task_assignee_user.name, task_assignee.employee_id)
+        )
+        FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+        LEFT JOIN users task_assignee_user
+          ON ${userIdentifierMatchSql("task_assignee_user", "task_assignee.employee_id")}
+      ) AS assignee_names,
+      (
+        SELECT STRING_AGG(
           DISTINCT COALESCE(contributor.name, contribution.employee_id),
           ', '
           ORDER BY COALESCE(contributor.name, contribution.employee_id)

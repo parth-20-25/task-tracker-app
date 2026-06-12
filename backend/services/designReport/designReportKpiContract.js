@@ -68,7 +68,7 @@ function resolveReportKpisFromCompletionTruth(projectTruth, fixtureRows = []) {
   if (!projectTruth) {
     return {
       ok: false,
-      error: "project completion truth is unavailable",
+      error: "missing_project_completion_truth",
     };
   }
 
@@ -76,7 +76,7 @@ function resolveReportKpisFromCompletionTruth(projectTruth, fixtureRows = []) {
     || projectTruth.completion_percent === null) {
     return {
       ok: false,
-      error: "project completion truth is incomplete",
+      error: "project_completion_truth_incomplete",
       truth_errors: projectTruth.truth_errors || [],
     };
   }

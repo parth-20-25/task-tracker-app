@@ -283,7 +283,7 @@ router.get(
 
     const truth = await getProjectCompletionTruthById(project.project_id, project.department_id);
     if (!truth) {
-      throw new AppError(404, "Project completion truth unavailable");
+      throw new AppError(404, `missing_project_completion_truth:${project.project_id}`);
     }
 
     return sendSuccess(res, truth);

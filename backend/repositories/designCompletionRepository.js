@@ -15,6 +15,10 @@ function mapFixtureBundleRow(row) {
     is_required_for_project_kpi: true,
     project_status: row.project_status,
     progress_rows: Array.isArray(row.progress_rows) ? row.progress_rows : [],
+    task_rows: Array.isArray(row.task_rows) ? row.task_rows : [],
+    task_attachment_rows: Array.isArray(row.task_attachment_rows) ? row.task_attachment_rows : [],
+    stage_attempt_rows: Array.isArray(row.stage_attempt_rows) ? row.stage_attempt_rows : [],
+    contribution_rows: Array.isArray(row.contribution_rows) ? row.contribution_rows : [],
   };
 }
 
@@ -71,7 +75,96 @@ async function loadFixtureBundlesForProject(projectId, departmentId, client = po
             ORDER BY fwp.stage_order ASC
           ) FILTER (WHERE fwp.fixture_id IS NOT NULL),
           '[]'::json
-        ) AS progress_rows
+        ) AS progress_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'task_id', t.id,
+                'stage_name', COALESCE(NULLIF(t.stage, ''), NULLIF(stage.stage_name, ''), NULLIF(stage.name, ''), 'Workflow Stage'),
+                'status', t.status,
+                'assigned_to', t.assigned_to,
+                'assignee_ids', COALESCE(t.assignee_ids, '[]'::jsonb),
+                'proof_url', COALESCE(t.proof_url, '[]'::jsonb),
+                'submitted_at', t.submitted_at,
+                'approved_at', t.approved_at,
+                'closed_at', t.closed_at,
+                'completion_percent', t.completion_percent
+              )
+              ORDER BY t.created_at ASC, t.id ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM tasks t
+          LEFT JOIN workflow_stages stage
+            ON stage.id = t.current_stage_id
+          WHERE t.fixture_id = df.id
+            AND t.department_id = dp.department_id
+            AND t.status <> 'cancelled'
+        ) AS task_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'attachment_id', ta.id,
+                'task_id', ta.task_id,
+                'file_url', ta.file_url,
+                'uploaded_by', ta.uploaded_by,
+                'uploaded_at', ta.uploaded_at
+              )
+              ORDER BY ta.uploaded_at ASC, ta.id ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM task_attachments ta
+          JOIN tasks t
+            ON t.id = ta.task_id
+          WHERE t.fixture_id = df.id
+            AND t.department_id = dp.department_id
+            AND t.status <> 'cancelled'
+        ) AS task_attachment_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'stage_name', attempts.stage_name,
+                'attempt_no', attempts.attempt_no,
+                'stage_version', attempts.stage_version,
+                'status', attempts.status,
+                'assigned_to', attempts.assigned_to,
+                'started_at', attempts.started_at,
+                'completed_at', attempts.completed_at,
+                'approved_at', attempts.approved_at
+              )
+              ORDER BY attempts.stage_name ASC, attempts.attempt_no ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM fixture_workflow_stage_attempts attempts
+          WHERE attempts.fixture_id = df.id
+            AND attempts.department_id = dp.department_id
+        ) AS stage_attempt_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'stage_name', contribution.stage_name,
+                'revision_code', contribution.revision_code,
+                'stage_revision_no', contribution.stage_revision_no,
+                'employee_id', contribution.employee_id,
+                'contribution_percent', contribution.contribution_percent,
+                'contribution_kind', contribution.contribution_kind,
+                'changed_at', contribution.changed_at
+              )
+              ORDER BY contribution.stage_name ASC, contribution.changed_at ASC, contribution.id ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM design.fixture_stage_contributions contribution
+          WHERE contribution.fixture_id = df.id
+            AND contribution.department_id = dp.department_id
+            AND contribution.superseded_by IS NULL
+        ) AS contribution_rows
       FROM design.fixtures df
       JOIN design.projects dp ON dp.id = df.project_id
       LEFT JOIN fixture_workflow_progress fwp
@@ -127,7 +220,96 @@ async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
             ORDER BY fwp.stage_order ASC
           ) FILTER (WHERE fwp.fixture_id IS NOT NULL),
           '[]'::json
-        ) AS progress_rows
+        ) AS progress_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'task_id', t.id,
+                'stage_name', COALESCE(NULLIF(t.stage, ''), NULLIF(stage.stage_name, ''), NULLIF(stage.name, ''), 'Workflow Stage'),
+                'status', t.status,
+                'assigned_to', t.assigned_to,
+                'assignee_ids', COALESCE(t.assignee_ids, '[]'::jsonb),
+                'proof_url', COALESCE(t.proof_url, '[]'::jsonb),
+                'submitted_at', t.submitted_at,
+                'approved_at', t.approved_at,
+                'closed_at', t.closed_at,
+                'completion_percent', t.completion_percent
+              )
+              ORDER BY t.created_at ASC, t.id ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM tasks t
+          LEFT JOIN workflow_stages stage
+            ON stage.id = t.current_stage_id
+          WHERE t.fixture_id = df.id
+            AND t.department_id = dp.department_id
+            AND t.status <> 'cancelled'
+        ) AS task_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'attachment_id', ta.id,
+                'task_id', ta.task_id,
+                'file_url', ta.file_url,
+                'uploaded_by', ta.uploaded_by,
+                'uploaded_at', ta.uploaded_at
+              )
+              ORDER BY ta.uploaded_at ASC, ta.id ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM task_attachments ta
+          JOIN tasks t
+            ON t.id = ta.task_id
+          WHERE t.fixture_id = df.id
+            AND t.department_id = dp.department_id
+            AND t.status <> 'cancelled'
+        ) AS task_attachment_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'stage_name', attempts.stage_name,
+                'attempt_no', attempts.attempt_no,
+                'stage_version', attempts.stage_version,
+                'status', attempts.status,
+                'assigned_to', attempts.assigned_to,
+                'started_at', attempts.started_at,
+                'completed_at', attempts.completed_at,
+                'approved_at', attempts.approved_at
+              )
+              ORDER BY attempts.stage_name ASC, attempts.attempt_no ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM fixture_workflow_stage_attempts attempts
+          WHERE attempts.fixture_id = df.id
+            AND attempts.department_id = dp.department_id
+        ) AS stage_attempt_rows,
+        (
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'stage_name', contribution.stage_name,
+                'revision_code', contribution.revision_code,
+                'stage_revision_no', contribution.stage_revision_no,
+                'employee_id', contribution.employee_id,
+                'contribution_percent', contribution.contribution_percent,
+                'contribution_kind', contribution.contribution_kind,
+                'changed_at', contribution.changed_at
+              )
+              ORDER BY contribution.stage_name ASC, contribution.changed_at ASC, contribution.id ASC
+            ),
+            '[]'::jsonb
+          )
+          FROM design.fixture_stage_contributions contribution
+          WHERE contribution.fixture_id = df.id
+            AND contribution.department_id = dp.department_id
+            AND contribution.superseded_by IS NULL
+        ) AS contribution_rows
       FROM design.fixtures df
       JOIN design.projects dp ON dp.id = df.project_id
       LEFT JOIN fixture_workflow_progress fwp
@@ -181,7 +363,11 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
               'is_legacy_workflow', df.is_legacy_workflow,
               'removed_from_latest_ingestion', df.removed_from_latest_ingestion,
               'is_required_for_project_kpi', TRUE,
-              'progress_rows', fixture_progress.progress_rows
+              'progress_rows', fixture_progress.progress_rows,
+              'task_rows', fixture_tasks.task_rows,
+              'task_attachment_rows', fixture_task_attachments.task_attachment_rows,
+              'stage_attempt_rows', fixture_stage_attempts.stage_attempt_rows,
+              'contribution_rows', fixture_contributions.contribution_rows
             )
             ORDER BY df.fixture_no ASC
           ) FILTER (WHERE df.id IS NOT NULL),
@@ -211,6 +397,95 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
         WHERE fwp.fixture_id = df.id
           AND fwp.department_id = dp.department_id
       ) fixture_progress ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'task_id', t.id,
+              'stage_name', COALESCE(NULLIF(t.stage, ''), NULLIF(stage.stage_name, ''), NULLIF(stage.name, ''), 'Workflow Stage'),
+              'status', t.status,
+              'assigned_to', t.assigned_to,
+              'assignee_ids', COALESCE(t.assignee_ids, '[]'::jsonb),
+              'proof_url', COALESCE(t.proof_url, '[]'::jsonb),
+              'submitted_at', t.submitted_at,
+              'approved_at', t.approved_at,
+              'closed_at', t.closed_at,
+              'completion_percent', t.completion_percent
+            )
+            ORDER BY t.created_at ASC, t.id ASC
+          ),
+          '[]'::jsonb
+        ) AS task_rows
+        FROM tasks t
+        LEFT JOIN workflow_stages stage
+          ON stage.id = t.current_stage_id
+        WHERE t.fixture_id = df.id
+          AND t.department_id = dp.department_id
+          AND t.status <> 'cancelled'
+      ) fixture_tasks ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'attachment_id', ta.id,
+              'task_id', ta.task_id,
+              'file_url', ta.file_url,
+              'uploaded_by', ta.uploaded_by,
+              'uploaded_at', ta.uploaded_at
+            )
+            ORDER BY ta.uploaded_at ASC, ta.id ASC
+          ),
+          '[]'::jsonb
+        ) AS task_attachment_rows
+        FROM task_attachments ta
+        JOIN tasks t
+          ON t.id = ta.task_id
+        WHERE t.fixture_id = df.id
+          AND t.department_id = dp.department_id
+          AND t.status <> 'cancelled'
+      ) fixture_task_attachments ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'stage_name', attempts.stage_name,
+              'attempt_no', attempts.attempt_no,
+              'stage_version', attempts.stage_version,
+              'status', attempts.status,
+              'assigned_to', attempts.assigned_to,
+              'started_at', attempts.started_at,
+              'completed_at', attempts.completed_at,
+              'approved_at', attempts.approved_at
+            )
+            ORDER BY attempts.stage_name ASC, attempts.attempt_no ASC
+          ),
+          '[]'::jsonb
+        ) AS stage_attempt_rows
+        FROM fixture_workflow_stage_attempts attempts
+        WHERE attempts.fixture_id = df.id
+          AND attempts.department_id = dp.department_id
+      ) fixture_stage_attempts ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'stage_name', contribution.stage_name,
+              'revision_code', contribution.revision_code,
+              'stage_revision_no', contribution.stage_revision_no,
+              'employee_id', contribution.employee_id,
+              'contribution_percent', contribution.contribution_percent,
+              'contribution_kind', contribution.contribution_kind,
+              'changed_at', contribution.changed_at
+            )
+            ORDER BY contribution.stage_name ASC, contribution.changed_at ASC, contribution.id ASC
+          ),
+          '[]'::jsonb
+        ) AS contribution_rows
+        FROM design.fixture_stage_contributions contribution
+        WHERE contribution.fixture_id = df.id
+          AND contribution.department_id = dp.department_id
+          AND contribution.superseded_by IS NULL
+      ) fixture_contributions ON TRUE
       WHERE dp.id = ANY($1::uuid[])
       GROUP BY dp.id, dp.project_no, dp.department_id, dp.status
     `,
@@ -233,6 +508,10 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
       removed_from_latest_ingestion: bundle.removed_from_latest_ingestion === true,
       is_required_for_project_kpi: bundle.is_required_for_project_kpi !== false,
       progress_rows: Array.isArray(bundle.progress_rows) ? bundle.progress_rows : [],
+      task_rows: Array.isArray(bundle.task_rows) ? bundle.task_rows : [],
+      task_attachment_rows: Array.isArray(bundle.task_attachment_rows) ? bundle.task_attachment_rows : [],
+      stage_attempt_rows: Array.isArray(bundle.stage_attempt_rows) ? bundle.stage_attempt_rows : [],
+      contribution_rows: Array.isArray(bundle.contribution_rows) ? bundle.contribution_rows : [],
     })),
   }));
 }

@@ -117,6 +117,7 @@ function installAssignmentMocks(stageName, options = {}) {
   const taskService = require("../services/taskService");
   const fixtureWorkflowService = require("../services/fixtureWorkflowService");
   const subdivisionRoutingRepository = require("../repositories/projectSubdivisionRoutingRepository");
+  const usersRepository = require("../repositories/usersRepository");
 
   const originals = {
     connect: db.pool.connect,
@@ -134,6 +135,8 @@ function installAssignmentMocks(stageName, options = {}) {
     createTaskForUser: taskService.createTaskForUser,
     getCurrentStage: fixtureWorkflowService.getCurrentStage,
     projectHasActive2DRouting: subdivisionRoutingRepository.projectHasActive2DRouting,
+    listAssigned2DLeaderTeamEmployeeIds: subdivisionRoutingRepository.listAssigned2DLeaderTeamEmployeeIds,
+    findUserByEmployeeId: usersRepository.findUserByEmployeeId,
   };
 
   const calls = {
@@ -238,6 +241,15 @@ function installAssignmentMocks(stageName, options = {}) {
     is_complete: false,
   });
   subdivisionRoutingRepository.projectHasActive2DRouting = async () => false;
+  subdivisionRoutingRepository.listAssigned2DLeaderTeamEmployeeIds = async () => ["DES-1", "DES-2", "DES-3"];
+  usersRepository.findUserByEmployeeId = async (employeeId) => ({
+    employee_id: employeeId,
+    department_id: "design",
+    is_active: true,
+    subdivision: {
+      subdivision_name: "2D",
+    },
+  });
 
   clearProjectCatalogServiceCache();
 
@@ -259,6 +271,8 @@ function installAssignmentMocks(stageName, options = {}) {
       taskService.createTaskForUser = originals.createTaskForUser;
       fixtureWorkflowService.getCurrentStage = originals.getCurrentStage;
       subdivisionRoutingRepository.projectHasActive2DRouting = originals.projectHasActive2DRouting;
+      subdivisionRoutingRepository.listAssigned2DLeaderTeamEmployeeIds = originals.listAssigned2DLeaderTeamEmployeeIds;
+      usersRepository.findUserByEmployeeId = originals.findUserByEmployeeId;
       clearProjectCatalogServiceCache();
     },
   };
@@ -350,6 +364,75 @@ for (const stageName of ["Concept", "DAP", "3D Finish", "2D Finish"]) {
       assert.ok(mocks.calls.tx.includes("BEGIN"));
       assert.ok(mocks.calls.tx.includes("COMMIT"));
       assert.equal(mocks.calls.tx.includes("ROLLBACK"), false);
+    } finally {
+      mocks.restore();
+    }
+  });
+}
+
+test("2D assignment supports multiple assignees with trackable contribution rows", async () => {
+  const mocks = installAssignmentMocks("2D Finish");
+
+  try {
+    const { createDesignTaskFromProject } = require("../services/projectCatalogService");
+    const task = await createDesignTaskFromProject(
+      {
+        employee_id: "MGR-1",
+        department_id: "design",
+        role: { id: "r1", role_key: "admin" },
+      },
+      {
+        department_id: "design",
+        project_id: "project-1",
+        fixture_id: "11111111-1111-1111-1111-111111111111",
+        description: "Fixture One",
+        assigned_to: "DES-1",
+        assignee_ids: ["DES-1", "DES-2", "DES-3"],
+        priority: "high",
+        deadline: "2026-06-12T23:59:59.999Z",
+      },
+    );
+
+    assert.equal(task.id, 1);
+    assert.deepEqual(mocks.calls.tasks[0].assignee_ids, ["DES-1", "DES-2", "DES-3"]);
+    assert.deepEqual(mocks.calls.contributions.map((row) => row.employee_id), ["DES-1", "DES-2", "DES-3"]);
+    assert.equal(
+      Math.round(mocks.calls.contributions.reduce((sum, row) => sum + Number(row.contribution_percent), 0) * 100) / 100,
+      100,
+    );
+  } finally {
+    mocks.restore();
+  }
+});
+
+for (const stageName of ["Concept", "DAP", "3D Finish"]) {
+  test(`design assignment rejects multiple assignees for ${stageName}`, async () => {
+    const mocks = installAssignmentMocks(stageName);
+
+    try {
+      const { createDesignTaskFromProject } = require("../services/projectCatalogService");
+      await assert.rejects(
+        () => createDesignTaskFromProject(
+          {
+            employee_id: "MGR-1",
+            department_id: "design",
+            role: { id: "r1", role_key: "admin" },
+          },
+          {
+            department_id: "design",
+            project_id: "project-1",
+            fixture_id: "11111111-1111-1111-1111-111111111111",
+            description: "Fixture One",
+            assigned_to: "DES-1",
+            assignee_ids: ["DES-1", "DES-2"],
+            priority: "high",
+            deadline: "2026-06-12T23:59:59.999Z",
+          },
+        ),
+        /Multiple assignees are only supported for 2D/,
+      );
+      assert.equal(mocks.calls.tasks.length, 0);
+      assert.ok(mocks.calls.tx.includes("ROLLBACK"));
     } finally {
       mocks.restore();
     }

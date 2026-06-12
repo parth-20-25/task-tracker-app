@@ -315,6 +315,57 @@ async function isProjectAssignedTo2DLeader(projectId, employeeId, client = pool)
   return result.rowCount > 0;
 }
 
+async function listAssigned2DLeaderTeamEmployeeIds(projectId, client = pool) {
+  const leadersResult = await client.query(
+    `
+      SELECT DISTINCT psa.assigned_leader_id
+      FROM design.project_subdivision_assignments psa
+      JOIN department_subdivisions ds
+        ON ds.id = psa.subdivision_id
+      WHERE psa.project_id = $1
+        AND psa.is_active = TRUE
+        AND ds.is_active = TRUE
+        AND ${twoDSubdivisionSql("ds")}
+      ORDER BY psa.assigned_leader_id ASC
+    `,
+    [projectId],
+  );
+
+  const employeeIds = new Set();
+  for (const row of leadersResult.rows) {
+    const leaderId = row.assigned_leader_id;
+    if (!leaderId) {
+      continue;
+    }
+
+    const teamResult = await client.query(
+      `
+        ${buildVisibleUsersCte("$1")}
+        SELECT DISTINCT visible_users.employee_id
+        FROM visible_users
+        JOIN users u
+          ON ${userIdentifierMatchSql("u", "visible_users.employee_id")}
+        JOIN department_subdivisions ds
+          ON ds.id = u.subdivision_id
+         AND ds.department_id = u.department_id
+        WHERE COALESCE(u.is_active, TRUE) = TRUE
+          AND ds.is_active = TRUE
+          AND ${twoDSubdivisionSql("ds")}
+        ORDER BY visible_users.employee_id ASC
+      `,
+      [leaderId],
+    );
+
+    teamResult.rows.forEach((teamRow) => {
+      if (teamRow.employee_id) {
+        employeeIds.add(teamRow.employee_id);
+      }
+    });
+  }
+
+  return [...employeeIds].sort();
+}
+
 async function assignProjectTo2DLeader({ projectId, assignedLeaderId, assignedBy }, client = pool) {
   const subdivision = await resolve2DSubdivisionForProject(projectId, client);
   if (!subdivision) {
@@ -376,6 +427,7 @@ module.exports = {
   is2DLeaderUser,
   is2DSubdivisionUser,
   isProjectAssignedTo2DLeader,
+  listAssigned2DLeaderTeamEmployeeIds,
   list2DLeadersForProject,
   listProjectSubdivisionAssignments,
   projectHasActive2DRouting,

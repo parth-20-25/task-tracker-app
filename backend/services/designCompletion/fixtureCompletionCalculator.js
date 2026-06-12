@@ -30,6 +30,16 @@ function detectActiveRework({ progressRows = [], revisionNo = 0, isWorkflowCompl
   return Number(revisionNo) > 0 || hasReopenedStage;
 }
 
+function buildSourceCounts(fixtureBundle) {
+  return {
+    fixture_workflow_progress: Array.isArray(fixtureBundle.progress_rows) ? fixtureBundle.progress_rows.length : 0,
+    tasks: Array.isArray(fixtureBundle.task_rows) ? fixtureBundle.task_rows.length : 0,
+    task_attachments: Array.isArray(fixtureBundle.task_attachment_rows) ? fixtureBundle.task_attachment_rows.length : 0,
+    fixture_workflow_stage_attempts: Array.isArray(fixtureBundle.stage_attempt_rows) ? fixtureBundle.stage_attempt_rows.length : 0,
+    contributions: Array.isArray(fixtureBundle.contribution_rows) ? fixtureBundle.contribution_rows.length : 0,
+  };
+}
+
 function computeFixtureCompletionTruth(fixtureBundle, options = {}) {
   const {
     progress_rows: progressRows = [],
@@ -61,6 +71,7 @@ function computeFixtureCompletionTruth(fixtureBundle, options = {}) {
       current_approval_state: null,
       stages: [],
       truth_errors: [`missing_progress:${missingStages.join(",")}`],
+      source_counts: buildSourceCounts(fixtureBundle),
     };
   }
 
@@ -121,6 +132,7 @@ function computeFixtureCompletionTruth(fixtureBundle, options = {}) {
       current_approval_state: currentStage?.approval_state || null,
       stages: stageTruths,
       truth_errors: truthErrors,
+      source_counts: buildSourceCounts(fixtureBundle),
     };
   }
 
@@ -164,6 +176,7 @@ function computeFixtureCompletionTruth(fixtureBundle, options = {}) {
     current_approval_state: currentStage?.approval_state || null,
     stages: stageTruths,
     truth_errors: truthErrors,
+    source_counts: buildSourceCounts(fixtureBundle),
   };
 }
 

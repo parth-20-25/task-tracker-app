@@ -89,6 +89,7 @@ const {
   DESIGN_2D_SUBDIVISION_NAME,
   is2DLeaderUser,
   isProjectAssignedTo2DLeader,
+  listAssigned2DLeaderTeamEmployeeIds,
   projectHasActive2DRouting,
 } = require("../repositories/projectSubdivisionRoutingRepository");
 
@@ -270,7 +271,19 @@ function isProofRequired(task) {
   return task?.proof_required === true;
 }
 
+function isDapWorkflowTask(task) {
+  return normalizeDesignStageName(task?.workflow_stage || task?.stage || task?.current_stage_name) === "dap";
+}
+
+function isWorkProofRequiredForTask(task) {
+  return !isDapWorkflowTask(task);
+}
+
 function assertWorkProofUploaded(task) {
+  if (!isWorkProofRequiredForTask(task)) {
+    return;
+  }
+
   if (!taskHasProof(task)) {
     throw new AppError(400, "Work proof image required before verification submission");
   }
@@ -279,7 +292,7 @@ function assertWorkProofUploaded(task) {
 function ensureTaskProofUpdateAllowed(user, task) {
   assertTaskProjectIsActive(task);
 
-  if (task.assigned_to !== user.employee_id) {
+  if (!isTaskAssignee(user, task)) {
     throw new AppError(403, "Only assignee can upload proof");
   }
 
@@ -340,6 +353,17 @@ function is2DStageName(stageName) {
   return normalizeDesignStageName(stageName) === "2d_finish";
 }
 
+function assertMultiAssigneeAllowedForStage(assigneeIds, stageName) {
+  if (assigneeIds.length > 1 && !is2DStageName(stageName)) {
+    throw new AppError(400, "Multiple assignees are only supported for 2D task assignments");
+  }
+}
+
+function is2DSubdivisionAssignee(assignee) {
+  return String(assignee?.subdivision?.subdivision_name || "").trim().toLowerCase()
+    === DESIGN_2D_SUBDIVISION_NAME.toLowerCase();
+}
+
 async function assert2DRoutingTaskAssignmentAllowed({ actor, assignees, projectId, stageName, client = pool }) {
   if (!projectId || !is2DStageName(stageName)) {
     return;
@@ -358,13 +382,16 @@ async function assert2DRoutingTaskAssignmentAllowed({ actor, assignees, projectI
     throw new AppError(403, "Only assigned 2D routing leaders can assign routed 2D-stage fixtures");
   }
 
-  const invalidAssignee = assignees.find((assignee) => (
-    String(assignee?.subdivision?.subdivision_name || "").trim().toLowerCase()
-    !== DESIGN_2D_SUBDIVISION_NAME.toLowerCase()
-  ));
+  const invalidAssignee = assignees.find((assignee) => !is2DSubdivisionAssignee(assignee));
 
   if (invalidAssignee) {
     throw new AppError(400, "Routed 2D-stage fixtures can only be assigned to Design 2D subdivision users");
+  }
+
+  const routedTeamEmployeeIds = new Set(await listAssigned2DLeaderTeamEmployeeIds(projectId, client));
+  const outsideAssignedLeaderTeam = assignees.find((assignee) => !routedTeamEmployeeIds.has(assignee.employee_id));
+  if (outsideAssignedLeaderTeam) {
+    throw new AppError(403, "Routed 2D-stage fixtures can only be assigned to the assigned 2D leader team");
   }
 }
 
@@ -940,7 +967,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       throw new AppError(400, "workflow_template_id is required for department workflow tasks");
     }
 
-    if (primaryAssignee.department_id !== resolvedDepartmentId) {
+    if (assignees.some((assignee) => assignee.department_id !== resolvedDepartmentId)) {
       throw new AppError(400, "Department workflow tasks can only be assigned within the selected department");
     }
 
@@ -958,7 +985,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       if (
         Array.isArray(workflowTemplate.eligible_role_ids)
         && workflowTemplate.eligible_role_ids.length > 0
-        && !workflowTemplate.eligible_role_ids.includes(primaryAssignee.role_id)
+        && assignees.some((assignee) => !workflowTemplate.eligible_role_ids.includes(assignee.role_id))
       ) {
         throw new AppError(400, "Selected assignee is not eligible for this workflow template");
       }
@@ -1040,6 +1067,9 @@ async function createTaskForUser(user, payload = {}, options = {}) {
   const resolvedProjectNo = fixtureContext?.project_no || projectNo;
   const stage = fixtureContext?.stage_name || null;
 
+  if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
+    assertMultiAssigneeAllowedForStage(assigneeIds, stage);
+  }
   await assertProjectIsActive(resolvedProjectId);
   await assert2DRoutingTaskAssignmentAllowed({
     actor: user,
@@ -1194,6 +1224,8 @@ async function getAssignableUsersForTaskContext(user, {
   taskType = TASK_TYPES.CUSTOM,
   departmentId = null,
   workflowTemplateId = null,
+  projectId = null,
+  stageName = null,
 } = {}) {
   const allUsers = await listUsers();
   const canUseAssignmentRules = hasPermission(user, PERMISSIONS.ASSIGN_TASK);
@@ -1229,6 +1261,14 @@ async function getAssignableUsersForTaskContext(user, {
       if (Array.isArray(template.eligible_role_ids) && template.eligible_role_ids.length > 0) {
         candidates = candidates.filter((candidate) => template.eligible_role_ids.includes(candidate.role_id));
       }
+    }
+
+    if (projectId && is2DStageName(stageName) && await projectHasActive2DRouting(projectId)) {
+      const routedTeamEmployeeIds = new Set(await listAssigned2DLeaderTeamEmployeeIds(projectId));
+      candidates = candidates.filter((candidate) => (
+        routedTeamEmployeeIds.has(candidate.employee_id)
+        && is2DSubdivisionAssignee(candidate)
+      ));
     }
   }
 
@@ -1705,7 +1745,7 @@ async function transitionTaskForUser(user, taskId, nextStageId) {
   const transitionTime = new Date();
   const nextStatus = nextStage.is_final ? TASK_STATUSES.CLOSED : TASK_STATUSES.ASSIGNED;
 
-  if (nextStatus === TASK_STATUSES.CLOSED && isProofRequired(task) && !taskHasProof(task)) {
+  if (nextStatus === TASK_STATUSES.CLOSED && isProofRequired(task) && isWorkProofRequiredForTask(task) && !taskHasProof(task)) {
     throw new AppError(400, "Proof is required before completing the task");
   }
   const nextApprovalStage = nextStage.is_final ? "closed" : "execution";
@@ -2465,6 +2505,9 @@ async function applyTaskDetailUpdate(user, task, payload) {
     }
 
     if (task.task_type === TASK_TYPES.DEPARTMENT_WORKFLOW) {
+      const stageName = task.workflow_stage || task.stage || null;
+      assertMultiAssigneeAllowedForStage(requestedAssigneeIds, stageName);
+
       if (assignees.some((assignee) => assignee.department_id !== task.department_id)) {
         throw new AppError(400, "Department workflow tasks can only be reassigned within the task department");
       }
@@ -2484,6 +2527,13 @@ async function applyTaskDetailUpdate(user, task, payload) {
           throw new AppError(400, "Selected assignee is not eligible for this workflow template");
         }
       }
+
+      await assert2DRoutingTaskAssignmentAllowed({
+        actor: user,
+        assignees,
+        projectId: task.project_id,
+        stageName,
+      });
     }
 
     normalizedPayload.assignee_ids = requestedAssigneeIds;

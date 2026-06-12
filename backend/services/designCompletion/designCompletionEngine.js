@@ -102,6 +102,7 @@ async function enrichProjectSummariesWithCompletionTruth(summaries = [], client)
         completion_percent: null,
         completion_truth_status: "incomplete_truth",
         completion_strict_complete: false,
+        completion_truth_errors: [`missing_project_workflow_bundle:${summary.project_id}`],
       };
     }
 

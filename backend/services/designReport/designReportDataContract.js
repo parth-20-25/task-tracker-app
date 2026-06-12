@@ -57,7 +57,18 @@ async function getFixtureStageTaskRows(fixtureIds) {
         t.due_date,
         t.sla_due_date,
         t.assigned_to,
+        t.assignee_ids,
         assignee.name AS assigned_to_name,
+        (
+          SELECT STRING_AGG(
+            COALESCE(task_assignee_user.name, task_assignee.employee_id),
+            ', '
+            ORDER BY COALESCE(task_assignee_user.name, task_assignee.employee_id)
+          )
+          FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+          LEFT JOIN users task_assignee_user
+            ON ${userIdentifierMatchSql("task_assignee_user", "task_assignee.employee_id")}
+        ) AS assignee_names,
         t.assigned_by,
         assigner.name AS assigned_by_name,
         t.assigned_at,

@@ -130,10 +130,14 @@ router.get(
     const taskType = String(req.query.task_type || "").trim() || "custom";
     const departmentId = String(req.query.department_id || "").trim() || null;
     const workflowTemplateId = String(req.query.workflow_template_id || "").trim() || null;
+    const projectId = String(req.query.project_id || "").trim() || null;
+    const stageName = String(req.query.stage_name || "").trim() || null;
     const users = await getAssignableUsersForTaskContext(req.user, {
       taskType,
       departmentId,
       workflowTemplateId,
+      projectId,
+      stageName,
     });
     return sendSuccess(res, users);
   }),

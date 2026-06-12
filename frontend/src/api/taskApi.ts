@@ -116,6 +116,8 @@ export function fetchTaskAssignmentUsers(params: {
   task_type: TaskType;
   department_id?: string | null;
   workflow_template_id?: string | null;
+  project_id?: string | null;
+  stage_name?: string | null;
 }) {
   const search = new URLSearchParams();
   search.set("task_type", params.task_type);
@@ -126,6 +128,14 @@ export function fetchTaskAssignmentUsers(params: {
 
   if (params.workflow_template_id) {
     search.set("workflow_template_id", params.workflow_template_id);
+  }
+
+  if (params.project_id) {
+    search.set("project_id", params.project_id);
+  }
+
+  if (params.stage_name) {
+    search.set("stage_name", params.stage_name);
   }
 
   return apiRequest<User[]>(`/task-assignment/assignable-users?${search.toString()}`);

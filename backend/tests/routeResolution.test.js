@@ -58,6 +58,22 @@ test("legacy fixture upload route returns retired 410 instead of authorizing leg
   }
 });
 
+test("production server app retires legacy fixture upload before auth", async () => {
+  const { app: productionApp } = require("../server");
+  const server = await listen(productionApp);
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/upload/design-excel`, {
+      method: "POST",
+    });
+
+    assert.equal(response.status, 410);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("analytics overview API route is mounted by createApp before auth", async () => {
   const server = await listen(createApp());
 

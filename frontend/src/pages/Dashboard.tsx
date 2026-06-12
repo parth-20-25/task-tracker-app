@@ -198,6 +198,7 @@ export default function Dashboard() {
 
   const isProjectFirstRole = isProjectAuthorityUser(user);
   const canAccessProjectFixtures = access.canAccessProjectFixtures;
+  const canUploadDesignNative = access.canUploadNativeDesignData;
 
   // ── Backend-authoritative project data ────────────────────────────────────
   const projectSummaryQuery = useQuery({

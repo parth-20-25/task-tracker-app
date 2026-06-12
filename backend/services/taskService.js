@@ -697,6 +697,28 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
     ? calculateActualMinutes({ ...task, started_at: startedAt, completed_at: completedAt }, completedAt)
     : task.actual_minutes || 0;
 
+  if (isWorkflowManagedTask(task) && [TASK_STATUSES.ASSIGNED, TASK_STATUSES.REWORK].includes(task.status) && nextStatus === TASK_STATUSES.IN_PROGRESS) {
+    const progressRows = await getProgressForFixture(task.fixture_id, task.department_id);
+    const progressRow = resolveProgressRowForTask(task, progressRows);
+    if (progressRow && [WORKFLOW_STATUSES.PENDING, WORKFLOW_STATUSES.REJECTED, WORKFLOW_STATUSES.IN_PROGRESS].includes(progressRow.status)) {
+      await updateProgressRow(task.fixture_id, progressRow.stage_name, {
+        status: WORKFLOW_STATUSES.IN_PROGRESS,
+        assigned_to: task.assigned_to,
+        assigned_at: progressRow.assigned_at || task.assigned_at || eventTime,
+        started_at: progressRow.started_at || startedAt || eventTime,
+        completed_at: null,
+        duration_minutes: null,
+      });
+      await startStageAttempt(
+        task.fixture_id,
+        task.department_id,
+        progressRow.stage_name,
+        task.assigned_to,
+        progressRow.started_at || startedAt || eventTime,
+      );
+    }
+  }
+
   await updateTaskStatus(task.id, {
     status: nextStatus,
     started_at: startedAt,

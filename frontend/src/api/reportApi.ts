@@ -1,4 +1,5 @@
-import { apiDownload } from "@/api/http";
+import { apiDownload, apiRequest } from "@/api/http";
+import { DesignProjectOption } from "@/types";
 
 export interface DesignReportFilters {
   department_id?: string;
@@ -23,4 +24,15 @@ export async function downloadDesignReport(filters: DesignReportFilters, fileNam
   await apiDownload(`/reports/design/export?${params.toString()}`, {
     filename: fileName,
   });
+}
+
+export function fetchDesignReportProjects(departmentId?: string) {
+  const params = new URLSearchParams();
+
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiRequest<DesignProjectOption[]>(`/reports/design/projects${suffix}`);
 }

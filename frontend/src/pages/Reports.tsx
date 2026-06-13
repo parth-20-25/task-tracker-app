@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   downloadDesignReport,
+  fetchDesignReportProjects,
 } from "@/api/reportApi";
 import { fetchAllDepartments } from "@/api/adminApi";
-import { fetchDesignProjects } from "@/api/designApi";
 import { ReportFilters } from "@/components/reports/ReportFilters";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
@@ -94,7 +94,7 @@ export default function Reports() {
     setReportProjectsLoading(true);
     setSelectedProjectId("");
 
-    fetchDesignProjects(selectedReportDepartmentId)
+    fetchDesignReportProjects(selectedReportDepartmentId)
       .then((projects) => {
         if (!active) {
           return;

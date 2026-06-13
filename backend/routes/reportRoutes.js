@@ -3,6 +3,7 @@ const { PERMISSIONS } = require("../config/constants");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
+const { listDesignProjectsForUser } = require("../services/projectCatalogService");
 const { exportDesignReport } = require("../services/designReportService");
 const { buildReport, exportTaskReport, listTaskReportRows } = require("../services/reportService");
 
@@ -33,6 +34,17 @@ router.get(
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
     return res.status(200).send(report.csv);
+  }),
+);
+
+router.get(
+  "/reports/design/projects",
+  authorize(PERMISSIONS.EXPORT_REPORTS),
+  asyncHandler(async (req, res) => {
+    const projects = await listDesignProjectsForUser(req.user, req.query.department_id, {
+      activeOnly: false,
+    });
+    return res.status(200).json(projects);
   }),
 );
 

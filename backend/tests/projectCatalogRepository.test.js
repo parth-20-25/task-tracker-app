@@ -270,6 +270,85 @@ test("project completion bundle SQL normalizes text-array proof URLs into JSON",
   assert.doesNotMatch(capturedSql, /COALESCE\(t\.proof_url,\s*'\[\]'::jsonb\)/i);
 });
 
+test("project completion bundle loads outsource evidence using fixture_id as the record key", async () => {
+  const projectId = "11111111-1111-1111-1111-111111111111";
+  const fixtureId = "22222222-2222-2222-2222-222222222222";
+  const queries = [];
+  const client = {
+    query: async (sql) => {
+      const text = String(sql);
+      queries.push(text);
+
+      if (/SELECT\s+to_regclass/i.test(text)) {
+        return { rows: [{ exists: "design.fixture_outsource_records" }] };
+      }
+      if (/FROM\s+fixture_workflow_revisions/i.test(text)) {
+        return { rows: [] };
+      }
+      if (/FROM\s+task_activity_logs/i.test(text)) {
+        return { rows: [] };
+      }
+      if (/FROM\s+design\.fixture_outsource_records/i.test(text)) {
+        assert.match(text, /SELECT\s+fixture_id\s+AS\s+id,\s*fixture_id/i);
+        assert.doesNotMatch(text, /ORDER\s+BY[\s\S]*\bid\s+ASC/i);
+        return {
+          rows: [{
+            id: fixtureId,
+            fixture_id: fixtureId,
+            outsource_status: "outsourced",
+            outsourced_stages: ["3D Finish"],
+            outsourced_at: "2026-06-01T00:00:00.000Z",
+            completed_at: null,
+            updated_at: "2026-06-01T00:00:00.000Z",
+          }],
+        };
+      }
+
+      return {
+        rows: [{
+          project_id: projectId,
+          project_no: "PRJ-1",
+          department_id: "design",
+          project_status: "active",
+          fixture_bundles: [{
+            fixture_id: fixtureId,
+            fixture_no: "FX-1",
+            project_id: projectId,
+            department_id: "design",
+            revision_no: 0,
+            is_workflow_complete: false,
+            is_outsourced: true,
+            is_legacy_workflow: false,
+            removed_from_latest_ingestion: false,
+            is_required_for_project_kpi: true,
+            progress_rows: [],
+            task_rows: [],
+            task_attachment_rows: [],
+            stage_attempt_rows: [],
+            contribution_rows: [],
+          }],
+        }],
+      };
+    },
+  };
+
+  const bundles = await loadProjectBundlesForProjects([{ project_id: projectId }], client);
+
+  assert.equal(bundles.length, 1);
+  assert.deepEqual(
+    bundles[0].fixture_bundles[0].outsource_rows.map((row) => ({
+      id: row.id,
+      fixture_id: row.fixture_id,
+      stage_name: row.stage_name,
+    })),
+    [{ id: fixtureId, fixture_id: fixtureId, stage_name: "3D Finish" }],
+  );
+  assert.equal(
+    queries.filter((text) => /FROM\s+design\.fixture_outsource_records/i.test(text)).length,
+    1,
+  );
+});
+
 test("recent outsource suppliers are optional for normal project fixture screens", async () => {
   const queries = [];
   const client = {

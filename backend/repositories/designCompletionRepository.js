@@ -19,6 +19,9 @@ function mapFixtureBundleRow(row) {
     task_attachment_rows: Array.isArray(row.task_attachment_rows) ? row.task_attachment_rows : [],
     stage_attempt_rows: Array.isArray(row.stage_attempt_rows) ? row.stage_attempt_rows : [],
     contribution_rows: Array.isArray(row.contribution_rows) ? row.contribution_rows : [],
+    revision_rows: [],
+    transition_rows: [],
+    outsource_rows: [],
   };
 }
 
@@ -44,6 +47,101 @@ async function loadStageWeightRowsForDepartment(departmentId, client = pool) {
   );
 
   return result.rows;
+}
+
+async function loadFixtureEvidenceRows(fixtureIds, client = pool) {
+  if (!fixtureIds.length) {
+    return new Map();
+  }
+
+  const [revisionsResult, transitionsResult, outsourceResult] = await Promise.all([
+    client.query(
+      `
+        SELECT id, fixture_id, stage_name, stage_version, revision_code,
+               reason_type, revision_type, changed_at
+        FROM fixture_workflow_revisions
+        WHERE fixture_id = ANY($1::uuid[])
+        ORDER BY fixture_id ASC, changed_at ASC, id ASC
+      `,
+      [fixtureIds],
+    ),
+    client.query(
+      `
+        SELECT
+          activity.id,
+          task.fixture_id,
+          COALESCE(NULLIF(task.stage, ''), NULLIF(stage.stage_name, ''), NULLIF(stage.name, '')) AS stage_name,
+          activity.action_type,
+          activity.metadata,
+          activity.created_at
+        FROM task_activity_logs activity
+        JOIN tasks task ON task.id = activity.task_id
+        LEFT JOIN workflow_stages stage ON stage.id = task.current_stage_id
+        WHERE task.fixture_id = ANY($1::uuid[])
+          AND activity.action_type IN (
+            'workflow_transitioned',
+            'task_workflow_transitioned',
+            'task_approved',
+            'task_quality_approved',
+            'task_rework_requested',
+            'task_quality_rework_requested'
+          )
+        ORDER BY task.fixture_id ASC, activity.created_at ASC, activity.id ASC
+      `,
+      [fixtureIds],
+    ),
+    tableExists("design.fixture_outsource_records", client).then((exists) => (
+      exists
+        ? client.query(
+          `
+            SELECT fixture_id AS id, fixture_id, outsource_status, outsourced_stages,
+                   outsourced_at, completed_at, updated_at
+            FROM design.fixture_outsource_records
+            WHERE fixture_id = ANY($1::uuid[])
+            ORDER BY fixture_id ASC, updated_at ASC
+          `,
+          [fixtureIds],
+        )
+        : { rows: [] }
+    )),
+  ]);
+
+  const evidenceByFixture = new Map(fixtureIds.map((fixtureId) => [String(fixtureId), {
+    revision_rows: [],
+    transition_rows: [],
+    outsource_rows: [],
+  }]));
+  const append = (key, row) => {
+    const evidence = evidenceByFixture.get(String(row.fixture_id));
+    if (evidence) {
+      evidence[key].push(row);
+    }
+  };
+
+  revisionsResult.rows.forEach((row) => append("revision_rows", row));
+  transitionsResult.rows.forEach((row) => append("transition_rows", row));
+  outsourceResult.rows.forEach((row) => {
+    const stages = Array.isArray(row.outsourced_stages) ? row.outsourced_stages : [];
+    if (stages.length === 0) {
+      append("outsource_rows", row);
+    } else {
+      stages.forEach((stageName) => append("outsource_rows", { ...row, stage_name: stageName }));
+    }
+  });
+
+  return evidenceByFixture;
+}
+
+async function attachFixtureEvidence(fixtureBundles, client = pool) {
+  const evidenceByFixture = await loadFixtureEvidenceRows(
+    fixtureBundles.map((bundle) => bundle.fixture_id).filter(Boolean),
+    client,
+  );
+
+  return fixtureBundles.map((bundle) => ({
+    ...bundle,
+    ...(evidenceByFixture.get(String(bundle.fixture_id)) || {}),
+  }));
 }
 
 async function loadFixtureBundlesForProject(projectId, departmentId, client = pool) {
@@ -188,7 +286,7 @@ async function loadFixtureBundlesForProject(projectId, departmentId, client = po
     [projectId, departmentId],
   );
 
-  return result.rows.map(mapFixtureBundleRow);
+  return attachFixtureEvidence(result.rows.map(mapFixtureBundleRow), client);
 }
 
 async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
@@ -333,7 +431,11 @@ async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
     [fixtureId, departmentId],
   );
 
-  return mapFixtureBundleRow(result.rows[0]);
+  const bundle = mapFixtureBundleRow(result.rows[0]);
+  if (!bundle?.fixture_id) {
+    return null;
+  }
+  return (await attachFixtureEvidence([bundle], client))[0] || null;
 }
 
 async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
@@ -494,7 +596,7 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
 
   const metaById = new Map(projectMetas.map((meta) => [meta.project_id, meta]));
 
-  return result.rows.map((row) => ({
+  const bundles = result.rows.map((row) => ({
     project_id: row.project_id,
     project_no: row.project_no || metaById.get(row.project_id)?.project_no || null,
     department_id: row.department_id,
@@ -512,7 +614,25 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
       task_attachment_rows: Array.isArray(bundle.task_attachment_rows) ? bundle.task_attachment_rows : [],
       stage_attempt_rows: Array.isArray(bundle.stage_attempt_rows) ? bundle.stage_attempt_rows : [],
       contribution_rows: Array.isArray(bundle.contribution_rows) ? bundle.contribution_rows : [],
+      revision_rows: [],
+      transition_rows: [],
+      outsource_rows: [],
     })),
+  }));
+
+  const enrichedFixtures = await attachFixtureEvidence(
+    bundles.flatMap((bundle) => bundle.fixture_bundles),
+    client,
+  );
+  const enrichedById = new Map(
+    enrichedFixtures.map((bundle) => [String(bundle.fixture_id), bundle]),
+  );
+
+  return bundles.map((bundle) => ({
+    ...bundle,
+    fixture_bundles: bundle.fixture_bundles.map(
+      (fixtureBundle) => enrichedById.get(String(fixtureBundle.fixture_id)) || fixtureBundle,
+    ),
   }));
 }
 

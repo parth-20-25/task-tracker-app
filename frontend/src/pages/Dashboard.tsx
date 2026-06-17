@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
 import { formatProjectNumber } from '@/lib/projectDisplay';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
+import { isMyActiveTask, isPendingVerificationTask, isTaskAssignedToEmployee } from '@/lib/taskFilters';
 import { toast } from '@/hooks/use-toast';
 import type { ProjectDashboardSummary, ProjectStatus, User } from '@/types';
 
@@ -139,6 +141,12 @@ function ProjectCard({
       </CardHeader>
       <CardContent className="space-y-4 p-4 pt-0">
         <div>
+          <div className="mb-2 text-sm">
+            <span className="text-muted-foreground">Overall Stage: </span>
+            <span className="font-semibold" title={project.overall_stage?.reason || undefined}>
+              {project.overall_stage?.label || "Data incomplete"}
+            </span>
+          </div>
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Completion</span>
             <span className="font-semibold">
@@ -192,6 +200,8 @@ function ProjectCard({
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const { user, role, access } = useAuth();
+  const [searchParams] = useSearchParams();
+  const requestedProjectId = searchParams.get("project_id") || "";
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [editingProject, setEditingProject] = useState<ProjectDashboardSummary | null>(null);
   const [reactivatingProject, setReactivatingProject] = useState<ProjectDashboardSummary | null>(null);
@@ -212,6 +222,16 @@ export default function Dashboard() {
   const selectedProject = projectSummaries.find((project) => project.project_id === selectedProjectId);
   const selectedProjectDepartmentId = selectedProject?.department_id || user?.department_id;
   const selectedProjectActive = selectedProject?.project_status === "active";
+
+  useEffect(() => {
+    if (!requestedProjectId || !canAccessProjectFixtures) {
+      return;
+    }
+
+    if (projectSummaries.some((project) => project.project_id === requestedProjectId)) {
+      setSelectedProjectId(requestedProjectId);
+    }
+  }, [canAccessProjectFixtures, projectSummaries, requestedProjectId]);
 
   const fixtureQuery = useQuery({
     queryKey: ["dashboard", "fixtures", selectedProjectId, selectedProjectDepartmentId],
@@ -294,13 +314,14 @@ export default function Dashboard() {
   const { tasks: rawTasks, isLoading: _tasksLoading } = useTasks();
   const safeTasks = isProjectFirstRole ? [] : rawTasks ?? [];
 
-  const myTasks = safeTasks.filter(t => user && (t.assigned_to === user.employee_id || t.assignee_ids?.includes(user.employee_id)));
+  const myTasks = safeTasks.filter(t => isTaskAssignedToEmployee(t, user?.employee_id));
   const viewTasks = access.canViewAllTasks ? safeTasks : myTasks;
+  const teamTasks = access.canViewTeamTasks ? safeTasks : [];
   const recentAssignedTasks = [...myTasks]
     .sort((a, b) => new Date(b.created_at || b.assigned_at || 0).getTime() - new Date(a.created_at || a.assigned_at || 0).getTime())
     .slice(0, 5);
-  const activeAssignedTasks = myTasks.filter(t => ['assigned', 'in_progress', 'on_hold', 'rework'].includes(t.status));
-  const pendingAssignedVerification = myTasks.filter(t => t.status === 'under_review');
+  const activeAssignedTasks = myTasks.filter(isMyActiveTask);
+  const pendingVerificationTasks = teamTasks.filter(isPendingVerificationTask);
   const upcomingDeadlines = [...myTasks]
     .filter(t => t.deadline && t.status !== 'closed')
     .sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime())
@@ -358,8 +379,8 @@ export default function Dashboard() {
       {isProjectFirstRole ? (
         /* ── Project-authority users: project-level metrics ─────────────── */
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          <MetricCard label="Projects" value={projectMetrics.total} icon={Layers3} color="text-primary" />
-          <MetricCard label="Active" value={projectMetrics.active} icon={PlayCircle} color="text-info" />
+          <MetricCard label="Projects" value={projectMetrics.total} icon={Layers3} color="text-primary" to="/batches" />
+          <MetricCard label="Active Projects" value={projectMetrics.active} icon={PlayCircle} color="text-info" to="/batches?status=active" />
           <MetricCard label="On Hold" value={projectMetrics.onHold} icon={PauseCircle} color="text-warning" />
           <MetricCard label="Completed" value={projectMetrics.completed} icon={PackageCheck} color="text-success" />
           <MetricCard label="Pending Fixtures" value={projectMetrics.pendingFixtures} icon={Clock} color="text-muted-foreground" />
@@ -367,11 +388,11 @@ export default function Dashboard() {
       ) : (
         /* ── Operational users: project-aware compact summary ───────────── */
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          {canAccessProjectFixtures && <MetricCard label="Projects" value={projectMetrics.total} icon={Layers3} color="text-primary" />}
-          {canAccessProjectFixtures && <MetricCard label="Active Projects" value={projectMetrics.active} icon={PlayCircle} color="text-info" />}
-          <MetricCard label="My Tasks" value={myTasks.length} icon={ClipboardList} color="text-primary" />
-          <MetricCard label="Active Tasks" value={activeAssignedTasks.length} icon={PlayCircle} color="text-info" />
-          <MetricCard label="Pending Verification" value={pendingAssignedVerification.length} icon={Clock} color="text-warning" />
+          {canAccessProjectFixtures && <MetricCard label="Projects" value={projectMetrics.total} icon={Layers3} color="text-primary" to="/batches" />}
+          {canAccessProjectFixtures && <MetricCard label="Active Projects" value={projectMetrics.active} icon={PlayCircle} color="text-info" to="/batches?status=active" />}
+          {(access.canViewSelfTasks || access.canViewAllTasks) && <MetricCard label="My Tasks" value={myTasks.length} icon={ClipboardList} color="text-primary" to="/tasks" />}
+          {(access.canViewSelfTasks || access.canViewAllTasks) && <MetricCard label="Active Tasks" value={activeAssignedTasks.length} icon={PlayCircle} color="text-info" to="/tasks?status=active" />}
+          {access.canViewTeamTasks && <MetricCard label="Pending Verification" value={pendingVerificationTasks.length} icon={Clock} color="text-warning" to="/team-tasks?status=pending_verification" />}
         </div>
       )}
 

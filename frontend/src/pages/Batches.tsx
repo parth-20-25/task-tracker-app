@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { Eye, PauseCircle, Pencil, PlayCircle, RefreshCw, Rocket, RotateCcw, Route, Trash2, Wrench } from "lucide-react";
 import { activateBatchProject, deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
 import { assignProjectTo2D, fetchProject2DRouting, reactivateProject, updateProject2DAssignment, updateProjectModification } from "@/api/designApi";
@@ -29,6 +30,20 @@ import { formatProjectNumber } from "@/lib/projectDisplay";
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import type { ProjectStatus, UploadBatch, User } from "@/types";
+
+const projectStatusFilters: Array<{ value: "all" | ProjectStatus; label: string }> = [
+  { value: "all", label: "All statuses" },
+  { value: "active", label: "Active" },
+  { value: "on_hold", label: "On Hold" },
+  { value: "completed", label: "Completed" },
+  { value: "released", label: "Released" },
+];
+
+function normalizeProjectStatusFilter(value: string | null): "all" | ProjectStatus {
+  return projectStatusFilters.some((filter) => filter.value === value)
+    ? value as "all" | ProjectStatus
+    : "all";
+}
 
 function formatDateTime(value: string) {
   if (!value) {
@@ -162,6 +177,8 @@ export default function Batches() {
   const queryClient = useQueryClient();
   const { access, user } = useAuth();
   const isAdmin = isAdminUser(user);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const projectStatusFilter = normalizeProjectStatusFilter(searchParams.get("status"));
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
   const [routingBatch, setRoutingBatch] = useState<UploadBatch | null>(null);
   const [editingBatch, setEditingBatch] = useState<UploadBatch | null>(null);
@@ -172,6 +189,12 @@ export default function Batches() {
     queryKey: batchQueryKeys.all,
     queryFn: fetchBatches,
   });
+  const batches = batchesQuery.data ?? [];
+  const filteredBatches = useMemo(() => (
+    projectStatusFilter === "all"
+      ? batches
+      : batches.filter((batch) => batch.project_status === projectStatusFilter)
+  ), [batches, projectStatusFilter]);
 
   const routingQuery = useQuery({
     queryKey: ["project-2d-routing", routingBatch?.project_id || ""],
@@ -419,6 +442,19 @@ export default function Batches() {
     });
   };
 
+  const handleProjectStatusFilterChange = (value: string) => {
+    const nextStatus = normalizeProjectStatusFilter(value);
+    const nextParams = new URLSearchParams(searchParams);
+
+    if (nextStatus === "all") {
+      nextParams.delete("status");
+    } else {
+      nextParams.set("status", nextStatus);
+    }
+
+    setSearchParams(nextParams, { replace: false });
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -426,15 +462,27 @@ export default function Batches() {
           <h1 className="text-2xl font-bold">Projects</h1>
           <p className="text-sm text-muted-foreground">Review operational projects and safely remove only inactive work.</p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => batchesQuery.refetch()}
-          disabled={batchesQuery.isFetching}
-        >
-          <RefreshCw className={cn("h-4 w-4 mr-2", batchesQuery.isFetching && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={projectStatusFilter} onValueChange={handleProjectStatusFilterChange}>
+            <SelectTrigger className="h-9 w-[180px] text-sm">
+              <SelectValue placeholder="Project status" />
+            </SelectTrigger>
+            <SelectContent>
+              {projectStatusFilters.map((filter) => (
+                <SelectItem key={filter.value} value={filter.value}>{filter.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => batchesQuery.refetch()}
+            disabled={batchesQuery.isFetching}
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", batchesQuery.isFetching && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -463,7 +511,7 @@ export default function Batches() {
                 </TableRow>
               ) : null}
 
-              {batchesQuery.data?.map((batch) => {
+              {filteredBatches.map((batch) => {
                 const hasCompletionTruth = typeof batch.project_completion_percent === "number";
                 const isOwner = Boolean(
                   user?.employee_id
@@ -522,6 +570,12 @@ export default function Batches() {
                       </Badge>
                     </TableCell>
                     <TableCell className="min-w-[160px]">
+                      <div className="mb-2 text-xs">
+                        <span className="text-muted-foreground">Overall Stage: </span>
+                        <span className="font-semibold" title={batch.overall_stage?.reason || undefined}>
+                          {batch.overall_stage?.label || "Data incomplete"}
+                        </span>
+                      </div>
                       <div className="flex items-center justify-between gap-3 text-xs">
                         <span className="font-semibold">
                           {hasCompletionTruth ? `${batch.project_completion_percent.toFixed(0)}%` : formatCompletionTruthIssue(batch.completion_truth_errors)}
@@ -621,10 +675,10 @@ export default function Batches() {
                 );
               })}
 
-              {!batchesQuery.isLoading && batchesQuery.data?.length === 0 ? (
+              {!batchesQuery.isLoading && filteredBatches.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    No projects found.
+                    {projectStatusFilter === "all" ? "No projects found." : "No matching projects."}
                   </TableCell>
                 </TableRow>
               ) : null}

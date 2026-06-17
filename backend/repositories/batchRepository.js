@@ -181,6 +181,13 @@ async function enrichBatchSummariesWithCompletionTruth(summaries, client = pool)
       project_completion_percent: truth?.completion_percent ?? null,
       completion_truth_status: truth?.completion_truth_status || "incomplete_truth",
       completion_truth_errors: truth?.completion_truth_errors || [`missing_project_completion_truth:${summary.project_id}`],
+      overall_stage: truth?.overall_stage || {
+        status: "incomplete",
+        label: "Data incomplete",
+        reason: `missing_project_completion_truth:${summary.project_id}`,
+        counts: {},
+      },
+      progress_diagnostics: truth?.progress_diagnostics || [],
     };
   });
 }
@@ -265,6 +272,8 @@ function mapBatchSummary(row) {
       : Number(row.project_completion_percent),
     completion_truth_status: row.completion_truth_status || null,
     completion_truth_errors: Array.isArray(row.completion_truth_errors) ? row.completion_truth_errors : [],
+    overall_stage: row.overall_stage || null,
+    progress_diagnostics: Array.isArray(row.progress_diagnostics) ? row.progress_diagnostics : [],
     total_tasks: totalFixtures,
     pending_tasks: pendingFixtures,
     completed_tasks: completedFixtures,

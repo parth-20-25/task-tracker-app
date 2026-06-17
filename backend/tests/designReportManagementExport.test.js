@@ -50,12 +50,14 @@ async function run() {
 
   assert.equal(model.reportVersion, "PARC Design Project Report v2");
   assert.equal(model.statusColors.Assigned, "#3A7BD5");
-  assert.equal(model.statusColors["In Progress"], "#28A745");
+  assert.equal(model.statusColors["In Progress"], "#F59E0B");
   assert.equal(model.statusColors["On Hold"], "#FF9800");
-  assert.equal(model.statusColors.Review, "#009688");
-  assert.equal(model.statusColors.Rework, "#9C27B0");
+  assert.equal(model.statusColors.Review, "#8B5CF6");
+  assert.equal(model.statusColors.Rework, "#DC2626");
   assert.equal(model.statusColors.Closed, "#616161");
-  assert.equal(model.statusColors.Overdue, "#D32F2F");
+  assert.equal(model.statusColors.Overdue, "#991B1B");
+  assert.equal(model.statusColors.Skipped, "#64748B");
+  assert.equal(model.statusColors.Outsourced, "#0D9488");
   assert.deepEqual(model.statusColors, STATUS_COLORS);
 
   assert.equal(model.kpis.totalFixtures, 5);
@@ -65,6 +67,10 @@ async function run() {
   assert.equal(model.kpis.overdueFixtures, 1);
   assert.equal(model.kpis.reworkCount, 1);
   assert.equal(model.kpis.completionDisplay, "60%");
+  assert.equal(model.kpis.assignedFixtures, 5);
+  assert.equal(model.kpis.unassignedFixtures, 0);
+  assert.equal(model.kpis.outsourcedFixtures, 0);
+  assert.equal(model.kpis.skippedStages, 0);
 
   assert.equal(
     model.overview.find((row) => row.label === "Project Leader")?.value,
@@ -84,6 +90,10 @@ async function run() {
   assert.equal(model.fixtureStageExecutionAudit.length, 5);
   const fixtureOneAudit = model.fixtureStageExecutionAudit.find((fixture) => fixture.fixtureNumber === "PARC26001301");
   const twoDAudit = fixtureOneAudit.stages.find((stage) => stage.stage === "2D" && stage.revision === "2D 00");
+  assert.equal(twoDAudit.key, "two_d_finish");
+  assert.equal(twoDAudit.status, "Approved");
+  assert.equal(twoDAudit.executionMode, "In-House");
+  assert.equal(twoDAudit.approvalStatus, "Approved");
   assert.equal(twoDAudit.priority, "High");
   assert.equal(twoDAudit.transferred, "Yes");
   assert.equal(twoDAudit.workers[0].worker, "511 - Mangesh Gite");
@@ -96,7 +106,9 @@ async function run() {
   assert.equal(threeDAudit.workers[0].contributionPercent, "Contribution % Not Recorded");
   assert.ok(model.workProofHistory.some((row) => row.proofLink === "/uploads/task-proofs/fixture-1-final.png"));
   assert.equal(model.reworkAnalytics.counts.conceptReworks, 1);
-  assert.equal(model.holdHistory[0].holdDuration, "54h 0m");
+  assert.equal(model.holdHistory[0].holdDuration, "2d 6h 0m");
+  assert.equal(model.revisionHistory[0].fixture, "PARC26001305");
+  assert.ok(model.revisionHistory[0].eventId);
   assert.ok(model.assignmentHistory.some((row) => row.comments === "Balanced workload"));
   assert.ok(model.activityLog.some((row) => row.action === "Task Quality Rework Requested"));
 

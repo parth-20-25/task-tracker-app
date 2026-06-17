@@ -1977,68 +1977,41 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
 }
 
 async function applyTaskVerificationUpdate(user, task, verificationStatus, remarks) {
-  assertTaskProjectIsActive(task);
-
-  if (!canVerifyTask(user, task)) {
-    throw new AppError(403, "You do not have permission to verify this task");
-  }
-
-  if (isTaskAssignee(user, task) && !hasPermission(user, PERMISSIONS.SELF_APPROVE)) {
-    throw new AppError(403, "You cannot approve your own task");
-  }
-
-  if (task.status !== TASK_STATUSES.UNDER_REVIEW) {
-    throw new AppError(400, "Task is not in verification state");
-  }
-
-  if (task.verification_status !== VERIFICATION_STATUSES.PENDING) {
-    throw new AppError(400, "Task is not pending verification");
-  }
-
-  let workflowProgressRow = null;
-  if (isWorkflowManagedTask(task)) {
-    const progressRows = await getProgressForFixture(task.fixture_id, task.department_id);
-    workflowProgressRow = resolveProgressRowForTask(task, progressRows);
-    if (!workflowProgressRow) {
-      throw new AppError(409, "Workflow stage is not ready for verification");
-    }
-
-    if (
-      workflowProgressRow.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
-      && !(isCanonicalReviewTask(task) && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS)
-    ) {
-      throw new AppError(409, "Task is not in verification state");
-    }
-    if (verificationStatus === VERIFICATION_STATUSES.APPROVED) {
-      assertWorkProofUploaded(task);
-    }
-  }
+  assertTaskPendingVerificationReview(user, task);
+  await resolveWorkflowReviewProgressRow(task, verificationStatus);
 
   if (verificationStatus === VERIFICATION_STATUSES.REJECTED && !String(remarks || "").trim()) {
     throw new AppError(400, "Remarks are required when rejecting a task");
   }
-
-  const next = getVerificationOutcome(user, task, verificationStatus);
-  const closedAt = next.status === TASK_STATUSES.CLOSED ? new Date() : null;
-  const completionMetrics = next.status === TASK_STATUSES.CLOSED
-    ? await buildTaskCompletionMetrics(task, closedAt)
-    : {};
-
-  ensureTaskTransitionAllowed(task.status, next.status, { allowSameStatus: true });
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [task.id]);
 
+    const lockedTask = await findTaskById(task.id, client);
+    if (!lockedTask) {
+      throw new AppError(404, "Task not found");
+    }
+
+    assertTaskPendingVerificationReview(user, lockedTask);
+    let workflowProgressRow = await resolveWorkflowReviewProgressRow(lockedTask, verificationStatus, client);
+    const next = getVerificationOutcome(user, lockedTask, verificationStatus);
+    const closedAt = next.status === TASK_STATUSES.CLOSED ? new Date() : null;
+    const completionMetrics = next.status === TASK_STATUSES.CLOSED
+      ? await buildTaskCompletionMetrics(lockedTask, closedAt)
+      : {};
+
+    ensureTaskTransitionAllowed(lockedTask.status, next.status, { allowSameStatus: true });
+
     if (
       workflowProgressRow
       && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS
-      && isCanonicalReviewTask(task)
+      && isCanonicalReviewTask(lockedTask)
     ) {
-      await updateProgressRow(task.fixture_id, workflowProgressRow.stage_name, {
+      await updateProgressRow(lockedTask.fixture_id, workflowProgressRow.stage_name, {
         status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
-        completed_at: task.completed_at || task.submitted_at || new Date(),
+        completed_at: lockedTask.completed_at || lockedTask.submitted_at || new Date(),
       }, client);
       workflowProgressRow = {
         ...workflowProgressRow,
@@ -2046,7 +2019,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
       };
     }
 
-    await updateTaskVerification(task.id, {
+    await updateTaskVerification(lockedTask.id, {
       verification_status: next.verificationStatus,
       remarks: remarks || null,
       verified_at: closedAt,
@@ -2058,28 +2031,28 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
       kpi_status: completionMetrics.kpi_status,
       approved_at: next.status === TASK_STATUSES.CLOSED ? closedAt : null,
       approved_by: next.status === TASK_STATUSES.CLOSED ? user.employee_id : null,
-      submitted_at: task.submitted_at || task.completed_at || closedAt || new Date(),
+      submitted_at: lockedTask.submitted_at || lockedTask.completed_at || closedAt || new Date(),
       rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
     }, client);
 
     if (next.status === TASK_STATUSES.CLOSED) {
       await advanceWorkflowAfterTaskApproval({
-        project_id: task.project_id,
-        fixture_no: task.fixture_no,
-        department_id: task.department_id,
-        fixture_id: task.fixture_id,
-        task_id: task.id,
+        project_id: lockedTask.project_id,
+        fixture_no: lockedTask.fixture_no,
+        department_id: lockedTask.department_id,
+        fixture_id: lockedTask.fixture_id,
+        task_id: lockedTask.id,
         client,
       });
     } else if (workflowProgressRow && next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
-      await updateProgressRow(task.fixture_id, workflowProgressRow.stage_name, {
+      await updateProgressRow(lockedTask.fixture_id, workflowProgressRow.stage_name, {
         status: WORKFLOW_STATUSES.REJECTED,
         completed_at: null,
       }, client);
-      await rejectStageAttempt(task.fixture_id, workflowProgressRow.stage_name, new Date(), client);
+      await rejectStageAttempt(lockedTask.fixture_id, workflowProgressRow.stage_name, new Date(), client);
     }
 
-    await appendTaskActivity(task.id, {
+    await appendTaskActivity(lockedTask.id, {
       userEmployeeId: user.employee_id,
       actionType: next.activityType,
       notes: remarks || null,
@@ -2090,9 +2063,9 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
           : next.verificationStatus === VERIFICATION_STATUSES.REJECTED
             ? WORKFLOW_STATUSES.REJECTED
             : WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
-        workflow_id: task.workflow_id || null,
-        current_stage_id: task.current_stage_id || null,
-        current_stage_name: task.workflow_stage || null,
+        workflow_id: lockedTask.workflow_id || null,
+        current_stage_id: lockedTask.current_stage_id || null,
+        current_stage_name: lockedTask.workflow_stage || null,
       },
     }, client);
 
@@ -2100,7 +2073,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
       userEmployeeId: user.employee_id,
       actionType: next.activityType,
       targetType: "task",
-      targetId: task.id,
+      targetId: lockedTask.id,
       metadata: {
         verification_status: verificationStatus,
         remarks: remarks || null,
@@ -2168,6 +2141,52 @@ function calculateActualMinutes(task, closedAt) {
   }
 
   return Math.max(1, Math.round((new Date(endTime).getTime() - new Date(task.started_at).getTime()) / 60000));
+}
+
+function assertTaskPendingVerificationReview(user, task) {
+  assertTaskProjectIsActive(task);
+
+  if (!canVerifyTask(user, task)) {
+    throw new AppError(403, "You do not have permission to verify this task");
+  }
+
+  if (isTaskAssignee(user, task) && !hasPermission(user, PERMISSIONS.SELF_APPROVE)) {
+    throw new AppError(403, "You cannot approve your own task");
+  }
+
+  if (task.status !== TASK_STATUSES.UNDER_REVIEW) {
+    throw new AppError(400, "Task is not in verification state");
+  }
+
+  if (task.verification_status !== VERIFICATION_STATUSES.PENDING) {
+    throw new AppError(400, "Task is not pending verification");
+  }
+}
+
+async function resolveWorkflowReviewProgressRow(task, verificationStatus, client = pool) {
+  if (!isWorkflowManagedTask(task)) {
+    return null;
+  }
+
+  const progressRows = await getProgressForFixture(task.fixture_id, task.department_id, client);
+  const workflowProgressRow = resolveProgressRowForTask(task, progressRows);
+
+  if (!workflowProgressRow) {
+    throw new AppError(409, "Workflow stage is not ready for verification");
+  }
+
+  if (
+    workflowProgressRow.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
+    && !(isCanonicalReviewTask(task) && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS)
+  ) {
+    throw new AppError(409, "Task is not in verification state");
+  }
+
+  if (verificationStatus === VERIFICATION_STATUSES.APPROVED) {
+    assertWorkProofUploaded(task);
+  }
+
+  return workflowProgressRow;
 }
 
 function assertTaskProjectIsActive(task) {

@@ -10,13 +10,23 @@ const { STATUS_LABELS, resolveFixtureGlobalStatus } = require("./designReportKpi
 const REPORT_VERSION = "PARC Design Project Report v2";
 
 const STATUS_COLORS = Object.freeze({
+  "Not Started": "#E5E7EB",
+  Skipped: "#64748B",
   Assigned: "#3A7BD5",
-  "In Progress": "#28A745",
+  "In Progress": "#F59E0B",
+  Submitted: "#8B5CF6",
+  "Under Review": "#8B5CF6",
+  Approved: "#22C55E",
+  Completed: "#22C55E",
+  "Workflow Completed": "#16A34A",
+  Outsourced: "#0D9488",
   "On Hold": "#FF9800",
-  Review: "#009688",
-  Rework: "#9C27B0",
+  Review: "#8B5CF6",
+  Rework: "#DC2626",
+  Rejected: "#DC2626",
   Closed: "#616161",
-  Overdue: "#D32F2F",
+  Overdue: "#991B1B",
+  "Missing Required Data": "#F43F5E",
 });
 
 const AUXILIARY_COLORS = Object.freeze({
@@ -33,6 +43,12 @@ const STAGE_LABELS = Object.freeze({
   dap: "DAP",
   three_d_finish: "3D",
   two_d_finish: "2D",
+});
+
+const OUTSOURCE_STAGE_KEY_BY_LABEL = Object.freeze({
+  Concept: "concept",
+  "3D": "three_d_finish",
+  "2D": "two_d_finish",
 });
 
 const MATRIX_STATUS_LABELS = [
@@ -95,14 +111,15 @@ function formatDateTime(value) {
 
 function formatDuration(totalMinutes) {
   const minutes = Number(totalMinutes);
-  if (!Number.isFinite(minutes) || minutes <= 0) {
+  if (!Number.isFinite(minutes) || minutes < 0) {
     return "";
   }
 
   const rounded = Math.round(minutes);
-  const hours = Math.floor(rounded / 60);
+  const days = Math.floor(rounded / 1440);
+  const hours = Math.floor((rounded % 1440) / 60);
   const remainder = rounded % 60;
-  return `${hours}h ${remainder}m`;
+  return `${days}d ${hours}h ${remainder}m`;
 }
 
 function formatHours(totalMinutes) {
@@ -223,6 +240,258 @@ function normalizeProgressStatus(value) {
 
 function statusColor(status) {
   return STATUS_COLORS[status] || AUXILIARY_COLORS[status] || "#616161";
+}
+
+function formatPartFixtureName(opNo, fixtureName) {
+  const name = normalizeText(fixtureName);
+  if (/^OP\s*[^:]+:\s*/i.test(name)) {
+    return name;
+  }
+
+  const operation = normalizeText(opNo).replace(/^OP\s*/i, "").replace(/:$/, "").trim();
+  return operation ? `OP ${operation}: ${name}` : name;
+}
+
+function canonicalReportStageKey(value) {
+  const stageKey = getStageBucket(value) || normalizeDesignStageName(value);
+
+  if (stageKey === "3d_finish") {
+    return "three_d_finish";
+  }
+
+  if (stageKey === "2d_finish") {
+    return "two_d_finish";
+  }
+
+  return stageKey || "";
+}
+
+function buildOutsourceLookup(outsourceRecords = []) {
+  return outsourceRecords.reduce((map, record) => {
+    const fixtureKey = String(record.fixture_id);
+    const stageKeys = new Set(
+      (Array.isArray(record.outsourced_stages) ? record.outsourced_stages : [])
+        .map((stage) => OUTSOURCE_STAGE_KEY_BY_LABEL[String(stage || "").trim()])
+        .filter(Boolean),
+    );
+
+    map.set(fixtureKey, {
+      ...record,
+      stageKeys,
+    });
+    return map;
+  }, new Map());
+}
+
+function isStageOutsourced(outsourceRecord, stageKey) {
+  return Boolean(outsourceRecord?.stageKeys?.has(stageKey));
+}
+
+function formatOutsourceStatus(value) {
+  const status = normalizeText(value).toLowerCase();
+  if (status === "completed") {
+    return "Completed";
+  }
+
+  if (status === "brought_in_house") {
+    return "Brought In-House";
+  }
+
+  if (status === "outsourced") {
+    return "Outsourced";
+  }
+
+  return status ? humanizeAction(status) : "";
+}
+
+function hasStageExecutionEvidence({
+  progress,
+  attempts = [],
+  stageTasks = [],
+  contributions = [],
+  revisions = [],
+  isOutsourced = false,
+}) {
+  if (isOutsourced) {
+    return true;
+  }
+
+  if (attempts.length || stageTasks.length || contributions.length || revisions.length) {
+    return true;
+  }
+
+  const status = normalizeProgressStatus(progress?.status);
+  if (["IN_PROGRESS", "SUBMITTED_FOR_VERIFICATION", "COMPLETED", "REJECTED"].includes(status)) {
+    return true;
+  }
+
+  return Boolean(progress?.assigned_to || progress?.assigned_at || progress?.started_at || progress?.completed_at);
+}
+
+function resolveSkippedStages(stageFacts) {
+  const latestEvidenceIndex = stageFacts.reduce((latest, fact, index) => (
+    fact.hasEvidence ? index : latest
+  ), -1);
+
+  return new Set(stageFacts
+    .filter((fact, index) => index < latestEvidenceIndex && !fact.hasEvidence)
+    .map((fact) => fact.stage.key));
+}
+
+function formatApprovalStatusFromProgress(progress, skipped, outsourceRecord, stageKey) {
+  if (skipped) {
+    return "Not Required";
+  }
+
+  const status = normalizeProgressStatus(progress?.status);
+  if (!progress) {
+    return "Stage history missing";
+  }
+
+  if (isStageOutsourced(outsourceRecord, stageKey) && outsourceRecord?.outsource_status !== "completed" && status === "APPROVED") {
+    return "Outsourced completion not fully confirmed";
+  }
+
+  if (status === "APPROVED") {
+    return "Approved";
+  }
+
+  if (status === "COMPLETED" || status === "SUBMITTED_FOR_VERIFICATION") {
+    return "Submission exists, approval pending";
+  }
+
+  if (status === "REJECTED") {
+    return "Rejected revision awaiting reassignment";
+  }
+
+  if (status === "IN_PROGRESS") {
+    return "In Progress";
+  }
+
+  if (status === "PENDING" && (progress.assigned_to || progress.assigned_at)) {
+    return "Assigned";
+  }
+
+  return "Not Started";
+}
+
+function progressStatusToRegisterStatus(progress, fixtureStatus, isCurrentStage) {
+  if (fixtureStatus === STATUS_LABELS.ON_HOLD && isCurrentStage) {
+    return "On Hold";
+  }
+
+  if (fixtureStatus === STATUS_LABELS.OVERDUE && isCurrentStage) {
+    return "Overdue";
+  }
+
+  const status = normalizeProgressStatus(progress?.status);
+  if (!progress || status === "PENDING") {
+    return progress?.assigned_to || progress?.assigned_at ? "Assigned" : "Not Started";
+  }
+
+  if (status === "APPROVED") {
+    return "Approved";
+  }
+
+  if (status === "COMPLETED" || status === "SUBMITTED_FOR_VERIFICATION") {
+    return "Under Review";
+  }
+
+  if (status === "REJECTED") {
+    return "Rework";
+  }
+
+  if (status === "IN_PROGRESS") {
+    return "In Progress";
+  }
+
+  return humanizeAction(status) || "Missing Required Data";
+}
+
+function resolveOutsourcedStageStatus(progress, outsourceRecord) {
+  const recordStatus = formatOutsourceStatus(outsourceRecord?.outsource_status);
+  const progressStatus = normalizeProgressStatus(progress?.status);
+
+  if (outsourceRecord?.outsource_status === "completed") {
+    return "Outsourced - Completed";
+  }
+
+  if (outsourceRecord?.outsource_status === "brought_in_house") {
+    return "Brought In-House";
+  }
+
+  if (progressStatus === "APPROVED") {
+    return "Outsourced - Completion Pending";
+  }
+
+  if (progressStatus === "SUBMITTED_FOR_VERIFICATION" || progressStatus === "COMPLETED") {
+    return "Outsourced - Completion Pending";
+  }
+
+  if (progressStatus === "IN_PROGRESS") {
+    return "Outsourced - In Progress";
+  }
+
+  if (progress?.assigned_to || progress?.assigned_at) {
+    return "Outsourced - Assigned";
+  }
+
+  return recordStatus ? `Outsourced - ${recordStatus}` : "Outsourced";
+}
+
+function formatProofRequirement({ proofLinks, stageKey, skipped }) {
+  if (skipped) {
+    return "Not Required";
+  }
+
+  if (proofLinks.length) {
+    return `${proofLinks.length} attachment${proofLinks.length === 1 ? "" : "s"}`;
+  }
+
+  if (stageKey === "dap") {
+    return "Optional - Not Uploaded";
+  }
+
+  return "Required Proof Missing";
+}
+
+function formatHoldEventsForStage(fixtureRow, stageKey) {
+  return fixtureRow.raw.activities
+    .filter(isHoldActivity)
+    .filter((activity) => {
+      const metadata = activity.metadata && typeof activity.metadata === "object" ? activity.metadata : {};
+      const activityStageKey = canonicalReportStageKey(metadata.stage || metadata.stage_name || activity.stage_name);
+      return !activityStageKey || activityStageKey === stageKey;
+    })
+    .sort((left, right) => (parseDate(left.created_at)?.getTime() || 0) - (parseDate(right.created_at)?.getTime() || 0))
+    .map((activity) => {
+      const metadata = activity.metadata && typeof activity.metadata === "object" ? activity.metadata : {};
+      return {
+        timestamp: formatDateTime(activity.created_at),
+        state: normalizeText(metadata.to).toLowerCase() === "on_hold"
+          ? "Hold Started"
+          : normalizeText(metadata.from).toLowerCase() === "on_hold"
+            ? "Hold Ended"
+            : "Hold",
+        reason: activity.notes || metadataValue(metadata, ["reason", "remarks", "comment"]),
+        by: formatEmployeeDisplay(activity.user_employee_id, activity.user_name),
+      };
+    });
+}
+
+function summarizeHoldEvents(events = []) {
+  if (!events.length) {
+    return "No hold history";
+  }
+
+  return events
+    .map((event) => [
+      event.timestamp,
+      event.state,
+      event.reason ? `Reason: ${event.reason}` : "",
+      event.by ? `By: ${event.by}` : "",
+    ].filter(Boolean).join("\n"))
+    .join("\n\n");
 }
 
 function humanizeAction(value) {
@@ -368,14 +637,7 @@ function getAttemptDurationMinutes(attempt) {
   if (Number.isFinite(direct) && direct > 0) {
     return direct;
   }
-
-  const start = parseDate(attempt?.assigned_at || attempt?.started_at);
-  const end = parseDate(attempt?.completed_at || attempt?.approved_at || attempt?.updated_at);
-  if (!start || !end || end <= start) {
-    return 0;
-  }
-
-  return Math.round((end.getTime() - start.getTime()) / 60000);
+  return 0;
 }
 
 function getStageDurationMinutes(progressRow, attempts = []) {
@@ -389,13 +651,7 @@ function getStageDurationMinutes(progressRow, attempts = []) {
     return direct;
   }
 
-  const start = getProgressStart(progressRow, attempts);
-  const end = getProgressActualEnd(progressRow, attempts);
-  if (!start || !end || end <= start) {
-    return 0;
-  }
-
-  return Math.round((end.getTime() - start.getTime()) / 60000);
+  return 0;
 }
 
 function getCurrentStage(progressByStage) {
@@ -623,7 +879,9 @@ function buildFixtureStageDetails(fixtureRows, revisions = []) {
 
     return {
       fixtureNumber: fixtureRow.fixtureNumber,
+      opNo: fixtureRow.opNo,
       fixtureName: fixtureRow.fixtureName,
+      partFixtureName: formatPartFixtureName(fixtureRow.opNo, fixtureRow.fixtureName),
       globalStatus: fixtureRow.currentStatus,
       currentStage: fixtureRow.currentStage,
       assignedTo: fixtureRow.assignedTo,
@@ -678,20 +936,10 @@ function buildRevisionRowsByFixtureStage(revisions = []) {
   }, new Map());
 }
 
-function getStageTaskPlannedEnd(stageTasks, fixtureRow) {
-  const stageTaskPlannedEnd = dateMax(
+function getStageTaskPlannedEnd(stageTasks) {
+  return dateMax(
     stageTasks.map((task) => task.deadline || task.due_date || task.sla_due_date),
   );
-
-  if (stageTaskPlannedEnd) {
-    return stageTaskPlannedEnd;
-  }
-
-  return dateMax([
-    fixtureRow.raw.fixture.task_deadline,
-    fixtureRow.raw.fixture.task_due_date,
-    fixtureRow.raw.fixture.task_sla_due_date,
-  ]);
 }
 
 function getStageTaskPlannedMinutes(stageTasks) {
@@ -899,6 +1147,12 @@ function buildStageAuditEntry({
   revisionNo,
   revision,
   contributionLookups,
+  stageRevisions = [],
+  skipped = false,
+  skippedTransition = "",
+  outsourceRecord = null,
+  isOutsourced = false,
+  generatedAt = new Date(),
 }) {
   const progress = fixtureRow.raw.progressByStage.get(stage.key) || null;
   const progressRevisionNo = normalizeStageVersion(progress?.stage_version);
@@ -909,7 +1163,7 @@ function buildStageAuditEntry({
     ? (fixtureRow.raw.fixtureStageTasks.get(stage.key) || [])
     : [];
   const stageName = progress?.stage_name || revision?.stage_name || stageDisplayName(stage.key);
-  const revisionCode = revision?.revision_code || formatStageRevisionCode(stageName, revisionNo);
+  const revisionCode = skipped ? "N/A" : (revision?.revision_code || formatStageRevisionCode(stageName, revisionNo));
   const contributions = (
     contributionLookups.byRevisionCode.get(`${fixtureRow.fixture_id}::${stage.key}::${revisionCode}`)
     || contributionLookups.byRevisionNo.get(`${fixtureRow.fixture_id}::${stage.key}::${revisionNo}`)
@@ -921,77 +1175,190 @@ function buildStageAuditEntry({
     revisionCode,
     revisionNo,
   });
-  const stageStart = dateMin([
-    progress?.assigned_at,
+  const actualStart = dateMin([
     progress?.started_at,
-    ...attempts.flatMap((attempt) => [attempt.assigned_at, attempt.started_at]),
-    ...stageTasks.flatMap((task) => [task.assigned_at, task.started_at, task.created_at]),
+    ...attempts.map((attempt) => attempt.started_at),
+    ...stageTasks.map((task) => task.started_at),
   ]);
   const actualEnd = dateMax([
     progress?.completed_at,
-    ...attempts.flatMap((attempt) => [attempt.approved_at, attempt.completed_at, attempt.updated_at]),
-    ...stageTasks.flatMap((task) => [task.approved_at, task.completed_at, task.closed_at, task.updated_at]),
+    ...attempts.flatMap((attempt) => [attempt.approved_at, attempt.completed_at]),
+    ...stageTasks.flatMap((task) => [task.approved_at, task.completed_at, task.closed_at]),
   ]);
   const stageDuration = attempts.length || progress
     ? getStageDurationMinutes(progress, attempts)
     : getStageTaskActualMinutes(stageTasks);
   const plannedMinutes = getStageTaskPlannedMinutes(stageTasks);
   const actualMinutes = getStageTaskActualMinutes(stageTasks) || stageDuration;
-  const plannedEnd = getStageTaskPlannedEnd(stageTasks, fixtureRow);
+  const plannedEnd = getStageTaskPlannedEnd(stageTasks);
+  const plannedStart = dateMin(stageTasks.map((task) => task.planned_start));
+  const elapsedEnd = actualEnd || (actualStart ? generatedAt : null);
+  const elapsedMinutes = minutesBetween(actualStart, elapsedEnd);
   const proofLinks = collectStageProofLinks(
     fixtureRow,
     stageDisplayName(stage.key, stageName),
-    isCurrentRevision,
+    isCurrentRevision && !skipped,
   );
-  const workers = collectAuditWorkers({
-    contributions,
-    activityWorkers,
-    attempts,
-    stageTasks,
-    progress: isCurrentRevision ? progress : null,
-    stageStart,
-    stageEnd: actualEnd,
-  });
+  const workers = skipped
+    ? [{
+      worker: "N/A",
+      contributionPercent: "N/A",
+      contributionKind: "",
+      started: "",
+      ended: "",
+      transferReason: "",
+      transferredBy: "",
+      transferredAt: "",
+    }]
+    : collectAuditWorkers({
+      contributions,
+      activityWorkers,
+      attempts,
+      stageTasks,
+      progress: isCurrentRevision ? progress : null,
+      stageStart: actualStart,
+      stageEnd: actualEnd,
+    });
   const hasTransfer = contributions.some((contribution) => (
     contribution.transfer_reason || contribution.transferred_by || contribution.transferred_at
   )) || activityWorkers.length > 0 || workers.filter((worker) => worker.worker && worker.worker !== "Not assigned").length > 1;
+  const isCurrentStage = getCurrentStage(fixtureRow.raw.progressByStage).stage.key === stage.key;
+  const baseStatus = skipped
+    ? "Skipped"
+    : progressStatusToRegisterStatus(progress, fixtureRow.currentStatus, isCurrentStage);
+  const executionStatus = skipped
+    ? "SKIPPED"
+    : isOutsourced
+      ? resolveOutsourcedStageStatus(progress, outsourceRecord)
+      : baseStatus;
+  const holdEvents = skipped ? [] : formatHoldEventsForStage(fixtureRow, stage.key);
+  const proofRequirement = formatProofRequirement({ proofLinks, stageKey: stage.key, skipped });
+  const statusReason = skipped
+    ? "Stage skipped by workflow evidence"
+    : isOutsourced && outsourceRecord?.outsource_status !== "completed" && normalizeProgressStatus(progress?.status) === "APPROVED"
+      ? "Outsourced completion not fully confirmed"
+      : !progress
+        ? "Stage history missing"
+        : "";
+  const trackedProgress = stageTasks
+    .map((task) => task.completion_percent)
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 100)
+    .at(-1);
 
   return {
+    key: stage.key,
     stage: stageDisplayName(stage.key, stageName),
+    status: skipped ? "Skipped" : baseStatus,
+    executionMode: skipped ? "Skipped" : isOutsourced ? "Outsourced" : "In-House",
+    executionStatus,
+    statusReason,
+    transition: skippedTransition,
+    vendor: isOutsourced ? outsourceRecord?.supplier_name || fixtureRow.raw.fixture.vendor_name || "" : "",
+    internalCoordinator: isOutsourced
+      ? formatEmployeeDisplay(outsourceRecord?.outsourced_by, outsourceRecord?.outsourced_by_name)
+      : "",
+    outsourcingStartedAt: isOutsourced ? formatDateTime(outsourceRecord?.outsourced_at) : "",
+    outsourcingCompletedAt: isOutsourced ? formatDateTime(outsourceRecord?.completed_at) : "",
+    outsourceRecordStatus: isOutsourced ? formatOutsourceStatus(outsourceRecord?.outsource_status) : "",
     revision: revisionCode,
     revisionReason: revision
       ? getDesignRevisionReasonLabel(revision.reason_type || revision.revision_type)
         || revision.revision_reason
         || revision.revision_remarks
         || ""
-      : "",
-    plannedStart: formatDateTime(stageStart),
-    plannedEnd: formatDateTime(plannedEnd),
-    actualEnd: formatDateTime(actualEnd),
-    plannedTime: formatHours(plannedMinutes),
-    actualTime: formatHours(actualMinutes),
-    variance: plannedMinutes && actualMinutes ? formatSignedHours(actualMinutes - plannedMinutes) : "",
+      : skipped
+        ? "N/A"
+        : "",
+    reworkLoops: skipped ? 0 : stageRevisions.length,
+    plannedStart: skipped ? "N/A" : formatDateTime(plannedStart),
+    plannedEnd: skipped ? "N/A" : formatDateTime(plannedEnd),
+    plannedDuration: skipped ? "N/A" : formatDuration(plannedMinutes),
+    actualStart: skipped ? "N/A" : formatDateTime(actualStart),
+    actualCompletion: skipped ? "N/A" : (formatDateTime(actualEnd) || (actualStart ? "In progress" : "")),
+    actualEnd: skipped ? "N/A" : (formatDateTime(actualEnd) || (actualStart ? "In progress" : "")),
+    elapsedDuration: skipped ? "N/A" : formatDuration(elapsedMinutes),
+    trackedWorkingTime: skipped ? "N/A" : formatDuration(actualMinutes),
+    plannedTime: skipped ? "N/A" : formatDuration(plannedMinutes),
+    actualTime: skipped ? "N/A" : formatDuration(actualMinutes),
+    variance: skipped ? "N/A" : (plannedMinutes && actualMinutes ? formatSignedHours(actualMinutes - plannedMinutes) : ""),
+    progress: skipped
+      ? "N/A"
+      : baseStatus === "Approved"
+        ? "100%"
+        : Number.isFinite(trackedProgress)
+          ? `${trackedProgress}%`
+          : "Not recorded",
+    approvalStatus: formatApprovalStatusFromProgress(progress, skipped, outsourceRecord, stage.key),
     priority: formatPriority(stageTasks[0]?.priority || fixtureRow.raw.fixture.task_priority),
     transferred: hasTransfer ? "Yes" : "No",
     proofLinks,
-    proofSummary: proofLinks.length ? `View Proof (${proofLinks.length})` : "No proof uploaded",
+    proofSummary: proofRequirement,
+    holdEvents,
+    holdSummary: summarizeHoldEvents(holdEvents),
     workers,
   };
 }
 
-function buildFixtureStageExecutionAudit({ fixtureRows, contributions = [], revisions = [] }) {
+function buildFixtureStageExecutionAudit({
+  fixtureRows,
+  contributions = [],
+  revisions = [],
+  outsourceRecords = [],
+  generatedAt = new Date(),
+}) {
   const contributionLookups = buildContributionLookups(contributions);
   const revisionsByFixtureStage = buildRevisionRowsByFixtureStage(revisions);
+  const outsourceLookup = buildOutsourceLookup(outsourceRecords);
 
   return fixtureRows.map((fixtureRow) => {
     const stages = [];
-
-    REPORT_STAGES.forEach((stage) => {
+    const outsourceRecord = outsourceLookup.get(String(fixtureRow.fixture_id)) || null;
+    const stageFacts = REPORT_STAGES.map((stage) => {
       const progress = fixtureRow.raw.progressByStage.get(stage.key) || null;
       const attempts = fixtureRow.raw.attemptByStage.get(stage.key) || [];
+      const stageTasks = fixtureRow.raw.fixtureStageTasks.get(stage.key) || [];
       const stageContributions = contributionLookups.byStage.get(`${fixtureRow.fixture_id}::${stage.key}`) || [];
       const stageRevisions = revisionsByFixtureStage.get(`${fixtureRow.fixture_id}::${stage.key}`) || [];
+      const outsourced = isStageOutsourced(outsourceRecord, stage.key);
+      return {
+        stage,
+        progress,
+        attempts,
+        stageTasks,
+        stageContributions,
+        stageRevisions,
+        outsourced,
+        hasEvidence: hasStageExecutionEvidence({
+          progress,
+          attempts,
+          stageTasks,
+          contributions: stageContributions,
+          revisions: stageRevisions,
+          isOutsourced: outsourced,
+        }),
+      };
+    });
+    const skippedStageKeys = resolveSkippedStages(stageFacts);
+
+    stageFacts.forEach((fact, factIndex) => {
+      const { stage, progress, attempts, stageContributions, stageRevisions } = fact;
       const revisionNos = new Set([0]);
+      const skipped = skippedStageKeys.has(stage.key);
+      const previousExecutedStage = [...stageFacts]
+        .slice(0, factIndex)
+        .reverse()
+        .find((candidate) => candidate.hasEvidence);
+      const nextExecutedStage = stageFacts
+        .slice(factIndex + 1)
+        .find((candidate) => candidate.hasEvidence);
+      const skippedTransition = skipped
+        ? [
+          previousExecutedStage?.stage ? stageDisplayName(previousExecutedStage.stage.key) : "Workflow Start",
+          nextExecutedStage?.stage ? stageDisplayName(nextExecutedStage.stage.key) : "Next executed stage",
+        ].join(" -> ")
+        : "";
 
       if (progress) {
         revisionNos.add(normalizeStageVersion(progress.stage_version));
@@ -1010,16 +1377,29 @@ function buildFixtureStageExecutionAudit({ fixtureRows, contributions = [], revi
             revisionNo,
             revision,
             contributionLookups,
+            stageRevisions,
+            skipped,
+            skippedTransition,
+            outsourceRecord,
+            isOutsourced: fact.outsourced,
+            generatedAt,
           }));
         });
     });
 
     return {
+      fixtureId: fixtureRow.fixture_id,
       fixtureNumber: fixtureRow.fixtureNumber,
+      opNo: fixtureRow.opNo,
       fixtureName: fixtureRow.fixtureName,
+      partFixtureName: formatPartFixtureName(fixtureRow.opNo, fixtureRow.fixtureName),
       priority: formatPriority(fixtureRow.raw.fixture.task_priority),
       currentStatus: fixtureRow.currentStatus,
       currentStage: fixtureRow.currentStage,
+      assignedTo: fixtureRow.assignedTo,
+      totalPlannedHours: fixtureRow.plannedHours,
+      totalActualHours: fixtureRow.actualHours,
+      totalVariance: fixtureRow.variance,
       stages,
     };
   });
@@ -1082,11 +1462,13 @@ function buildFixtureRows({
   projectTruth,
   activitiesByTaskId,
   attachmentsByTaskId,
+  outsourceRecords = [],
   generatedAt,
 }) {
   const fixtureTruthById = new Map(
     (projectTruth?.fixtures || []).map((truth) => [String(truth.fixture_id), truth]),
   );
+  const outsourceLookup = buildOutsourceLookup(outsourceRecords);
 
   return fixtures.map((fixture) => {
     const fixtureKey = String(fixture.fixture_id);
@@ -1094,6 +1476,7 @@ function buildFixtureRows({
     const attemptByStage = attemptLookup.get(fixtureKey) || new Map();
     const fixtureStageTasks = stageTaskLookup.get(fixtureKey) || new Map();
     const fixtureTruth = fixtureTruthById.get(fixtureKey) || null;
+    const outsourceRecord = outsourceLookup.get(fixtureKey) || null;
     const current = getCurrentStage(progressByStage);
     const fixtureStatus = resolveFixtureGlobalStatus(fixtureTruth, fixture);
     const currentProgress = current.row;
@@ -1128,6 +1511,7 @@ function buildFixtureRows({
     return {
       fixture_id: fixture.fixture_id,
       fixtureNumber: fixture.fixture_no || "",
+      opNo: fixture.op_no || "",
       fixtureName: fixture.part_name || "",
       currentStage: fixtureStatus === STATUS_LABELS.CLOSED ? "Released" : stageDisplayName(current.stage.key, current.row?.stage_name),
       currentStatus: fixtureStatus,
@@ -1144,6 +1528,7 @@ function buildFixtureRows({
       proofRecords,
       raw: {
         fixture,
+        outsourceRecord,
         progressByStage,
         attemptByStage,
         fixtureStageTasks,
@@ -1189,6 +1574,12 @@ function buildKpis({ fixtureRows, projectTruth, context }) {
     completionPercent,
     completionDisplay: hasCompletionTruth ? `${completionPercent}%` : "Not available",
     completionTruthErrors: Array.isArray(projectTruth?.truth_errors) ? projectTruth.truth_errors : [],
+    overallStage: projectTruth?.overall_stage || {
+      status: "incomplete",
+      label: "Data incomplete",
+      reason: projectTruth?.truth_errors?.[0] || "project_progress_unavailable",
+      counts: {},
+    },
     averageCompletionTime: formatDuration(averageMinutes),
   };
 }
@@ -1235,18 +1626,20 @@ function buildProjectOverview({ context, fixtureRows, kpis, generatedAt, generat
       openStages.set(row.currentStage, (openStages.get(row.currentStage) || 0) + 1);
     }
   });
-  const currentStage = fixtureRows.length
+  const currentStage = kpis.overallStage?.label || (fixtureRows.length
     ? ([...openStages.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || "Released")
-    : "Not Started";
+    : "Not Started");
 
   return [
     { label: "Project Number", value: context.project_no || "" },
     { label: "Project Name", value: context.project_name || "" },
     { label: "Customer", value: context.customer_name || "" },
+    { label: "Plant", value: context.plant || "" },
     { label: "Project Type", value: context.project_type || "Design" },
     { label: "Department", value: context.department_name || context.department_id || "" },
     { label: "Project Uploader", value: formatEmployeeDisplay(context.created_by_user_id || context.uploaded_by, context.created_by_name || context.uploaded_by_name) },
     { label: "Project Leader", value: formatEmployeeDisplay(context.project_leader_id, context.project_leader_name) },
+    { label: "Team Lead", value: formatEmployeeDisplay(context.team_lead_id, context.team_lead_name) },
     { label: "Current Stage", value: currentStage },
     { label: "Current Status", value: resolveOverallStatus(kpis) },
     { label: "Completion Percentage", value: kpis.completionDisplay },
@@ -1381,7 +1774,49 @@ function buildProofAnalytics(fixtureRows) {
   });
 }
 
-function buildReworkAnalytics({ revisions = [], attemptRows = [] }) {
+function buildRevisionHistory({ revisions = [], fixtureRows = [] }) {
+  const fixtureById = new Map(fixtureRows.map((row) => [String(row.fixture_id), row]));
+  const seen = new Set();
+
+  return revisions
+    .filter((revision) => {
+      const eventId = String(revision.id || "").trim();
+      if (!eventId || seen.has(eventId)) {
+        return false;
+      }
+      seen.add(eventId);
+      return true;
+    })
+    .map((revision) => {
+      const fixture = fixtureById.get(String(revision.fixture_id));
+      const reasonType = normalizeText(revision.reason_type || revision.revision_type).toUpperCase();
+      return {
+        eventId: revision.id,
+        fixture: fixture?.fixtureNumber || revision.fixture_id,
+        fixtureName: fixture?.fixtureName || "",
+        stage: stageDisplayName(getStageBucket(revision.stage_name), revision.stage_name),
+        revision: revision.revision_code || "",
+        eventType: reasonType === "MANUAL_OVERRIDE" ? "Manual Override" : "Revision",
+        reason: getDesignRevisionReasonLabel(reasonType)
+          || revision.revision_reason
+          || revision.revision_remarks
+          || "",
+        changedBy: formatEmployeeDisplay(revision.changed_by, revision.changed_by_name),
+        date: formatDateTime(revision.changed_at),
+        comments: revision.revision_remarks || revision.revision_reason || "",
+      };
+    });
+}
+
+function isGenuineReworkRevision(revision) {
+  const reasonType = normalizeText(revision.reason_type || revision.revision_type).toUpperCase();
+  const operation = normalizeText(revision.metadata?.operation).toLowerCase();
+  return ["APPROVAL_REJECTION", "QUALITY_CORRECTION"].includes(reasonType)
+    || operation.includes("rework")
+    || operation.includes("reopen");
+}
+
+function buildReworkAnalytics({ revisions = [], attemptRows = [], fixtureRows = [] }) {
   const counts = {
     Concept: 0,
     DAP: 0,
@@ -1399,7 +1834,8 @@ function buildReworkAnalytics({ revisions = [], attemptRows = [] }) {
     rejectedDurations.set(key, (rejectedDurations.get(key) || 0) + getAttemptDurationMinutes(attempt));
   });
 
-  const rows = revisions.map((revision) => {
+  const fixtureById = new Map(fixtureRows.map((row) => [String(row.fixture_id), row]));
+  const revisionRows = revisions.filter(isGenuineReworkRevision).map((revision) => {
     const stageKey = getStageBucket(revision.stage_name);
     const stage = stageDisplayName(stageKey, revision.stage_name);
     if (counts[stage] !== undefined) {
@@ -1410,6 +1846,8 @@ function buildReworkAnalytics({ revisions = [], attemptRows = [] }) {
       || revision.revision_remarks
       || "";
     return {
+      eventId: revision.id,
+      fixture: fixtureById.get(String(revision.fixture_id))?.fixtureNumber || revision.fixture_id,
       fixtureId: revision.fixture_id,
       stage,
       reworkReason: reason,
@@ -1420,6 +1858,34 @@ function buildReworkAnalytics({ revisions = [], attemptRows = [] }) {
       comments: revision.revision_remarks || revision.revision_reason || "",
     };
   });
+  const revisionIds = new Set(revisionRows.map((row) => String(row.eventId)));
+  const revisionStageKeys = new Set(
+    revisionRows.map((row) => `${row.fixtureId}::${getStageBucket(row.stage)}`),
+  );
+  const rejectedRows = attemptRows
+    .filter((attempt) => normalizeProgressStatus(attempt.status) === "REJECTED")
+    .filter((attempt) => !revisionIds.has(String(attempt.id)))
+    .filter((attempt) => !revisionStageKeys.has(`${attempt.fixture_id}::${getStageBucket(attempt.stage_name)}`))
+    .map((attempt) => {
+      const stageKey = getStageBucket(attempt.stage_name);
+      const stage = stageDisplayName(stageKey, attempt.stage_name);
+      if (counts[stage] !== undefined) {
+        counts[stage] += 1;
+      }
+      return {
+        eventId: attempt.id,
+        fixture: fixtureById.get(String(attempt.fixture_id))?.fixtureNumber || attempt.fixture_id,
+        fixtureId: attempt.fixture_id,
+        stage,
+        reworkReason: "Rejected stage attempt",
+        initiatedBy: formatEmployeeDisplay(attempt.assigned_to, attempt.assigned_to_name),
+        date: formatDateTime(attempt.updated_at || attempt.completed_at),
+        durationImpact: formatDuration(getAttemptDurationMinutes(attempt)),
+        revision: formatStageRevisionCode(attempt.stage_name, normalizeStageVersion(attempt.stage_version)),
+        comments: "Stage attempt rejected",
+      };
+    });
+  const rows = [...revisionRows, ...rejectedRows];
 
   return {
     counts: {
@@ -1673,6 +2139,7 @@ function buildDesignManagementReportModel({
     projectTruth: reportData.projectTruth,
     activitiesByTaskId: reportData.activitiesByTaskId,
     attachmentsByTaskId: reportData.attachmentsByTaskId,
+    outsourceRecords: reportData.outsourceRecords || [],
     generatedAt,
   });
   const integrityWarnings = Array.isArray(reportData.integrityWarnings)
@@ -1682,8 +2149,31 @@ function buildDesignManagementReportModel({
   const reworkAnalytics = buildReworkAnalytics({
     revisions: reportData.revisions || [],
     attemptRows: reportData.attemptRows || [],
+    fixtureRows,
+  });
+  const revisionHistory = buildRevisionHistory({
+    revisions: reportData.revisions || [],
+    fixtureRows,
   });
   const holdHistory = buildHoldHistory(fixtureRows);
+  const fixtureStageExecutionAudit = buildFixtureStageExecutionAudit({
+    fixtureRows,
+    contributions: reportData.contributions || [],
+    revisions: reportData.revisions || [],
+    outsourceRecords: reportData.outsourceRecords || [],
+    generatedAt,
+  });
+  const enrichedKpis = {
+    ...kpis,
+    assignedFixtures: fixtureRows.filter((row) => normalizeText(row.assignedTo) && !row.assignedTo.includes("Not recorded")).length,
+    unassignedFixtures: fixtureRows.filter((row) => !normalizeText(row.assignedTo) || row.assignedTo.includes("Not recorded")).length,
+    outsourcedFixtures: fixtureStageExecutionAudit.filter((fixture) => (
+      fixture.stages.some((stage) => stage.executionMode === "Outsourced")
+    )).length,
+    skippedStages: fixtureStageExecutionAudit.reduce((sum, fixture) => (
+      sum + fixture.stages.filter((stage) => stage.status === "Skipped").length
+    ), 0),
+  };
   const model = {
     reportVersion: REPORT_VERSION,
     generatedAt,
@@ -1693,24 +2183,32 @@ function buildDesignManagementReportModel({
     auxiliaryColors: AUXILIARY_COLORS,
     matrixStatusLabels: MATRIX_STATUS_LABELS,
     overview: [],
-    kpis,
+    kpis: enrichedKpis,
     workflowTimeline: buildWorkflowTimeline({ fixtureRows, context }),
     stageHealthMatrix: buildStageHealthMatrix(fixtureRows),
-    progressVisualization: buildProgressVisualization({ fixtureRows, kpis }),
+    progressVisualization: buildProgressVisualization({ fixtureRows, kpis: enrichedKpis }),
     fixtureBreakdown: fixtureRows.map(({ raw, proofRecords, ...row }) => row),
     fixtureStageDetails: buildFixtureStageDetails(fixtureRows, reportData.revisions || []),
-    fixtureStageExecutionAudit: buildFixtureStageExecutionAudit({
-      fixtureRows,
-      contributions: reportData.contributions || [],
-      revisions: reportData.revisions || [],
-    }),
+    fixtureStageExecutionAudit,
     proofAnalytics: buildProofAnalytics(fixtureRows),
     workProofHistory: buildWorkProofHistory(fixtureRows),
+    revisionHistory,
     reworkAnalytics,
     holdHistory,
     assignmentHistory: buildAssignmentHistory(fixtureRows),
     activityLog: buildActivityLog(fixtureRows, reportData.revisions || []),
     healthSummary: [],
+    projectProgress: reportData.projectTruth || {
+      completion_percent: null,
+      truth_status: "incomplete_truth",
+      truth_errors: ["project_progress_unavailable"],
+      overall_stage: {
+        status: "incomplete",
+        label: "Data incomplete",
+        reason: "project_progress_unavailable",
+        counts: {},
+      },
+    },
     databaseQuerySummary: [
       "Report availability: generated as a current-state snapshot; incomplete stages, missing proofs, and open workflow items are reported as-is.",
       "design.projects / design.fixtures with visibility predicates for project context and fixture list",
@@ -1733,14 +2231,15 @@ function buildDesignManagementReportModel({
   model.overview = buildProjectOverview({
     context,
     fixtureRows,
-    kpis,
+    kpis: enrichedKpis,
     generatedAt,
     generatedBy,
   });
   model.healthSummary = buildProjectHealthSummary({
     fixtureRows,
-    kpis,
+    kpis: enrichedKpis,
     reworkAnalytics,
+    revisionHistory,
     holdHistory,
   });
 

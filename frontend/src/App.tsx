@@ -19,11 +19,33 @@ const TeamTasks = React.lazy(() => import("./pages/TeamTasks"));
 const AdminPanel = React.lazy(() => import("./pages/AdminPanel"));
 const Analytics = React.lazy(() => import("./pages/Analytics/AnalyticsDashboard"));
 const Reports = React.lazy(() => import("./pages/Reports"));
+const DesignReportViewPage = React.lazy(() => import("./pages/DesignReportViewPage"));
 const Batches = React.lazy(() => import("./pages/Batches"));
 const Issues = React.lazy(() => import("./pages/Issues"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
+
+function AppLayoutRoutes() {
+  const { access } = useAuth();
+
+  return (
+    <AppLayout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/tasks" element={<MyTasks />} />
+        <Route path="/tasks/:taskId" element={<TaskDetail />} />
+        <Route path="/issues" element={<Issues />} />
+        <Route path="/batches" element={<Batches />} />
+        {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}
+        {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}
+        {access.canViewReports && <Route path="/reports" element={<Reports />} />}
+        {access.canAccessAdminPanel && <Route path="/admin/*" element={<AdminPanel />} />}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </AppLayout>
+  );
+}
 
 function AuthenticatedApp() {
   const { isAuthenticated, isReady, access } = useAuth();
@@ -36,22 +58,12 @@ function AuthenticatedApp() {
 
   return (
     <TaskProvider>
-      <AppLayout>
-        <Suspense fallback={<RouteContentSkeleton />}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/tasks" element={<MyTasks />} />
-            <Route path="/tasks/:taskId" element={<TaskDetail />} />
-            <Route path="/issues" element={<Issues />} />
-            <Route path="/batches" element={<Batches />} />
-            {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}
-            {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}
-            {access.canViewReports && <Route path="/reports" element={<Reports />} />}
-            {access.canAccessAdminPanel && <Route path="/admin/*" element={<AdminPanel />} />}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </Suspense>
-      </AppLayout>
+      <Suspense fallback={<RouteContentSkeleton />}>
+        <Routes>
+          {access.canViewReports && <Route path="/reports/design/view" element={<DesignReportViewPage />} />}
+          <Route path="*" element={<AppLayoutRoutes />} />
+        </Routes>
+      </Suspense>
     </TaskProvider>
   );
 }

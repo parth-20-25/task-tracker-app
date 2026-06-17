@@ -1647,7 +1647,10 @@ async function getFixturesForProject(projectId, user) {
         ON ${userIdentifierMatchSql("assigner", "linked_task.assigned_by")}
       WHERE f.project_id = $2
         AND ${visibleFixturePredicate("f", "p")}
-      ORDER BY f.fixture_no ASC, f.id ASC
+      ORDER BY
+        NULLIF(BTRIM(f.op_no), '') ASC NULLS LAST,
+        f.fixture_no ASC,
+        f.id ASC
     `,
     [user.employee_id, projectId, [...OPEN_TASK_STATUSES]],
   );
@@ -2143,23 +2146,85 @@ async function generateDesignProjectExecutionTemplateExcel({
   return rows;
 }
 
-async function exportDesignReport(user, query = {}, options = {}) {
+function resolveDesignReportRequest(user, query = {}) {
   const reportType = REPORT_TYPES.PROJECT;
   const departmentId = resolveReportDepartmentId(user, query.department_id);
-  const requestedFormat = String(query.format || query.export_format || "xlsx").trim().toLowerCase();
-  const exportFormat = requestedFormat === "pdf" ? "pdf" : "xlsx";
-  let context = null;
-  let fixtures = [];
+  const projectId = String(query.project_id || "").trim();
 
-  if (reportType === REPORT_TYPES.PROJECT) {
-    const projectId = String(query.project_id || "").trim();
-    if (!projectId) {
-      throw new AppError(400, "project_id is required");
-    }
-
-    context = await getProjectContext(user, projectId, departmentId);
-    fixtures = await getFixturesForProject(projectId, user);
+  if (reportType === REPORT_TYPES.PROJECT && !projectId) {
+    throw new AppError(400, "project_id is required");
   }
+
+  return {
+    reportType,
+    departmentId,
+    projectId,
+  };
+}
+
+function toAbsoluteReportUrl(value, publicOrigin = "") {
+  const rawUrl = String(value || "").trim();
+  if (!rawUrl) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+
+  if (!rawUrl.startsWith("/")) {
+    return rawUrl;
+  }
+
+  const origin = String(publicOrigin || "").trim().replace(/\/+$/g, "");
+  if (!origin) {
+    return rawUrl;
+  }
+
+  try {
+    return new URL(rawUrl, origin).href;
+  } catch (_error) {
+    return rawUrl;
+  }
+}
+
+function normalizeReportModelProofUrls(model, publicOrigin = "") {
+  model.fixtureStageDetails = (model.fixtureStageDetails || []).map((row) => ({
+    ...row,
+    conceptProofUrl: toAbsoluteReportUrl(row.conceptProofUrl, publicOrigin),
+    dapProofUrl: toAbsoluteReportUrl(row.dapProofUrl, publicOrigin),
+    threeDProofUrl: toAbsoluteReportUrl(row.threeDProofUrl, publicOrigin),
+    twoDProofUrl: toAbsoluteReportUrl(row.twoDProofUrl, publicOrigin),
+  }));
+
+  model.fixtureStageExecutionAudit = (model.fixtureStageExecutionAudit || []).map((fixture) => ({
+    ...fixture,
+    stages: (fixture.stages || []).map((stage) => ({
+      ...stage,
+      proofLinks: (stage.proofLinks || []).map((proof) => ({
+        ...proof,
+        url: toAbsoluteReportUrl(proof.url, publicOrigin),
+      })),
+    })),
+  }));
+
+  model.workProofHistory = (model.workProofHistory || []).map((row) => ({
+    ...row,
+    proofLink: toAbsoluteReportUrl(row.proofLink, publicOrigin),
+  }));
+
+  model.activityLog = (model.activityLog || []).map((row) => ({
+    ...row,
+    description: toAbsoluteReportUrl(row.description, publicOrigin),
+  }));
+
+  return model;
+}
+
+async function buildDesignReportSnapshot(user, query = {}, options = {}) {
+  const { projectId, departmentId } = resolveDesignReportRequest(user, query);
+  const context = await getProjectContext(user, projectId, departmentId);
+  const fixtures = await getFixturesForProject(projectId, user);
 
   const reportData = await loadDesignReportExportData({
     fixtures,
@@ -2167,19 +2232,47 @@ async function exportDesignReport(user, query = {}, options = {}) {
     departmentId: context.department_id,
   });
 
-  if (exportFormat === "pdf") {
-    const reportModel = buildDesignManagementReportModel({
-      context,
-      fixtures,
-      reportData,
-      generatedAt: options.generatedAt || new Date(),
-      generatedBy: user,
-    });
+  const model = buildDesignManagementReportModel({
+    context,
+    fixtures,
+    reportData,
+    generatedAt: options.generatedAt || new Date(),
+    generatedBy: user,
+  });
 
+  return {
+    context,
+    fixtures,
+    reportData,
+    model: normalizeReportModelProofUrls(model, options.publicOrigin),
+    validation: {
+      ok: true,
+      warnings: Array.isArray(reportData.integrityWarnings) ? reportData.integrityWarnings : [],
+    },
+  };
+}
+
+async function getDesignReportData(user, query = {}, options = {}) {
+  const snapshot = await buildDesignReportSnapshot(user, query, options);
+  return {
+    report_type: REPORT_TYPES.PROJECT,
+    generated_at: snapshot.model.generatedAt,
+    validation: snapshot.validation,
+    model: snapshot.model,
+  };
+}
+
+async function exportDesignReport(user, query = {}, options = {}) {
+  const requestedFormat = String(query.format || query.export_format || "xlsx").trim().toLowerCase();
+  const exportFormat = requestedFormat === "pdf" ? "pdf" : "xlsx";
+  const snapshot = await buildDesignReportSnapshot(user, query, options);
+  const { context, fixtures, reportData, model } = snapshot;
+
+  if (exportFormat === "pdf") {
     return {
       filename: buildReportFileName(context, "pdf"),
       contentType: "application/pdf",
-      buffer: generateDesignManagementPdf(reportModel),
+      buffer: generateDesignManagementPdf(model),
     };
   }
 
@@ -2212,6 +2305,7 @@ module.exports = {
   buildDesignManagementReportModel,
   collectDesignReportTruthLayerErrors: collectWorkflowTruthLayerErrors,
   exportDesignReport,
+  getDesignReportData,
   generateDesignManagementPdf,
   generateDesignProjectExecutionTemplateExcel: generateTemplateExport,
   generateRawScopeExcel,

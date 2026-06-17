@@ -7,8 +7,8 @@ const {
 } = require("./designReportManagementModel");
 
 const PAGE = Object.freeze({
-  width: 842,
-  height: 595,
+  width: 1191,
+  height: 842,
   margin: 28,
   footerHeight: 24,
 });
@@ -379,10 +379,14 @@ function flattenAuditFixtureRows(fixtureBlock) {
         worker: worker.worker || "",
         contributionPercent: worker.contributionPercent || "Contribution % Not Recorded",
         started: worker.started || "",
-        plannedEnd: index === 0 ? stage.plannedEnd : "",
-        actualEnd: index === 0 ? stage.actualEnd : "",
+        planned: index === 0
+          ? [stage.plannedStart || "Not recorded", stage.plannedEnd || "Not recorded", stage.plannedDuration || stage.plannedTime || "Not recorded"].join(" | ")
+          : "",
+        actual: index === 0
+          ? [stage.actualStart || "Not recorded", stage.actualCompletion || stage.actualEnd || "Not recorded", stage.elapsedDuration || "Not recorded"].join(" | ")
+          : "",
         time: index === 0
-          ? [stage.plannedTime ? `P ${stage.plannedTime}` : "", stage.actualTime ? `A ${stage.actualTime}` : "", stage.variance ? `V ${stage.variance}` : ""].filter(Boolean).join(" | ")
+          ? [stage.trackedWorkingTime ? `Tracked ${stage.trackedWorkingTime}` : "", stage.variance ? `V ${stage.variance}` : ""].filter(Boolean).join(" | ")
           : "",
         transferred: index === 0 ? stage.transferred : "",
         proof: proof ? proof.url : (index === 0 ? stage.proofSummary : ""),
@@ -458,15 +462,15 @@ function generateDesignManagementPdf(model) {
   pdf.addPage("Fixture Stage Execution Audit");
   model.fixtureStageExecutionAudit.forEach((fixtureBlock) => {
     pdf.table(
-      `Fixture: ${fixtureBlock.fixtureNumber} | ${fixtureBlock.fixtureName} | Priority: ${fixtureBlock.priority || "Not recorded"}`,
+      `Fixture: ${fixtureBlock.fixtureNumber} | ${fixtureBlock.partFixtureName || fixtureBlock.fixtureName} | Priority: ${fixtureBlock.priority || "Not recorded"}`,
       [
         { key: "stageRevision", header: "Stage / Revision", width: 18 },
         { key: "worker", header: "Worker", width: 24 },
         { key: "contributionPercent", header: "Contribution %", width: 20 },
         { key: "started", header: "Started", width: 15 },
-        { key: "plannedEnd", header: "Planned End", width: 15 },
-        { key: "actualEnd", header: "Actual End", width: 15 },
-        { key: "time", header: "Time P/A/V", width: 18 },
+        { key: "planned", header: "Planned Start / End / Duration", width: 24 },
+        { key: "actual", header: "Actual Start / Completion / Elapsed", width: 24 },
+        { key: "time", header: "Tracked / Variance", width: 18 },
         { key: "transferred", header: "Transferred", width: 10 },
         { key: "proof", header: "Proof Reference", width: 30 },
       ],
@@ -503,8 +507,18 @@ function generateDesignManagementPdf(model) {
     { key: "comments", header: "Comments", width: 34 },
   ], model.assignmentHistory, { rowHeight: 22 });
 
-  pdf.addPage("Rework, Holds, and Activity");
-  pdf.table("SECTION 8 - REWORK ANALYTICS", [
+  pdf.addPage("Revision, Rework, Holds, and Activity");
+  pdf.table("SECTION 8 - REVISION HISTORY", [
+    { key: "fixture", header: "Fixture", width: 14 },
+    { key: "stage", header: "Stage", width: 12 },
+    { key: "revision", header: "Revision", width: 12 },
+    { key: "eventType", header: "Event", width: 16 },
+    { key: "reason", header: "Reason", width: 24 },
+    { key: "changedBy", header: "Changed By", width: 24 },
+    { key: "date", header: "Date", width: 16 },
+  ], model.revisionHistory, { rowHeight: 24 });
+  pdf.table("SECTION 9 - REWORK REGISTER", [
+    { key: "fixture", header: "Fixture", width: 14 },
     { key: "stage", header: "Stage", width: 12 },
     { key: "reworkReason", header: "Reason", width: 28 },
     { key: "initiatedBy", header: "Initiated By", width: 28 },
@@ -512,7 +526,7 @@ function generateDesignManagementPdf(model) {
     { key: "durationImpact", header: "Impact", width: 12 },
     { key: "comments", header: "Comments", width: 36 },
   ], model.reworkAnalytics.rows, { rowHeight: 24 });
-  pdf.table("SECTION 9 - HOLD HISTORY", [
+  pdf.table("SECTION 10 - HOLD HISTORY", [
     { key: "fixtureNumber", header: "Fixture", width: 14 },
     { key: "date", header: "Date", width: 16 },
     { key: "stage", header: "Stage", width: 10 },
@@ -541,7 +555,7 @@ function generateDesignManagementPdf(model) {
     { note: "Worker contribution percentages are not guessed from elapsed time. Missing contribution truth is displayed as Contribution % Not Recorded." },
     { note: "Task reassignment activity/audit metadata records stage, revision, previous assignee, new assignee, current completion percent, and remaining percent for future audits." },
     { note: "The v2 presentation layer is read-only and does not mutate workflow, RBAC, assignment, revision, or historical records." },
-    { note: "Excel and PDF exports are produced from the same management report model to keep content parity across formats." },
+    { note: "HTML view and PDF export are produced from the same management report model to keep content parity across formats." },
   ], { rowHeight: 24 });
 
   return buildPdfBuffer(pdf.pages);

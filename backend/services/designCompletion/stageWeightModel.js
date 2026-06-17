@@ -41,25 +41,28 @@ function buildWeightMapForStageKeys(stageKeys, overrideRows = []) {
 
 function resolveStageKeysFromProgress(progressRows = [], workflowStages = []) {
   const keys = new Set();
+  const orderByKey = new Map();
 
   for (const row of progressRows) {
     const key = normalizeDesignStageName(row.stage_name);
     if (key) {
       keys.add(key);
+      orderByKey.set(key, Number(row.stage_order || orderByKey.get(key) || 0));
     }
   }
 
-  for (const stage of workflowStages) {
+  workflowStages.forEach((stage, index) => {
     const key = normalizeDesignStageName(stage.stage_name || stage.name);
     if (key) {
       keys.add(key);
+      if (!orderByKey.has(key) || orderByKey.get(key) === 0) {
+        orderByKey.set(key, Number(stage.order ?? stage.sequence_order ?? index + 1));
+      }
     }
-  }
+  });
 
   return [...keys].sort((left, right) => {
-    const leftOrder = progressRows.find((row) => normalizeDesignStageName(row.stage_name) === left)?.stage_order;
-    const rightOrder = progressRows.find((row) => normalizeDesignStageName(row.stage_name) === right)?.stage_order;
-    return Number(leftOrder || 0) - Number(rightOrder || 0);
+    return Number(orderByKey.get(left) || 0) - Number(orderByKey.get(right) || 0);
   });
 }
 

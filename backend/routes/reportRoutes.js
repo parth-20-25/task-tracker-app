@@ -4,7 +4,7 @@ const { asyncHandler } = require("../lib/asyncHandler");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
 const { listDesignProjectsForUser } = require("../services/projectCatalogService");
-const { exportDesignReport } = require("../services/designReportService");
+const { exportDesignReport, getDesignReportData } = require("../services/designReportService");
 const { buildReport, exportTaskReport, listTaskReportRows } = require("../services/reportService");
 
 const router = express.Router();
@@ -45,6 +45,17 @@ router.get(
       activeOnly: false,
     });
     return res.status(200).json(projects);
+  }),
+);
+
+router.get(
+  "/reports/design/data",
+  authorize(PERMISSIONS.EXPORT_REPORTS),
+  asyncHandler(async (req, res) => {
+    const report = await getDesignReportData(req.user, req.query, {
+      publicOrigin: getRequestOrigin(req),
+    });
+    return res.status(200).json(report);
   }),
 );
 

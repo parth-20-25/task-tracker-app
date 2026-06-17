@@ -1,4 +1,4 @@
-import { FileSpreadsheet, FileText } from "lucide-react";
+import { Eye, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -18,9 +18,9 @@ interface ReportFiltersProps {
   onProjectChange: (value: string) => void;
   selectedProject: DesignProjectOption | null;
   projectsLoading: boolean;
-  exportLoading: "xlsx" | "pdf" | null;
+  exportLoading: "html" | "pdf" | null;
   canDownloadReport: boolean;
-  onDownloadExcel: () => void;
+  onViewHtmlReport: () => void;
   onDownloadPdf: () => void;
 }
 
@@ -38,7 +38,7 @@ export function ReportFilters({
   projectsLoading,
   exportLoading,
   canDownloadReport,
-  onDownloadExcel,
+  onViewHtmlReport,
   onDownloadPdf,
 }: ReportFiltersProps) {
   if (!canExportReports) {
@@ -55,7 +55,7 @@ export function ReportFilters({
     <Card className="md:col-span-3">
       <CardHeader className="p-4 pb-2">
         <div className="flex items-center gap-2">
-          <FileSpreadsheet className="h-4 w-4 text-primary" />
+          <FileText className="h-4 w-4 text-primary" />
           <h2 className="font-semibold">Report</h2>
         </div>
       </CardHeader>
@@ -116,10 +116,10 @@ export function ReportFilters({
               className="w-full md:w-auto"
               variant="outline"
               disabled={!canDownloadReport || Boolean(exportLoading)}
-              onClick={onDownloadExcel}
+              onClick={onViewHtmlReport}
             >
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-              {exportLoading === "xlsx" ? "Downloading..." : "Excel Report"}
+              <Eye className="mr-2 h-4 w-4" />
+              {exportLoading === "html" ? "Loading..." : "View HTML Report"}
             </Button>
             <Button
               className="w-full md:w-auto"
@@ -128,7 +128,7 @@ export function ReportFilters({
               onClick={onDownloadPdf}
             >
               <FileText className="mr-2 h-4 w-4" />
-              {exportLoading === "pdf" ? "Downloading..." : "PDF Report"}
+              {exportLoading === "pdf" ? "Exporting..." : "Export PDF"}
             </Button>
           </div>
         </div>

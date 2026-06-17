@@ -342,6 +342,8 @@ function mapProjectSummaryRow(row) {
     completion_truth_status: row.completion_truth_status || null,
     completion_strict_complete: row.completion_strict_complete === true,
     completion_truth_errors: Array.isArray(row.completion_truth_errors) ? row.completion_truth_errors : [],
+    overall_stage: row.overall_stage || null,
+    progress_diagnostics: Array.isArray(row.progress_diagnostics) ? row.progress_diagnostics : [],
     total_fixtures: Number(row.total_fixtures || 0),
     total_tasks: Number(row.total_tasks || 0),
     pending_tasks: Number(row.pending_tasks || 0),

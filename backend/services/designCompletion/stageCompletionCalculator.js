@@ -1,31 +1,36 @@
 const { normalizeDesignStageName } = require("../../lib/designWorkflowStages");
-const { STAGE_STATUS_CREDIT } = require("../../config/designCompletionWeights");
+const SUPPORTED_PROGRESS_STATUSES = new Set([
+  "PENDING",
+  "IN_PROGRESS",
+  "SUBMITTED_FOR_VERIFICATION",
+  "COMPLETED",
+  "REJECTED",
+  "APPROVED",
+]);
 
 function normalizeProgressStatus(status) {
   return String(status || "").trim().toUpperCase();
 }
 
-function resolveStageCreditFactor(status, stageVersion = 0) {
-  const normalized = normalizeProgressStatus(status);
-  const base = STAGE_STATUS_CREDIT[normalized];
-
-  if (base === undefined) {
+function normalizeTrackedProgress(value) {
+  if (value === null || value === undefined || value === "") {
     return null;
   }
 
-  if (normalized === "APPROVED" && Number(stageVersion) > 0) {
-    return 1;
+  const percent = Number(value);
+  if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+    return null;
   }
 
-  return base;
+  return Math.round(percent * 100) / 100;
 }
 
-function computeStageCompletionTruth(progressRow, weightPercent) {
+function computeStageCompletionTruth(progressRow, weightPercent, options = {}) {
   const stageKey = normalizeDesignStageName(progressRow?.stage_name);
   const status = normalizeProgressStatus(progressRow?.status);
-  const creditFactor = resolveStageCreditFactor(status, progressRow?.stage_version);
+  const trackedProgressPercent = normalizeTrackedProgress(options.trackedProgressPercent);
 
-  if (creditFactor === null) {
+  if (!SUPPORTED_PROGRESS_STATUSES.has(status)) {
     return {
       stage_key: stageKey,
       stage_name: progressRow?.stage_name || null,
@@ -40,20 +45,43 @@ function computeStageCompletionTruth(progressRow, weightPercent) {
     };
   }
 
-  const earned = Math.round(weightPercent * creditFactor * 100) / 100;
+  let stageProgressPercent = null;
   let approvalState = "pending";
 
   if (status === "APPROVED") {
     approvalState = "approved";
+    stageProgressPercent = 100;
   } else if (status === "REJECTED") {
     approvalState = "rejected";
+    stageProgressPercent = 0;
   } else if (status === "IN_PROGRESS") {
     approvalState = "in_progress";
-  } else if (status === "COMPLETED") {
+    stageProgressPercent = trackedProgressPercent;
+  } else if (status === "COMPLETED" || status === "SUBMITTED_FOR_VERIFICATION") {
     approvalState = "submitted";
+    stageProgressPercent = trackedProgressPercent;
   } else if (status === "PENDING") {
     approvalState = "pending";
+    stageProgressPercent = 0;
   }
+
+  if (stageProgressPercent === null) {
+    return {
+      stage_key: stageKey,
+      stage_name: progressRow?.stage_name || null,
+      stage_order: progressRow?.stage_order ?? null,
+      stage_version: Number(progressRow?.stage_version || 0),
+      status,
+      weight_percent: weightPercent,
+      stage_completion_percent: null,
+      earned_weight_percent: null,
+      approval_state: approvalState,
+      is_truth_complete: false,
+      truth_error: `missing_tracked_progress:${stageKey || "unknown"}`,
+    };
+  }
+
+  const earned = Math.round(weightPercent * (stageProgressPercent / 100) * 100) / 100;
 
   return {
     stage_key: stageKey,
@@ -62,7 +90,7 @@ function computeStageCompletionTruth(progressRow, weightPercent) {
     stage_version: Number(progressRow?.stage_version || 0),
     status,
     weight_percent: weightPercent,
-    stage_completion_percent: earned,
+    stage_completion_percent: stageProgressPercent,
     earned_weight_percent: earned,
     approval_state: approvalState,
     is_truth_complete: status === "APPROVED",
@@ -72,6 +100,6 @@ function computeStageCompletionTruth(progressRow, weightPercent) {
 
 module.exports = {
   computeStageCompletionTruth,
+  normalizeTrackedProgress,
   normalizeProgressStatus,
-  resolveStageCreditFactor,
 };

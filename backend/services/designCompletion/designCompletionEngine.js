@@ -103,6 +103,12 @@ async function enrichProjectSummariesWithCompletionTruth(summaries = [], client)
         completion_truth_status: "incomplete_truth",
         completion_strict_complete: false,
         completion_truth_errors: [`missing_project_workflow_bundle:${summary.project_id}`],
+        overall_stage: {
+          status: "incomplete",
+          label: "Data incomplete",
+          reason: `missing_project_workflow_bundle:${summary.project_id}`,
+          counts: {},
+        },
       };
     }
 
@@ -122,6 +128,15 @@ async function enrichProjectSummariesWithCompletionTruth(summaries = [], client)
       completion_truth_status: projectTruth.truth_status,
       completion_strict_complete: projectTruth.strict_complete,
       completion_truth_errors: projectTruth.truth_errors,
+      overall_stage: projectTruth.overall_stage,
+      progress_diagnostics: projectTruth.fixtures
+        .filter((truth) => truth.truth_errors?.length || truth.diagnostic_warnings?.length)
+        .map((truth) => ({
+          fixture_id: truth.fixture_id,
+          fixture_no: truth.fixture_no,
+          reasons: [...(truth.truth_errors || []), ...(truth.diagnostic_warnings || [])],
+          source_counts: truth.source_counts,
+        })),
     };
   });
 }

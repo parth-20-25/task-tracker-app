@@ -80,7 +80,8 @@ async function getFixtureStageTaskRows(fixtureIds) {
         t.created_at,
         t.updated_at,
         t.planned_minutes,
-        t.actual_minutes
+        t.actual_minutes,
+        t.completion_percent
       FROM tasks t
       LEFT JOIN workflow_stages stage
         ON stage.id = t.current_stage_id
@@ -196,6 +197,34 @@ async function listRevisionsForFixtures(fixtureIds, departmentId) {
   return result.rows;
 }
 
+async function listOutsourceRecordsForFixtures(fixtureIds) {
+  if (!fixtureIds.length) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        record.*,
+        outsourced_by_user.name AS outsourced_by_name,
+        completed_by_user.name AS completed_by_name,
+        brought_in_house_by_user.name AS brought_in_house_by_name
+      FROM design.fixture_outsource_records record
+      LEFT JOIN users outsourced_by_user
+        ON ${userIdentifierMatchSql("outsourced_by_user", "record.outsourced_by")}
+      LEFT JOIN users completed_by_user
+        ON ${userIdentifierMatchSql("completed_by_user", "record.completed_by")}
+      LEFT JOIN users brought_in_house_by_user
+        ON ${userIdentifierMatchSql("brought_in_house_by_user", "record.brought_in_house_by")}
+      WHERE record.fixture_id = ANY($1::uuid[])
+      ORDER BY record.fixture_id ASC, record.updated_at DESC NULLS LAST, record.created_at DESC NULLS LAST
+    `,
+    [fixtureIds],
+  );
+
+  return result.rows;
+}
+
 /**
  * Aggregated, batched report payload for template-exact export generation.
  */
@@ -212,6 +241,7 @@ async function loadDesignReportExportData({
     stageTasks,
     contributions,
     revisions,
+    outsourceRecords,
     projectTruth,
     weightRows,
     workflow,
@@ -221,6 +251,7 @@ async function loadDesignReportExportData({
     getFixtureStageTaskRows(fixtureIds),
     listContributionsForFixtures(fixtureIds),
     listRevisionsForFixtures(fixtureIds, departmentId),
+    listOutsourceRecordsForFixtures(fixtureIds),
     getProjectCompletionTruthById(projectId, departmentId),
     loadStageWeightRowsForDepartment(departmentId),
     getConfiguredWorkflowForDepartment(departmentId),
@@ -259,6 +290,7 @@ async function loadDesignReportExportData({
     stageTasks,
     contributions,
     revisions,
+    outsourceRecords,
     projectTruth,
     weightRows,
     workflowStages: workflow?.stages || [],
@@ -274,6 +306,7 @@ module.exports = {
   getFixtureStageTaskRows,
   getTaskActivitiesByTaskIds,
   getTaskAttachmentsByTaskIds,
+  listOutsourceRecordsForFixtures,
   listRevisionsForFixtures,
   loadDesignReportExportData,
 };

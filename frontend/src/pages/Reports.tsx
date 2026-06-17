@@ -28,7 +28,7 @@ export default function Reports() {
   const [selectedReportDepartmentId, setSelectedReportDepartmentId] = useState("");
   const [reportProjects, setReportProjects] = useState<DesignProjectOption[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [reportExportLoading, setReportExportLoading] = useState<"xlsx" | "pdf" | null>(null);
+  const [reportExportLoading, setReportExportLoading] = useState<"html" | "pdf" | null>(null);
   const [reportProjectsLoading, setReportProjectsLoading] = useState(false);
 
   useEffect(() => {
@@ -142,21 +142,46 @@ export default function Reports() {
       && selectedProject,
   );
 
-  const handleReportDownload = (format: "xlsx" | "pdf") => {
+  const handleViewHtmlReport = () => {
+    if (!selectedProject || !selectedReportDepartmentId) {
+      return;
+    }
+
+    const params = new URLSearchParams({
+      department_id: selectedReportDepartmentId,
+      project_id: selectedProject.project_id,
+      report_type: "project",
+    });
+    const reportUrl = `${window.location.origin}/reports/design/view?${params.toString()}`;
+    const reportWindow = window.open(reportUrl, "_blank");
+
+    if (reportWindow) {
+      reportWindow.opener = null;
+      return;
+    }
+
+    toast({
+      title: "Report window blocked",
+      description: "Allow pop-ups for this site and try View HTML Report again.",
+      variant: "destructive",
+    });
+  };
+
+  const handlePdfExport = () => {
     if (!selectedProject || !selectedReportDepartmentId) {
       return;
     }
 
     const targetName = formatDesignProjectLabel(selectedProject);
     const reportLabel = "Project_Report";
-    const fileName = `${sanitizeFileNamePart(formatProjectNumber(selectedProject))}_${sanitizeFileNamePart(targetName)}_${reportLabel}_v2.${format}`;
+    const fileName = `${sanitizeFileNamePart(formatProjectNumber(selectedProject))}_${sanitizeFileNamePart(targetName)}_${reportLabel}_v2.pdf`;
 
-    setReportExportLoading(format);
+    setReportExportLoading("pdf");
     downloadDesignReport({
       department_id: selectedReportDepartmentId,
       project_id: selectedProject.project_id,
       report_type: "project",
-      format,
+      format: "pdf",
     }, fileName)
       .catch((error) => {
         toast({
@@ -191,8 +216,8 @@ export default function Reports() {
         projectsLoading={reportProjectsLoading}
         exportLoading={reportExportLoading}
         canDownloadReport={canDownloadReport}
-        onDownloadExcel={() => handleReportDownload("xlsx")}
-        onDownloadPdf={() => handleReportDownload("pdf")}
+        onViewHtmlReport={handleViewHtmlReport}
+        onDownloadPdf={handlePdfExport}
       />
     </div>
   );

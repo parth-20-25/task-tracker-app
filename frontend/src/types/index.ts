@@ -221,6 +221,17 @@ export interface UploadBatch {
   project_completion_percent: number | null;
   completion_truth_status?: string | null;
   completion_truth_errors?: string[];
+  overall_stage?: {
+    status: "active" | "mixed" | "completed" | "incomplete";
+    label: string;
+    reason?: string | null;
+    counts: Record<string, number>;
+  } | null;
+  progress_diagnostics?: Array<{
+    fixture_id: string;
+    fixture_no?: string | null;
+    reasons: string[];
+  }>;
   total_tasks: number;
   pending_tasks: number;
   completed_tasks: number;
@@ -248,6 +259,17 @@ export interface ProjectDashboardSummary {
   completion_truth_status?: string | null;
   completion_strict_complete?: boolean;
   completion_truth_errors?: string[];
+  overall_stage?: {
+    status: "active" | "mixed" | "completed" | "incomplete";
+    label: string;
+    reason?: string | null;
+    counts: Record<string, number>;
+  } | null;
+  progress_diagnostics?: Array<{
+    fixture_id: string;
+    fixture_no?: string | null;
+    reasons: string[];
+  }>;
   total_fixtures: number;
   total_tasks: number;
   pending_tasks: number;

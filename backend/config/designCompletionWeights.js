@@ -12,15 +12,6 @@ const DEFAULT_DESIGN_STAGE_WEIGHTS = Object.freeze({
   detailing: 0,
 });
 
-const STAGE_STATUS_CREDIT = Object.freeze({
-  PENDING: 0,
-  IN_PROGRESS: 0.35,
-  SUBMITTED_FOR_VERIFICATION: 0.95,
-  COMPLETED: 0.65,
-  REJECTED: 0,
-  APPROVED: 1,
-});
-
 const COMPLETION_TRUTH_STATUSES = Object.freeze({
   COMPLETE: "complete",
   INCOMPLETE_TRUTH: "incomplete_truth",
@@ -30,5 +21,4 @@ const COMPLETION_TRUTH_STATUSES = Object.freeze({
 module.exports = {
   COMPLETION_TRUTH_STATUSES,
   DEFAULT_DESIGN_STAGE_WEIGHTS,
-  STAGE_STATUS_CREDIT,
 };

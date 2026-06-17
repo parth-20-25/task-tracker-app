@@ -46,6 +46,7 @@ runTest("approved stages earn full weight; in-progress earns partial only", () =
       buildProgress("2d_finish", "PENDING", 4),
       buildProgress("release", "PENDING", 5),
     ],
+    task_rows: [{ stage_name: "dap", status: "in_progress", completion_percent: 40 }],
     workflow_stages: [],
     weight_rows: [],
   });
@@ -72,6 +73,7 @@ runTest("rejected stage removes earned credit for that stage", () => {
       buildProgress("2d_finish", "PENDING", 4),
       buildProgress("release", "PENDING", 5),
     ],
+    task_rows: [{ stage_name: "3d_finish", status: "in_progress", completion_percent: 55 }],
   });
 
   assert.equal(truth.has_unresolved_reject, true);
@@ -226,6 +228,105 @@ runTest("catalog-soft-removed fixtures remain in project denominator", () => {
 
   assert.equal(projectTruth.total_fixtures, 2);
   assert.equal(projectTruth.completion_percent, 7.5);
+});
+
+runTest("release is not required when it has no fixture workflow evidence", () => {
+  const truth = computeFixtureCompletionTruth({
+    fixture_id: "f-release-optional",
+    fixture_no: "FX-RO",
+    project_id: "p1",
+    revision_no: 0,
+    is_workflow_complete: true,
+    progress_rows: [
+      buildProgress("concept", "APPROVED", 1),
+      buildProgress("dap", "APPROVED", 2),
+      buildProgress("3d_finish", "APPROVED", 3),
+      buildProgress("2d_finish", "APPROVED", 4),
+    ],
+    workflow_stages: [
+      { name: "Concept", order: 1 },
+      { name: "DAP", order: 2 },
+      { name: "3D Finish", order: 3 },
+      { name: "2D Finish", order: 4 },
+      { name: "Release", order: 5 },
+    ],
+  });
+
+  assert.equal(truth.completion_percent, 100);
+  assert.equal(truth.strict_complete, true);
+  assert.ok(!truth.applicable_stage_keys.includes("release"));
+});
+
+runTest("workflow-completed fixtures remain 100 with missing historical rows", () => {
+  const truth = computeFixtureCompletionTruth({
+    fixture_id: "f-complete-missing",
+    fixture_no: "FX-CM",
+    project_id: "p1",
+    is_workflow_complete: true,
+    progress_rows: [buildProgress("concept", "APPROVED", 1)],
+    workflow_stages: [
+      { name: "Concept", order: 1 },
+      { name: "DAP", order: 2 },
+      { name: "3D Finish", order: 3 },
+      { name: "2D Finish", order: 4 },
+    ],
+  });
+
+  assert.equal(truth.completion_percent, 100);
+  assert.equal(truth.strict_complete, true);
+  assert.ok(truth.diagnostic_warnings.includes("completed_fixture_missing_progress:dap"));
+});
+
+runTest("skipped configured stages are excluded from the denominator", () => {
+  const truth = computeFixtureCompletionTruth({
+    fixture_id: "f-skip",
+    fixture_no: "FX-SKIP",
+    project_id: "p1",
+    revision_no: 0,
+    is_workflow_complete: false,
+    progress_rows: [
+      buildProgress("concept", "APPROVED", 1),
+      buildProgress("dap", "PENDING", 2),
+      buildProgress("3d_finish", "IN_PROGRESS", 3),
+      buildProgress("2d_finish", "PENDING", 4),
+    ],
+    task_rows: [{ stage_name: "3d_finish", status: "in_progress", completion_percent: 20 }],
+  });
+
+  assert.ok(truth.skipped_stage_keys.includes("dap"));
+  assert.ok(!truth.applicable_stage_keys.includes("dap"));
+  assert.ok(truth.completion_percent > 25);
+});
+
+runTest("project overall stage reports ties as Mixed", () => {
+  const projectTruth = aggregateProjectCompletionTruth({
+    project_id: "p-mixed",
+    project_status: "active",
+    fixture_bundles: [
+      {
+        fixture_id: "f-concept",
+        fixture_no: "FX-C",
+        project_id: "p-mixed",
+        progress_rows: [
+          buildProgress("concept", "IN_PROGRESS", 1),
+          buildProgress("dap", "PENDING", 2),
+        ],
+        task_rows: [{ stage_name: "concept", status: "in_progress", completion_percent: 25 }],
+      },
+      {
+        fixture_id: "f-dap",
+        fixture_no: "FX-D",
+        project_id: "p-mixed",
+        progress_rows: [
+          buildProgress("concept", "APPROVED", 1),
+          buildProgress("dap", "IN_PROGRESS", 2),
+        ],
+        task_rows: [{ stage_name: "dap", status: "in_progress", completion_percent: 25 }],
+      },
+    ],
+  });
+
+  assert.equal(projectTruth.overall_stage.label, "Mixed - Concept / DAP");
 });
 
 console.log("All design completion engine tests passed.");

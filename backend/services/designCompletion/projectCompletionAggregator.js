@@ -1,6 +1,42 @@
 const { PROJECT_STATUSES } = require("../../config/constants");
 const { COMPLETION_TRUTH_STATUSES } = require("../../config/designCompletionWeights");
 const { computeFixtureCompletionTruth } = require("./fixtureCompletionCalculator");
+const { getDesignStageDisplayName } = require("../../lib/designWorkflowStages");
+
+const OVERALL_STAGE_KEYS = new Set(["concept", "dap", "3d_finish", "2d_finish"]);
+
+function buildOverallStage(fixtureTruths) {
+  const active = fixtureTruths.filter((truth) => !truth.strict_complete);
+  if (active.length === 0 && fixtureTruths.length > 0) {
+    return { status: "completed", label: "Completed", reason: null, counts: {} };
+  }
+
+  const invalid = active.find((truth) => (
+    truth.completion_percent === null
+    || !truth.current_stage_key
+    || !OVERALL_STAGE_KEYS.has(truth.current_stage_key)
+  ));
+  if (invalid) {
+    const reason = invalid.truth_errors?.[0]
+      || `fixture:${invalid.fixture_no || invalid.fixture_id}:current_stage_unresolved`;
+    return { status: "incomplete", label: "Data incomplete", reason, counts: {} };
+  }
+
+  const counts = active.reduce((map, truth) => {
+    map[truth.current_stage_key] = (map[truth.current_stage_key] || 0) + 1;
+    return map;
+  }, {});
+  const max = Math.max(...Object.values(counts), 0);
+  const leaders = Object.keys(counts).filter((key) => counts[key] === max);
+  const labels = leaders.map((key) => getDesignStageDisplayName(key, key).replace(" Finish", ""));
+
+  return {
+    status: leaders.length > 1 ? "mixed" : "active",
+    label: leaders.length > 1 ? `Mixed - ${labels.join(" / ")}` : labels[0] || "Data incomplete",
+    reason: null,
+    counts,
+  };
+}
 
 function aggregateProjectCompletionTruth(projectBundle, options = {}) {
   const fixtureBundles = Array.isArray(projectBundle.fixture_bundles)
@@ -80,6 +116,11 @@ function buildProjectTruth({
   strictComplete,
   truthErrors,
 }) {
+  const overallStage = buildOverallStage(fixtureTruths);
+  if (overallStage.label === "Data incomplete" && !overallStage.reason && truthErrors?.length) {
+    overallStage.reason = truthErrors[0];
+  }
+
   return {
     project_id: projectBundle.project_id,
     project_no: projectBundle.project_no,
@@ -93,9 +134,11 @@ function buildProjectTruth({
     outsourced_fixtures: fixtureTruths.filter((truth) => truth.is_outsourced).length,
     fixtures: fixtureTruths,
     truth_errors: truthErrors,
+    overall_stage: overallStage,
   };
 }
 
 module.exports = {
   aggregateProjectCompletionTruth,
+  buildOverallStage,
 };

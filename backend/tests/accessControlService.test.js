@@ -180,6 +180,21 @@ test("lower hierarchy roles do not receive org-wide project authority", () => {
   })), false);
 });
 
+test("department leaders can review additional design tasks without fixture workflow visibility", () => {
+  const leader = makeUser({
+    department_id: "design",
+    permissions: [PERMISSIONS.VIEW_ALL_TASKS, PERMISSIONS.APPROVE_COMPLETED_TASK],
+    role: { id: "team_leader", name: "Team Leader", hierarchy_level: 4, permissions: {} },
+  });
+  const unrelatedProjectTask = makeTask({
+    department_id: "design",
+    project_uploaded_by: "EMP999",
+  });
+
+  assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "additional_design" }), true);
+  assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "department_workflow" }), false);
+});
+
 test("operational controller roles include General Manager, Team Leader, and Co-Leader but exclude lower workers", () => {
   assert.equal(isOperationalControllerRole(makeUser({
     role: { id: "general_manager", name: "General Manager", hierarchy_level: 3, permissions: {} },

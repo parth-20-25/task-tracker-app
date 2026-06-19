@@ -6,6 +6,7 @@ const {
   canCancelAssignedTask,
   canCancelOperationalTask,
   shouldAutoStartTask,
+  shouldAdvanceFixtureWorkflow,
   shouldSubmitForVerification,
 } = require("../services/taskStateRules");
 
@@ -116,4 +117,12 @@ test("case 8: operational cancellation after start is allowed before verificatio
 test("case 9: operational cancellation is blocked for verification and approved work", () => {
   assert.equal(canCancelOperationalTask(task({ status: "under_review", completion_percent: 100 })), false);
   assert.equal(canCancelOperationalTask(task({ status: "closed", verification_status: "approved", approved_at: new Date() })), false);
+});
+
+test("additional design task approval never advances fixture workflow", () => {
+  const fixtureContext = { fixture_id: "fixture-1", workflow_id: "workflow-1", current_stage_id: "stage-1" };
+
+  assert.equal(shouldAdvanceFixtureWorkflow({ ...fixtureContext, task_type: "additional_design" }, "closed"), false);
+  assert.equal(shouldAdvanceFixtureWorkflow({ ...fixtureContext, task_type: "department_workflow" }, "closed"), true);
+  assert.equal(shouldAdvanceFixtureWorkflow({ ...fixtureContext, task_type: "department_workflow" }, "rework"), false);
 });

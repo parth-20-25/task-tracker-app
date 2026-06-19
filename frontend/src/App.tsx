@@ -11,6 +11,8 @@ import { AppBootSkeleton, RouteContentSkeleton } from "@/components/LoadingSkele
 import { PWAUpdatePrompt } from "@/components/PWAUpdatePrompt";
 import Login from "./pages/Login";
 import React, { Suspense } from "react";
+import { isDesignDepartment } from "@/lib/departments";
+import { isProjectAuthorityUser } from "@/lib/permissions";
 
 const Dashboard = React.lazy(() => import("./pages/Dashboard"));
 const MyTasks = React.lazy(() => import("./pages/MyTasks"));
@@ -22,12 +24,14 @@ const Reports = React.lazy(() => import("./pages/Reports"));
 const DesignReportViewPage = React.lazy(() => import("./pages/DesignReportViewPage"));
 const Batches = React.lazy(() => import("./pages/Batches"));
 const Issues = React.lazy(() => import("./pages/Issues"));
+const AdditionalDesignTasks = React.lazy(() => import("./pages/AdditionalDesignTasks"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
 
 function AppLayoutRoutes() {
-  const { access } = useAuth();
+  const { access, user } = useAuth();
+  const canAccessAdditionalDesignTasks = isDesignDepartment(user) || isProjectAuthorityUser(user);
 
   return (
     <AppLayout>
@@ -37,6 +41,7 @@ function AppLayoutRoutes() {
         <Route path="/tasks/:taskId" element={<TaskDetail />} />
         <Route path="/issues" element={<Issues />} />
         <Route path="/batches" element={<Batches />} />
+        {canAccessAdditionalDesignTasks && <Route path="/additional-design-tasks" element={<AdditionalDesignTasks />} />}
         {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}
         {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}
         {access.canViewReports && <Route path="/reports" element={<Reports />} />}

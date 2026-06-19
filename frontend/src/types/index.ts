@@ -4,7 +4,19 @@ export type ProjectStatus = 'active' | 'on_hold' | 'completed' | 'released';
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type RoleScope = 'global' | 'department' | 'team' | 'self';
 export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed' | 'cancelled';
-export type TaskType = 'department_workflow' | 'custom';
+export type TaskType = 'department_workflow' | 'custom' | 'additional_design';
+export type AdditionalDesignTaskKind =
+  | 'Drafting'
+  | 'Print & Drafting Checking'
+  | 'BOM Checking'
+  | 'Drawing Correction'
+  | 'AutoCAD PDF'
+  | 'IGES Data'
+  | 'CMM Data'
+  | 'Line Layout'
+  | 'Mimic Display'
+  | 'Wear-Out Data';
+export type DesignTeam = '2D' | '3D';
 export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import';
 export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
@@ -62,6 +74,7 @@ export interface User {
   subdivision?: DepartmentSubdivision | null;
   is_active: boolean;
   created_at: string;
+  incomplete_task_count?: number;
   avatar?: string;
 }
 
@@ -70,6 +83,8 @@ export interface Task {
   title: string;
   internal_identifier?: string;
   task_type: TaskType;
+  additional_task_kind?: AdditionalDesignTaskKind | null;
+  design_team?: DesignTeam | null;
   description: string;
   assigned_to: string;
   assigned_user_id?: string;

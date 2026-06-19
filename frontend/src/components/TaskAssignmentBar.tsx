@@ -19,7 +19,7 @@ import { getCachedDepartments } from "@/lib/referenceDataCache";
 import { Priority, TaskType, WorkflowTemplate } from "@/types";
 import { Plus, ShieldCheck, Workflow } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
+import { formatAssigneeOption } from "@/lib/employeeDisplay";
 
 const assignmentTypeOptions: Array<{ value: TaskType; label: string; hint: string }> = [
   {
@@ -438,7 +438,7 @@ export function TaskAssignmentBar({
                 <SelectContent>
                   {assignableUsers.map((user) => (
                     <SelectItem key={user.employee_id} value={user.employee_id}>
-                      {formatEmployeeDisplay(user)}
+                      {formatAssigneeOption(user)}
                     </SelectItem>
                   ))}
                 </SelectContent>

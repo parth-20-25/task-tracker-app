@@ -49,8 +49,8 @@ import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { useAssignableUsersQuery } from "@/hooks/queries/useAssignableUsersQuery";
 import { toast } from "@/hooks/use-toast";
-import { analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
-import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
+import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
+import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { cn } from "@/lib/utils";
 import { resolveImageUrl } from "@/lib/imageUrl";
 import {
@@ -758,6 +758,8 @@ export function ProjectFixtureOperationsGrid({
       queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
       queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
       queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
       queryClient.invalidateQueries({ queryKey: ["workflow"] }),
       queryClient.invalidateQueries({ queryKey: ["design", "outsourcing", "suppliers"] }),
     ]);
@@ -1307,7 +1309,7 @@ function OutsourcedDapAssignmentPanel({
               <SelectItem value="__none__">Employee</SelectItem>
               {assignableUsers.map((employee) => (
                 <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                  {formatEmployeeDisplay(employee)}
+                  {formatAssigneeOption(employee)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1428,7 +1430,7 @@ function AdditionalAssigneePicker({
                 );
               }}
             />
-            <span className="min-w-0 truncate">{formatEmployeeDisplay(employee)}</span>
+            <span className="min-w-0 truncate">{formatAssigneeOption(employee)}</span>
           </label>
         );
       })}
@@ -1725,7 +1727,7 @@ function BulkFixtureAssignmentPanel({
                   <SelectItem value="__none__">Employee</SelectItem>
                   {assignmentUsersForTarget.map((employee) => (
                     <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                      {formatEmployeeDisplay(employee)}
+                      {formatAssigneeOption(employee)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -2534,7 +2536,7 @@ function ProjectFixtureCard({
                     <SelectItem value="__none__">Assignee</SelectItem>
                     {assignmentUsersForTarget.map((employee) => (
                       <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                        {formatEmployeeDisplay(employee)}
+                        {formatAssigneeOption(employee)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -2671,7 +2673,7 @@ function ProjectFixtureCard({
                   .filter((employee) => employee.employee_id !== task?.assigned_to)
                   .map((employee) => (
                     <SelectItem key={employee.employee_id} value={employee.employee_id}>
-                      {formatEmployeeDisplay(employee)}
+                      {formatAssigneeOption(employee)}
                     </SelectItem>
                   ))}
               </SelectContent>

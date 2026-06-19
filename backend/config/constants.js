@@ -220,6 +220,7 @@ const VERIFICATION_STATUSES = {
 const TASK_TYPES = {
   DEPARTMENT_WORKFLOW: "department_workflow",
   CUSTOM: "custom",
+  ADDITIONAL_DESIGN: "additional_design",
 };
 
 const TASK_SOURCES = {

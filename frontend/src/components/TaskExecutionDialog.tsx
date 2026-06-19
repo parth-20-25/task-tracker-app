@@ -1,6 +1,6 @@
 import { type ChangeEvent, type ClipboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Camera, CheckSquare, ClipboardPaste, FileImage, History, Loader2, NotebookText, Trash2, UploadCloud, X } from "lucide-react";
+import { ArrowRightLeft, Camera, CheckSquare, ClipboardPaste, FileImage, FileText, History, Loader2, NotebookText, Trash2, UploadCloud, X } from "lucide-react";
 import { addTaskChecklist, addTaskLog, deleteTaskAttachment, deleteTaskChecklist, fetchTaskActivity, fetchTaskAssignmentUsers, fetchTaskAttachments, fetchTaskChecklists, fetchTaskLogs, transferTask, updateTask, updateTaskChecklist, uploadTaskAttachment } from "@/api/taskApi";
 import { Task, TaskActivity, TaskAttachment, TaskChecklist, TaskLog } from "@/types";
 import { Badge } from "@/components/ui/badge";
@@ -18,8 +18,8 @@ import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
 import { isProjectAuthorityUser } from "@/lib/permissions";
-import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
-import { batchQueryKeys } from "@/lib/queryKeys";
+import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
+import { adminQueryKeys, batchQueryKeys, taskAssignmentQueryKeys } from "@/lib/queryKeys";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
 import { resolveImageUrl } from "@/lib/imageUrl";
 
@@ -37,12 +37,14 @@ const ALLOWED_TASK_PROOF_MIME_TYPES = new Set([
   "image/webp",
 ]);
 const ALLOWED_TASK_PROOF_EXTENSIONS = [".bmp", ".gif", ".heic", ".heif", ".jfif", ".jpeg", ".jpg", ".png", ".webp"];
+const ADDITIONAL_DESIGN_FILE_EXTENSIONS = [".csv", ".dwg", ".dxf", ".igs", ".iges", ".pdf", ".rar", ".step", ".stp", ".txt", ".xls", ".xlsx", ".zip"];
+const ADDITIONAL_DESIGN_FILE_ACCEPT = `${ALLOWED_TASK_PROOF_EXTENSIONS.join(",")},${ADDITIONAL_DESIGN_FILE_EXTENSIONS.join(",")}`;
 
 interface TaskExecutionDialogProps {
   task: Task;
 }
 
-function isAllowedTaskProofFile(file: File) {
+function isImageProofFile(file: File) {
   const mimeType = file.type.toLowerCase();
 
   if (mimeType && ALLOWED_TASK_PROOF_MIME_TYPES.has(mimeType)) {
@@ -51,6 +53,15 @@ function isAllowedTaskProofFile(file: File) {
 
   const lowerCaseName = file.name.toLowerCase();
   return ALLOWED_TASK_PROOF_EXTENSIONS.some((extension) => lowerCaseName.endsWith(extension));
+}
+
+function isAllowedTaskProofFile(file: File, allowDocuments: boolean) {
+  if (isImageProofFile(file)) {
+    return true;
+  }
+
+  const lowerCaseName = file.name.toLowerCase();
+  return allowDocuments && ADDITIONAL_DESIGN_FILE_EXTENSIONS.some((extension) => lowerCaseName.endsWith(extension));
 }
 
 function extensionForMimeType(mimeType: string) {
@@ -221,10 +232,14 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
       return;
     }
 
-    if (!isAllowedTaskProofFile(file)) {
+    const allowDocuments = task.task_type === "additional_design";
+
+    if (!isAllowedTaskProofFile(file, allowDocuments)) {
       toast({
-        title: "Only image files are allowed",
-        description: "Please upload a JPEG, PNG, WEBP, GIF, BMP, HEIC, or HEIF image.",
+        title: "Unsupported proof file",
+        description: allowDocuments
+          ? "Upload an image, PDF, CAD, spreadsheet, text, or archive file."
+          : "Please upload a JPEG, PNG, WEBP, GIF, BMP, HEIC, or HEIF image.",
         variant: "destructive",
       });
       resetProofInputs();
@@ -233,8 +248,8 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
 
     if (file.size > MAX_TASK_PROOF_SIZE_BYTES) {
       toast({
-        title: "Image too large",
-        description: `Proof images must be ${MAX_TASK_PROOF_SIZE_MB} MB or smaller.`,
+        title: "File too large",
+        description: `Proof files must be ${MAX_TASK_PROOF_SIZE_MB} MB or smaller.`,
         variant: "destructive",
       });
       resetProofInputs();
@@ -242,17 +257,17 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     }
 
     setPendingProofFile(file);
-    setPendingProofPreviewUrl(URL.createObjectURL(file));
+    setPendingProofPreviewUrl(isImageProofFile(file) ? URL.createObjectURL(file) : null);
     setWaitingForPaste(false);
     setProofPickerOpen(false);
     resetProofInputs();
-  }, [resetProofInputs]);
+  }, [resetProofInputs, task.task_type]);
 
   const handlePendingProofSubmit = useCallback(async () => {
     if (!pendingProofFile) {
       toast({
         title: "No proof selected",
-        description: "Choose or paste an image before submitting proof.",
+        description: "Choose a proof file before submitting.",
         variant: "destructive",
       });
       return;
@@ -286,7 +301,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
         title: autoSubmitted ? "Proof uploaded and task submitted" : "Proof uploaded",
         description: autoSubmitted
           ? "The task moved into verification automatically."
-          : "The proof image is ready for the task submission flow.",
+          : "The proof file is ready for the task submission flow.",
       });
     } catch (error) {
       toast({ title: "Could not upload proof", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
@@ -478,11 +493,19 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
         transfer_reason: transferReason.trim(),
         completion_percent: nextCompletion,
       });
+      const refreshedTransferUsers = await fetchTaskAssignmentUsers({
+        task_type: task.task_type,
+        department_id: task.department_id,
+        workflow_template_id: task.workflow_template_id,
+      });
+      setTransferUsers(refreshedTransferUsers);
       setTransferTo("");
       setTransferReason("");
       await Promise.all([
         refreshTasks(),
         loadExecutionData(),
+        queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
         queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
         queryClient.invalidateQueries({ queryKey: ["analytics"] }),
@@ -497,7 +520,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     } finally {
       setTransferring(false);
     }
-  }, [completionInput, loadExecutionData, queryClient, refreshTasks, task.id, transferReason, transferTo]);
+  }, [completionInput, loadExecutionData, queryClient, refreshTasks, task.department_id, task.id, task.task_type, task.workflow_template_id, transferReason, transferTo]);
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
@@ -730,7 +753,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                         <SelectItem value="__none__">Select employee</SelectItem>
                         {transferCandidates.map((candidate) => (
                           <SelectItem key={candidate.employee_id} value={candidate.employee_id}>
-                            {formatEmployeeDisplay(candidate)}
+                            {formatAssigneeOption(candidate)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -780,7 +803,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
               <div className="flex items-center gap-3">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept={task.task_type === "additional_design" ? ADDITIONAL_DESIGN_FILE_ACCEPT : "image/*"}
                   ref={fileInputRef}
                   style={{ display: "none" }}
                   onChange={handleFileUpload}
@@ -801,9 +824,9 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                       size="icon"
                       className="h-8 w-8"
                       disabled={!isAssignee || uploading || task.status === 'closed'}
-                      aria-label="Add proof image"
+                      aria-label="Add proof file"
                     >
-                      <Camera className="h-4 w-4" />
+                      {task.task_type === "additional_design" ? <FileText className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-56 p-2">
@@ -844,18 +867,26 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Images only. Max {MAX_TASK_PROOF_SIZE_MB} MB.
+                {task.task_type === "additional_design"
+                  ? `Images, PDF, CAD, spreadsheet, text, or archive files. Max ${MAX_TASK_PROOF_SIZE_MB} MB.`
+                  : `Images only. Max ${MAX_TASK_PROOF_SIZE_MB} MB.`}
               </p>
 
-              {pendingProofPreviewUrl ? (
+              {pendingProofFile ? (
                 <div className="rounded-lg border bg-slate-50/60 p-3">
                   <div className="flex flex-col gap-3 sm:flex-row">
                     <div className="h-40 w-full overflow-hidden rounded-md border bg-background sm:w-56">
-                      <img
-                        src={pendingProofPreviewUrl}
-                        alt="Selected proof preview"
-                        className="h-full w-full object-contain"
-                      />
+                      {pendingProofPreviewUrl ? (
+                        <img
+                          src={pendingProofPreviewUrl}
+                          alt="Selected proof preview"
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-muted-foreground">
+                          <FileText className="h-12 w-12" />
+                        </div>
+                      )}
                     </div>
                     <div className="flex min-w-0 flex-1 flex-col justify-between gap-3">
                       <div className="min-w-0">

@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
 import { formatProjectNumber } from '@/lib/projectDisplay';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
+import { TaskCard } from '@/components/TaskCard';
 import { isMyActiveTask, isPendingVerificationTask, isTaskAssignedToEmployee } from '@/lib/taskFilters';
 import { toast } from '@/hooks/use-toast';
 import type { ProjectDashboardSummary, ProjectStatus, User } from '@/types';
@@ -312,12 +313,16 @@ export default function Dashboard() {
 
   // ── Task data — project-authority users keep the project-first dashboard.
   const { tasks: rawTasks, isLoading: _tasksLoading } = useTasks();
+  const myAdditionalDesignTasks = (rawTasks ?? [])
+    .filter((task) => task.task_type === "additional_design" && isTaskAssignedToEmployee(task, user?.employee_id))
+    .filter((task) => !["closed", "cancelled"].includes(task.status))
+    .sort((left, right) => new Date(left.deadline).getTime() - new Date(right.deadline).getTime());
   const safeTasks = isProjectFirstRole ? [] : rawTasks ?? [];
 
   const myTasks = safeTasks.filter(t => isTaskAssignedToEmployee(t, user?.employee_id));
   const viewTasks = access.canViewAllTasks ? safeTasks : myTasks;
   const teamTasks = access.canViewTeamTasks ? safeTasks : [];
-  const recentAssignedTasks = [...myTasks]
+  const recentAssignedTasks = myTasks.filter((task) => task.task_type !== "additional_design")
     .sort((a, b) => new Date(b.created_at || b.assigned_at || 0).getTime() - new Date(a.created_at || a.assigned_at || 0).getTime())
     .slice(0, 5);
   const activeAssignedTasks = myTasks.filter(isMyActiveTask);
@@ -395,6 +400,18 @@ export default function Dashboard() {
           {access.canViewTeamTasks && <MetricCard label="Pending Verification" value={pendingVerificationTasks.length} icon={Clock} color="text-warning" to="/team-tasks?status=pending_verification" />}
         </div>
       )}
+
+      {myAdditionalDesignTasks.length > 0 ? (
+        <Card>
+          <CardHeader className="p-4 pb-2">
+            <h2 className="text-base font-semibold">My Additional Design Tasks</h2>
+            <p className="text-sm text-muted-foreground">Start assigned work here before uploading proof or deliverable files.</p>
+          </CardHeader>
+          <CardContent className="grid gap-3 p-4 pt-0 lg:grid-cols-2">
+            {myAdditionalDesignTasks.map((task) => <TaskCard key={task.id} task={task} compact />)}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {canUploadDesignNative ? (
         <div className="grid gap-3 md:grid-cols-2">

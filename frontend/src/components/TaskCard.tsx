@@ -58,7 +58,7 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
     if (action === 'submit' && proofUrls.length === 0 && !isDapTask(task)) {
       toast({
         title: 'Work proof required',
-        description: 'Work proof image required before verification submission',
+        description: 'Upload proof or a work file before verification submission',
         variant: 'destructive',
       });
       return;
@@ -93,7 +93,9 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
       setCancelReason('');
       toast({
         title: 'Task cancelled',
-        description: 'The fixture is back in Unassigned.',
+        description: task.task_type === 'additional_design'
+          ? 'The additional design task was cancelled.'
+          : 'The fixture is back in Unassigned.',
       });
     } catch (error) {
       toast({
@@ -155,7 +157,11 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
                 {task.instance_count !== null && task.instance_count !== undefined ? ` · Instance ${task.instance_count}` : ""}
               </span>
             )}
-            <span>Stage: {task.workflow_stage || "—"}</span>
+            <span>
+              {task.task_type === 'additional_design'
+                ? `Team: ${task.design_team || "—"}`
+                : `Stage: ${task.workflow_stage || "—"}`}
+            </span>
             {task.rework_date && <span>Rework: {new Date(task.rework_date).toLocaleDateString("en-GB")}</span>}
             <span className="flex items-center gap-1">
               <Timer className="h-3 w-3" />

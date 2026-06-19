@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, ClipboardList, Users, Settings, Shield, Building2, FileText, LogOut, ChevronDown, BarChart3,
-  MessageSquareWarning, PackageCheck,
+  MessageSquareWarning, PackageCheck, ListTodo,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/useAuth';
@@ -14,6 +14,8 @@ import { Separator } from '@/components/ui/separator';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { isDesignDepartment } from '@/lib/departments';
+import { isProjectAuthorityUser } from '@/lib/permissions';
 
 export function AppSidebar() {
   const { user, role, access, logout } = useAuth();
@@ -25,6 +27,9 @@ export function AppSidebar() {
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
     { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
     { title: 'Projects', url: '/batches', icon: PackageCheck },
+    ...(isDesignDepartment(user) || isProjectAuthorityUser(user)
+      ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
+      : []),
   ];
 
   const workItems = [

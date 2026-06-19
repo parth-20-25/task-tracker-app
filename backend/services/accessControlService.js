@@ -289,6 +289,15 @@ function canAccessTask(user, task) {
     return true;
   }
 
+  if (
+    task.task_type === "additional_design"
+    && isOperationalControllerRole(user)
+    && hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)
+    && canAccessDepartment(user, task.department_id)
+  ) {
+    return true;
+  }
+
   const selfScoped = isTaskDirectAssignee(user, task) || isTaskOwnedByUser(user, task);
 
   if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)) {
@@ -475,13 +484,30 @@ function buildTaskAccessPredicate(user, params, options = {}) {
     });
 
     if (is2DLeader) {
-      return current2DStagePredicate;
+      params.push(user.department_id || "");
+      const departmentParam = `$${params.length}`;
+      return `
+        (
+          ${current2DStagePredicate}
+          OR (
+            ${taskAlias}.task_type = 'additional_design'
+            AND ${taskAlias}.department_id = ${departmentParam}
+          )
+        )
+      `;
     }
 
     return `
       (
-        ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
-        AND ${current2DStagePredicate}
+        (
+          ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
+          AND ${current2DStagePredicate}
+        )
+        OR (
+          ${taskAlias}.task_type = 'additional_design'
+          AND ${taskAlias}.design_team = '2D'
+          AND ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
+        )
       )
     `;
   }

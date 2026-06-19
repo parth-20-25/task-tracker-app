@@ -9,9 +9,10 @@ const {
   handleTaskProofUpload,
   removeStoredTaskProof,
   sanitizeOriginalFileName,
+  isImageProofFile,
 } = require("../lib/taskProofUpload");
 const { authenticate } = require("../middleware/authenticate");
-const { PERMISSIONS, PROJECT_STATUSES } = require("../config/constants");
+const { PERMISSIONS, PROJECT_STATUSES, TASK_TYPES } = require("../config/constants");
 const {
   cancelTaskForUser,
   createTaskForUser,
@@ -390,7 +391,7 @@ router.post(
     const task = await loadTaskForAccess(req.user, req.params.taskId);
 
     if (!req.file) {
-      throw new AppError(400, "No image file uploaded");
+      throw new AppError(400, "No proof file uploaded");
     }
 
     const fileUrl = buildTaskProofFileUrl(req.file.filename);
@@ -400,6 +401,11 @@ router.post(
 
     try {
       ensureTaskProofUpdateAllowed(req.user, task);
+
+      const isImage = isImageProofFile(req.file);
+      if (!isImage && task.task_type !== TASK_TYPES.ADDITIONAL_DESIGN) {
+        throw new AppError(400, "Document and CAD proof files are only supported for additional design tasks");
+      }
 
       attachment = await addTaskAttachment(req.params.taskId, {
         file_url: fileUrl,
@@ -412,7 +418,7 @@ router.post(
 
       await updateTaskForUser(req.user, task.id, {
         proof_url: fileUrl,
-        proof_type: "image",
+        proof_type: isImage ? "image" : "file",
         proof_name: originalFileName,
         proof_mime: req.file.mimetype,
         proof_size: req.file.size,

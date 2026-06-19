@@ -68,13 +68,28 @@ async function listUsers(client = pool) {
   const result = await client.query(
     `
       SELECT
-        ${buildUserColumns({ userAlias: "u", roleAlias: "r", departmentAlias: "d" })}
+        ${buildUserColumns({ userAlias: "u", roleAlias: "r", departmentAlias: "d" })},
+        COALESCE(task_workload.incomplete_task_count, 0)::int AS incomplete_task_count
       FROM users u
       LEFT JOIN roles r ON r.id = u.role
       LEFT JOIN departments d ON d.id = u.department_id
       LEFT JOIN department_subdivisions subdivision ON subdivision.id = u.subdivision_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS incomplete_task_count
+        FROM tasks task
+        WHERE task.status = ANY($1::text[])
+          AND COALESCE(task.verification_status, 'pending') <> 'approved'
+          AND task.approved_at IS NULL
+          AND COALESCE(task.lifecycle_status, '') <> 'completed'
+          AND (
+            COALESCE(task.assigned_user_id, task.assigned_to) = u.employee_id
+            OR task.assigned_to = u.employee_id
+            OR COALESCE(task.assignee_ids, '[]'::jsonb) ? u.employee_id
+          )
+      ) task_workload ON TRUE
       ORDER BY u.employee_id
     `,
+    [ACTIVE_TASK_STATUSES],
   );
 
   return result.rows.map((row) => mapUserRow(row));

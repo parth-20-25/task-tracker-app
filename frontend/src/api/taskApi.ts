@@ -43,7 +43,7 @@ interface TransferTaskPayload {
   completion_percent: number;
 }
 
-interface CreateTaskPayload {
+export interface CreateTaskPayload {
   task_type: TaskType;
   title?: string;
   description: string;
@@ -68,6 +68,10 @@ interface CreateTaskPayload {
   quantity_index?: string;
   instance_count?: number;
   rework_date?: string | null;
+  project_id?: string;
+  fixture_id?: string | null;
+  additional_task_kind?: Task["additional_task_kind"];
+  design_team?: Task["design_team"];
 }
 
 export interface TaskAssignmentReferenceData {

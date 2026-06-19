@@ -333,13 +333,15 @@ async function insertTask(task, client = pool) {
         rejection_count,
         approved_by,
         stage,
+        additional_task_kind,
+        design_team,
         updated_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), $14,
         $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24, $25::jsonb, $26, $27, $28,
         $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43,
-        $44, $45, $46, $47, NOW()
+        $44, $45, $46, $47, $48, $49, NOW()
       )
       ON CONFLICT (fixture_id, stage)
       WHERE status NOT IN ('closed','cancelled')
@@ -393,7 +395,9 @@ async function insertTask(task, client = pool) {
     task.sla_due_date || task.due_date || task.deadline || null,
     task.rejection_count || 0,
     task.approved_by || null,
-    task.stage || null
+    task.stage || null,
+    task.additional_task_kind || null,
+    task.design_team || null
   ];
 
   const result = await executeRepositoryQuery("insertTask", client, insertQuery, insertParams);

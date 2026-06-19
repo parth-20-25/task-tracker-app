@@ -18,6 +18,11 @@ const {
 } = require("./fixtureWorkflowService");
 const { AppError } = require("../lib/AppError");
 const { isDesignDepartment } = require("../lib/designDepartment");
+const {
+  normalizeAdditionalDesignTaskKind,
+  normalizeAdditionalDesignTeam,
+  userBelongsToAdditionalDesignTeam,
+} = require("../lib/additionalDesignTasks");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const {
   formatStageRevisionCode,
@@ -45,7 +50,12 @@ const {
   listUsers,
 } = require("../repositories/usersRepository");
 const { listDepartments } = require("../repositories/departmentsRepository");
-const { countProjectsByDepartment, getProjectStatusById } = require("../repositories/designProjectCatalogRepository");
+const {
+  countProjectsByDepartment,
+  findFixtureAssignmentContextByIdForUser,
+  findProjectByIdForUser,
+  getProjectStatusById,
+} = require("../repositories/designProjectCatalogRepository");
 const {
   getLatestStageAttempt,
   getProgressForFixture,
@@ -83,6 +93,7 @@ const { ensureDepartmentWorkflow } = require("./workflowRecoveryService");
 const {
   canCancelOperationalTask,
   shouldAutoStartTask,
+  shouldAdvanceFixtureWorkflow,
   shouldSubmitForVerification,
 } = require("./taskStateRules");
 const {
@@ -919,6 +930,8 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     instance_count: instanceCount = null,
     current_stage_id: currentStageId = null,
     rework_date: reworkDate = null,
+    additional_task_kind: requestedAdditionalTaskKind = null,
+    design_team: requestedDesignTeam = null,
   } = payload;
 
   const assigneeIds = [...new Set([assignedTo, ...(requestedAssigneeIds || [])].filter(Boolean))];
@@ -946,17 +959,58 @@ async function createTaskForUser(user, payload = {}, options = {}) {
   }
 
   const primaryAssignee = assignees[0];
+  const additionalTaskKind = taskType === TASK_TYPES.ADDITIONAL_DESIGN
+    ? normalizeAdditionalDesignTaskKind(requestedAdditionalTaskKind)
+    : null;
+  const designTeam = taskType === TASK_TYPES.ADDITIONAL_DESIGN
+    ? normalizeAdditionalDesignTeam(requestedDesignTeam)
+    : null;
+
+  if (taskType === TASK_TYPES.ADDITIONAL_DESIGN) {
+    if (!isOperationalControllerRole(user) || !hasPermission(user, PERMISSIONS.ASSIGN_TASK)) {
+      throw new AppError(403, "Only leaders with task assignment permission can assign additional design tasks");
+    }
+
+    if (!isDesignDepartment(user) && !isProjectAuthorityRole(user)) {
+      throw new AppError(403, "Additional design tasks can only be assigned by Design leaders");
+    }
+
+    if (assigneeIds.length !== 1) {
+      throw new AppError(400, "Additional design tasks require exactly one assignee");
+    }
+
+    if (!additionalTaskKind) {
+      throw new AppError(400, "A supported additional design task is required");
+    }
+
+    if (!designTeam) {
+      throw new AppError(400, "design_team must be either 2D or 3D");
+    }
+
+    if (!isDesignDepartment(primaryAssignee) || !userBelongsToAdditionalDesignTeam(primaryAssignee, designTeam)) {
+      throw new AppError(400, `Assignee must be an active Design ${designTeam} team member`);
+    }
+
+    if (!String(projectId || "").trim()) {
+      throw new AppError(400, "project_id is required for additional design tasks");
+    }
+  }
+
   const resolvedTaskStatus = TASK_STATUSES.ASSIGNED;
   const legacyWorkflowManaged = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
     && !workflowTemplateId
     && Boolean(projectId || payloadFixtureId || currentStageId || projectNo || quantityIndex);
   const resolvedDepartmentId = String(
     requestedDepartmentId
-    || (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW ? primaryAssignee.department_id || user.department_id || "" : requestedDepartmentId || ""),
+    || ([TASK_TYPES.DEPARTMENT_WORKFLOW, TASK_TYPES.ADDITIONAL_DESIGN].includes(taskType)
+      ? primaryAssignee.department_id || user.department_id || ""
+      : requestedDepartmentId || ""),
   ).trim() || null;
   let workflowTemplate = null;
   let workflow = null;
   let resolvedCurrentStageId = null;
+  let additionalProject = null;
+  let additionalFixture = null;
 
   if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
     if (!resolvedDepartmentId) {
@@ -1014,6 +1068,37 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     }
   }
 
+  if (taskType === TASK_TYPES.ADDITIONAL_DESIGN) {
+    additionalProject = await findProjectByIdForUser(
+      String(projectId).trim(),
+      user,
+      resolvedDepartmentId,
+      { activeOnly: true },
+      db,
+    );
+
+    if (!additionalProject) {
+      throw new AppError(404, "Active project not found or not accessible");
+    }
+
+    if (payloadFixtureId) {
+      additionalFixture = await findFixtureAssignmentContextByIdForUser(
+        String(payloadFixtureId).trim(),
+        user,
+        resolvedDepartmentId,
+        db,
+      );
+
+      if (!additionalFixture) {
+        throw new AppError(404, "Fixture not found or not accessible");
+      }
+
+      if (additionalFixture.project_id !== additionalProject.project_id) {
+        throw new AppError(400, "fixture_id does not belong to the selected project");
+      }
+    }
+  }
+
   if (!Object.values(TASK_STATUSES).includes(resolvedTaskStatus)) {
     throw new AppError(500, `Invalid task status configuration: ${resolvedTaskStatus}`);
   }
@@ -1042,12 +1127,16 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     }
   }
 
-  const resolvedApprovalRequired = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
-    ? (requestedApprovalRequired ?? workflowTemplate?.default_approval_required ?? true)
-    : requestedApprovalRequired === true;
-  const resolvedProofRequired = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
-    ? (requestedProofRequired ?? workflowTemplate?.default_proof_required ?? true)
-    : requestedProofRequired === true;
+  const resolvedApprovalRequired = taskType === TASK_TYPES.ADDITIONAL_DESIGN
+    ? true
+    : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+      ? (requestedApprovalRequired ?? workflowTemplate?.default_approval_required ?? true)
+      : requestedApprovalRequired === true;
+  const resolvedProofRequired = taskType === TASK_TYPES.ADDITIONAL_DESIGN
+    ? true
+    : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+      ? (requestedProofRequired ?? workflowTemplate?.default_proof_required ?? true)
+      : requestedProofRequired === true;
 
   const fixtureContext = legacyWorkflowManaged
     ? await resolveFixtureContextForTask({
@@ -1061,10 +1150,10 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     })
     : null;
 
-  const fixtureId = fixtureContext?.fixture_id || null;
-  const resolvedProjectId = fixtureContext?.project_id || (projectId ? String(projectId).trim() : null);
-  const resolvedFixtureNo = fixtureContext?.fixture_no || payloadFixtureNo || quantityIndex || null;
-  const resolvedProjectNo = fixtureContext?.project_no || projectNo;
+  const fixtureId = additionalFixture?.fixture_id || fixtureContext?.fixture_id || null;
+  const resolvedProjectId = additionalProject?.project_id || fixtureContext?.project_id || (projectId ? String(projectId).trim() : null);
+  const resolvedFixtureNo = additionalFixture?.fixture_no || fixtureContext?.fixture_no || payloadFixtureNo || quantityIndex || null;
+  const resolvedProjectNo = additionalProject?.project_no || fixtureContext?.project_no || projectNo;
   const stage = fixtureContext?.stage_name || null;
 
   if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
@@ -1102,9 +1191,15 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     priority: resolvedPriority,
     deadline: resolvedDeadline.toISOString(),
   });
-  const resolvedTitle = taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
-    ? (workflowTemplate?.template_name || String(title || "").trim() || internalIdentifier)
-    : String(title || "").trim();
+  const resolvedTitle = taskType === TASK_TYPES.ADDITIONAL_DESIGN
+    ? additionalTaskKind
+    : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+      ? (workflowTemplate?.template_name || String(title || "").trim() || internalIdentifier)
+      : String(title || "").trim();
+  const resolvedDescription = String(description || "").trim()
+    || (taskType === TASK_TYPES.ADDITIONAL_DESIGN
+      ? `${additionalTaskKind} for ${resolvedFixtureNo || additionalProject?.project_name || resolvedProjectNo}`
+      : "");
 
   let taskId;
   try {
@@ -1112,7 +1207,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       title: resolvedTitle,
       internal_identifier: internalIdentifier,
       task_type: taskType,
-      description: String(description || "").trim(),
+      description: resolvedDescription,
       assigned_to: primaryAssignee.employee_id,
       assignee_ids: assigneeIds,
       assigned_by: user.employee_id,
@@ -1131,7 +1226,9 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       location_tag: locationTag,
       recurrence_rule: recurrenceRule,
       dependency_ids: dependencyIds,
-      requires_quality_approval: payload.requires_quality_approval === true && resolvedApprovalRequired === true,
+      requires_quality_approval: taskType === TASK_TYPES.ADDITIONAL_DESIGN
+        ? false
+        : payload.requires_quality_approval === true && resolvedApprovalRequired === true,
       source: normalizedSource,
       tags: normalizedTags,
       next_escalation_at: escalationSchedule.nextEscalationAt,
@@ -1144,13 +1241,15 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       fixture_id: fixtureId,
       fixture_no: resolvedFixtureNo,
       project_no: resolvedProjectNo,
-      project_name: projectName,
-      customer_name: customerName,
+      project_name: additionalProject?.project_name || projectName,
+      customer_name: additionalProject?.customer_name || customerName,
       project_description: projectDescription,
       quantity_index: quantityIndex,
       instance_count: instanceCount,
       rework_date: reworkDate,
       stage: stage,
+      additional_task_kind: additionalTaskKind,
+      design_team: designTeam,
     }, db);
   } catch (error) {
     if (error?.code === "ACTIVE_TASK_STAGE_CONFLICT" || error?.constraint === "uniq_active_task_per_stage") {
@@ -1162,7 +1261,12 @@ async function createTaskForUser(user, payload = {}, options = {}) {
   await appendTaskActivity(taskId, {
     userEmployeeId: user.employee_id,
     actionType: "task_created",
-    metadata: { assignee_ids: assigneeIds, internal_identifier: internalIdentifier },
+    metadata: {
+      assignee_ids: assigneeIds,
+      internal_identifier: internalIdentifier,
+      additional_task_kind: additionalTaskKind,
+      design_team: designTeam,
+    },
   }, db);
 
   await createAuditLog({
@@ -1180,6 +1284,8 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       tags: normalizedTags,
       internal_identifier: internalIdentifier,
       assignee_ids: assigneeIds,
+      additional_task_kind: additionalTaskKind,
+      design_team: designTeam,
     },
   }, db);
 
@@ -2035,7 +2141,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
       rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
     }, client);
 
-    if (next.status === TASK_STATUSES.CLOSED) {
+    if (shouldAdvanceFixtureWorkflow(lockedTask, next.status)) {
       await advanceWorkflowAfterTaskApproval({
         project_id: lockedTask.project_id,
         fixture_no: lockedTask.fixture_no,

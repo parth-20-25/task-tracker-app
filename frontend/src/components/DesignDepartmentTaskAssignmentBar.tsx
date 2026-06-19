@@ -31,6 +31,7 @@ import {
   adminQueryKeys,
   analyticsQueryKeys,
   projectQueryKeys,
+  taskAssignmentQueryKeys,
   taskQueryKeys,
 } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { getResolvedUserPermissionIds, hasUserPermission, PERMISSIONS } from "@/lib/permissions";
-import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
+import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { formatDesignProjectLabel } from "@/lib/projectDisplay";
 
 const priorityOptions = [
@@ -376,6 +377,8 @@ export function DesignDepartmentTaskAssignmentBar() {
         queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: adminQueryKeys.auditLogs }),
         queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
         queryClient.invalidateQueries({ queryKey: ["workflow", "current-stage", fixtureId] }),
         queryClient.invalidateQueries({ queryKey: ["workflow", "validate", fixtureId] }),
         queryClient.invalidateQueries({ queryKey: ["workflow", "progress", fixtureId] }),
@@ -728,7 +731,7 @@ export function DesignDepartmentTaskAssignmentBar() {
                                   setSearchQuery("");
                                 }}
                               >
-                                <span className="font-medium">{formatEmployeeDisplay(user)}</span>
+                                <span className="font-medium">{formatAssigneeOption(user)}</span>
                               </button>
                             ))}
                             {filteredUsers.length === 0 && (

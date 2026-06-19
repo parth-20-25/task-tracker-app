@@ -8,6 +8,10 @@ export const taskQueryKeys = {
   verificationQueue: ["tasks", "verification-queue"] as const,
 };
 
+export const taskAssignmentQueryKeys = {
+  all: ["task-assignment"] as const,
+};
+
 export const adminQueryKeys = {
   users: (scope: "accessible" | "assignable") => ["admin", "users", scope] as const,
   roles: ["admin", "roles"] as const,

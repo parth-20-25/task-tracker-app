@@ -36,6 +36,12 @@ function shouldSubmitForVerification(task, completionPercent) {
     && (!isWorkProofRequiredForState(task) || hasTaskProofForState(task));
 }
 
+function shouldAdvanceFixtureWorkflow(task, nextStatus) {
+  return nextStatus === "closed"
+    && task?.task_type === "department_workflow"
+    && Boolean(task?.workflow_id && task?.current_stage_id && task?.fixture_id);
+}
+
 function canCancelAssignedTask(task) {
   return normalizeStatus(task?.status) === "assigned"
     && normalizeCompletion(task?.completion_percent) === 0
@@ -57,5 +63,6 @@ module.exports = {
   isDapWorkflowTask,
   isWorkProofRequiredForState,
   shouldAutoStartTask,
+  shouldAdvanceFixtureWorkflow,
   shouldSubmitForVerification,
 };

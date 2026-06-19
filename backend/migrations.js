@@ -304,7 +304,44 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS fixture_id UUID,
       ADD COLUMN IF NOT EXISTS fixture_no TEXT,
       ADD COLUMN IF NOT EXISTS stage TEXT,
-      ADD COLUMN IF NOT EXISTS completion_percent INTEGER NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS completion_percent INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS additional_task_kind TEXT,
+      ADD COLUMN IF NOT EXISTS design_team TEXT
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_additional_design_queue
+      ON tasks (design_team, status, deadline)
+      WHERE task_type = 'additional_design'
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'tasks_additional_design_fields_check'
+        ) THEN
+          ALTER TABLE tasks
+          ADD CONSTRAINT tasks_additional_design_fields_check
+          CHECK (
+            task_type <> 'additional_design'
+            OR (
+              additional_task_kind IN (
+                'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
+                'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data'
+              )
+              AND design_team IN ('2D', '3D')
+              AND project_id IS NOT NULL
+              AND workflow_id IS NULL
+              AND current_stage_id IS NULL
+              AND stage IS NULL
+              AND approval_required = TRUE
+              AND proof_required = TRUE
+              AND requires_quality_approval = FALSE
+            )
+          );
+        END IF;
+      END $$;
     `);
 
     await client.query(`

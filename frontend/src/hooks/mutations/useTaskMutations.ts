@@ -1,9 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cancelTask, createTask, updateTask } from "@/api/taskApi";
-import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
+import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { Task, TaskStatus, VerificationStatus } from "@/types";
 
 interface CreateTaskInput {
+  task_type: Task["task_type"];
+  title?: string;
   description: string;
   assigned_to: string;
   assignee_ids?: string[];
@@ -21,6 +23,13 @@ interface CreateTaskInput {
   quantity_index?: string;
   instance_count?: number;
   rework_date?: string | null;
+  department_id?: string | null;
+  approval_required?: boolean;
+  proof_required?: boolean;
+  project_id?: string;
+  fixture_id?: string | null;
+  additional_task_kind?: Task["additional_task_kind"];
+  design_team?: Task["design_team"];
 }
 
 interface UpdateTaskInput {
@@ -57,17 +66,14 @@ export function useTaskMutations() {
       queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
       queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
       queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
     ]);
   };
 
   const createTaskMutation = useMutation({
     mutationFn: (input: CreateTaskInput) => createTask(input),
-    onSuccess: async () => {
-      await Promise.all([
-        invalidateTaskState(),
-        queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
-      ]);
-    },
+    onSuccess: invalidateTaskState,
   });
 
   const updateTaskMutation = useMutation({

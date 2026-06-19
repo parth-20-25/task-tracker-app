@@ -78,6 +78,7 @@ async function loadFixtureEvidenceRows(fixtureIds, client = pool) {
         JOIN tasks task ON task.id = activity.task_id
         LEFT JOIN workflow_stages stage ON stage.id = task.current_stage_id
         WHERE task.fixture_id = ANY($1::uuid[])
+          AND COALESCE(task.task_type, 'department_workflow') <> 'additional_design'
           AND activity.action_type IN (
             'workflow_transitioned',
             'task_workflow_transitioned',
@@ -198,6 +199,7 @@ async function loadFixtureBundlesForProject(projectId, departmentId, client = po
             ON stage.id = t.current_stage_id
           WHERE t.fixture_id = df.id
             AND t.department_id = dp.department_id
+            AND COALESCE(t.task_type, 'department_workflow') <> 'additional_design'
             AND t.status <> 'cancelled'
         ) AS task_rows,
         (
@@ -219,6 +221,7 @@ async function loadFixtureBundlesForProject(projectId, departmentId, client = po
             ON t.id = ta.task_id
           WHERE t.fixture_id = df.id
             AND t.department_id = dp.department_id
+            AND COALESCE(t.task_type, 'department_workflow') <> 'additional_design'
             AND t.status <> 'cancelled'
         ) AS task_attachment_rows,
         (
@@ -343,6 +346,7 @@ async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
             ON stage.id = t.current_stage_id
           WHERE t.fixture_id = df.id
             AND t.department_id = dp.department_id
+            AND COALESCE(t.task_type, 'department_workflow') <> 'additional_design'
             AND t.status <> 'cancelled'
         ) AS task_rows,
         (
@@ -364,6 +368,7 @@ async function loadFixtureBundleById(fixtureId, departmentId, client = pool) {
             ON t.id = ta.task_id
           WHERE t.fixture_id = df.id
             AND t.department_id = dp.department_id
+            AND COALESCE(t.task_type, 'department_workflow') <> 'additional_design'
             AND t.status <> 'cancelled'
         ) AS task_attachment_rows,
         (
@@ -523,6 +528,7 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
           ON stage.id = t.current_stage_id
         WHERE t.fixture_id = df.id
           AND t.department_id = dp.department_id
+          AND COALESCE(t.task_type, 'department_workflow') <> 'additional_design'
           AND t.status <> 'cancelled'
       ) fixture_tasks ON TRUE
       LEFT JOIN LATERAL (
@@ -544,6 +550,7 @@ async function loadProjectBundlesForProjects(projectMetas = [], client = pool) {
           ON t.id = ta.task_id
         WHERE t.fixture_id = df.id
           AND t.department_id = dp.department_id
+          AND COALESCE(t.task_type, 'department_workflow') <> 'additional_design'
           AND t.status <> 'cancelled'
       ) fixture_task_attachments ON TRUE
       LEFT JOIN LATERAL (

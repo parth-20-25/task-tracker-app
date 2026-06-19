@@ -167,6 +167,8 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stage TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'department_workflow'`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS additional_task_kind TEXT`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS design_team TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS workflow_template_id UUID`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS approval_required BOOLEAN NOT NULL DEFAULT TRUE`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_required BOOLEAN NOT NULL DEFAULT TRUE`,
@@ -300,6 +302,12 @@ async function ensureTasksTable(client) {
     CREATE INDEX IF NOT EXISTS idx_tasks_task_type_department
     ON tasks (task_type, department_id, created_at DESC)
   `, "idx_tasks_task_type_department");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_tasks_additional_design_queue
+    ON tasks (design_team, status, deadline)
+    WHERE task_type = 'additional_design'
+  `, "idx_tasks_additional_design_queue");
 
   await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_tasks_workflow_template
@@ -1085,6 +1093,35 @@ async function ensureReferenceTables(client) {
   await client.query(`
     ALTER TABLE tasks
     ADD COLUMN IF NOT EXISTS current_stage_id TEXT REFERENCES workflow_stages(id)
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'tasks_additional_design_fields_check'
+      ) THEN
+        ALTER TABLE tasks
+        ADD CONSTRAINT tasks_additional_design_fields_check
+        CHECK (
+          task_type <> 'additional_design'
+          OR (
+            additional_task_kind IN (
+              'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
+              'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data'
+            )
+            AND design_team IN ('2D', '3D')
+            AND project_id IS NOT NULL
+            AND workflow_id IS NULL
+            AND current_stage_id IS NULL
+            AND stage IS NULL
+            AND approval_required = TRUE
+            AND proof_required = TRUE
+            AND requires_quality_approval = FALSE
+          )
+        );
+      END IF;
+    END $$;
   `);
 
   await client.query(`

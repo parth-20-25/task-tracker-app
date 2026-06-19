@@ -33,3 +33,22 @@ export function formatEmployeeDisplay(employee?: {
 
   return employeeName || "Not assigned";
 }
+
+export function formatIncompleteTaskWorkload(count?: number | null) {
+  const normalizedCount = Number(count);
+
+  if (!Number.isFinite(normalizedCount) || normalizedCount <= 0) {
+    return "Free";
+  }
+
+  return String(Math.floor(normalizedCount));
+}
+
+export function formatAssigneeOption(employee: {
+  employee_id?: string | null;
+  name?: string | null;
+  display_name?: string | null;
+  incomplete_task_count?: number | null;
+}) {
+  return `${formatEmployeeDisplay(employee)} — ${formatIncompleteTaskWorkload(employee.incomplete_task_count)}`;
+}

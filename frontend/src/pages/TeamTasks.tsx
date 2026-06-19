@@ -16,7 +16,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/useAuth';
 import { useTasks } from '@/contexts/useTasks';
 import { toast } from '@/hooks/use-toast';
-import { analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
+import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { resolveImageUrl } from '@/lib/imageUrl';
 import { formatProjectNumber } from '@/lib/projectDisplay';
@@ -286,6 +286,8 @@ export default function TeamTasks() {
         queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
         queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: adminQueryKeys.users('assignable') }),
         queryClient.invalidateQueries({ queryKey: ["dashboard", "fixtures"] }),
         queryClient.invalidateQueries({ queryKey: ["workflow"] }),
       ]);

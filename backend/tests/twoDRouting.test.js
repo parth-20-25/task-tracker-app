@@ -53,9 +53,27 @@ test("2D task access predicate uses current 2D Finish stage routing", () => {
     fixtureAlias: "fixture",
   });
 
-  assert.deepEqual(params, ["EMP2D1"]);
+  assert.deepEqual(params, ["EMP2D1", "design"]);
   assert.match(sql, /project_subdivision_assignments/);
   assert.match(sql, /'2d_finish'/);
+  assert.match(sql, /task\.task_type = 'additional_design'/);
+  assert.match(sql, /task\.department_id = \$2/);
+});
+
+test("2D assignees can see their additional tasks without fixture stage coupling", () => {
+  const params = [];
+  const sql = buildTaskAccessPredicate(make2DUser({
+    role: { id: "r6", name: "Designer", hierarchy_level: 5, permissions: {} },
+  }), params, {
+    taskAlias: "task",
+    projectAlias: "project",
+    fixtureAlias: "fixture",
+  });
+
+  assert.deepEqual(params, ["EMP2D1"]);
+  assert.match(sql, /task\.task_type = 'additional_design'/);
+  assert.match(sql, /task\.design_team = '2D'/);
+  assert.match(sql, /task\.assigned_to = \$1/);
 });
 
 test("fixture visibility predicate includes 2D Finish for subdivision-routed users", () => {

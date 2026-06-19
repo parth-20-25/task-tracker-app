@@ -132,6 +132,7 @@ function mapUserRow(row, prefix = "") {
     subdivision_id: row[`${prefix}subdivision_id`] || null,
     is_active: row[`${prefix}is_active`],
     created_at: row[`${prefix}created_at`],
+    incomplete_task_count: Number(row[`${prefix}incomplete_task_count`] || 0),
     role: mapRoleRow(row, prefix),
     department: mapDepartmentRow(row, prefix),
     subdivision: mapSubdivisionRow(row, prefix),

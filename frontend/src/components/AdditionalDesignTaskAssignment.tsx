@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus, Loader2 } from "lucide-react";
-import { createTask, fetchTaskAssignmentReferenceData } from "@/api/taskApi";
+import { createTask, fetchTaskAssignmentUsers } from "@/api/taskApi";
 import { fetchDesignFixtures, fetchProjectDashboardSummary } from "@/api/designApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -49,11 +49,6 @@ export function AdditionalDesignTaskAssignment() {
   const [notes, setNotes] = useState("");
 
   const canAssign = access.canAssignTasks && access.canCreateTasks;
-  const referenceQuery = useQuery({
-    queryKey: [...taskAssignmentQueryKeys.all, "reference-data", "additional-design"],
-    queryFn: fetchTaskAssignmentReferenceData,
-    enabled: canAssign,
-  });
   const projectsQuery = useQuery({
     queryKey: ["additional-design", "projects", user?.department_id || "all"],
     queryFn: () => fetchProjectDashboardSummary(user?.department_id || undefined),
@@ -74,12 +69,29 @@ export function AdditionalDesignTaskAssignment() {
     enabled: canAssign && Boolean(projectId && selectedProject),
   });
 
+  const assigneesQuery = useQuery({
+    queryKey: [
+      ...taskAssignmentQueryKeys.all,
+      "assignable-users",
+      "department-workflow",
+      selectedProject?.department_id || "none",
+      projectId || "none",
+      designTeam,
+    ],
+    queryFn: () => fetchTaskAssignmentUsers({
+      task_type: "department_workflow",
+      department_id: selectedProject?.department_id || null,
+      project_id: projectId,
+      stage_name: designTeam === "2D" ? "2D Finish" : null,
+    }),
+    enabled: canAssign && Boolean(projectId && selectedProject?.department_id),
+  });
+
   const assignees = useMemo(() => (
-    (referenceQuery.data?.assignable_users ?? []).filter((candidate) => (
-      candidate.department_id === selectedProject?.department_id
-      && candidate.subdivision?.subdivision_name?.trim().toUpperCase() === designTeam
+    (assigneesQuery.data ?? []).filter((candidate) => (
+      candidate.subdivision?.subdivision_name?.trim().toUpperCase() === designTeam
     ))
-  ), [designTeam, referenceQuery.data?.assignable_users, selectedProject?.department_id]);
+  ), [assigneesQuery.data, designTeam]);
 
   const createMutation = useMutation({
     mutationFn: () => createTask({
@@ -192,8 +204,12 @@ export function AdditionalDesignTaskAssignment() {
 
           <div className="space-y-1.5">
             <Label>Assignee</Label>
-            <Select value={assigneeId || "__none__"} onValueChange={(value) => setAssigneeId(value === "__none__" ? "" : value)} disabled={!selectedProject}>
-              <SelectTrigger><SelectValue placeholder="Select assignee" /></SelectTrigger>
+            <Select
+              value={assigneeId || "__none__"}
+              onValueChange={(value) => setAssigneeId(value === "__none__" ? "" : value)}
+              disabled={!selectedProject || assigneesQuery.isLoading || assignees.length === 0}
+            >
+              <SelectTrigger><SelectValue placeholder={assigneesQuery.isLoading ? "Loading assignees..." : "Select assignee"} /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">Select assignee</SelectItem>
                 {assignees.map((candidate) => (
@@ -201,7 +217,9 @@ export function AdditionalDesignTaskAssignment() {
                 ))}
               </SelectContent>
             </Select>
-            {selectedProject && assignees.length === 0 ? <p className="text-xs text-amber-700">No accessible {designTeam} team members found.</p> : null}
+            {selectedProject && !assigneesQuery.isLoading && assignees.length === 0 ? (
+              <p className="text-xs text-amber-700">No eligible assignees in your scope</p>
+            ) : null}
           </div>
 
           <div className="space-y-1.5">

@@ -87,11 +87,7 @@ export function AdditionalDesignTaskAssignment() {
     enabled: canAssign && Boolean(projectId && selectedProject?.department_id),
   });
 
-  const assignees = useMemo(() => (
-    (assigneesQuery.data ?? []).filter((candidate) => (
-      candidate.subdivision?.subdivision_name?.trim().toUpperCase() === designTeam
-    ))
-  ), [assigneesQuery.data, designTeam]);
+  const assignees = assigneesQuery.data ?? [];
 
   const createMutation = useMutation({
     mutationFn: () => createTask({

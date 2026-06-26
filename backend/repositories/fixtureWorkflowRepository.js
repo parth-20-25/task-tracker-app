@@ -560,7 +560,8 @@ async function getFixtureWorkflowContext(fixtureId, client = pool) {
        dp.department_id,
        COALESCE(dp.status, 'active') AS project_status,
        df.revision_no,
-       df.is_legacy_workflow
+       df.is_legacy_workflow,
+       df.is_workflow_complete
      FROM design.fixtures df
      JOIN design.projects dp ON dp.id = df.project_id
      WHERE df.id = $1

@@ -26,6 +26,7 @@ import {
   reopenFixtureStage,
   releaseFixtureWorkflow,
   validateFixtureAssignment,
+  type FixtureCurrentStage,
   type FixtureFullProgress,
   type FixtureRevisionType,
 } from "@/api/designApi";
@@ -499,6 +500,24 @@ interface ProjectFixtureOperationsGridProps {
   projectId: string;
   departmentId?: string | null;
 }
+function applyReleasedFixtureState(fixture: DesignFixtureOption, releaseState: FixtureCurrentStage | undefined) {
+  if (!releaseState?.is_complete) {
+    return fixture;
+  }
+
+  return {
+    ...fixture,
+    is_workflow_complete: true,
+    operational_state: "WORKFLOW_COMPLETE",
+    workflow_status: releaseState.status || "APPROVED",
+    workflow_stage: releaseState.stage,
+    workflow_stage_label: releaseState.stage_label ?? "Released",
+    workflow_stage_order: releaseState.stage_order,
+    workflow_stage_version: releaseState.stage_version,
+    workflow_assigned_to: null,
+    workflow_assigned_to_name: null,
+  };
+}
 
 const FIXTURE_SECTION_ORDER = [
   { key: "UNASSIGNED", label: "Unassigned" },
@@ -647,6 +666,38 @@ export function ProjectFixtureOperationsGrid({
     REWORK: true,
     WORKFLOW_COMPLETE: false,
   });
+  const [releasedFixtureStatesById, setReleasedFixtureStatesById] = useState<Record<string, FixtureCurrentStage>>({});
+
+  useEffect(() => {
+    setReleasedFixtureStatesById((current) => {
+      const fixturesById = new Map(fixtures.map((fixture) => [fixture.fixture_id, fixture]));
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([fixtureId]) => {
+          const fixture = fixturesById.get(fixtureId);
+          return fixture
+            && fixture.is_workflow_complete !== true
+            && fixture.operational_state !== "WORKFLOW_COMPLETE";
+        }),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [fixtures]);
+
+  const visibleFixtures = useMemo(
+    () => fixtures.map((fixture) => applyReleasedFixtureState(fixture, releasedFixtureStatesById[fixture.fixture_id])),
+    [fixtures, releasedFixtureStatesById],
+  );
+
+  const rememberReleasedFixtureState = useCallback((fixtureId: string, releaseState: FixtureCurrentStage) => {
+    if (!releaseState.is_complete) {
+      return;
+    }
+
+    setReleasedFixtureStatesById((current) => ({
+      ...current,
+      [fixtureId]: releaseState,
+    }));
+  }, []);
 
   const verificationQuery = useQuery({
     queryKey: taskQueryKeys.verificationQueue,
@@ -674,7 +725,7 @@ export function ProjectFixtureOperationsGrid({
   }, []);
 
   const combinedTasks = useMemo(() => {
-    const fixtureIds = new Set(fixtures.map((fixture) => fixture.fixture_id));
+    const fixtureIds = new Set(visibleFixtures.map((fixture) => fixture.fixture_id));
     const taskById = new Map<number, Task>();
 
     [...tasks, ...(verificationQuery.data ?? [])].forEach((task) => {
@@ -684,30 +735,30 @@ export function ProjectFixtureOperationsGrid({
     });
 
     return [...taskById.values()];
-  }, [fixtures, tasks, verificationQuery.data]);
+  }, [visibleFixtures, tasks, verificationQuery.data]);
 
   const fixtureTaskById = useMemo(() => {
     const map = new Map<string, Task | null>();
-    fixtures.forEach((fixture) => {
+    visibleFixtures.forEach((fixture) => {
       map.set(fixture.fixture_id, pickFixtureTask(fixture, combinedTasks));
     });
     return map;
-  }, [combinedTasks, fixtures]);
+  }, [combinedTasks, visibleFixtures]);
 
   const operationalResolutionByFixtureId = useMemo(() => {
     const map = new Map<string, FixtureOperationalResolution>();
-    fixtures.forEach((fixture) => {
+    visibleFixtures.forEach((fixture) => {
       map.set(fixture.fixture_id, resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null));
     });
     return map;
-  }, [fixtureTaskById, fixtures]);
+  }, [fixtureTaskById, visibleFixtures]);
 
   const assignableFixtures = useMemo(
-    () => fixtures.filter((fixture) => (
+    () => visibleFixtures.filter((fixture) => (
       !isFixtureActiveOutsourcedSection(fixture)
       && operationalResolutionByFixtureId.get(fixture.fixture_id)?.assignable === true
     )),
-    [fixtures, operationalResolutionByFixtureId],
+    [visibleFixtures, operationalResolutionByFixtureId],
   );
   const assignableFixtureIds = useMemo(
     () => new Set(assignableFixtures.map((fixture) => fixture.fixture_id)),
@@ -726,7 +777,7 @@ export function ProjectFixtureOperationsGrid({
     const seen = new Set<string>();
 
     return FIXTURE_SECTION_ORDER.map((section) => {
-      const sectionFixtures = fixtures.filter((fixture) => {
+      const sectionFixtures = visibleFixtures.filter((fixture) => {
         if (seen.has(fixture.fixture_id)) {
           return false;
         }
@@ -746,7 +797,7 @@ export function ProjectFixtureOperationsGrid({
         fixtures: sortSectionFixtures(section.key, sectionFixtures, fixtureTaskById),
       };
     });
-  }, [fixtureTaskById, fixtures, operationalResolutionByFixtureId]);
+  }, [fixtureTaskById, visibleFixtures, operationalResolutionByFixtureId]);
 
   const invalidateOperationalState = useCallback(async () => {
     await Promise.all([
@@ -800,6 +851,7 @@ export function ProjectFixtureOperationsGrid({
           isLoadingUsers={isLoadingAssignableUsers}
           isLoadingTwoDUsers={isLoadingTwoDAssignableUsers}
           invalidateOperationalState={invalidateOperationalState}
+          onFixtureReleased={rememberReleasedFixtureState}
           onCancel={() => setBulkPanelOpen(false)}
         />
       ) : null}
@@ -884,6 +936,7 @@ export function ProjectFixtureOperationsGrid({
                         operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
                         recentSupplierNames={recentSupplierNames}
                         onSupplierUsed={rememberSupplierName}
+                        onFixtureReleased={rememberReleasedFixtureState}
                         selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
                         selected={selectedFixtureIds.includes(fixture.fixture_id)}
                         onSelectedChange={toggleSelectedFixture}
@@ -1500,6 +1553,7 @@ interface BulkFixtureAssignmentPanelProps {
   isLoadingUsers: boolean;
   isLoadingTwoDUsers: boolean;
   invalidateOperationalState: () => Promise<void>;
+  onFixtureReleased: (fixtureId: string, releaseState: FixtureCurrentStage) => void;
   onCancel: () => void;
 }
 
@@ -1513,6 +1567,7 @@ function BulkFixtureAssignmentPanel({
   isLoadingUsers,
   isLoadingTwoDUsers,
   invalidateOperationalState,
+  onFixtureReleased,
   onCancel,
 }: BulkFixtureAssignmentPanelProps) {
   const { access } = useAuth();
@@ -1624,6 +1679,16 @@ function BulkFixtureAssignmentPanel({
       let skippedCount = 0;
 
       for (const fixture of targetFixtures) {
+        if (releaseSelected) {
+          const releaseState = await releaseFixtureWorkflow({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+          });
+          onFixtureReleased(fixture.fixture_id, releaseState);
+          assignedCount += 1;
+          continue;
+        }
+
         const validation = await validateFixtureAssignment(fixture.fixture_id, departmentId);
         if (validation.canAssign !== true) {
           skippedCount += 1;
@@ -1656,14 +1721,6 @@ function BulkFixtureAssignmentPanel({
           }
         }
 
-        if (releaseSelected) {
-          await releaseFixtureWorkflow({
-            fixture_id: fixture.fixture_id,
-            department_id: departmentId,
-          });
-          assignedCount += 1;
-          continue;
-        }
 
         await createDesignTask({
           department_id: departmentId,
@@ -1858,6 +1915,7 @@ interface ProjectFixtureCardProps {
   operationalResolution: FixtureOperationalResolution;
   recentSupplierNames: string[];
   onSupplierUsed: (supplierName: string) => void;
+  onFixtureReleased: (fixtureId: string, releaseState: FixtureCurrentStage) => void;
   selectable?: boolean;
   selected?: boolean;
   onSelectedChange?: (fixtureId: string, checked: boolean) => void;
@@ -1876,6 +1934,7 @@ function ProjectFixtureCard({
   operationalResolution,
   recentSupplierNames,
   onSupplierUsed,
+  onFixtureReleased,
   selectable = false,
   selected = false,
   onSelectedChange,
@@ -2044,15 +2103,14 @@ function ProjectFixtureCard({
   };
 
   const assignMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<{ action: "release"; releaseState: FixtureCurrentStage } | { action: "assignment" }> => {
       if (releaseSelected) {
-        await releaseFixtureWorkflow({
+        const releaseState = await releaseFixtureWorkflow({
           fixture_id: fixture.fixture_id,
           department_id: departmentId,
         });
-        return;
+        return { action: "release", releaseState };
       }
-
       if (!assignedTo || !deadline) {
         throw new Error("Assignee and deadline are required");
       }
@@ -2097,8 +2155,12 @@ function ProjectFixtureCard({
         priority,
         deadline: normalizeDeadlineToEndOfDayIso(deadline),
       });
+      return { action: "assignment" };
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if (result.action === "release") {
+        onFixtureReleased(fixture.fixture_id, result.releaseState);
+      }
       await invalidateOperationalState();
       resetAssignForm();
       setExpanded(null);
@@ -2519,11 +2581,6 @@ function ProjectFixtureCard({
 
       {expanded === "assign" ? (
         <div className="mt-2 space-y-2 border-t pt-2">
-          <div>
-            <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
-            <p className="break-words text-xs text-muted-foreground">{fixture.part_name}</p>
-          </div>
-
           {!releaseSelected ? (
             <div className="grid gap-2 md:grid-cols-3">
               <div className="space-y-1">

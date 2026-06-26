@@ -131,7 +131,7 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     vi.clearAllMocks();
   });
 
-  it("uses the Project Fixtures scoped source and refreshes for project and team changes", async () => {
+  it("uses the Project Fixtures scoped source directly and refreshes for project and team changes", async () => {
     renderAssignment();
     await screen.findByRole("option", { name: "P-001 — First Project" });
     const selects = await screen.findAllByRole("combobox");
@@ -141,7 +141,7 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     fireEvent.change(projectSelect, { target: { value: "project-1" } });
 
     expect(await screen.findByRole("option", { name: "EMP-3D-1 - Alice — Free" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Other Team/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "EMP-2D-OTHER - Other Team — Free" })).toBeInTheDocument();
     expect(fetchTaskAssignmentUsers).toHaveBeenLastCalledWith({
       task_type: "department_workflow",
       department_id: "design",

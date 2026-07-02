@@ -57,15 +57,14 @@ export function AdditionalDesignTaskAssignment() {
 
   const projects = useMemo(() => (
     (projectsQuery.data ?? []).filter((project) => (
-      project.project_status === "active"
-      && (project.department_id?.toLowerCase() === "design" || project.department_name?.toLowerCase() === "design")
+      project.department_id?.toLowerCase() === "design" || project.department_name?.toLowerCase() === "design"
     ))
   ), [projectsQuery.data]);
   const selectedProject = projects.find((project) => project.project_id === projectId) || null;
 
   const fixturesQuery = useQuery({
     queryKey: ["additional-design", "fixtures", projectId],
-    queryFn: () => fetchDesignFixtures(projectId, selectedProject?.department_id, { activeOnly: true }),
+    queryFn: () => fetchDesignFixtures(projectId, selectedProject?.department_id),
     enabled: canAssign && Boolean(projectId && selectedProject),
   });
 

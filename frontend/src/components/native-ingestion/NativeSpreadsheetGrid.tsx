@@ -55,11 +55,13 @@ interface NativeSpreadsheetGridProps {
   rows: NativeIngestionRow[];
   onRowsChange: (rows: NativeIngestionRow[]) => void;
   onStageImage: (row: NativeIngestionRow, file: File) => Promise<void>;
+  onDeleteFixture?: (row: NativeIngestionRow) => void | Promise<void>;
   isBusy?: boolean;
 }
 
 const ROW_HEIGHT = 42;
 const ROW_NUMBER_WIDTH = 48;
+const ACTION_COLUMN_WIDTH = 96;
 const MIN_GRID_WIDTH = 1360;
 
 const BASE_COLUMNS: Array<{
@@ -242,6 +244,7 @@ export function NativeSpreadsheetGrid({
   rows,
   onRowsChange,
   onStageImage,
+  onDeleteFixture,
   isBusy,
 }: NativeSpreadsheetGridProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -263,7 +266,7 @@ export function NativeSpreadsheetGrid({
   const columns = useMemo(() => (showDetails ? [...BASE_COLUMNS, ...DETAIL_COLUMNS] : BASE_COLUMNS), [showDetails]);
   const totalWidth = Math.max(
     MIN_GRID_WIDTH,
-    ROW_NUMBER_WIDTH + columns.reduce((sum, column) => sum + column.width, 0),
+    ROW_NUMBER_WIDTH + columns.reduce((sum, column) => sum + column.width, 0) + (onDeleteFixture ? ACTION_COLUMN_WIDTH : 0),
   );
 
   const virtualizer = useVirtualizer({
@@ -848,6 +851,11 @@ export function NativeSpreadsheetGrid({
               {column.label}
             </div>
           ))}
+          {onDeleteFixture ? (
+            <div className="flex h-9 shrink-0 items-center border-r bg-slate-100 px-2" style={{ width: ACTION_COLUMN_WIDTH, minWidth: ACTION_COLUMN_WIDTH }}>
+              Actions
+            </div>
+          ) : null}
         </div>
 
         <div className="relative" style={{ height: virtualizer.getTotalSize(), width: totalWidth, minWidth: totalWidth }}>
@@ -887,6 +895,24 @@ export function NativeSpreadsheetGrid({
                   {virtualRow.index + 1}
                 </button>
                 {columns.map((column) => renderCell(row, virtualRow.index, column.key))}
+                {onDeleteFixture ? (
+                  <div className="flex h-10 shrink-0 items-center justify-center border-r border-slate-200 bg-white px-1" style={{ width: ACTION_COLUMN_WIDTH, minWidth: ACTION_COLUMN_WIDTH }}>
+                    {row.existing?.fixture_id ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-destructive hover:text-destructive"
+                        disabled={isBusy}
+                        title={`Delete fixture ${row.fixture_no || row.existing.fixture_no}`}
+                        onClick={() => void onDeleteFixture(row)}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        Delete
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             );
           })}

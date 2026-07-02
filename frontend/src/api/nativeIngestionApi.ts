@@ -93,6 +93,17 @@ export function stageNativeIngestionImage(
   );
 }
 
+export function deleteNativeProjectFixture(fixtureId: string, departmentId?: string | null) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+
+  return apiRequest<{ deleted: boolean; fixture_id: string; fixture_no: string; project_id: string }>(
+    `/design/native-ingestion/fixtures/${encodeURIComponent(fixtureId)}${params.toString() ? `?${params.toString()}` : ""}`,
+    { method: "DELETE" },
+  );
+}
 export function commitNativeIngestion(
   sessionId: string,
   context: NativeIngestionContext,

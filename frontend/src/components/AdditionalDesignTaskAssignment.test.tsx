@@ -76,6 +76,31 @@ const projectTwo = {
   project_name: "Second Project",
 };
 
+const completedProject = {
+  ...projectOne,
+  project_id: "project-completed",
+  project_no: "P-003",
+  project_name: "Completed Project",
+  project_status: "completed",
+};
+
+const releasedProject = {
+  ...projectOne,
+  project_id: "project-released",
+  project_no: "P-004",
+  project_name: "Released Project",
+  project_status: "released",
+};
+
+const nonDesignProject = {
+  ...projectOne,
+  project_id: "project-manufacturing",
+  project_no: "M-001",
+  project_name: "Manufacturing Project",
+  department_id: "manufacturing",
+  department_name: "Manufacturing",
+};
+
 function employee(employeeId: string, name: string, team: "2D" | "3D") {
   return {
     employee_id: employeeId,
@@ -108,7 +133,7 @@ function renderAssignment() {
 
 describe("AdditionalDesignTaskAssignment assignee scope", () => {
   beforeEach(() => {
-    fetchProjectDashboardSummary.mockResolvedValue([projectOne, projectTwo]);
+    fetchProjectDashboardSummary.mockResolvedValue([projectOne, projectTwo, completedProject, releasedProject, nonDesignProject]);
     fetchDesignFixtures.mockResolvedValue([]);
     fetchTaskAssignmentUsers.mockImplementation(async ({ project_id, stage_name }) => {
       if (project_id === "project-1") {
@@ -131,6 +156,16 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     vi.clearAllMocks();
   });
 
+
+  it("includes completed and released design projects without showing other departments", async () => {
+    renderAssignment();
+
+    expect(await screen.findByRole("option", { name: "P-001 — First Project" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "P-003 — Completed Project" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "P-004 — Released Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "M-001 — Manufacturing Project" })).not.toBeInTheDocument();
+  });
+
   it("uses the Project Fixtures scoped source directly and refreshes for project and team changes", async () => {
     renderAssignment();
     await screen.findByRole("option", { name: "P-001 — First Project" });
@@ -148,6 +183,7 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
       project_id: "project-1",
       stage_name: null,
     });
+    expect(fetchDesignFixtures).toHaveBeenCalledWith("project-1", "design");
 
     fireEvent.change(projectSelect, { target: { value: "project-2" } });
 

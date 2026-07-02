@@ -314,6 +314,29 @@ async function ensureDesignSubdivisionRoutingSchema(client) {
   `);
 
   await client.query(`
+    WITH ranked_assignments AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (
+          PARTITION BY project_id, subdivision_id, assigned_leader_id
+          ORDER BY created_at DESC, id DESC
+        ) AS assignment_rank
+      FROM design.project_subdivision_assignments
+      WHERE is_active = TRUE
+    )
+    DELETE FROM design.project_subdivision_assignments assignment
+    USING ranked_assignments ranked
+    WHERE assignment.id = ranked.id
+      AND ranked.assignment_rank > 1
+  `);
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_design_project_subdivision_assignments_active_unique
+    ON design.project_subdivision_assignments (project_id, subdivision_id, assigned_leader_id)
+    WHERE is_active = TRUE
+  `);
+
+  await client.query(`
     WITH design_department AS (
       SELECT id
       FROM departments

@@ -16,6 +16,7 @@ const {
   commitNativeSession,
   createNativeIngestionSession,
   createNativeProjectEditSession,
+  deleteNativeProjectFixture,
   importNativeExcel,
   pasteNativeClipboardRows,
   saveNativeDraft,
@@ -140,6 +141,16 @@ router.post(
   }),
 );
 
+router.delete(
+  "/design/native-ingestion/fixtures/:fixtureId",
+  authorizeNativeWorkspaceCommand,
+  asyncHandler(async (req, res) => {
+    const result = await deleteNativeProjectFixture(req.user, req.params.fixtureId, {
+      department_id: req.body?.department_id ?? req.query.department_id,
+    });
+    return sendSuccess(res, result, 200);
+  }),
+);
 router.post(
   "/design/native-ingestion/sessions/:sessionId/commit",
   authorizeNativeWorkspaceCommand,

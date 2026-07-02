@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Eye, PauseCircle, Pencil, PlayCircle, RefreshCw, Rocket, RotateCcw, Route, Trash2, Wrench } from "lucide-react";
 import { activateBatchProject, deleteBatch, fetchBatches, holdBatchProject, releaseBatchProject } from "@/api/batchApi";
-import { assignProjectTo2D, fetchProject2DRouting, reactivateProject, updateProject2DAssignment, updateProjectModification } from "@/api/designApi";
+import { assignProjectTo2D, deleteProject2DAssignment, fetchProject2DRouting, reactivateProject, updateProjectModification } from "@/api/designApi";
 import type { ReactivateProjectPayload } from "@/api/designApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -230,11 +230,21 @@ export default function Batches() {
     },
   });
 
-  const toggle2DMutation = useMutation({
-    mutationFn: ({ assignmentId, isActive }: { assignmentId: string; isActive: boolean }) =>
-      updateProject2DAssignment(routingBatch?.project_id || "", assignmentId, isActive),
+  const delete2DMutation = useMutation({
+    mutationFn: (assignmentId: string) => deleteProject2DAssignment(routingBatch?.project_id || "", assignmentId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["project-2d-routing", routingBatch?.project_id || ""] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project-2d-routing", routingBatch?.project_id || ""] }),
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+      ]);
+      toast({ title: "2D leader assignment deleted" });
+    },
+    onError: (error) => {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Could not delete this 2D leader assignment.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -801,20 +811,20 @@ export default function Batches() {
                 <div className="space-y-2">
                   {(routingQuery.data?.assignments ?? []).map((assignment) => (
                     <div key={assignment.id} className="flex items-center justify-between rounded-md border p-2 text-sm">
-                      <span>
-                        {formatEmployeeDisplay(assignment.assigned_leader_id, assignment.assigned_leader_name)}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {assignment.is_active ? "Active" : "Inactive"}
-                        </span>
-                      </span>
+                      <span>{formatEmployeeDisplay(assignment.assigned_leader_id, assignment.assigned_leader_name)}</span>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={toggle2DMutation.isPending}
-                        onClick={() => toggle2DMutation.mutate({ assignmentId: assignment.id, isActive: !assignment.is_active })}
+                        disabled={delete2DMutation.isPending}
+                        onClick={() => {
+                          if (window.confirm(`Delete 2D leader assignment for ${formatEmployeeDisplay(assignment.assigned_leader_id, assignment.assigned_leader_name)}?`)) {
+                            delete2DMutation.mutate(assignment.id);
+                          }
+                        }}
                       >
-                        {assignment.is_active ? "Deactivate" : "Activate"}
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        Delete
                       </Button>
                     </div>
                   ))}

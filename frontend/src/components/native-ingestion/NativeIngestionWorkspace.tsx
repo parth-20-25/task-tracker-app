@@ -14,6 +14,7 @@ import {
   commitNativeIngestion,
   createNativeIngestionSession,
   createNativeProjectEditSession,
+  deleteNativeProjectFixture,
   downloadNativeIngestionTemplate,
   importNativeIngestionExcel,
   pasteNativeIngestionClipboard,
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
+import { batchQueryKeys, projectQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import type {
   NativeCommitResponse,
@@ -55,7 +57,7 @@ import {
   padRows,
 } from "./nativeIngestionUtils";
 
-type BusyAction = "open" | "import" | "paste" | "template" | "validate" | "commit" | "image" | null;
+type BusyAction = "open" | "import" | "paste" | "template" | "validate" | "commit" | "image" | "delete" | null;
 
 function SummaryPill({
   label,
@@ -382,6 +384,37 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
       setBusy(null);
     }
   };
+  const runDeleteExistingFixture = async (row: NativeIngestionRow) => {
+    const fixtureId = row.existing?.fixture_id;
+    if (!fixtureId) return;
+
+    const fixtureLabel = row.fixture_no || row.existing?.fixture_no || "this fixture";
+    if (!window.confirm(`Delete fixture ${fixtureLabel}? This removes the fixture from the project and cannot be undone.`)) {
+      return;
+    }
+
+    setBusy("delete");
+    try {
+      const result = await deleteNativeProjectFixture(fixtureId, context.department_id);
+      setRows((current) => padRows(current.filter((item) => item.existing?.fixture_id !== fixtureId), current.length));
+      setSummary(null);
+      setLastCommit(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      ]);
+      toast({ title: "Fixture deleted", description: `${result.fixture_no} was removed from the project.` });
+    } catch (error) {
+      toast({
+        title: "Fixture deletion blocked",
+        description: error instanceof Error ? error.message : "The fixture could not be deleted.",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const departmentOptions = (departmentsQuery.data ?? []).filter((department) => department.is_active !== false);
   const updateDepartment = (departmentId: string) => {
@@ -537,6 +570,7 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
             setLastCommit(null);
           }}
           onStageImage={runStageImage}
+          onDeleteFixture={mode === "edit" ? runDeleteExistingFixture : undefined}
           isBusy={isBusy}
         />
       </div>

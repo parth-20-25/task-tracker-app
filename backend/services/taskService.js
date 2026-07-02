@@ -1073,12 +1073,12 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       String(projectId).trim(),
       user,
       resolvedDepartmentId,
-      { activeOnly: true },
+      { activeOnly: false },
       db,
     );
 
     if (!additionalProject) {
-      throw new AppError(404, "Active project not found or not accessible");
+      throw new AppError(404, "Project not found or not accessible");
     }
 
     if (payloadFixtureId) {

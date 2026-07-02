@@ -5,8 +5,8 @@ const {
   assignProjectTo2DLeader,
   canManageProject2DRouting,
   list2DLeadersForProject,
+  deleteProjectSubdivisionAssignment,
   listProjectSubdivisionAssignments,
-  setProjectSubdivisionAssignmentActive,
 } = require("../repositories/projectSubdivisionRoutingRepository");
 
 async function require2DRoutingManager(user, projectId, client = pool) {
@@ -23,16 +23,17 @@ async function getProject2DRouting(user, projectId) {
     list2DLeadersForProject(projectId),
     listProjectSubdivisionAssignments(projectId),
   ]);
+  const twoDAssignments = assignments.filter((assignment) => (
+    String(assignment.subdivision_name || "").trim().toLowerCase() === "2d"
+  ));
+  const assignedLeaderIds = new Set(twoDAssignments.map((assignment) => assignment.assigned_leader_id));
 
   return {
     project_id: projectId,
-    eligible_leaders: leaders,
-    assignments: assignments.filter((assignment) => (
-      String(assignment.subdivision_name || "").trim().toLowerCase() === "2d"
-    )),
+    eligible_leaders: leaders.filter((leader) => !assignedLeaderIds.has(leader.employee_id)),
+    assignments: twoDAssignments,
   };
 }
-
 async function assignProject2DLeader(user, projectId, assignedLeaderId) {
   const client = await pool.connect();
   let assignment;
@@ -68,25 +69,22 @@ async function assignProject2DLeader(user, projectId, assignedLeaderId) {
   return assignment;
 }
 
-async function updateProject2DAssignmentStatus(user, projectId, assignmentId, isActive) {
+async function deleteProject2DAssignment(user, projectId, assignmentId) {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
     await require2DRoutingManager(user, projectId, client);
-    const changedProjectId = await setProjectSubdivisionAssignmentActive(assignmentId, isActive === true, client);
-    if (String(changedProjectId) !== String(projectId)) {
-      throw new AppError(400, "Assignment does not belong to the selected project");
-    }
+    const deleted = await deleteProjectSubdivisionAssignment(projectId, assignmentId, client);
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
-      actionType: isActive === true ? "PROJECT_2D_ASSIGNMENT_ACTIVATED" : "PROJECT_2D_ASSIGNMENT_DEACTIVATED",
+      actionType: "PROJECT_2D_ASSIGNMENT_DELETED",
       targetType: "design_project_subdivision_assignment",
       targetId: assignmentId,
       metadata: {
         project_id: projectId,
-        is_active: isActive === true,
+        assigned_leader_id: deleted.assigned_leader_id || null,
       },
     }, client);
 
@@ -103,6 +101,6 @@ async function updateProject2DAssignmentStatus(user, projectId, assignmentId, is
 
 module.exports = {
   assignProject2DLeader,
+  deleteProject2DAssignment,
   getProject2DRouting,
-  updateProject2DAssignmentStatus,
 };

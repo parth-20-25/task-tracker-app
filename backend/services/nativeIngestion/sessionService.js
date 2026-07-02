@@ -864,6 +864,177 @@ async function stageNativeIngestionImage(user, sessionId, file, payload = {}) {
   };
 }
 
+async function queryOptionalDependency(client, sql, params) {
+  try {
+    return await client.query(sql, params);
+  } catch (error) {
+    if (error?.code === "42P01") {
+      return { rows: [{}], rowCount: 0 };
+    }
+    throw error;
+  }
+}
+
+function pushDependencyBlocker(blockers, count, singular, plural = `${singular}s`) {
+  const numericCount = Number(count || 0);
+  if (numericCount > 0) {
+    blockers.push(`${numericCount} ${numericCount === 1 ? singular : plural}`);
+  }
+}
+
+async function listFixtureDeleteBlockers(fixtureId, client) {
+  const blockers = [];
+
+  const taskResult = await queryOptionalDependency(client, `
+    SELECT
+      COUNT(*)::integer AS total_count,
+      COUNT(*) FILTER (WHERE COALESCE(status, '') NOT IN ('closed', 'cancelled'))::integer AS active_count
+    FROM tasks
+    WHERE fixture_id = $1
+  `, [fixtureId]);
+  const taskRow = taskResult.rows[0] || {};
+  pushDependencyBlocker(blockers, taskRow.active_count, "active task", "active tasks");
+  if (Number(taskRow.active_count || 0) === 0) {
+    pushDependencyBlocker(blockers, taskRow.total_count, "task history record", "task history records");
+  }
+
+  const progressResult = await queryOptionalDependency(client, `
+    SELECT COUNT(*)::integer AS touched_count
+    FROM fixture_workflow_progress
+    WHERE fixture_id = $1
+      AND (
+        status <> 'PENDING'
+        OR assigned_to IS NOT NULL
+        OR assigned_at IS NOT NULL
+        OR started_at IS NOT NULL
+        OR completed_at IS NOT NULL
+      )
+  `, [fixtureId]);
+  pushDependencyBlocker(blockers, progressResult.rows[0]?.touched_count, "started workflow stage", "started workflow stages");
+
+  const attemptResult = await queryOptionalDependency(client, `
+    SELECT COUNT(*)::integer AS count
+    FROM fixture_workflow_stage_attempts
+    WHERE fixture_id = $1
+  `, [fixtureId]);
+  pushDependencyBlocker(blockers, attemptResult.rows[0]?.count, "workflow attempt", "workflow attempts");
+
+  const revisionResult = await queryOptionalDependency(client, `
+    SELECT COUNT(*)::integer AS count
+    FROM fixture_workflow_revisions
+    WHERE fixture_id = $1
+  `, [fixtureId]);
+  pushDependencyBlocker(blockers, revisionResult.rows[0]?.count, "workflow revision", "workflow revisions");
+
+  const contributionResult = await queryOptionalDependency(client, `
+    SELECT COUNT(*)::integer AS count
+    FROM design.fixture_stage_contributions
+    WHERE fixture_id = $1
+  `, [fixtureId]);
+  pushDependencyBlocker(blockers, contributionResult.rows[0]?.count, "stage contribution", "stage contributions");
+
+  const snapshotResult = await queryOptionalDependency(client, `
+    SELECT COUNT(*)::integer AS count
+    FROM design.workflow_completion_snapshots
+    WHERE fixture_id = $1
+  `, [fixtureId]);
+  pushDependencyBlocker(blockers, snapshotResult.rows[0]?.count, "completion snapshot", "completion snapshots");
+
+  const outsourceResult = await queryOptionalDependency(client, `
+    SELECT COUNT(*)::integer AS count
+    FROM design.fixture_outsource_records
+    WHERE fixture_id = $1
+  `, [fixtureId]);
+  pushDependencyBlocker(blockers, outsourceResult.rows[0]?.count, "outsource history record", "outsource history records");
+
+  return blockers;
+}
+
+async function deleteNativeProjectFixture(user, fixtureId, payload = {}) {
+  const normalizedFixtureId = collapseWhitespace(fixtureId);
+  if (!normalizedFixtureId) {
+    throw new AppError(400, "fixture_id is required");
+  }
+
+  const requestedDepartmentId = collapseWhitespace(payload.department_id || payload.departmentId);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const fixtureResult = await client.query(
+      `
+        ${buildVisibleUsersCte("$1")}
+        SELECT
+          f.id AS fixture_id,
+          f.project_id,
+          f.fixture_no,
+          p.project_no,
+          p.department_id
+        FROM design.fixtures f
+        JOIN design.projects p
+          ON p.id = f.project_id
+        WHERE f.id = $2
+          AND ($3::text IS NULL OR p.department_id = $3)
+          AND ${visibleFixturePredicate("f", "p")}
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [user.employee_id, normalizedFixtureId, requestedDepartmentId || null],
+    );
+
+    const fixture = fixtureResult.rows[0] || null;
+    if (!fixture) {
+      throw new AppError(404, "Fixture not found or not accessible");
+    }
+
+    resolveNativeDepartmentId(user, fixture.department_id, {
+      requireDepartment: true,
+      message: "Invalid native fixture delete department context",
+    });
+
+    const blockers = await listFixtureDeleteBlockers(normalizedFixtureId, client);
+    if (blockers.length > 0) {
+      throw new AppError(
+        409,
+        `Cannot delete fixture ${fixture.fixture_no}: ${blockers.join(", ")} still reference it.`,
+        { blockers, fixture_id: normalizedFixtureId, fixture_no: fixture.fixture_no },
+        "FIXTURE_DELETE_BLOCKED",
+      );
+    }
+
+    await queryOptionalDependency(client, `DELETE FROM fixture_workflow WHERE fixture_id = $1`, [normalizedFixtureId]);
+    await client.query(`DELETE FROM design.fixtures WHERE id = $1`, [normalizedFixtureId]);
+
+    await createAuditLog({
+      userEmployeeId: user.employee_id,
+      actionType: "DESIGN_FIXTURE_DELETED",
+      targetType: "design_fixture",
+      targetId: normalizedFixtureId,
+      metadata: {
+        project_id: fixture.project_id,
+        project_no: fixture.project_no,
+        fixture_no: fixture.fixture_no,
+        department_id: fixture.department_id,
+        source: "native_project_edit_workspace",
+      },
+    }, client);
+
+    await client.query("COMMIT");
+
+    return {
+      deleted: true,
+      fixture_id: normalizedFixtureId,
+      fixture_no: fixture.fixture_no,
+      project_id: fixture.project_id,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 module.exports = {
   NATIVE_INGESTION_SOURCE,
   NATIVE_SUBSYSTEM,
@@ -871,6 +1042,7 @@ module.exports = {
   commitNativeSession,
   createNativeIngestionSession,
   createNativeProjectEditSession,
+  deleteNativeProjectFixture,
   importNativeExcel,
   pasteNativeClipboardRows,
   saveNativeDraft,

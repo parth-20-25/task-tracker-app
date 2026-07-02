@@ -39,8 +39,8 @@ const {
 const { reactivateProjectForModificationById } = require("../services/batchService");
 const {
   assignProject2DLeader,
+  deleteProject2DAssignment,
   getProject2DRouting,
-  updateProject2DAssignmentStatus,
 } = require("../services/projectSubdivisionRoutingService");
 
 const router = express.Router();
@@ -389,15 +389,14 @@ router.post(
   }),
 );
 
-router.patch(
+router.delete(
   "/design/projects/:projectId/2d-routing/:assignmentId",
   requireOperationalController,
   asyncHandler(async (req, res) => {
-    const routing = await updateProject2DAssignmentStatus(
+    const routing = await deleteProject2DAssignment(
       req.user,
       req.params.projectId,
       req.params.assignmentId,
-      req.body?.is_active === true,
     );
     return sendSuccess(res, routing);
   }),

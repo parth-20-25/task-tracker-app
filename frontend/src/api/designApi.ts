@@ -336,13 +336,10 @@ export function assignProjectTo2D(projectId: string, assignedLeaderId: string) {
   });
 }
 
-export function updateProject2DAssignment(projectId: string, assignmentId: string, isActive: boolean) {
+export function deleteProject2DAssignment(projectId: string, assignmentId: string) {
   return apiRequest<Project2DRouting>(
     `/design/projects/${encodeURIComponent(projectId)}/2d-routing/${encodeURIComponent(assignmentId)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ is_active: isActive }),
-    },
+    { method: "DELETE" },
   );
 }
 

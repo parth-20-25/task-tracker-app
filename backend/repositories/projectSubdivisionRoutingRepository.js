@@ -251,6 +251,17 @@ async function list2DLeadersForProject(projectId, client = pool) {
 async function listProjectSubdivisionAssignments(projectId, client = pool) {
   const result = await client.query(
     `
+      WITH active_assignments AS (
+        SELECT
+          psa.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY psa.project_id, psa.subdivision_id, psa.assigned_leader_id
+            ORDER BY psa.created_at DESC, psa.id DESC
+          ) AS assignment_rank
+        FROM design.project_subdivision_assignments psa
+        WHERE psa.project_id = $1
+          AND psa.is_active = TRUE
+      )
       SELECT
         psa.id,
         psa.project_id,
@@ -262,15 +273,15 @@ async function listProjectSubdivisionAssignments(projectId, client = pool) {
         assigner.name AS assigned_by_name,
         psa.created_at,
         psa.is_active
-      FROM design.project_subdivision_assignments psa
+      FROM active_assignments psa
       JOIN department_subdivisions ds
         ON ds.id = psa.subdivision_id
       LEFT JOIN users assigned_leader
         ON ${userIdentifierMatchSql("assigned_leader", "psa.assigned_leader_id")}
       LEFT JOIN users assigner
         ON ${userIdentifierMatchSql("assigner", "psa.assigned_by")}
-      WHERE psa.project_id = $1
-      ORDER BY psa.is_active DESC, psa.created_at DESC
+      WHERE psa.assignment_rank = 1
+      ORDER BY psa.created_at DESC
     `,
     [projectId],
   );
@@ -378,43 +389,87 @@ async function assignProjectTo2DLeader({ projectId, assignedLeaderId, assignedBy
     throw new AppError(400, "Assigned leader must be an active Design 2D Team Leader or Co-Leader");
   }
 
-  const result = await client.query(
+  await client.query(
     `
-      INSERT INTO design.project_subdivision_assignments (
-        project_id,
-        subdivision_id,
-        assigned_leader_id,
-        assigned_by,
-        created_at,
-        is_active
-      )
-      VALUES ($1, $2, $3, $4, NOW(), TRUE)
-      RETURNING id
+      SELECT id
+      FROM design.projects
+      WHERE id = $1
+      FOR UPDATE
     `,
-    [projectId, subdivision.id, assignedLeaderId, assignedBy || null],
+    [projectId],
   );
+
+  const existing = await client.query(
+    `
+      SELECT id
+      FROM design.project_subdivision_assignments
+      WHERE project_id = $1
+        AND subdivision_id = $2
+        AND assigned_leader_id = $3
+        AND is_active = TRUE
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [projectId, subdivision.id, assignedLeaderId],
+  );
+
+  if (existing.rowCount > 0) {
+    throw new AppError(409, "2D leader is already assigned to this project");
+  }
+
+  let result;
+  try {
+    result = await client.query(
+      `
+        INSERT INTO design.project_subdivision_assignments (
+          project_id,
+          subdivision_id,
+          assigned_leader_id,
+          assigned_by,
+          created_at,
+          is_active
+        )
+        VALUES ($1, $2, $3, $4, NOW(), TRUE)
+        ON CONFLICT (project_id, subdivision_id, assigned_leader_id)
+          WHERE is_active = TRUE
+        DO NOTHING
+        RETURNING id
+      `,
+      [projectId, subdivision.id, assignedLeaderId, assignedBy || null],
+    );
+  } catch (error) {
+    if (error?.code === "23505") {
+      throw new AppError(409, "2D leader is already assigned to this project");
+    }
+    throw error;
+  }
+
+  if (result.rowCount === 0) {
+    throw new AppError(409, "2D leader is already assigned to this project");
+  }
 
   return (await listProjectSubdivisionAssignments(projectId, client))
     .find((assignment) => assignment.id === result.rows[0]?.id) || null;
 }
 
-async function setProjectSubdivisionAssignmentActive(assignmentId, isActive, client = pool) {
+async function deleteProjectSubdivisionAssignment(projectId, assignmentId, client = pool) {
   const result = await client.query(
     `
-      UPDATE design.project_subdivision_assignments
-      SET is_active = $2
+      DELETE FROM design.project_subdivision_assignments
       WHERE id = $1
-      RETURNING project_id
+        AND project_id = $2
+      RETURNING project_id, assigned_leader_id
     `,
-    [assignmentId, isActive === true],
+    [assignmentId, projectId],
   );
 
   if (result.rowCount === 0) {
     throw new AppError(404, "Project subdivision assignment not found");
   }
 
-  return result.rows[0].project_id;
+  return result.rows[0];
 }
+
 
 module.exports = {
   DESIGN_2D_LEADER_ROLE_KEYS,
@@ -424,6 +479,7 @@ module.exports = {
   assignProjectTo2DLeader,
   canManageProject2DRouting,
   current2DWorkflowStageFixtureSql,
+  deleteProjectSubdivisionAssignment,
   is2DLeaderUser,
   is2DSubdivisionUser,
   isProjectAssignedTo2DLeader,
@@ -431,7 +487,6 @@ module.exports = {
   list2DLeadersForProject,
   listProjectSubdivisionAssignments,
   projectHasActive2DRouting,
-  setProjectSubdivisionAssignmentActive,
   twoDSubdivisionSql,
   twoDStageNameSql,
   userIs2DLeaderSql,

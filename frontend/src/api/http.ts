@@ -1,8 +1,18 @@
 import { ApiError } from "@/lib/api/ApiError";
 import { API_BASE_URL } from "@/api/config";
 
+function readTokenFromStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.localStorage.getItem("token");
+}
+
+let authToken: string | null = readTokenFromStorage();
+
 export function getStoredToken() {
-  return localStorage.getItem("token");
+  return authToken ?? readTokenFromStorage();
 }
 
 function parsePayload(text: string) {
@@ -18,12 +28,18 @@ function parsePayload(text: string) {
 }
 
 export function setToken(token: string | null) {
-  if (token) {
-    localStorage.setItem("token", token);
+  authToken = token;
+
+  if (typeof window === "undefined") {
     return;
   }
 
-  localStorage.removeItem("token");
+  if (token) {
+    window.localStorage.setItem("token", token);
+    return;
+  }
+
+  window.localStorage.removeItem("token");
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

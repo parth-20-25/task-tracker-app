@@ -1,3 +1,5 @@
+process.env.VITE_API_URL ||= "http://localhost:5000";
+
 import "@testing-library/jest-dom";
 
 Object.defineProperty(window, "matchMedia", {

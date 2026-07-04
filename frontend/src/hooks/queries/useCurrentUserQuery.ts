@@ -3,11 +3,11 @@ import { getCurrentUser } from "@/api/authApi";
 import { getStoredToken } from "@/api/http";
 import { authQueryKeys } from "@/lib/queryKeys";
 
-export function useCurrentUserQuery() {
+export function useCurrentUserQuery(enabled = !!getStoredToken()) {
   return useQuery({
     queryKey: authQueryKeys.currentUser,
     queryFn: getCurrentUser,
-    enabled: !!getStoredToken(),
+    enabled,
     retry: false,
   });
 }

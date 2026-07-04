@@ -1,15 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { useAuth } from "@/contexts/useAuth";
 import { TaskProvider } from "@/contexts/TaskContext";
+import { LoginRoute, ProtectedRoute } from "@/components/AuthRoutes";
 import { AppLayout } from "@/components/AppLayout";
-import { AppBootSkeleton, RouteContentSkeleton } from "@/components/LoadingSkeletons";
+import { RouteContentSkeleton } from "@/components/LoadingSkeletons";
 import { PWAUpdatePrompt } from "@/components/PWAUpdatePrompt";
-import Login from "./pages/Login";
 import React, { Suspense } from "react";
 import { isDesignDepartment } from "@/lib/departments";
 import { isProjectAuthorityUser } from "@/lib/permissions";
@@ -53,13 +53,7 @@ function AppLayoutRoutes() {
 }
 
 function AuthenticatedApp() {
-  const { isAuthenticated, isReady, access } = useAuth();
-
-  if (!isReady) {
-    return <AppBootSkeleton />;
-  }
-
-  if (!isAuthenticated) return <Login />;
+  const { access } = useAuth();
 
   return (
     <TaskProvider>
@@ -73,6 +67,20 @@ function AuthenticatedApp() {
   );
 }
 
+function AppRoutes() {
+  const location = useLocation();
+
+  if (location.pathname === "/login") {
+    return <LoginRoute />;
+  }
+
+  return (
+    <ProtectedRoute>
+      <AuthenticatedApp />
+    </ProtectedRoute>
+  );
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -81,7 +89,7 @@ const App = () => (
       <PWAUpdatePrompt />
       <AuthProvider>
         <BrowserRouter>
-          <AuthenticatedApp />
+          <AppRoutes />
         </BrowserRouter>
       </AuthProvider>
     </TooltipProvider>

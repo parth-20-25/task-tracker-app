@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { loginRequest } from "@/api/authApi";
 import { getStoredToken, setToken } from "@/api/http";
@@ -10,12 +10,18 @@ import { AuthContext, type AuthContextType } from "@/contexts/useAuth";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
-  const currentUserQuery = useCurrentUserQuery();
+  const [sessionToken, setSessionToken] = useState(() => getStoredToken());
+  const hasToken = Boolean(sessionToken);
+  const currentUserQuery = useCurrentUserQuery(hasToken);
   const currentUser = currentUserQuery.data ?? null;
-  const hasToken = !!getStoredToken();
 
   const role = currentUser?.role || null;
   const access = buildUiAccess(currentUser);
+
+  const persistSessionToken = useCallback((token: string | null) => {
+    setToken(token);
+    setSessionToken(token);
+  }, []);
 
   useEffect(() => {
     if (!hasToken || !currentUserQuery.isError) {
@@ -23,30 +29,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (currentUserQuery.error instanceof ApiError && currentUserQuery.error.status === 401) {
-      setToken(null);
+      persistSessionToken(null);
       queryClient.removeQueries({ queryKey: authQueryKeys.currentUser });
     }
-  }, [currentUserQuery.error, currentUserQuery.isError, hasToken, queryClient]);
+  }, [currentUserQuery.error, currentUserQuery.isError, hasToken, persistSessionToken, queryClient]);
 
   const refreshSession = useCallback(async () => {
     if (!getStoredToken()) {
+      persistSessionToken(null);
       queryClient.removeQueries({ queryKey: authQueryKeys.currentUser });
       return;
     }
 
-    try {
-      await currentUserQuery.refetch();
-    } catch (_error) {
-      setToken(null);
+    const result = await currentUserQuery.refetch();
+
+    if (result.error) {
+      persistSessionToken(null);
       queryClient.removeQueries({ queryKey: authQueryKeys.currentUser });
     }
-  }, [currentUserQuery, queryClient]);
+  }, [currentUserQuery, persistSessionToken, queryClient]);
 
   const login = useCallback(async (employeeId: string, password: string): ReturnType<AuthContextType["login"]> => {
     try {
       const response = await loginRequest(employeeId, password);
-      setToken(response.token);
+      persistSessionToken(response.token);
       queryClient.setQueryData(authQueryKeys.currentUser, response.user);
+      void queryClient.invalidateQueries({ queryKey: authQueryKeys.currentUser });
       return { success: true };
     } catch (error) {
       return {
@@ -54,18 +62,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         error: error instanceof Error ? error.message : "Login failed",
       };
     }
-  }, [queryClient]);
+  }, [persistSessionToken, queryClient]);
 
   const logout = useCallback(() => {
-    setToken(null);
-    queryClient.setQueryData(authQueryKeys.currentUser, null);
+    persistSessionToken(null);
     void queryClient.cancelQueries();
+    queryClient.setQueryData(authQueryKeys.currentUser, null);
     queryClient.removeQueries();
-  }, [queryClient]);
+  }, [persistSessionToken, queryClient]);
 
   const hasPermission = useCallback((permission: string) => {
     return hasUserPermission(currentUser, permission);
   }, [currentUser]);
+
+  const hasResolvedCurrentUser = currentUserQuery.data !== undefined || currentUserQuery.isFetched || currentUserQuery.isError;
 
   return (
     <AuthContext.Provider
@@ -75,8 +85,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         access,
         login,
         logout,
-        isAuthenticated: !!currentUser,
-        isReady: !hasToken || currentUserQuery.isFetched || currentUserQuery.isError,
+        isAuthenticated: hasToken && !!currentUser,
+        isReady: !hasToken || hasResolvedCurrentUser,
         hasPermission,
         refreshSession,
       }}

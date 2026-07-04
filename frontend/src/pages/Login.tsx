@@ -1,28 +1,37 @@
-import { useState } from 'react';
-import { useAuth } from '@/contexts/useAuth';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { Settings, AlertCircle } from 'lucide-react';
+import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/useAuth";
+import { getPostLoginRedirectPath } from "@/lib/authNavigation";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Settings, AlertCircle } from "lucide-react";
 
 export default function Login() {
   const { login } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  const [employeeId, setEmployeeId] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [employeeId, setEmployeeId] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // 🔴 NORMAL LOGIN
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError("");
+    setIsSubmitting(true);
 
     const result = await login(employeeId, password);
 
     if (!result.success) {
       setError(result.error || "Login failed");
+      setIsSubmitting(false);
+      return;
     }
+
+    navigate(getPostLoginRedirectPath(location.state), { replace: true });
   };
 
   return (
@@ -74,7 +83,7 @@ export default function Login() {
                 </div>
               )}
 
-              <Button type="submit" className="w-full">
+              <Button type="submit" className="w-full" disabled={isSubmitting}>
                 Sign In
               </Button>
 

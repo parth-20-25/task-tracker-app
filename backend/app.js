@@ -11,6 +11,7 @@ const { errorHandler } = require("./middleware/errorHandler");
 const { adminRoutes } = require("./routes/adminRoutes");
 const { authRoutes } = require("./routes/authRoutes");
 const { taskRoutes } = require("./routes/taskRoutes");
+const { notificationRoutes } = require("./routes/notificationRoutes");
 const { analyticsRoutes } = require("./routes/analyticsRoutes");
 const overviewRoute = require("./routes/analytics/overviewRoute");
 const deadlineHonestyRoute = require("./routes/analytics/deadlineHonestyRoute");
@@ -48,6 +49,7 @@ function createApp() {
   app.use("/api", retiredUploadRoutes);
   app.use("/api", authRoutes);
   app.use("/api", taskRoutes);
+  app.use("/api", notificationRoutes);
   app.use("/api", nativeIngestionRoutes);
   app.use("/api", designRoutes);
   app.use("/api", workflowRoutes);

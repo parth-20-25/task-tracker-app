@@ -6,7 +6,7 @@ import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/useAuth';
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
-  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarFooter,
+  SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarFooter,
 } from '@/components/ui/sidebar';
 import { useSidebar } from '@/components/ui/sidebar-context';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -16,11 +16,24 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { isDesignDepartment } from '@/lib/departments';
 import { isProjectAuthorityUser } from '@/lib/permissions';
+import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
 
 export function AppSidebar() {
   const { user, role, access, logout } = useAuth();
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
+  const includeTeamOverdueAlerts = Boolean(user?.employee_id)
+    && (
+      access.canViewTeamTasks
+      || access.canAccessProjectFixtures
+      || access.canApproveCompletedTasks
+      || access.canApproveQuality
+      || isProjectAuthorityUser(user)
+    );
+  const myOverdueAlertsQuery = useMyOverdueAlertsQuery(Boolean(user?.employee_id));
+  const teamOverdueAlertsQuery = useTeamOverdueAlertsQuery(includeTeamOverdueAlerts);
+  const overdueAlertCount = (myOverdueAlertsQuery.data?.length || 0)
+    + (includeTeamOverdueAlerts ? teamOverdueAlertsQuery.data?.length || 0 : 0);
 
   const mainItems = [
     { title: 'Dashboard', url: '/', icon: LayoutDashboard },
@@ -70,6 +83,11 @@ export function AppSidebar() {
                     <NavLink to={item.url} end className="hover:bg-sidebar-accent" activeClassName="bg-sidebar-accent text-sidebar-primary font-medium">
                       <item.icon className="mr-2 h-4 w-4" />
                       {!collapsed && <span>{item.title}</span>}
+                      {item.title === 'Dashboard' && overdueAlertCount > 0 ? (
+                        <SidebarMenuBadge className="bg-amber-100 text-amber-900">
+                          {overdueAlertCount}
+                        </SidebarMenuBadge>
+                      ) : null}
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

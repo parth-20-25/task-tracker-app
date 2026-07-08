@@ -10,10 +10,11 @@ import { MetricCard } from '@/components/MetricCard';
 import { NativeFixtureIngestionLauncher, NativeProjectEditWorkspace } from '@/components/native-ingestion/NativeIngestionWorkspace';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
-import { ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
+import { AlertTriangle, ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User as UserIcon, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
 import { isProjectAuthorityUser } from '@/lib/permissions';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -22,8 +23,10 @@ import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys
 import { formatProjectNumber } from '@/lib/projectDisplay';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { TaskCard } from '@/components/TaskCard';
+import { OverdueAlertModal } from '@/components/OverdueAlertModal';
 import { isMyActiveTask, isPendingVerificationTask, isTaskAssignedToEmployee } from '@/lib/taskFilters';
 import { toast } from '@/hooks/use-toast';
+import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
 import type { ProjectDashboardSummary, ProjectStatus, User } from '@/types';
 
 function statusLabel(status: ProjectStatus) {
@@ -176,7 +179,7 @@ function ProjectCard({
           <span>{project.customer_name || "No customer"}</span>
         </div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <User className="h-3 w-3" />
+          <UserIcon className="h-3 w-3" />
           <span>Team Leader: {formatEmployeeDisplay(project.team_lead_id || null, project.team_lead_name)}</span>
         </div>
         {projectTerminal && canReactivateProject ? (
@@ -210,6 +213,19 @@ export default function Dashboard() {
   const isProjectFirstRole = isProjectAuthorityUser(user);
   const canAccessProjectFixtures = access.canAccessProjectFixtures;
   const canUploadDesignNative = access.canUploadNativeDesignData;
+  const includeTeamOverdueAlerts = Boolean(user?.employee_id)
+    && (
+      access.canViewTeamTasks
+      || access.canAccessProjectFixtures
+      || access.canApproveCompletedTasks
+      || access.canApproveQuality
+      || isProjectAuthorityUser(user)
+    );
+
+  const myOverdueAlertsQuery = useMyOverdueAlertsQuery(Boolean(user?.employee_id));
+  const teamOverdueAlertsQuery = useTeamOverdueAlertsQuery(includeTeamOverdueAlerts);
+  const overdueAlertCount = (myOverdueAlertsQuery.data?.length || 0)
+    + (includeTeamOverdueAlerts ? teamOverdueAlertsQuery.data?.length || 0 : 0);
 
   // ── Backend-authoritative project data ────────────────────────────────────
   const projectSummaryQuery = useQuery({
@@ -376,10 +392,22 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <OverdueAlertModal includeTeam={includeTeamOverdueAlerts} />
+
       <div>
         <h1 className="text-2xl font-bold">Welcome, {user?.name?.split(' ')[0]}</h1>
         <p className="text-sm text-muted-foreground">{role?.name} · {user?.department?.name || 'All Departments'}</p>
       </div>
+
+      {overdueAlertCount > 0 ? (
+        <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+          <AlertTriangle className="h-4 w-4 text-amber-700" />
+          <AlertTitle>Overdue notification</AlertTitle>
+          <AlertDescription>
+            {overdueAlertCount} active overdue alert{overdueAlertCount === 1 ? "" : "s"} need attention.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {isProjectFirstRole ? (
         /* ── Project-authority users: project-level metrics ─────────────── */

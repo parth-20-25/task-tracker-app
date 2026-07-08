@@ -3,6 +3,7 @@ const { ensureDesignDepartmentSchema } = require("../repositories/designSchemaRe
 const { repairOrphanDesignProjects } = require("./workflowRecoveryService");
 const {
   ensureReferenceTables,
+  ensureTaskNotificationsTable,
   ensureTasksTable,
   ensureUsersTable,
   syncTaskEscalationSchedule,
@@ -30,6 +31,7 @@ async function initDatabase() {
     console.log("[bootstrap] Ensuring tables exist...");
     await ensureUsersTable(client);
     await ensureTasksTable(client);
+    await ensureTaskNotificationsTable(client);
     await ensureReferenceTables(client);
     await alignPermissionData(client);
     await ensurePerformanceAnalyticsTables(client);

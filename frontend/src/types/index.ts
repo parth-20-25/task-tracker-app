@@ -91,6 +91,7 @@ export interface Task {
   assignee_ids: string[];
   assignee_names?: string | null;
   assigned_by: string;
+  assigned_at?: string | null;
   created_by?: string | null;
   department_id: string;
   workflow_template_id?: string | null;
@@ -191,6 +192,42 @@ export interface WorkflowTemplate {
   updated_at?: string | null;
 }
 
+export interface TaskNotification {
+  id: string;
+  task_id: number | null;
+  project_id?: string | null;
+  recipient_user_id: string;
+  notification_type: "OVERDUE_TASK" | "TEAM_OVERDUE_TASK";
+  title: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  status: "unread" | "read" | "acknowledged";
+  triggered_at: string;
+  acknowledged_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OverdueAlert {
+  notification_id: string;
+  notification_type: "OVERDUE_TASK" | "TEAM_OVERDUE_TASK";
+  notification_status: "unread" | "read" | "acknowledged";
+  notification_title: string;
+  notification_message: string;
+  severity: "info" | "warning" | "critical";
+  triggered_at: string;
+  task_id: number;
+  project_id?: string | null;
+  project_number: string;
+  project_name: string;
+  stage_task_name: string;
+  deadline: string;
+  overdue_minutes: number;
+  time_overdue: string;
+  current_status: string;
+  employee_name?: string | null;
+  employee_id?: string | null;
+}
 export interface TaskActivity {
   id: string;
   task_id: number;

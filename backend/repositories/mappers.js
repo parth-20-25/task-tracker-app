@@ -156,6 +156,7 @@ function mapTaskRow(row) {
     assignee_ids: parseJsonArray(row.assignee_ids),
     assignee_names: row.assignee_names || null,
     assigned_by: row.assigned_by,
+    assigned_at: row.assigned_at || null,
     created_by: row.created_by || row.assigned_by || null,
     department_id: row.department_id,
     workflow_template_id: row.workflow_template_id || null,

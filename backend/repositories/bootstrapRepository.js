@@ -526,6 +526,51 @@ async function ensureTasksTable(client) {
 
 }
 
+async function ensureTaskNotificationsTable(client) {
+  await client.query(`SET search_path TO public`);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS task_notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+      project_id UUID,
+      recipient_user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'warning',
+      status TEXT NOT NULL DEFAULT 'unread',
+      triggered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT task_notifications_type_check
+        CHECK (notification_type IN ('OVERDUE_TASK', 'TEAM_OVERDUE_TASK')),
+      CONSTRAINT task_notifications_status_check
+        CHECK (status IN ('unread', 'read', 'acknowledged')),
+      CONSTRAINT task_notifications_severity_check
+        CHECK (severity IN ('info', 'warning', 'critical'))
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_task_notification
+    ON task_notifications (task_id, recipient_user_id, notification_type)
+    WHERE task_id IS NOT NULL
+      AND status IN ('unread', 'read')
+  `, "uniq_active_task_notification");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_task_notifications_recipient_status
+    ON task_notifications (recipient_user_id, status, triggered_at DESC)
+  `, "idx_task_notifications_recipient_status");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_task_notifications_task_recipient_type
+    ON task_notifications (task_id, recipient_user_id, notification_type)
+  `, "idx_task_notifications_task_recipient_type");
+}
+
 async function ensureReferenceTables(client) {
   await client.query(`SET search_path TO public`);
   await ensurePerformanceAnalyticsTables(client);
@@ -1703,6 +1748,7 @@ async function syncTaskEscalationSchedule(client) {
 
 module.exports = {
   ensureReferenceTables,
+  ensureTaskNotificationsTable,
   ensureTasksTable,
   ensureUsersTable,
   normalizeSeedUserPasswords,

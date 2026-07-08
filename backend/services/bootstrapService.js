@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const { ensureControlWorkflowSchema } = require("../repositories/controlWorkflowSchemaRepository");
 const { ensureDesignDepartmentSchema } = require("../repositories/designSchemaRepository");
 const { repairOrphanDesignProjects } = require("./workflowRecoveryService");
 const {
@@ -36,6 +37,7 @@ async function initDatabase() {
     await alignPermissionData(client);
     await ensurePerformanceAnalyticsTables(client);
     await ensureDesignDepartmentSchema(client);
+    await ensureControlWorkflowSchema(client);
 
     console.log("[bootstrap] Skipping seed and demo data initialization.");
     await repairOrphanDesignProjects(null, client);

@@ -8,6 +8,7 @@ import type { ReactivateProjectPayload } from '@/api/designApi';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { NativeFixtureIngestionLauncher, NativeProjectEditWorkspace } from '@/components/native-ingestion/NativeIngestionWorkspace';
+import { ControlWorkflowSection } from '@/components/ControlWorkflowSection';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
 import { AlertTriangle, ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User as UserIcon, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
@@ -509,6 +510,8 @@ export default function Dashboard() {
             </SelectContent>
           </Select>
         </div>
+
+        {selectedProject ? <ControlWorkflowSection project={selectedProject} /> : null}
 
         {!selectedProjectId ? (
           <Card>

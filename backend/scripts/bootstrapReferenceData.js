@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const { ensureControlWorkflowSchema } = require("../repositories/controlWorkflowSchemaRepository");
 const { ensureDesignDepartmentSchema } = require("../repositories/designSchemaRepository");
 const { alignPermissionData } = require("../repositories/permissionRepository");
 const {
@@ -22,6 +23,7 @@ async function main() {
     await ensureTasksTable(client);
     await ensureReferenceTables(client);
     await ensureDesignDepartmentSchema(client);
+    await ensureControlWorkflowSchema(client);
     await seedReferenceData(client);
     await seedPermissionsAndWorkflows(client);
     await alignPermissionData(client);

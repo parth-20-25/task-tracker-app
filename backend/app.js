@@ -23,6 +23,7 @@ const { designRoutes } = require("./routes/designRoutes");
 const { nativeIngestionRoutes } = require("./routes/nativeIngestionRoutes");
 const { retiredUploadRoutes } = require("./routes/retiredUploadRoutes");
 const { workflowRoutes } = require("./routes/workflowRoutes");
+const { controlWorkflowRoutes } = require("./routes/controlWorkflowRoutes");
 const workflowAnalyticsRoutes = require("./routes/workflowAnalyticsRoutes");
 const { batchRoutes } = require("./routes/batchRoutes");
 const { issueRoutes } = require("./routes/issueRoutes");
@@ -53,6 +54,7 @@ function createApp() {
   app.use("/api", nativeIngestionRoutes);
   app.use("/api", designRoutes);
   app.use("/api", workflowRoutes);
+  app.use("/api", controlWorkflowRoutes);
   app.use("/api", batchRoutes);
   app.use("/api", issueRoutes);
   app.use("/api", analyticsRoutes);

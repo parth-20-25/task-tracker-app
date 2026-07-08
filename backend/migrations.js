@@ -1,4 +1,5 @@
 const pool = require("./db");
+const { ensureControlWorkflowSchema } = require("./repositories/controlWorkflowSchemaRepository");
 const { ensureDesignDepartmentSchema } = require("./repositories/designSchemaRepository");
 const { seedPermissions } = require("./repositories/permissionRepository");
 
@@ -687,6 +688,7 @@ async function runMigrations() {
     `);
 
     await ensureDesignDepartmentSchema(client);
+    await ensureControlWorkflowSchema(client);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS issues (

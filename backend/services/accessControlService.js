@@ -86,6 +86,10 @@ function isProjectAuthorityRole(user) {
     || isProjectAuthorityRoleIdentity(getRoleId(user));
 }
 
+function isExecutiveDashboardRole(user) {
+  return isProjectAuthorityRole(user);
+}
+
 function isOperationalControllerRole(user) {
   const roleDetails = getRoleDetails(user);
   const roleNameKey = normalizeRoleKey(roleDetails?.name);
@@ -584,6 +588,7 @@ module.exports = {
   isTaskDirectAssignee,
   isTaskOwnedByUser,
   isAdmin,
+  isExecutiveDashboardRole,
   isOperationalControllerRole,
   isProjectAuthorityRole,
   isSupervisor,

@@ -7,7 +7,7 @@ const { handleReferenceImageUpload } = require("../lib/designFixtureReferenceIma
 const { uploadFixtureReferenceImageFile } = require("../lib/supabaseStorage");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
-const { authorize, requireOperationalController } = require("../middleware/authorize");
+const { authorize, requireExecutiveDashboardAccess, requireOperationalController } = require("../middleware/authorize");
 const { resolveWorkflowForDepartment } = require("../services/taskService");
 const { getStageById } = require("../services/workflowService");
 const {
@@ -260,6 +260,7 @@ router.get(
 
 router.get(
   "/dashboard/executive",
+  requireExecutiveDashboardAccess,
   asyncHandler(async (req, res) => {
     const dashboard = await getExecutiveDashboardForUser(req.user, req.query);
     return sendSuccess(res, dashboard);

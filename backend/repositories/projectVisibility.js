@@ -10,6 +10,7 @@ const PROJECT_AUTHORITY_ROLE_KEYS = [
   "ceo",
   "director",
   "director_ceo",
+  "ceo_director",
 ];
 // Numeric hierarchy is not an authority contract. Kept only as a deprecated export.
 const PROJECT_AUTHORITY_MAX_HIERARCHY_LEVEL = null;

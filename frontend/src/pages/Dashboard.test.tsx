@@ -13,10 +13,16 @@ const designApi = vi.hoisted(() => ({
   updateProjectModification: vi.fn(),
 }));
 
+const executiveDashboard = vi.hoisted(() => ({
+  render: vi.fn(),
+}));
+
 let mockAuth: {
-  user: Partial<User>;
-  role: { id: string; name: string };
+  user: Partial<User> | null;
+  role: { id: string; name: string } | null;
   access: Record<string, boolean>;
+  isAuthenticated: boolean;
+  isReady: boolean;
 };
 
 vi.mock("@/api/designApi", () => ({
@@ -45,7 +51,10 @@ vi.mock("@/components/native-ingestion/NativeIngestionWorkspace", () => ({
 }));
 
 vi.mock("@/components/ExecutiveDashboard", () => ({
-  ExecutiveDashboard: () => <div>Executive Dashboard Surface</div>,
+  ExecutiveDashboard: () => {
+    executiveDashboard.render();
+    return <div>Executive Dashboard Surface</div>;
+  },
 }));
 
 vi.mock("@/components/ControlDesignDashboardWorkspace", () => ({
@@ -125,48 +134,70 @@ function buildControlUser(overrides: Partial<User> = {}) {
   } satisfies Partial<User>;
 }
 
-function setControlDesignAuth() {
+function setMockAuth({
+  user,
+  role,
+  access,
+  isReady = true,
+}: {
+  user: Partial<User> | null;
+  role: { id: string; name: string } | null;
+  access: Record<string, boolean>;
+  isReady?: boolean;
+}) {
   mockAuth = {
-    user: buildControlUser({
-      subdivision_id: "sub-control-design",
-      subdivision: {
-        id: "sub-control-design",
-        department_id: "control",
-        subdivision_name: "Control Design",
-        is_active: true,
-      },
-    }),
-    role: { id: "team_leader", name: "Team Leader" },
-    access: { ...baseAccess, canAssignTasks: true, canAssignControlDesignProjects: true },
+    user,
+    role,
+    access,
+    isReady,
+    isAuthenticated: isReady && Boolean(user),
   };
 }
 
-function setControlWithoutDesignSubdivisionAuth() {
-  mockAuth = {
+function setControlDesignAuth() {
+  const user = buildControlUser({
+    subdivision_id: "sub-control-design",
+    subdivision: {
+      id: "sub-control-design",
+      department_id: "control",
+      subdivision_name: "Control Design",
+      is_active: true,
+    },
+  });
+  setMockAuth({
+    user,
+    role: { id: "team_leader", name: "Team Leader" },
+    access: { ...baseAccess, canAssignTasks: true, canAssignControlDesignProjects: true },
+  });
+}
+
+function setControlWithoutDesignSubdivisionAuth(accessOverrides: Record<string, boolean> = {}) {
+  setMockAuth({
     user: buildControlUser(),
     role: { id: "team_leader", name: "Team Leader" },
-    access: { ...baseAccess, canAssignTasks: true, canApproveCompletedTasks: true, canChangeFixtureStage: true },
-  };
+    access: { ...baseAccess, canAssignTasks: true, canApproveCompletedTasks: true, canChangeFixtureStage: true, ...accessOverrides },
+  });
 }
 
 function setControlOtherSubdivisionAuth() {
-  mockAuth = {
-    user: buildControlUser({
-      subdivision_id: "sub-plc",
-      subdivision: {
-        id: "sub-plc",
-        department_id: "control",
-        subdivision_name: "PLC Programming",
-        is_active: true,
-      },
-    }),
+  const user = buildControlUser({
+    subdivision_id: "sub-plc",
+    subdivision: {
+      id: "sub-plc",
+      department_id: "control",
+      subdivision_name: "PLC Programming",
+      is_active: true,
+    },
+  });
+  setMockAuth({
+    user,
     role: { id: "team_leader", name: "Team Leader" },
     access: { ...baseAccess, canAssignTasks: true },
-  };
+  });
 }
 
-function setDesignAuth() {
-  mockAuth = {
+function setDesignAuth(accessOverrides: Record<string, boolean> = {}) {
+  setMockAuth({
     user: {
       employee_id: "EMP-DESIGN",
       name: "Design User",
@@ -179,28 +210,66 @@ function setDesignAuth() {
       created_at: "2026-07-01T00:00:00.000Z",
     },
     role: { id: "team_leader", name: "Team Leader" },
-    access: { ...baseAccess },
-  };
+    access: { ...baseAccess, ...accessOverrides },
+  });
 }
 
-function setExecutiveAuth() {
-  mockAuth = {
+function setDesignEmployeeAuth() {
+  setMockAuth({
     user: {
-      employee_id: "EMP-ADMIN",
-      name: "Admin User",
+      employee_id: "EMP-DESIGN-1",
+      name: "Design Employee",
       department_id: "design",
       department: { id: "design", name: "Design" },
-      role_id: "r1",
-      role: { id: "r1", name: "Admin", hierarchy_level: 1, permissions: { all: true }, scope: "global" },
+      role_id: "employee",
+      role: { id: "employee", name: "Employee", hierarchy_level: 6, permissions: {}, scope: "self" },
       permissions: [],
       is_active: true,
       created_at: "2026-07-01T00:00:00.000Z",
     },
-    role: { id: "r1", name: "Admin" },
-    access: { ...baseAccess, canViewAllDepartmentsAnalytics: true },
-  };
+    role: { id: "employee", name: "Employee" },
+    access: {
+      ...baseAccess,
+      canAccessProjectFixtures: false,
+      canUploadNativeDesignData: false,
+      canViewSelfTasks: true,
+    },
+  });
 }
 
+function setExecutiveAuth(roleOverride: { id: string; name: string; hierarchy_level?: number } = { id: "r1", name: "Admin", hierarchy_level: 1 }) {
+  const role = {
+    id: roleOverride.id,
+    name: roleOverride.name,
+    hierarchy_level: roleOverride.hierarchy_level ?? 1,
+    permissions: roleOverride.id === "r1" ? { all: true } : {},
+    scope: "global" as const,
+  };
+  setMockAuth({
+    user: {
+      employee_id: `EMP-${roleOverride.id.toUpperCase()}`,
+      name: `${roleOverride.name} User`,
+      department_id: "design",
+      department: { id: "design", name: "Design" },
+      role_id: roleOverride.id,
+      role,
+      permissions: [],
+      is_active: true,
+      created_at: "2026-07-01T00:00:00.000Z",
+    },
+    role: { id: roleOverride.id, name: roleOverride.name },
+    access: { ...baseAccess, canViewAllDepartmentsAnalytics: true },
+  });
+}
+
+function setLoadingAuth() {
+  setMockAuth({
+    user: null,
+    role: null,
+    access: { ...baseAccess },
+    isReady: false,
+  });
+}
 function renderDashboard(route = "/") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -226,13 +295,34 @@ describe("Dashboard workspace routing", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    executiveDashboard.render.mockClear();
   });
 
-  it("renders the executive dashboard for project authority users", async () => {
+  it("renders the executive dashboard for Admin users", async () => {
     setExecutiveAuth();
     renderDashboard();
 
     expect(await screen.findByText("Executive Dashboard Surface")).toBeInTheDocument();
+    expect(executiveDashboard.render).toHaveBeenCalledTimes(1);
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
+  });
+
+  it("renders the executive dashboard for CEO and Director users", async () => {
+    setExecutiveAuth({ id: "ceo", name: "CEO" });
+    const { unmount } = renderDashboard();
+
+    expect(await screen.findByText("Executive Dashboard Surface")).toBeInTheDocument();
+    expect(executiveDashboard.render).toHaveBeenCalledTimes(1);
+    unmount();
+    cleanup();
+    vi.clearAllMocks();
+    executiveDashboard.render.mockClear();
+
+    setExecutiveAuth({ id: "director", name: "Director" });
+    renderDashboard();
+
+    expect(await screen.findByText("Executive Dashboard Surface")).toBeInTheDocument();
+    expect(executiveDashboard.render).toHaveBeenCalledTimes(1);
     expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
   });
 
@@ -272,6 +362,50 @@ describe("Dashboard workspace routing", () => {
     expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
     expect(screen.getByText("Select a project above to view fixture-level operational status.")).toBeInTheDocument();
+    expect(executiveDashboard.render).not.toHaveBeenCalled();
     await waitFor(() => expect(designApi.fetchProjectDashboardSummary).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps Team Leaders with analytics permissions on the operational dashboard", async () => {
+    setDesignAuth({ canViewDepartmentAnalytics: true, canViewAllDepartmentsAnalytics: true });
+    renderDashboard();
+
+    expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(screen.queryByText("Executive Dashboard Surface")).not.toBeInTheDocument();
+    expect(executiveDashboard.render).not.toHaveBeenCalled();
+    await waitFor(() => expect(designApi.fetchProjectDashboardSummary).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps Design employees on the original self-service dashboard", async () => {
+    setDesignEmployeeAuth();
+    renderDashboard();
+
+    expect(await screen.findByRole("heading", { name: "Welcome, Design" })).toBeInTheDocument();
+    expect(screen.queryByText("Executive Dashboard Surface")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
+    expect(executiveDashboard.render).not.toHaveBeenCalled();
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
+  });
+
+  it("keeps Control users with analytics permissions off the executive dashboard", async () => {
+    setControlWithoutDesignSubdivisionAuth({ canViewDepartmentAnalytics: true, canViewAllDepartmentsAnalytics: true });
+    renderDashboard();
+
+    expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(screen.queryByText("Executive Dashboard Surface")).not.toBeInTheDocument();
+    expect(executiveDashboard.render).not.toHaveBeenCalled();
+  });
+
+  it("does not flash either dashboard while authentication is loading", () => {
+    setLoadingAuth();
+    renderDashboard();
+
+    expect(screen.queryByText("Executive Dashboard Surface")).not.toBeInTheDocument();
+    expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
+    expect(executiveDashboard.render).not.toHaveBeenCalled();
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
   });
 });

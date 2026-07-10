@@ -3,6 +3,7 @@ const { AppError } = require("../lib/AppError");
 const {
   HasPermission,
   isAdmin,
+  isExecutiveDashboardRole,
   isOperationalControllerRole,
   isProjectAuthorityRole,
 } = require("../services/accessControlService");
@@ -68,6 +69,18 @@ function requireOperationalController(req, _res, next) {
 
   if (!isOperationalControllerRole(req.user)) {
     return next(new AppError(403, "Project fixture controls are limited to operational controllers"));
+  }
+
+  return next();
+}
+
+function requireExecutiveDashboardAccess(req, _res, next) {
+  if (!req.user) {
+    return next(new AppError(401, "Unauthorized: User not authenticated"));
+  }
+
+  if (!isExecutiveDashboardRole(req.user)) {
+    return next(new AppError(403, "Executive dashboard access requires Admin, CEO, or Director role"));
   }
 
   return next();
@@ -145,6 +158,7 @@ function authorize(requiredPermission) {
 
 module.exports = {
   requireAdmin,
+  requireExecutiveDashboardAccess,
   requireOperationalController,
   authorize,
   loadPermissions,

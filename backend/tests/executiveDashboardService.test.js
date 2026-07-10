@@ -5,9 +5,13 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 
 const { PERMISSIONS } = require("../config/constants");
 const {
+  assertExecutiveDashboardAccess,
   buildExecutiveDashboardModel,
   canApprovalTaskBeApprovedByUser,
   getPeriodRange,
+  normalizeDashboardQuery,
+  queryCompletionEvents,
+  queryProjectSupplements,
 } = require("../services/executiveDashboardService");
 
 function project(overrides = {}) {
@@ -40,6 +44,129 @@ function makeUser(overrides = {}) {
     ...overrides,
   };
 }
+
+function executiveUser(role) {
+  return makeUser({
+    employee_id: `${role.id || role.name}-1`,
+    department_id: null,
+    role: {
+      hierarchy_level: 1,
+      permissions: {},
+      ...role,
+    },
+    permissions: [],
+  });
+}
+
+test("executive dashboard access is limited to Admin, CEO, and Director roles", async () => {
+  await assert.doesNotReject(() => assertExecutiveDashboardAccess(executiveUser({ id: "r1", name: "Admin" })));
+  await assert.doesNotReject(() => assertExecutiveDashboardAccess(executiveUser({ id: "ceo", name: "CEO" })));
+  await assert.doesNotReject(() => assertExecutiveDashboardAccess(executiveUser({ id: "director", name: "Director" })));
+  await assert.doesNotReject(() => assertExecutiveDashboardAccess(executiveUser({ id: "ceo_director", name: "CEO/Director" })));
+
+  await assert.rejects(
+    () => assertExecutiveDashboardAccess(makeUser({ permissions: [PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS] })),
+    { statusCode: 403 },
+  );
+  await assert.rejects(
+    () => assertExecutiveDashboardAccess(makeUser({ role: { id: "employee", name: "Employee", permissions: {}, hierarchy_level: 6 } })),
+    { statusCode: 403 },
+  );
+  await assert.rejects(
+    () => assertExecutiveDashboardAccess(null),
+    { statusCode: 401 },
+  );
+});
+
+test("normalizeDashboardQuery validates executive API parameters", async () => {
+  const admin = executiveUser({ id: "r1", name: "Admin", permissions: { all: true } });
+  const departments = [
+    { id: "design", label: "Design", name: "Design" },
+    { id: "control", label: "Control", name: "Control" },
+  ];
+
+  const filters = await normalizeDashboardQuery({
+    department: "all",
+    period: "this_week",
+    status: "all",
+    risk: "all",
+    page: "1",
+    page_size: "7",
+  }, admin, departments);
+
+  assert.equal(filters.selectedDepartment.id, null);
+  assert.equal(filters.selectedDepartment.mode, "all");
+  assert.equal(filters.periodRange.period, "this_week");
+  assert.equal(filters.page, 1);
+  assert.equal(filters.pageSize, 7);
+
+  await assert.rejects(() => normalizeDashboardQuery({ period: "quarter" }, admin, departments), { statusCode: 400 });
+  await assert.rejects(() => normalizeDashboardQuery({ status: "done-ish" }, admin, departments), { statusCode: 400 });
+  await assert.rejects(() => normalizeDashboardQuery({ risk: "critical" }, admin, departments), { statusCode: 400 });
+  await assert.rejects(() => normalizeDashboardQuery({ page: "0" }, admin, departments), { statusCode: 400 });
+  await assert.rejects(() => normalizeDashboardQuery({ page_size: "999" }, admin, departments), { statusCode: 400 });
+  await assert.rejects(() => normalizeDashboardQuery({ department: "unknown" }, admin, departments), { statusCode: 400 });
+});
+
+test("queryProjectSupplements omits optional workflow snapshots when the table is not migrated", async () => {
+  const queries = [];
+  const missingSnapshotError = new Error('relation "design.workflow_completion_snapshots" does not exist');
+  missingSnapshotError.code = "42P01";
+  missingSnapshotError.relation = "workflow_completion_snapshots";
+
+  const client = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+
+      if (sql.includes("workflow_completion_snapshots")) {
+        throw missingSnapshotError;
+      }
+
+      return {
+        rows: [{
+          project_id: "project-1",
+          last_snapshot_at: null,
+          last_fixture_at: "2026-07-10T00:00:00.000Z",
+        }],
+      };
+    },
+  };
+
+  const supplements = await queryProjectSupplements(["project-1"], client);
+
+  assert.equal(queries.length, 2);
+  assert.match(queries[0].sql, /workflow_completion_snapshots/);
+  assert.doesNotMatch(queries[1].sql, /workflow_completion_snapshots/);
+  assert.equal(supplements.get("project-1").last_snapshot_at, null);
+});
+
+test("queryCompletionEvents omits optional workflow snapshots when the table is not migrated", async () => {
+  const queries = [];
+  const missingSnapshotError = new Error('relation "design.workflow_completion_snapshots" does not exist');
+  missingSnapshotError.code = "42P01";
+  missingSnapshotError.relation = "workflow_completion_snapshots";
+
+  const client = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+
+      if (sql.includes("workflow_completion_snapshots")) {
+        throw missingSnapshotError;
+      }
+
+      return {
+        rows: [{ project_id: "project-1", event_at: "2026-07-10T00:00:00.000Z" }],
+      };
+    },
+  };
+
+  const events = await queryCompletionEvents(["project-1"], client);
+
+  assert.equal(queries.length, 2);
+  assert.match(queries[0].sql, /workflow_completion_snapshots/);
+  assert.doesNotMatch(queries[1].sql, /workflow_completion_snapshots/);
+  assert.equal(events.get("project-1")[0].toISOString(), "2026-07-10T00:00:00.000Z");
+});
 
 test("getPeriodRange uses Monday business weeks in Asia/Kolkata", async () => {
   const range = await getPeriodRange("this_week", new Date("2026-07-10T10:00:00.000Z"));

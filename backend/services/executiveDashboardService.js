@@ -2,7 +2,7 @@ const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
 const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { PROJECT_STATUSES, TASK_STATUSES, VERIFICATION_STATUSES, PERMISSIONS } = require("../config/constants");
-const { hasPermission, isProjectAuthorityRole } = require("./accessControlService");
+const { hasPermission, isExecutiveDashboardRole } = require("./accessControlService");
 const { hasOrgWideVisibility } = require("./visibilityResolutionService");
 const {
   listProjectSummariesForUser,
@@ -38,16 +38,20 @@ function canSeeAllDepartments(user) {
     || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
 }
 
-function assertDashboardAccess(user) {
-  if (
-    isProjectAuthorityRole(user)
-    || hasPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS)
-    || hasPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS)
-  ) {
+function canViewExecutiveDashboard(user) {
+  return isExecutiveDashboardRole(user);
+}
+
+function assertExecutiveDashboardAccess(user) {
+  if (!user) {
+    throw new AppError(401, "Unauthorized: User not authenticated");
+  }
+
+  if (canViewExecutiveDashboard(user)) {
     return;
   }
 
-  throw new AppError(403, "Executive dashboard access requires executive or department analytics scope");
+  throw new AppError(403, "Executive dashboard access requires Admin, CEO, or Director role");
 }
 
 function addDays(date, days) {
@@ -329,24 +333,49 @@ function resolveDepartmentSelection(user, requestedDepartment, departments) {
   };
 }
 
-function normalizeFilterValue(value, allowed, fallback = "all") {
-  const normalized = normalizeKey(value);
-  return allowed.includes(normalized) ? normalized : fallback;
+function normalizeEnumParam(value, allowed, fallback, label) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const normalized = normalizeKey(raw);
+  if (allowed.includes(normalized)) {
+    return normalized;
+  }
+
+  throw new AppError(400, `Invalid ${label} filter`);
+}
+
+function normalizePositiveIntegerParam(value, fallback, label, max = null) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  if (!/^\d+$/.test(raw)) {
+    throw new AppError(400, `Invalid ${label}`);
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || (max !== null && parsed > max)) {
+    throw new AppError(400, `Invalid ${label}`);
+  }
+
+  return parsed;
 }
 
 function normalizeDashboardQuery(query = {}, user, departments) {
   const selectedDepartment = resolveDepartmentSelection(user, query.department, departments);
-  const periodRange = getPeriodRange(query.period, new Date(), query.start, query.end);
-  const page = Math.max(1, Number.parseInt(query.page || "1", 10) || 1);
-  const pageSize = Math.min(
-    PAGE_SIZE_MAX,
-    Math.max(1, Number.parseInt(query.page_size || query.pageSize || String(PAGE_SIZE_DEFAULT), 10) || PAGE_SIZE_DEFAULT),
-  );
+  const period = normalizeEnumParam(query.period, ["this_week", "last_week", "this_month", "custom"], "this_week", "period");
+  const periodRange = getPeriodRange(period, new Date(), query.start, query.end);
+  const page = normalizePositiveIntegerParam(query.page, 1, "page");
+  const pageSize = normalizePositiveIntegerParam(query.page_size ?? query.pageSize, PAGE_SIZE_DEFAULT, "page_size", PAGE_SIZE_MAX);
 
   return {
     selectedDepartment,
     periodRange,
-    status: normalizeFilterValue(query.status, [
+    status: normalizeEnumParam(query.status, [
       "all",
       "in_progress",
       "pending_approval",
@@ -355,21 +384,35 @@ function normalizeDashboardQuery(query = {}, user, departments) {
       "overdue",
       "released",
       "not_started",
-    ]),
-    risk: normalizeFilterValue(query.risk, ["all", "low", "medium", "high"]),
+    ], "all", "status"),
+    risk: normalizeEnumParam(query.risk, ["all", "low", "medium", "high"], "all", "risk"),
     search: String(query.search || "").trim(),
     page,
     pageSize,
   };
 }
 
-async function queryProjectSupplements(projectIds, client = pool) {
-  if (!projectIds.length) {
-    return new Map();
+function isMissingOptionalSnapshotRelation(error) {
+  if (error?.code !== "42P01") {
+    return false;
   }
 
-  const result = await client.query(
-    `
+  const relation = String(error.relation || error.message || "");
+  return relation.includes("workflow_completion_snapshots");
+}
+
+function buildProjectSupplementsQuery({ includeSnapshots = true } = {}) {
+  const snapshotSelect = includeSnapshots
+    ? "snapshot_rollup.last_snapshot_at"
+    : "NULL::timestamptz AS last_snapshot_at";
+  const snapshotJoin = includeSnapshots ? `
+      LEFT JOIN LATERAL (
+        SELECT MAX(snapshot.captured_at) AS last_snapshot_at
+        FROM design.workflow_completion_snapshots snapshot
+        WHERE snapshot.project_id = p.id
+      ) snapshot_rollup ON TRUE` : "";
+
+  return `
       SELECT
         p.id::text AS project_id,
         p.rework_date,
@@ -398,7 +441,7 @@ async function queryProjectSupplements(projectIds, client = pool) {
         issue_rollup.blocking_issue_count,
         issue_rollup.last_issue_at,
         audit_rollup.last_audit_at,
-        snapshot_rollup.last_snapshot_at,
+        ${snapshotSelect},
         fixture_rollup.last_fixture_at
       FROM design.projects p
       LEFT JOIN users project_leader
@@ -529,19 +572,28 @@ async function queryProjectSupplements(projectIds, client = pool) {
         WHERE a.target_id = p.id::text
            OR a.metadata ->> 'project_id' = p.id::text
       ) audit_rollup ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT MAX(snapshot.captured_at) AS last_snapshot_at
-        FROM design.workflow_completion_snapshots snapshot
-        WHERE snapshot.project_id = p.id
-      ) snapshot_rollup ON TRUE
+      ${snapshotJoin}
       WHERE p.id::text = ANY($1::text[])
-    `,
-    [projectIds],
-  );
-
-  return new Map(result.rows.map((row) => [row.project_id, row]));
+    `;
 }
 
+async function queryProjectSupplements(projectIds, client = pool) {
+  if (!projectIds.length) {
+    return new Map();
+  }
+
+  let rows;
+  try {
+    rows = (await client.query(buildProjectSupplementsQuery({ includeSnapshots: true }), [projectIds])).rows;
+  } catch (error) {
+    if (!isMissingOptionalSnapshotRelation(error)) {
+      throw error;
+    }
+    rows = (await client.query(buildProjectSupplementsQuery({ includeSnapshots: false }), [projectIds])).rows;
+  }
+
+  return new Map(rows.map((row) => [row.project_id, row]));
+}
 async function queryCompletionEvents(projectIds, client = pool) {
   if (!projectIds.length) {
     return new Map();
@@ -598,7 +650,7 @@ async function queryCompletionEvents(projectIds, client = pool) {
   try {
     rows = (await client.query(queryWithSnapshots, [projectIds])).rows;
   } catch (error) {
-    if (error?.code !== "42P01") {
+    if (!isMissingOptionalSnapshotRelation(error)) {
       throw error;
     }
     rows = (await client.query(queryWithoutSnapshots, [projectIds])).rows;
@@ -1127,7 +1179,7 @@ function buildExecutiveDashboardModel({
 }
 
 async function getExecutiveDashboardForUser(user, query = {}, client = pool) {
-  assertDashboardAccess(user);
+  assertExecutiveDashboardAccess(user);
 
   const departments = await listDashboardDepartments(user, client);
   const filters = normalizeDashboardQuery(query, user, departments);
@@ -1156,10 +1208,14 @@ async function getExecutiveDashboardForUser(user, query = {}, client = pool) {
 }
 
 module.exports = instrumentModuleExports("service.executiveDashboardService", {
+  assertExecutiveDashboardAccess,
   buildExecutiveDashboardModel,
   canApprovalTaskBeApprovedByUser,
+  canViewExecutiveDashboard,
   getExecutiveDashboardForUser,
   getPeriodRange,
   normalizeDashboardQuery,
+  queryCompletionEvents,
+  queryProjectSupplements,
 });
 

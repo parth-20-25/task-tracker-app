@@ -200,13 +200,12 @@ export function isProjectAuthorityUser(user: User | null | undefined) {
     || isAdminUser(user);
 }
 
-export function isExecutiveDashboardUser(
-  user: User | null | undefined,
-  access?: Pick<UiAccess, "canViewDepartmentAnalytics" | "canViewAllDepartmentsAnalytics">,
-) {
-  return isProjectAuthorityUser(user)
-    || access?.canViewDepartmentAnalytics === true
-    || access?.canViewAllDepartmentsAnalytics === true;
+export function canViewExecutiveDashboard(user: User | null | undefined) {
+  return isProjectAuthorityUser(user);
+}
+
+export function isExecutiveDashboardUser(user: User | null | undefined) {
+  return canViewExecutiveDashboard(user);
 }
 
 export function isOperationalControllerUser(user: User | null | undefined) {

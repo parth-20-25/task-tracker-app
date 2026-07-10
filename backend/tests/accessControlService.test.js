@@ -12,6 +12,7 @@ const {
   isOperationalControllerRole,
   isProjectAuthorityRole,
 } = require("../services/accessControlService");
+const { requireExecutiveDashboardAccess } = require("../middleware/authorize");
 
 function makeUser(overrides = {}) {
   return {
@@ -158,6 +159,32 @@ test("Director/CEO-style project authority roles inherit org-wide task and depar
   const params = [];
   assert.equal(buildTaskAccessPredicate(directorCeo, params).trim(), "1 = 1");
   assert.deepEqual(params, []);
+});
+
+test("executive dashboard middleware returns 403 for analytics-only non-executive roles", () => {
+  const allowedAdmin = makeUser({
+    role: { id: "r1", name: "Admin", hierarchy_level: 1, permissions: { all: true } },
+  });
+  const allowedDirector = makeUser({
+    role: { id: "director", name: "Director", hierarchy_level: 2, permissions: {} },
+  });
+  const analyticsLeader = makeUser({
+    permissions: [PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS],
+    role: { id: "team_leader", name: "Team Leader", hierarchy_level: 4, permissions: {} },
+  });
+
+  let nextError = "not-called";
+  requireExecutiveDashboardAccess({ user: allowedAdmin }, null, (error) => { nextError = error; });
+  assert.equal(nextError, undefined);
+
+  nextError = "not-called";
+  requireExecutiveDashboardAccess({ user: allowedDirector }, null, (error) => { nextError = error; });
+  assert.equal(nextError, undefined);
+
+  nextError = "not-called";
+  requireExecutiveDashboardAccess({ user: analyticsLeader }, null, (error) => { nextError = error; });
+  assert.equal(nextError.statusCode, 403);
+  assert.match(nextError.message, /Admin, CEO, or Director/);
 });
 
 test("lower hierarchy roles do not receive org-wide project authority", () => {

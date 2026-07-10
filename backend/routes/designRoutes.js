@@ -37,6 +37,7 @@ const {
   updateProjectModificationForUser,
 } = require("../services/projectCatalogService");
 const { reactivateProjectForModificationById } = require("../services/batchService");
+const { getExecutiveDashboardForUser } = require("../services/executiveDashboardService");
 const {
   assignProject2DLeader,
   deleteProject2DAssignment,
@@ -258,6 +259,14 @@ router.get(
 );
 
 router.get(
+  "/dashboard/executive",
+  asyncHandler(async (req, res) => {
+    const dashboard = await getExecutiveDashboardForUser(req.user, req.query);
+    return sendSuccess(res, dashboard);
+  }),
+);
+
+router.get(
   "/visibility/explain/:projectId",
   requireOperationalController,
   asyncHandler(async (req, res) => {
@@ -422,3 +431,4 @@ router.post(
 module.exports = {
   designRoutes: router,
 };
+

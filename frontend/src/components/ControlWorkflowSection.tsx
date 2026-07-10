@@ -438,7 +438,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <GitBranch className="h-4 w-4 text-primary" />
-              <h2 className="text-base font-semibold">Control Workflow</h2>
+              <h2 className="text-base font-semibold">Control Design</h2>
               <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">Control Design</Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -484,10 +484,10 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                 <Label>Assigned To</Label>
                 <Select value={ownerId || "__none__"} onValueChange={(value) => setOwnerId(value === "__none__" ? "" : value)} disabled={!canAssignOwner || assigneesQuery.isLoading}>
                   <SelectTrigger>
-                    <SelectValue placeholder={assigneesQuery.isLoading ? "Loading owners..." : "Select Control Design owner"} />
+                    <SelectValue placeholder={assigneesQuery.isLoading ? "Loading owners..." : "Select project owner"} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__">Select Control Design owner</SelectItem>
+                    <SelectItem value="__none__">Select project owner</SelectItem>
                     {assignees.map((candidate) => (
                       <SelectItem key={candidate.employee_id} value={candidate.employee_id}>{formatAssigneeOption(candidate)}</SelectItem>
                     ))}
@@ -497,7 +497,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
               </div>
               <Button disabled={!ownerId || createMutation.isPending || !templateQuery.data} onClick={() => createMutation.mutate()}>
                 {createMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-                Assign Control Design Workflow
+                Assign Control Design Project
               </Button>
             </div>
           </div>

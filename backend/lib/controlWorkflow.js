@@ -92,6 +92,26 @@ function normalizeControlKey(value) {
     .replace(/^_+|_+$/g, "");
 }
 
+function isControlDepartmentUser(user) {
+  const departmentId = normalizeControlKey(user?.department_id || user?.department?.id);
+  const departmentName = normalizeControlKey(user?.department?.name);
+
+  return departmentId === CONTROL_DEPARTMENT_ID || departmentName === normalizeControlKey(CONTROL_DEPARTMENT_NAME);
+}
+
+function isControlDesignSubdivisionUser(user, expectedSubDepartmentId = null) {
+  const expectedId = normalizeControlText(expectedSubDepartmentId);
+  const subdivisionId = normalizeControlText(user?.subdivision_id || user?.subdivision?.id);
+  const subdivisionName = normalizeControlKey(user?.subdivision?.subdivision_name || user?.subdivision_name);
+
+  return Boolean(expectedId && subdivisionId && subdivisionId === expectedId)
+    || subdivisionName === normalizeControlKey(CONTROL_DESIGN_TEMPLATE_NAME);
+}
+
+function isControlDesignWorkspaceUser(user, expectedSubDepartmentId = null) {
+  return isControlDepartmentUser(user) && isControlDesignSubdivisionUser(user, expectedSubDepartmentId);
+}
+
 function normalizeRevisionReason(value) {
   const incoming = normalizeControlText(value);
   return REVISION_REASONS.find((reason) => reason.toLowerCase() === incoming.toLowerCase()) || null;
@@ -169,6 +189,9 @@ module.exports = {
   canSubmitStage,
   createInitialStageRows,
   isApprovedForProgress,
+  isControlDepartmentUser,
+  isControlDesignSubdivisionUser,
+  isControlDesignWorkspaceUser,
   isTerminalStageStatus,
   nextUnlockedStage,
   normalizeControlKey,

@@ -22,6 +22,32 @@ router.get(
 );
 
 router.get(
+  "/control/design/projects",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listControlDesignProjects(req.user))),
+);
+
+router.get(
+  "/control/design/assignees",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listControlDesignAssignableUsers(req.user))),
+);
+
+router.post(
+  "/control/design/co",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.createControlDesignCo(req.user, req.body), 201)),
+);
+
+router.post(
+  "/control/design/projects/:projectId/assign",
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.assignControlDesignProjectOwner(
+      req.user,
+      req.params.projectId,
+      req.body?.assigned_user_id,
+    ),
+  )),
+);
+router.get(
   "/control/workflows/approvals/pending",
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listPendingApprovals(req.user))),
 );

@@ -12,6 +12,9 @@ const {
   canSubmitStage,
   createInitialStageRows,
   isApprovedForProgress,
+  isControlDepartmentUser,
+  isControlDesignSubdivisionUser,
+  isControlDesignWorkspaceUser,
   isTerminalStageStatus,
   nextUnlockedStage,
   normalizeControlKey,
@@ -104,4 +107,50 @@ test("revision reasons are constrained and Other requires manual remarks", () =>
     () => assertOtherReasonHasManualRemarks("Other", ""),
     /manual_reason is required/,
   );
+});
+test("Control Design workspace access requires actual Control department and Control Design subdivision", () => {
+  const controlDesignUser = {
+    employee_id: "EMP-CD-1",
+    name: "Control Designer",
+    department_id: "control",
+    department: { id: "control", name: "Control" },
+    subdivision_id: "sub-control-design",
+    subdivision: { id: "sub-control-design", department_id: "control", subdivision_name: "Control Design" },
+    role: { id: "team_leader", name: "Team Leader" },
+    permissions: ["can_assign_tasks"],
+  };
+
+  assert.equal(isControlDepartmentUser(controlDesignUser), true);
+  assert.equal(isControlDesignSubdivisionUser(controlDesignUser), true);
+  assert.equal(isControlDesignWorkspaceUser(controlDesignUser, "sub-control-design"), true);
+
+  assert.equal(isControlDesignWorkspaceUser({
+    ...controlDesignUser,
+    department_id: "design",
+    department: { id: "design", name: "Design" },
+  }, "sub-control-design"), false);
+
+  assert.equal(isControlDesignWorkspaceUser({
+    ...controlDesignUser,
+    subdivision_id: "sub-plc",
+    subdivision: { id: "sub-plc", department_id: "control", subdivision_name: "PLC Programming" },
+  }, "sub-control-design"), false);
+
+  assert.equal(isControlDesignWorkspaceUser({
+    ...controlDesignUser,
+    subdivision_id: null,
+    subdivision: null,
+  }, "sub-control-design"), false);
+});
+
+test("Control Design workspace access is not inferred from user or role names", () => {
+  assert.equal(isControlDepartmentUser({ name: "Control" }), false);
+  assert.equal(isControlDesignWorkspaceUser({
+    employee_id: "EMP-TL",
+    name: "Control Design",
+    department_id: "control",
+    department: { id: "control", name: "Control" },
+    role: { id: "team_leader", name: "Control Design Team Leader" },
+    permissions: ["can_assign_tasks", "change_fixture_stage"],
+  }), false);
 });

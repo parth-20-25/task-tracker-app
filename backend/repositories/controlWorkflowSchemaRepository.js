@@ -97,6 +97,26 @@ async function ensureControlWorkflowSchema(client) {
   `);
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS project_control_records (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      project_id UUID NOT NULL REFERENCES design.projects(id) ON DELETE CASCADE,
+      sub_department_id UUID NOT NULL REFERENCES department_subdivisions(id),
+      budget_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      budget_currency TEXT NOT NULL DEFAULT 'INR',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by VARCHAR(50) REFERENCES users(employee_id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT project_control_records_status_check CHECK (status IN ('active', 'cancelled'))
+    )
+  `);
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_project_control_records_active_unique
+    ON project_control_records (project_id, sub_department_id)
+    WHERE status = 'active'
+  `);
+  await client.query(`
     CREATE TABLE IF NOT EXISTS project_workflow_stages (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,

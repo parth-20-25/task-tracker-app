@@ -39,6 +39,9 @@ export const PERMISSIONS = {
   VIEW_EFFICIENCY_ANALYTICS: "view_efficiency_analytics",
   VIEW_WORKFLOW_HEALTH: "view_workflow_health",
   VIEW_PREDICTIVE_ANALYTICS: "view_predictive_analytics",
+  CONTROL_DESIGN_VIEW_ALL_PROJECTS: "control_design.view_all_projects",
+  CONTROL_DESIGN_ASSIGN_PROJECTS: "control_design.assign_projects",
+  CONTROL_DESIGN_REASSIGN_PROJECTS: "control_design.reassign_projects",
 } as const;
 
 export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);
@@ -47,6 +50,9 @@ export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[numbe
   [PERMISSIONS.VIEW_SELF_TASKS]: "View Self Tasks Only",
   [PERMISSIONS.VIEW_ALL_TASKS]: "View All Tasks",
   [PERMISSIONS.SELF_APPROVE]: "Self Approve",
+  [PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS]: "View All Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS]: "Assign Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS]: "Reassign Control Design Projects",
 };
 
 export function getPermissionLabel(permission: string) {
@@ -110,6 +116,9 @@ export interface UiAccess {
   canViewDepartmentAnalytics: boolean;
   canViewAllDepartmentsAnalytics: boolean;
   canViewAllUsersAnalytics: boolean;
+  canViewAllControlDesignProjects: boolean;
+  canAssignControlDesignProjects: boolean;
+  canReassignControlDesignProjects: boolean;
 }
 
 export function normalizePermissionId(permission: string) {
@@ -191,6 +200,15 @@ export function isProjectAuthorityUser(user: User | null | undefined) {
     || isAdminUser(user);
 }
 
+export function isExecutiveDashboardUser(
+  user: User | null | undefined,
+  access?: Pick<UiAccess, "canViewDepartmentAnalytics" | "canViewAllDepartmentsAnalytics">,
+) {
+  return isProjectAuthorityUser(user)
+    || access?.canViewDepartmentAnalytics === true
+    || access?.canViewAllDepartmentsAnalytics === true;
+}
+
 export function isOperationalControllerUser(user: User | null | undefined) {
   const roleName = normalizeRoleKey(user?.role?.name);
   const roleId = normalizeRoleKey(user?.role?.id || user?.role_id);
@@ -218,6 +236,23 @@ export function isOperationalControllerUser(user: User | null | undefined) {
     ].includes(roleId);
 }
 
+export function isControlDepartmentUser(user: User | null | undefined) {
+  const departmentId = normalizeRoleKey(user?.department_id);
+  const departmentName = normalizeRoleKey(user?.department?.name);
+
+  return departmentId === "control" || departmentName === "control";
+}
+
+export function isControlDesignSubdivisionUser(user: User | null | undefined) {
+  const subdivisionId = normalizeRoleKey(user?.subdivision_id);
+  const subdivisionName = normalizeRoleKey(user?.subdivision?.subdivision_name);
+
+  return subdivisionId === "control_design" || subdivisionName === "control_design";
+}
+
+export function isControlDesignDashboardUser(user: User | null | undefined, _access?: unknown) {
+  return isControlDepartmentUser(user) && isControlDesignSubdivisionUser(user);
+}
 function normalizeRoleKey(value: unknown) {
   return String(value || "")
     .trim()
@@ -257,6 +292,11 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canViewAllDepartmentsAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const canViewAllUsersAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
   const canViewAnalytics = hasAnyUserPermission(user, ANALYTICS_VISIBILITY_PERMISSIONS);
+  const canAssignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS) || canAssignTasks;
+  const canReassignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS) || canAssignControlDesignProjects;
+  const canViewAllControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS)
+    || canAssignControlDesignProjects
+    || canReassignControlDesignProjects;
 
   return {
     canAssignTasks,
@@ -292,5 +332,8 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canViewDepartmentAnalytics,
     canViewAllDepartmentsAnalytics,
     canViewAllUsersAnalytics,
+    canViewAllControlDesignProjects,
+    canAssignControlDesignProjects,
+    canReassignControlDesignProjects,
   };
 }

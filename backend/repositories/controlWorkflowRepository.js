@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const { CONTROL_DEPARTMENT_ID } = require("../lib/controlWorkflow");
 const { userIdentifierMatchSql } = require("./sqlFragments");
 
 function mapTemplate(row, stages = []) {
@@ -855,8 +856,226 @@ async function listRevisionQueue({ departmentId = null, assignedTo = null } = {}
   }));
 }
 
+function mapControlRecord(row) {
+  if (!row?.control_record_id) {
+    return null;
+  }
+
+  return {
+    id: row.control_record_id,
+    project_id: row.project_id,
+    sub_department_id: row.control_record_sub_department_id,
+    budget_amount: row.control_record_budget_amount === null || row.control_record_budget_amount === undefined
+      ? null
+      : Number(row.control_record_budget_amount),
+    budget_currency: row.control_record_budget_currency || "INR",
+    status: row.control_record_status || "active",
+    created_by: row.control_record_created_by || null,
+    created_at: row.control_record_created_at || null,
+    updated_at: row.control_record_updated_at || null,
+  };
+}
+
+function mapControlDesignProject(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    project_id: row.project_id,
+    project_no: row.project_no,
+    project_name: row.project_name,
+    customer_name: row.customer_name || null,
+    department_id: row.department_id,
+    department_name: row.department_name || null,
+    project_status: row.project_status || "active",
+    completion_percent: null,
+    total_fixtures: 0,
+    total_tasks: 0,
+    pending_tasks: 0,
+    active_tasks: 0,
+    completed_tasks: 0,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    control_record: mapControlRecord(row),
+    workflow: row.workflow_id ? {
+      id: row.workflow_id,
+      project_id: row.project_id,
+      sub_department_id: row.workflow_sub_department_id,
+      assigned_user_id: row.assigned_user_id || null,
+      assigned_user_name: row.assigned_user_name || null,
+      assigned_by: row.assigned_by || null,
+      assigned_by_name: row.assigned_by_name || null,
+      status: row.workflow_status || "active",
+      current_stage_id: row.current_stage_id || null,
+      template_id: row.template_id || null,
+      template_name: row.template_name || null,
+      created_at: row.workflow_created_at || null,
+      updated_at: row.workflow_updated_at || null,
+    } : null,
+  };
+}
+
+async function findProjectControlRecord(projectId, subDepartmentId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        id AS control_record_id,
+        project_id,
+        sub_department_id AS control_record_sub_department_id,
+        budget_amount AS control_record_budget_amount,
+        budget_currency AS control_record_budget_currency,
+        status AS control_record_status,
+        created_by AS control_record_created_by,
+        created_at AS control_record_created_at,
+        updated_at AS control_record_updated_at
+      FROM project_control_records
+      WHERE project_id = $1
+        AND sub_department_id = $2
+        AND status = 'active'
+      LIMIT 1
+    `,
+    [projectId, subDepartmentId],
+  );
+
+  return mapControlRecord(result.rows[0]);
+}
+
+async function upsertProjectControlRecord(values, client = pool) {
+  const result = await client.query(
+    `
+      INSERT INTO project_control_records (
+        project_id,
+        sub_department_id,
+        budget_amount,
+        budget_currency,
+        status,
+        created_by,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, 'active', $5, NOW(), NOW())
+      ON CONFLICT (project_id, sub_department_id)
+      WHERE status = 'active'
+      DO UPDATE
+      SET budget_amount = EXCLUDED.budget_amount,
+          budget_currency = EXCLUDED.budget_currency,
+          updated_at = NOW()
+      RETURNING
+        id AS control_record_id,
+        project_id,
+        sub_department_id AS control_record_sub_department_id,
+        budget_amount AS control_record_budget_amount,
+        budget_currency AS control_record_budget_currency,
+        status AS control_record_status,
+        created_by AS control_record_created_by,
+        created_at AS control_record_created_at,
+        updated_at AS control_record_updated_at
+    `,
+    [
+      values.project_id,
+      values.sub_department_id,
+      values.budget_amount,
+      values.budget_currency,
+      values.created_by || null,
+    ],
+  );
+
+  return mapControlRecord(result.rows[0]);
+}
+
+function controlDesignProjectSelect(whereClause) {
+  return `
+    WITH active_workflow AS (
+      SELECT DISTINCT ON (pw.project_id)
+        pw.*
+      FROM project_workflows pw
+      WHERE pw.sub_department_id = $1
+        AND pw.status = 'active'
+      ORDER BY pw.project_id, pw.updated_at DESC, pw.created_at DESC
+    )
+    SELECT
+      p.id AS project_id,
+      p.project_no,
+      COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+      p.customer_name,
+      p.department_id,
+      d.name AS department_name,
+      COALESCE(p.status, 'active') AS project_status,
+      p.created_at,
+      p.updated_at,
+      pcr.id AS control_record_id,
+      pcr.sub_department_id AS control_record_sub_department_id,
+      pcr.budget_amount AS control_record_budget_amount,
+      pcr.budget_currency AS control_record_budget_currency,
+      pcr.status AS control_record_status,
+      pcr.created_by AS control_record_created_by,
+      pcr.created_at AS control_record_created_at,
+      pcr.updated_at AS control_record_updated_at,
+      aw.id AS workflow_id,
+      aw.sub_department_id AS workflow_sub_department_id,
+      aw.assigned_user_id,
+      owner.name AS assigned_user_name,
+      aw.assigned_by,
+      assigner.name AS assigned_by_name,
+      aw.current_stage_id,
+      aw.status AS workflow_status,
+      aw.template_id,
+      wt.template_name,
+      aw.created_at AS workflow_created_at,
+      aw.updated_at AS workflow_updated_at
+    FROM design.projects p
+    JOIN departments d ON d.id = p.department_id
+    LEFT JOIN project_control_records pcr
+      ON pcr.project_id = p.id
+     AND pcr.sub_department_id = $1
+     AND pcr.status = 'active'
+    LEFT JOIN active_workflow aw ON aw.project_id = p.id
+    LEFT JOIN workflow_templates wt ON wt.id = aw.template_id
+    LEFT JOIN users owner ON ${userIdentifierMatchSql("owner", "aw.assigned_user_id")}
+    LEFT JOIN users assigner ON ${userIdentifierMatchSql("assigner", "aw.assigned_by")}
+    ${whereClause}
+  `;
+}
+
+async function listControlDesignProjects({ subDepartmentId, assignedUserId = null, activeOnly = false } = {}, client = pool) {
+  const result = await client.query(
+    `
+      ${controlDesignProjectSelect(`
+        WHERE p.department_id = $2
+          AND ($3::text IS NULL OR aw.assigned_user_id = $3)
+          AND ($4::boolean = FALSE OR COALESCE(p.status, 'active') = 'active')
+      `)}
+      ORDER BY
+        CASE WHEN aw.id IS NULL THEN 1 ELSE 0 END,
+        p.updated_at DESC,
+        p.created_at DESC,
+        p.project_no ASC
+    `,
+    [subDepartmentId, CONTROL_DEPARTMENT_ID, assignedUserId || null, activeOnly === true],
+  );
+
+  return result.rows.map(mapControlDesignProject);
+}
+
+async function findControlDesignProject(projectId, subDepartmentId, client = pool) {
+  const result = await client.query(
+    `
+      ${controlDesignProjectSelect(`
+        WHERE p.id = $2
+          AND p.department_id = $3
+      `)}
+      LIMIT 1
+    `,
+    [subDepartmentId, projectId, CONTROL_DEPARTMENT_ID],
+  );
+
+  return mapControlDesignProject(result.rows[0]);
+}
 module.exports = {
   findActiveProjectWorkflow,
+  findControlDesignProject,
+  findProjectControlRecord,
   findPendingSubmissionForStage,
   findRevisionById,
   findSubDepartmentByName,
@@ -865,6 +1084,7 @@ module.exports = {
   findWorkflowById,
   findWorkflowStage,
   hydrateWorkflowDetails,
+  listControlDesignProjects,
   insertDocumentHistory,
   insertOverride,
   insertProjectWorkflow,
@@ -880,6 +1100,7 @@ module.exports = {
   updateStage,
   updateSubmissionReview,
   updateWorkflowCurrentStage,
+  upsertProjectControlRecord,
   updateWorkflowOwner,
   updateWorkflowStatus,
 };

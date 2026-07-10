@@ -183,6 +183,37 @@ export interface ControlProjectWorkflow {
   created_at: string;
   updated_at: string;
 }
+export interface ControlDesignCoRecord {
+  id: string;
+  project_id: string;
+  sub_department_id: string;
+  budget_amount: number | null;
+  budget_currency: string;
+  status: "active" | "cancelled";
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ControlDesignProject extends ProjectDashboardSummary {
+  control_record?: ControlDesignCoRecord | null;
+  workflow?: Pick<
+    ControlProjectWorkflow,
+    | "id"
+    | "project_id"
+    | "sub_department_id"
+    | "assigned_user_id"
+    | "assigned_user_name"
+    | "assigned_by"
+    | "assigned_by_name"
+    | "current_stage_id"
+    | "status"
+    | "template_id"
+    | "template_name"
+    | "created_at"
+    | "updated_at"
+  > | null;
+}
 
 export interface ControlApprovalQueueItem extends ControlWorkflowSubmission {
   stage_name: string;
@@ -202,6 +233,31 @@ function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
 
 export function fetchControlSubDepartments() {
   return apiRequest<ControlSubDepartment[]>("/control/sub-departments");
+}
+export function fetchControlDesignProjects() {
+  return apiRequest<ControlDesignProject[]>("/control/design/projects");
+}
+
+export function fetchControlDesignAssignableUsers() {
+  return apiRequest<User[]>("/control/design/assignees");
+}
+
+export function createControlDesignCo(payload: {
+  project_id: string;
+  budget_amount: number | string;
+  budget_currency?: string;
+}) {
+  return apiRequest<ControlDesignCoRecord>("/control/design/co", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function assignControlDesignProjectOwner(projectId: string, assignedUserId: string) {
+  return apiRequest<ControlProjectWorkflow>(`/control/design/projects/${encodeURIComponent(projectId)}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ assigned_user_id: assignedUserId }),
+  });
 }
 
 export function fetchControlWorkflowTemplate(subDepartmentId: string) {

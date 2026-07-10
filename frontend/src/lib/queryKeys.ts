@@ -42,6 +42,11 @@ export const analyticsOverviewQueryKeys = {
   filtered: (filters: any) => ["analytics", "unified-overview", filters] as const,
 };
 
+
+export const executiveDashboardQueryKeys = {
+  all: ["dashboard", "executive"] as const,
+  filtered: (filters: any) => ["dashboard", "executive", filters] as const,
+};
 export const deadlineHonestyQueryKeys = {
   all: ["analytics", "deadline-honesty"] as const,
   filtered: (filters: any) => ["analytics", "deadline-honesty", filters] as const,
@@ -80,3 +85,4 @@ export const issueQueryKeys = {
   assigned: ["issues", "assigned"] as const,
   comments: (issueId: string) => ["issues", issueId, "comments"] as const,
 };
+

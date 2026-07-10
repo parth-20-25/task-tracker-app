@@ -8,11 +8,12 @@ import type { ReactivateProjectPayload } from '@/api/designApi';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { MetricCard } from '@/components/MetricCard';
 import { NativeFixtureIngestionLauncher, NativeProjectEditWorkspace } from '@/components/native-ingestion/NativeIngestionWorkspace';
-import { ControlWorkflowSection } from '@/components/ControlWorkflowSection';
+import { ControlDesignDashboardWorkspace } from '@/components/ControlDesignDashboardWorkspace';
+import { ExecutiveDashboard } from '@/components/ExecutiveDashboard';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
 import { AlertTriangle, ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User as UserIcon, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
-import { isProjectAuthorityUser } from '@/lib/permissions';
+import { isControlDesignDashboardUser, isExecutiveDashboardUser, isProjectAuthorityUser } from '@/lib/permissions';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -203,6 +204,20 @@ function ProjectCard({
 }
 
 export default function Dashboard() {
+  const { user, access } = useAuth();
+
+  if (isControlDesignDashboardUser(user)) {
+    return <ControlDesignDashboardWorkspace />;
+  }
+
+  if (isExecutiveDashboardUser(user, access)) {
+    return <ExecutiveDashboard />;
+  }
+
+  return <OperationalDashboard />;
+}
+
+function OperationalDashboard() {
   const queryClient = useQueryClient();
   const { user, role, access } = useAuth();
   const [searchParams] = useSearchParams();
@@ -510,8 +525,6 @@ export default function Dashboard() {
             </SelectContent>
           </Select>
         </div>
-
-        {selectedProject ? <ControlWorkflowSection project={selectedProject} /> : null}
 
         {!selectedProjectId ? (
           <Card>

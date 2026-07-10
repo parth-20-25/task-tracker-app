@@ -374,7 +374,7 @@ describe("ControlWorkflowSection", () => {
   it("renders the Control Design workflow tree and owner actions without reviewer controls", async () => {
     renderSection();
 
-    expect(await screen.findByRole("heading", { name: "Control Workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
     expect((await screen.findAllByText("CO Creation")).length).toBeGreaterThan(0);
     expect(screen.getByText("Manual Preparation")).toBeInTheDocument();
     expect(screen.getAllByText("Locked until previous stage is approved").length).toBeGreaterThan(0);
@@ -393,7 +393,7 @@ describe("ControlWorkflowSection", () => {
     setLeaderAuth();
     renderSection();
 
-    expect(await screen.findByRole("heading", { name: "Control Workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
     await waitFor(() => expect(taskApi.fetchTaskAssignmentUsers).toHaveBeenCalledWith({
       task_type: "department_workflow",
       department_id: "control",

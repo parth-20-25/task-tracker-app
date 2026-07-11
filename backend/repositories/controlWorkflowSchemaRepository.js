@@ -84,8 +84,9 @@ async function ensureControlWorkflowSchema(client) {
       department_id TEXT NOT NULL REFERENCES departments(id),
       sub_department_id UUID NOT NULL REFERENCES department_subdivisions(id),
       template_id UUID NOT NULL REFERENCES workflow_templates(id),
-      assigned_user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      assigned_user_id VARCHAR(50) REFERENCES users(employee_id),
       assigned_by VARCHAR(50) REFERENCES users(employee_id),
+      assigned_at TIMESTAMPTZ,
       current_stage_id UUID NULL,
       status TEXT NOT NULL DEFAULT 'active',
       started_at TIMESTAMPTZ,
@@ -107,14 +108,52 @@ async function ensureControlWorkflowSchema(client) {
       created_by VARCHAR(50) REFERENCES users(employee_id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT project_control_records_budget_non_negative_check CHECK (budget_amount >= 0),
       CONSTRAINT project_control_records_status_check CHECK (status IN ('active', 'cancelled'))
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE project_workflows
+    ALTER COLUMN assigned_user_id DROP NOT NULL
+  `);
+
+  await client.query(`
+    ALTER TABLE project_workflows
+    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ
+  `);
+
+  await client.query(`
+    UPDATE project_workflows
+    SET assigned_at = COALESCE(assigned_at, started_at, created_at)
+    WHERE assigned_user_id IS NOT NULL
+      AND assigned_at IS NULL
+  `);
+
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'project_control_records_budget_non_negative_check'
+      ) THEN
+        ALTER TABLE project_control_records
+        ADD CONSTRAINT project_control_records_budget_non_negative_check
+        CHECK (budget_amount >= 0);
+      END IF;
+    END $$;
   `);
 
   await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_project_control_records_active_unique
     ON project_control_records (project_id, sub_department_id)
     WHERE status = 'active'
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_project_control_records_sub_department_status
+    ON project_control_records (sub_department_id, status, updated_at DESC)
   `);
   await client.query(`
     CREATE TABLE IF NOT EXISTS project_workflow_stages (
@@ -253,6 +292,12 @@ async function ensureControlWorkflowSchema(client) {
   await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_project_workflows_active_unique
     ON project_workflows (project_id, sub_department_id, template_id)
+    WHERE status = 'active'
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_project_workflows_assigned_active
+    ON project_workflows (sub_department_id, assigned_user_id, status)
     WHERE status = 'active'
   `);
 

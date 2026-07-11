@@ -26,7 +26,7 @@ const {
   canAssignTo,
   hasPermission,
 } = require("./accessControlService");
-const { findProjectByIdForDepartment } = require("../repositories/designProjectCatalogRepository");
+const { findProjectByIdForDepartment, insertProjectByNumber } = require("../repositories/designProjectCatalogRepository");
 const { findUserByEmployeeId, listUsers } = require("../repositories/usersRepository");
 const controlWorkflowRepository = require("../repositories/controlWorkflowRepository");
 
@@ -363,16 +363,27 @@ async function listControlDesignProjects(actor) {
 }
 
 function normalizeBudgetAmount(value) {
-  if (value === null || value === undefined || value === "") {
-    throw new AppError(400, "budget_amount is required");
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    throw new AppError(400, "Budget is required");
   }
 
-  const amount = Number(value);
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw new AppError(400, "budget_amount must be a non-negative number");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) {
+    throw new AppError(400, "Budget must be a non-negative decimal amount");
   }
 
-  return Math.round(amount * 100) / 100;
+  const [whole, fraction = ""] = raw.split(".");
+  const normalizedWhole = whole.replace(/^0+(?=\d)/, "") || "0";
+  return `${normalizedWhole}.${fraction.padEnd(2, "0")}`;
+}
+
+function normalizeControlDesignProjectPayload(payload = {}) {
+  return {
+    project_no: requireNonEmpty(payload.project_id ?? payload.projectId, "Project ID"),
+    project_name: requireNonEmpty(payload.project_name ?? payload.projectName, "Project Name"),
+    customer_name: requireNonEmpty(payload.customer ?? payload.customer_name ?? payload.customerName, "Customer"),
+    budget_amount: normalizeBudgetAmount(payload.budget ?? payload.budget_amount ?? payload.budgetAmount),
+  };
 }
 
 function normalizeBudgetCurrency(value) {
@@ -384,6 +395,62 @@ function normalizeBudgetCurrency(value) {
   return currency;
 }
 
+async function createControlDesignProject(actor, payload = {}) {
+  const controlDesign = await resolveControlDesignSubDepartment();
+  requireControlDesignWorkspaceAccess(actor, controlDesign.id);
+  if (!hasControlDesignAssignPermission(actor)) {
+    throw new AppError(403, "Control Design project creation requires assignment permission");
+  }
+
+  const normalized = normalizeControlDesignProjectPayload(payload);
+
+  return withTransaction(async (client) => {
+    const template = await ensureControlDesignTemplate(controlDesign.id, client);
+    let project;
+
+    try {
+      project = await insertProjectByNumber({
+        project_no: normalized.project_no,
+        project_name: normalized.project_name,
+        customer_name: normalized.customer_name,
+        department_id: controlDesign.department_id,
+        uploaded_by: getActorId(actor),
+        created_by_user_id: getActorId(actor),
+      }, client);
+    } catch (error) {
+      if (error?.code === "23505") {
+        throw new AppError(409, "A project with this Project ID already exists.");
+      }
+      throw error;
+    }
+
+    await controlWorkflowRepository.upsertProjectControlRecord({
+      project_id: project.project_id,
+      sub_department_id: controlDesign.id,
+      budget_amount: normalized.budget_amount,
+      budget_currency: "INR",
+      created_by: getActorId(actor),
+    }, client);
+
+    const existing = await controlWorkflowRepository.findActiveProjectWorkflow({
+      projectId: project.project_id,
+      subDepartmentId: controlDesign.id,
+      templateId: template.id,
+    }, client);
+    if (existing) {
+      throw new AppError(409, "An active Control Design workflow already exists for this project");
+    }
+
+    await insertWorkflowWithStages({
+      projectId: project.project_id,
+      template,
+      assignedUserId: null,
+      assignedBy: null,
+    }, client);
+
+    return controlWorkflowRepository.findControlDesignProject(project.project_id, controlDesign.id, client);
+  });
+}
 async function createControlDesignCo(actor, payload = {}) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
@@ -867,6 +934,7 @@ module.exports = {
   approveStageSubmission,
   assignControlDesignProjectOwner,
   createControlDesignCo,
+  createControlDesignProject,
   createProjectWorkflow,
   getProjectWorkflow,
   getWorkflowTemplateBySubDepartment,
@@ -877,6 +945,8 @@ module.exports = {
   listRevisionQueue,
   markStagePreCompleted,
   markStageRevisionRequired,
+  normalizeBudgetAmount,
+  normalizeControlDesignProjectPayload,
   overrideUnlockStage,
   raiseRevision,
   reassignProjectWorkflowOwner,

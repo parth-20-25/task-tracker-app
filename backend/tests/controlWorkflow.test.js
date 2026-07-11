@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
+process.env.DATABASE_URL ||= "postgres://user:pass@localhost:5432/tasktracker_test";
+
 const {
   CONTROL_DESIGN_STAGES,
   CONTROL_SUB_DEPARTMENTS,
@@ -20,6 +22,7 @@ const {
   normalizeControlKey,
   normalizeRevisionReason,
 } = require("../lib/controlWorkflow");
+const { normalizeBudgetAmount, normalizeControlDesignProjectPayload } = require("../services/controlWorkflowService");
 
 function templateStages() {
   return CONTROL_DESIGN_STAGES.map((stageName, index) => ({
@@ -153,4 +156,30 @@ test("Control Design workspace access is not inferred from user or role names", 
     role: { id: "team_leader", name: "Control Design Team Leader" },
     permissions: ["can_assign_tasks", "change_fixture_stage"],
   }), false);
+});
+
+test("Control Design project creation validation trims required fields and normalizes INR budget", () => {
+  assert.deepEqual(normalizeControlDesignProjectPayload({
+    projectId: " PARC2600M029 ",
+    projectName: " U546 Frame Auto Revising SPM ",
+    customer: " Tata Motors ",
+    budget: "001250000.5",
+  }), {
+    project_no: "PARC2600M029",
+    project_name: "U546 Frame Auto Revising SPM",
+    customer_name: "Tata Motors",
+    budget_amount: "1250000.50",
+  });
+
+  assert.equal(normalizeBudgetAmount("0"), "0.00");
+  assert.equal(normalizeBudgetAmount("12.34"), "12.34");
+
+  assert.throws(() => normalizeControlDesignProjectPayload({ projectId: " ", projectName: "Name", customer: "Customer", budget: "1" }), /Project ID is required/);
+  assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: " ", customer: "Customer", budget: "1" }), /Project Name is required/);
+  assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: "Name", customer: " ", budget: "1" }), /Customer is required/);
+  assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: "Name", customer: "Customer", budget: "" }), /Budget is required/);
+  assert.throws(() => normalizeBudgetAmount("-1"), /Budget must be a non-negative decimal amount/);
+  assert.throws(() => normalizeBudgetAmount("Infinity"), /Budget must be a non-negative decimal amount/);
+  assert.throws(() => normalizeBudgetAmount("12,500"), /Budget must be a non-negative decimal amount/);
+  assert.throws(() => normalizeBudgetAmount("12.345"), /Budget must be a non-negative decimal amount/);
 });

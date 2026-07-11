@@ -76,6 +76,7 @@ function mapWorkflow(row, stages = []) {
     assigned_user_name: row.assigned_user_name || null,
     assigned_by: row.assigned_by || null,
     assigned_by_name: row.assigned_by_name || null,
+    assigned_at: row.assigned_at || null,
     current_stage_id: row.current_stage_id || null,
     status: row.status,
     started_at: row.started_at || null,
@@ -274,12 +275,13 @@ async function insertProjectWorkflow(values, client = pool) {
         template_id,
         assigned_user_id,
         assigned_by,
+        assigned_at,
         status,
         started_at,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW(), NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END, 'active', NOW(), NOW(), NOW())
       RETURNING id
     `,
     [
@@ -355,6 +357,7 @@ async function updateWorkflowOwner(workflowId, assignedUserId, assignedBy, clien
       UPDATE project_workflows
       SET assigned_user_id = $2,
           assigned_by = $3,
+          assigned_at = NOW(),
           updated_at = NOW()
       WHERE id = $1
     `,
@@ -906,6 +909,7 @@ function mapControlDesignProject(row) {
       assigned_user_name: row.assigned_user_name || null,
       assigned_by: row.assigned_by || null,
       assigned_by_name: row.assigned_by_name || null,
+      assigned_at: row.assigned_at || null,
       status: row.workflow_status || "active",
       current_stage_id: row.current_stage_id || null,
       template_id: row.template_id || null,
@@ -1018,6 +1022,7 @@ function controlDesignProjectSelect(whereClause) {
       owner.name AS assigned_user_name,
       aw.assigned_by,
       assigner.name AS assigned_by_name,
+      aw.assigned_at,
       aw.current_stage_id,
       aw.status AS workflow_status,
       aw.template_id,
@@ -1043,6 +1048,7 @@ async function listControlDesignProjects({ subDepartmentId, assignedUserId = nul
     `
       ${controlDesignProjectSelect(`
         WHERE p.department_id = $2
+          AND (pcr.id IS NOT NULL OR aw.id IS NOT NULL)
           AND ($3::text IS NULL OR aw.assigned_user_id = $3)
           AND ($4::boolean = FALSE OR COALESCE(p.status, 'active') = 'active')
       `)}

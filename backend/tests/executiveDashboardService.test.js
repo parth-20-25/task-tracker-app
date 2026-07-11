@@ -200,6 +200,8 @@ test("queryProjectSupplements omits optional workflow snapshots when the table i
   assert.equal(queries.length, 2);
   assert.match(queries[0].sql, /workflow_completion_snapshots/);
   assert.doesNotMatch(queries[1].sql, /workflow_completion_snapshots/);
+  assert.doesNotMatch(queries[0].sql, /\bp\.rework_date\b/);
+  assert.doesNotMatch(queries[1].sql, /\bp\.rework_date\b/);
   assert.equal(supplements.get("project-1").last_snapshot_at, null);
 });
 

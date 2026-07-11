@@ -26,6 +26,11 @@ router.get(
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listControlDesignProjects(req.user))),
 );
 
+router.post(
+  "/control/design/projects",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.createControlDesignProject(req.user, req.body), 201)),
+);
+
 router.get(
   "/control/design/assignees",
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listControlDesignAssignableUsers(req.user))),

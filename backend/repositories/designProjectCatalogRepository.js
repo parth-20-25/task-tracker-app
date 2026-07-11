@@ -1024,6 +1024,55 @@ async function findDepartmentProjectByIdForDepartment(projectId, departmentId, c
   return mapDepartmentProjectRow(result.rows[0]);
 }
 
+async function insertProjectByNumber(project, client = pool) {
+  const createdByUserId = String(project.created_by_user_id || "").trim();
+  if (!createdByUserId) {
+    throw new AppError(400, "created_by_user_id is required for design project creation");
+  }
+
+  const projectNo = normalizeProjectNo(project.project_no);
+  const projectName = normalizeProjectName(project.project_name);
+  const customerName = collapseProjectLabel(project.customer_name);
+
+  const result = await client.query(
+    `
+      INSERT INTO design.projects (
+        project_no,
+        project_name,
+        customer_name,
+        department_id,
+        uploaded_by,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+      RETURNING
+        id AS project_id,
+        project_no,
+        project_name,
+        customer_name,
+        department_id,
+        COALESCE(status, '${PROJECT_STATUSES.ACTIVE}') AS project_status,
+        COALESCE(is_modified, FALSE) AS is_modified,
+        uploaded_by,
+        created_by_user_id,
+        created_at,
+        updated_at,
+        TRUE AS was_created
+    `,
+    [
+      projectNo,
+      projectName,
+      customerName,
+      project.department_id,
+      project.uploaded_by || null,
+      createdByUserId,
+    ],
+  );
+
+  return mapDesignProjectRow(result.rows[0]);
+}
 async function upsertProjectByNumber(project, client = pool) {
   const createdByUserId = String(project.created_by_user_id || "").trim();
   if (!createdByUserId) {
@@ -2333,6 +2382,7 @@ module.exports = instrumentModuleExports("repository.designProjectCatalogReposit
   findFixturesByProjectForDedupe,
   findProjectByIdForDepartment,
   findProjectByIdForUser,
+  insertProjectByNumber,
   findProjectByNumberForDepartment,
   getProjectStatusById,
   getProjectModificationContextForUser,

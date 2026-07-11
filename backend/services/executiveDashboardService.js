@@ -415,7 +415,6 @@ function buildProjectSupplementsQuery({ includeSnapshots = true } = {}) {
   return `
       SELECT
         p.id::text AS project_id,
-        p.rework_date,
         p.status_changed_at,
         p.completed_at AS project_completed_at,
         p.updated_at AS project_updated_at,
@@ -423,7 +422,7 @@ function buildProjectSupplementsQuery({ includeSnapshots = true } = {}) {
         project_leader.name AS project_leader_name,
         p.team_lead_id,
         team_lead.name AS direct_team_lead_name,
-        COALESCE(task_rollup.effective_due_at, p.rework_date::timestamptz) AS effective_due_at,
+        task_rollup.effective_due_at,
         task_rollup.last_task_at,
         task_rollup.pending_approval_count,
         task_rollup.pending_over_24_count,

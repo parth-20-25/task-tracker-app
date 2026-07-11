@@ -169,10 +169,11 @@ export interface ControlProjectWorkflow {
   sub_department_name?: string | null;
   template_id: string;
   template_name?: string | null;
-  assigned_user_id: string;
+  assigned_user_id: string | null;
   assigned_user_name?: string | null;
   assigned_by?: string | null;
   assigned_by_name?: string | null;
+  assigned_at?: string | null;
   current_stage_id?: string | null;
   status: "active" | "completed" | "cancelled";
   started_at?: string | null;
@@ -206,6 +207,7 @@ export interface ControlDesignProject extends ProjectDashboardSummary {
     | "assigned_user_name"
     | "assigned_by"
     | "assigned_by_name"
+    | "assigned_at"
     | "current_stage_id"
     | "status"
     | "template_id"
@@ -240,6 +242,18 @@ export function fetchControlDesignProjects() {
 
 export function fetchControlDesignAssignableUsers() {
   return apiRequest<User[]>("/control/design/assignees");
+}
+
+export function createControlDesignProject(payload: {
+  project_id: string;
+  project_name: string;
+  customer: string;
+  budget: string;
+}) {
+  return apiRequest<ControlDesignProject>("/control/design/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createControlDesignCo(payload: {

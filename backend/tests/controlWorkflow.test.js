@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 process.env.DATABASE_URL ||= "postgres://user:pass@localhost:5432/tasktracker_test";
@@ -22,7 +24,13 @@ const {
   normalizeControlKey,
   normalizeRevisionReason,
 } = require("../lib/controlWorkflow");
-const { normalizeBudgetAmount, normalizeControlDesignProjectPayload } = require("../services/controlWorkflowService");
+const { PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
+const {
+  canCreateControlDesignProject,
+  normalizeBudgetAmount,
+  normalizeControlDesignProjectPayload,
+  requireControlDesignCreatePermission,
+} = require("../services/controlWorkflowService");
 
 function templateStages() {
   return CONTROL_DESIGN_STAGES.map((stageName, index) => ({
@@ -156,6 +164,78 @@ test("Control Design workspace access is not inferred from user or role names", 
     role: { id: "team_leader", name: "Control Design Team Leader" },
     permissions: ["can_assign_tasks", "change_fixture_stage"],
   }), false);
+});
+test("Control Design project creation requires scoped create permission", () => {
+  const subDepartmentId = "sub-control-design";
+  const controlDesignLeader = {
+    employee_id: "EMP-CD-TL",
+    name: "Control Design Team Leader",
+    department_id: "control",
+    department: { id: "control", name: "Control" },
+    subdivision_id: subDepartmentId,
+    subdivision: { id: subDepartmentId, department_id: "control", subdivision_name: "Control Design" },
+    role: { id: "r4", name: "Team Leader", permissions: {} },
+    permissions: [PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS],
+  };
+
+  assert.equal(canCreateControlDesignProject(controlDesignLeader, subDepartmentId), true);
+  assert.doesNotThrow(() => requireControlDesignCreatePermission(controlDesignLeader, subDepartmentId));
+
+  const regularControlDesignUser = {
+    ...controlDesignLeader,
+    employee_id: "EMP-CD-1",
+    role: { id: "r6", name: "Engineer", permissions: {} },
+    permissions: [],
+  };
+  assert.equal(canCreateControlDesignProject(regularControlDesignUser, subDepartmentId), false);
+  assert.throws(
+    () => requireControlDesignCreatePermission(regularControlDesignUser, subDepartmentId),
+    (error) => error.statusCode === 403 && /creation permission/.test(error.message),
+  );
+
+  const designTeamLeader = {
+    ...controlDesignLeader,
+    employee_id: "EMP-DESIGN-TL",
+    department_id: "design",
+    department: { id: "design", name: "Design" },
+  };
+  assert.equal(canCreateControlDesignProject(designTeamLeader, subDepartmentId), false);
+  assert.throws(
+    () => requireControlDesignCreatePermission(designTeamLeader, subDepartmentId),
+    (error) => error.statusCode === 403 && /Control Design workspace access/.test(error.message),
+  );
+
+  const otherControlSubdivisionLeader = {
+    ...controlDesignLeader,
+    employee_id: "EMP-PLC-TL",
+    subdivision_id: "sub-plc",
+    subdivision: { id: "sub-plc", department_id: "control", subdivision_name: "PLC Programming" },
+  };
+  assert.equal(canCreateControlDesignProject(otherControlSubdivisionLeader, subDepartmentId), false);
+  assert.throws(
+    () => requireControlDesignCreatePermission(otherControlSubdivisionLeader, subDepartmentId),
+    (error) => error.statusCode === 403 && /Control Design workspace access/.test(error.message),
+  );
+});
+
+test("Control Design create permission is seeded for leadership roles only", () => {
+  for (const roleId of ["r1", "r2", "r3", "r4"]) {
+    assert.equal(ROLE_DEFAULT_PERMISSIONS[roleId].includes(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS), true);
+  }
+
+  for (const roleId of ["r5", "r6", "r7"]) {
+    assert.equal(ROLE_DEFAULT_PERMISSIONS[roleId].includes(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS), false);
+  }
+});
+
+test("frontend and backend declare the same Control Design create permission", () => {
+  const frontendPermissions = fs.readFileSync(
+    path.resolve(__dirname, "../../frontend/src/lib/permissions.ts"),
+    "utf8",
+  );
+
+  assert.equal(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS, "control_design.create_projects");
+  assert.match(frontendPermissions, /CONTROL_DESIGN_CREATE_PROJECTS:\s*"control_design\.create_projects"/);
 });
 
 test("Control Design project creation validation trims required fields and normalizes INR budget", () => {

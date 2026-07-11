@@ -114,6 +114,7 @@ const baseAccess = {
   canViewAllTasks: false,
   canAssignTasks: false,
   canChangeFixtureStage: false,
+  canCreateControlDesignProjects: false,
   canAssignControlDesignProjects: false,
   canReassignControlDesignProjects: false,
   canViewAllControlDesignProjects: false,
@@ -167,7 +168,7 @@ function setControlDesignAuth() {
   setMockAuth({
     user,
     role: { id: "team_leader", name: "Team Leader" },
-    access: { ...baseAccess, canAssignTasks: true, canAssignControlDesignProjects: true },
+    access: { ...baseAccess, canAssignTasks: true, canCreateControlDesignProjects: true, canAssignControlDesignProjects: true },
   });
 }
 

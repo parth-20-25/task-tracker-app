@@ -17,6 +17,7 @@ const LEGACY_PERMISSION_MIGRATIONS = {
 const STALE_PERMISSION_IDS = ["tasks_assign", ...Object.keys(LEGACY_PERMISSION_MIGRATIONS)];
 const LEGACY_UPLOAD_COMPATIBILITY_ROLE_IDS = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10"];
 const deprecatedPermissionIdSet = new Set(DEPRECATED_PERMISSION_IDS);
+const CONTROL_DESIGN_PROJECT_LEADERSHIP_ROLE_IDS = ["r1", "r2", "r3", "r4"];
 
 function normalizePermissionId(permissionId) {
   if (typeof permissionId !== "string") {
@@ -197,6 +198,28 @@ async function syncNativeUploadPermissionFromLegacy(client) {
   );
 }
 
+async function syncControlDesignProjectPermissions(client) {
+  await client.query(
+    `
+      INSERT INTO role_permissions (role_id, permission_id)
+      SELECT roles.id, permission.permission_id
+      FROM roles
+      CROSS JOIN unnest($2::text[]) AS permission(permission_id)
+      WHERE roles.id = ANY($1::text[])
+      ON CONFLICT (role_id, permission_id) DO NOTHING
+    `,
+    [
+      CONTROL_DESIGN_PROJECT_LEADERSHIP_ROLE_IDS,
+      [
+        PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS,
+        PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS,
+        PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS,
+        PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS,
+      ],
+    ],
+  );
+}
+
 async function syncRolePermissionJson(client) {
   await client.query(
     `
@@ -348,6 +371,7 @@ async function alignPermissionData(client) {
     [STALE_PERMISSION_IDS],
   );
 
+  await syncControlDesignProjectPermissions(client);
   await syncNativeUploadPermissionFromLegacy(client);
   await syncRolePermissionJson(client);
 }

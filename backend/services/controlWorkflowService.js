@@ -65,14 +65,17 @@ function requireNonEmpty(value, fieldName) {
 
 function hasControlDesignViewAllPermission(actor) {
   return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS)
+    || hasControlDesignCreatePermission(actor)
     || hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS)
-    || hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS)
-    || hasPermission(actor, PERMISSIONS.ASSIGN_TASK);
+    || hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS);
+}
+
+function hasControlDesignCreatePermission(actor) {
+  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS);
 }
 
 function hasControlDesignAssignPermission(actor) {
-  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS)
-    || hasPermission(actor, PERMISSIONS.ASSIGN_TASK);
+  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS);
 }
 
 function hasControlDesignReassignPermission(actor) {
@@ -90,6 +93,22 @@ function requireControlDesignWorkspaceAccess(actor, subDepartmentId = null) {
   requireActor(actor);
   if (!isControlDesignWorkspaceUser(actor, subDepartmentId)) {
     throw new AppError(403, "Control Design workspace access requires Control department and Control Design subdivision membership");
+  }
+}
+
+function requireControlDesignCreatePermission(actor, subDepartmentId = null) {
+  requireControlDesignWorkspaceAccess(actor, subDepartmentId);
+  if (!hasControlDesignCreatePermission(actor)) {
+    throw new AppError(403, "Control Design project creation permission is required");
+  }
+}
+
+function canCreateControlDesignProject(actor, subDepartmentId = null) {
+  try {
+    requireControlDesignCreatePermission(actor, subDepartmentId);
+    return true;
+  } catch (_error) {
+    return false;
   }
 }
 
@@ -397,10 +416,7 @@ function normalizeBudgetCurrency(value) {
 
 async function createControlDesignProject(actor, payload = {}) {
   const controlDesign = await resolveControlDesignSubDepartment();
-  requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  if (!hasControlDesignAssignPermission(actor)) {
-    throw new AppError(403, "Control Design project creation requires assignment permission");
-  }
+  requireControlDesignCreatePermission(actor, controlDesign.id);
 
   const normalized = normalizeControlDesignProjectPayload(payload);
 
@@ -933,6 +949,7 @@ module.exports = {
   approveRevision,
   approveStageSubmission,
   assignControlDesignProjectOwner,
+  canCreateControlDesignProject,
   createControlDesignCo,
   createControlDesignProject,
   createProjectWorkflow,
@@ -950,6 +967,7 @@ module.exports = {
   overrideUnlockStage,
   raiseRevision,
   reassignProjectWorkflowOwner,
+  requireControlDesignCreatePermission,
   startRevision,
   startStage,
   submitRevisionForApproval,

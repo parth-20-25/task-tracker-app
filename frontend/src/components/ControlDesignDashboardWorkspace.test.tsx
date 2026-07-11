@@ -202,11 +202,11 @@ function buildWorkflow(projectId = "project-1", workflowId = "workflow-1"): Cont
   };
 }
 
-function setAuth(canAssign: boolean) {
+function setAuth(canCreate: boolean, canAssign = canCreate) {
   mockAuth = {
     user: {
-      employee_id: canAssign ? "EMP-MGR" : "EMP-CD-1",
-      name: canAssign ? "Control Manager" : "Control Designer",
+      employee_id: canCreate || canAssign ? "EMP-MGR" : "EMP-CD-1",
+      name: canCreate || canAssign ? "Control Manager" : "Control Designer",
       department_id: "control",
       department: { id: "control", name: "Control" },
       subdivision_id: "sub-control-design",
@@ -216,16 +216,20 @@ function setAuth(canAssign: boolean) {
         subdivision_name: "Control Design",
         is_active: true,
       },
-      role_id: canAssign ? "r3" : "r6",
-      permissions: canAssign ? ["control_design.assign_projects"] : [],
+      role_id: canCreate || canAssign ? "r3" : "r6",
+      permissions: [
+        ...(canCreate ? ["control_design.create_projects"] : []),
+        ...(canAssign ? ["control_design.assign_projects"] : []),
+      ],
       is_active: true,
       created_at: "2026-07-01T00:00:00.000Z",
     },
     access: {
-      canAssignTasks: canAssign,
+      canAssignTasks: false,
+      canCreateControlDesignProjects: canCreate,
       canAssignControlDesignProjects: canAssign,
       canReassignControlDesignProjects: canAssign,
-      canViewAllControlDesignProjects: canAssign,
+      canViewAllControlDesignProjects: canCreate || canAssign,
     },
   };
 }
@@ -314,6 +318,34 @@ describe("ControlDesignDashboardWorkspace", () => {
     expect(screen.queryByRole("button", { name: /New Project/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Assign Control Design Project/ })).not.toBeInTheDocument();
     expect(controlApi.fetchControlDesignAssignableUsers).not.toHaveBeenCalled();
+  });
+
+  it("keeps project creation separate from assignment permission", async () => {
+    setAuth(false, true);
+    renderWorkspace();
+
+    expect(await screen.findByText("Press Line")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New Project/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Assign Control Design Project/ })).toBeInTheDocument();
+  });
+
+  it("keeps assignment separate from project creation permission", async () => {
+    setAuth(true, false);
+    renderWorkspace();
+
+    expect(await screen.findByText("Press Line")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /New Project/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Assign Control Design Project/ })).not.toBeInTheDocument();
+    expect(controlApi.fetchControlDesignAssignableUsers).not.toHaveBeenCalled();
+  });
+
+  it("shows the authorized empty state with project creation", async () => {
+    setAuth(true);
+    controlApi.fetchControlDesignProjects.mockResolvedValue([]);
+    renderWorkspace();
+
+    expect(await screen.findByText("No Control Design projects have been created yet.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /New Project/ }).length).toBeGreaterThan(0);
   });
 
   it("shows the regular-user empty state without creation controls", async () => {

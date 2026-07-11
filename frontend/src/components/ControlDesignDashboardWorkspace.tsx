@@ -436,9 +436,10 @@ export function ControlDesignDashboardWorkspace() {
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [createErrors, setCreateErrors] = useState<Partial<Record<keyof typeof emptyCreateForm | "submit", string>>>({});
 
+  const canCreateProjects = access.canCreateControlDesignProjects
+    || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS);
   const canAssignProjects = access.canAssignControlDesignProjects
-    || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS)
-    || hasUserPermission(user, PERMISSIONS.ASSIGN_TASK);
+    || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS);
   const canReassignProjects = access.canReassignControlDesignProjects
     || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS)
     || canAssignProjects;
@@ -450,7 +451,7 @@ export function ControlDesignDashboardWorkspace() {
     staleTime: 60_000,
   });
 
-  const projects = projectsQuery.data ?? [];
+  const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId) || null;
 
   useEffect(() => {
@@ -581,7 +582,7 @@ export function ControlDesignDashboardWorkspace() {
     || !assignedUserId
     || assignmentMutation.isPending
     || (Boolean(selectedOwner) && !canReassignProjects);
-  const emptyMessage = canAssignProjects
+  const emptyMessage = canCreateProjects
     ? "No Control Design projects have been created yet."
     : "No Control Design projects are currently assigned to you.";
 
@@ -598,7 +599,7 @@ export function ControlDesignDashboardWorkspace() {
       <ProjectSelector
         projects={projects}
         selectedProjectId={selectedProjectId}
-        canCreateProjects={canAssignProjects}
+        canCreateProjects={canCreateProjects}
         onSelectProject={setSelectedProjectId}
         onNewProject={() => setCreateOpen(true)}
       />
@@ -618,7 +619,7 @@ export function ControlDesignDashboardWorkspace() {
           <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-500">
             <FolderOpen className="h-10 w-10 opacity-30" />
             <p>{emptyMessage}</p>
-            {canAssignProjects ? (
+            {canCreateProjects ? (
               <Button type="button" onClick={() => setCreateOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 New Project

@@ -39,6 +39,7 @@ export const PERMISSIONS = {
   VIEW_EFFICIENCY_ANALYTICS: "view_efficiency_analytics",
   VIEW_WORKFLOW_HEALTH: "view_workflow_health",
   VIEW_PREDICTIVE_ANALYTICS: "view_predictive_analytics",
+  CONTROL_DESIGN_CREATE_PROJECTS: "control_design.create_projects",
   CONTROL_DESIGN_VIEW_ALL_PROJECTS: "control_design.view_all_projects",
   CONTROL_DESIGN_ASSIGN_PROJECTS: "control_design.assign_projects",
   CONTROL_DESIGN_REASSIGN_PROJECTS: "control_design.reassign_projects",
@@ -50,6 +51,7 @@ export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[numbe
   [PERMISSIONS.VIEW_SELF_TASKS]: "View Self Tasks Only",
   [PERMISSIONS.VIEW_ALL_TASKS]: "View All Tasks",
   [PERMISSIONS.SELF_APPROVE]: "Self Approve",
+  [PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS]: "Create Control Design Projects",
   [PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS]: "View All Control Design Projects",
   [PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS]: "Assign Control Design Projects",
   [PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS]: "Reassign Control Design Projects",
@@ -116,6 +118,7 @@ export interface UiAccess {
   canViewDepartmentAnalytics: boolean;
   canViewAllDepartmentsAnalytics: boolean;
   canViewAllUsersAnalytics: boolean;
+  canCreateControlDesignProjects: boolean;
   canViewAllControlDesignProjects: boolean;
   canAssignControlDesignProjects: boolean;
   canReassignControlDesignProjects: boolean;
@@ -291,9 +294,11 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canViewAllDepartmentsAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const canViewAllUsersAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
   const canViewAnalytics = hasAnyUserPermission(user, ANALYTICS_VISIBILITY_PERMISSIONS);
-  const canAssignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS) || canAssignTasks;
+  const canCreateControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS);
+  const canAssignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS);
   const canReassignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS) || canAssignControlDesignProjects;
   const canViewAllControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS)
+    || canCreateControlDesignProjects
     || canAssignControlDesignProjects
     || canReassignControlDesignProjects;
 
@@ -331,6 +336,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canViewDepartmentAnalytics,
     canViewAllDepartmentsAnalytics,
     canViewAllUsersAnalytics,
+    canCreateControlDesignProjects,
     canViewAllControlDesignProjects,
     canAssignControlDesignProjects,
     canReassignControlDesignProjects,

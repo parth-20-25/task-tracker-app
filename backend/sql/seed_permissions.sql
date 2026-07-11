@@ -25,7 +25,11 @@ VALUES
   ('can_manage_kpis', 'Manage KPIs', 'Allows managing KPI definitions.'),
   ('can_manage_escalation_rules', 'Manage Escalation Rules', 'Allows managing escalation rules.'),
   ('can_view_reports', 'View Reports', 'Allows viewing reports.'),
-  ('can_export_reports', 'Export Reports', 'Allows exporting reports.')
+  ('can_export_reports', 'Export Reports', 'Allows exporting reports.'),
+  ('control_design.create_projects', 'Create Control Design Projects', 'Allows creating Control Design project workflows.'),
+  ('control_design.view_all_projects', 'View All Control Design Projects', 'Allows viewing all eligible Control Design project workflows.'),
+  ('control_design.assign_projects', 'Assign Control Design Projects', 'Allows assigning Control Design project ownership.'),
+  ('control_design.reassign_projects', 'Reassign Control Design Projects', 'Allows reassigning Control Design project ownership.')
 ON CONFLICT (id) DO UPDATE
 SET name = EXCLUDED.name,
     description = EXCLUDED.description,

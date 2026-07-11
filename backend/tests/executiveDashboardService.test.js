@@ -8,6 +8,7 @@ const {
   assertExecutiveDashboardAccess,
   buildExecutiveDashboardModel,
   canApprovalTaskBeApprovedByUser,
+  getExecutiveDashboardForUser,
   getPeriodRange,
   normalizeDashboardQuery,
   queryCompletionEvents,
@@ -43,6 +44,32 @@ function makeUser(overrides = {}) {
     role: { id: "team_leader", name: "Team Leader", permissions: {}, hierarchy_level: 3 },
     ...overrides,
   };
+}
+
+function createEmptyDashboardClient() {
+  const client = {
+    queries: [],
+    async query(sql, params = []) {
+      client.queries.push({ sql, params });
+
+      if (sql.includes("FROM departments")) {
+        return {
+          rows: [
+            { id: "design", name: "Design Department" },
+            { id: "control", name: "Control Department" },
+          ],
+        };
+      }
+
+      if (sql.includes("FROM design.projects p") && sql.includes("p.id AS project_id")) {
+        return { rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${String(sql).replace(/\s+/g, " ").slice(0, 180)}`);
+    },
+  };
+
+  return client;
 }
 
 function executiveUser(role) {
@@ -106,6 +133,42 @@ test("normalizeDashboardQuery validates executive API parameters", async () => {
   await assert.rejects(() => normalizeDashboardQuery({ page: "0" }, admin, departments), { statusCode: 400 });
   await assert.rejects(() => normalizeDashboardQuery({ page_size: "999" }, admin, departments), { statusCode: 400 });
   await assert.rejects(() => normalizeDashboardQuery({ department: "unknown" }, admin, departments), { statusCode: 400 });
+});
+
+test("getExecutiveDashboardForUser returns zero state for exact executive filters", async () => {
+  const admin = executiveUser({ id: "admin", name: "Admin", permissions: { all: true } });
+
+  for (const department of ["design", "control", "all"]) {
+    const client = createEmptyDashboardClient();
+    const model = await getExecutiveDashboardForUser(admin, {
+      department,
+      period: "this_week",
+      status: "all",
+      risk: "all",
+      page: "1",
+      page_size: "7",
+    }, client);
+
+    assert.equal(model.filters.department, department);
+    assert.equal(model.filters.period, "this_week");
+    assert.equal(model.filters.status, "all");
+    assert.equal(model.filters.risk, "all");
+    assert.equal(model.selected_department.id, department === "all" ? null : department);
+    assert.equal(model.table.page, 1);
+    assert.equal(model.table.page_size, 7);
+    assert.equal(model.table.total_rows, 0);
+    assert.equal(model.table.total_pages, 0);
+    assert.deepEqual(model.table.rows, []);
+    assert.deepEqual(model.needs_attention, []);
+    assert.deepEqual(model.owner_workload.items, []);
+    assert.equal(model.approvals_summary.pending_my_approval, 0);
+    assert.equal(model.approvals_summary.pending_over_24h, 0);
+    assert.equal(model.approvals_summary.pending_over_48h, 0);
+    assert.equal(model.overview.total_projects, 0);
+    assert.equal(model.kpis.length, 6);
+    assert.ok(model.kpis.every((kpi) => kpi.value === 0));
+    assert.ok(model.department_comparison.every((row) => row.total_projects === 0));
+  }
 });
 
 test("queryProjectSupplements omits optional workflow snapshots when the table is not migrated", async () => {

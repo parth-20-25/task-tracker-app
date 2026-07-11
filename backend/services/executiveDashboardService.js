@@ -1144,8 +1144,8 @@ function buildExecutiveDashboardModel({
   const scopedApprovalTasks = approvalTasks.filter((task) => scopedProjectIds.has(String(task.project_id)));
   const tableRows = projects.map(buildTableRow);
   const filteredRows = applyTableFilters(tableRows, filters);
-  const pageCount = Math.max(1, Math.ceil(filteredRows.length / filters.pageSize));
-  const safePage = Math.min(filters.page, pageCount);
+  const pageCount = Math.ceil(filteredRows.length / filters.pageSize);
+  const safePage = pageCount === 0 ? 1 : Math.min(filters.page, pageCount);
   const start = (safePage - 1) * filters.pageSize;
 
   return {
@@ -1218,4 +1218,3 @@ module.exports = instrumentModuleExports("service.executiveDashboardService", {
   queryCompletionEvents,
   queryProjectSupplements,
 });
-

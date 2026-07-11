@@ -161,7 +161,7 @@ export interface ExecutiveDashboardResponse {
   };
 }
 
-export async function fetchExecutiveDashboard(filters: ExecutiveDashboardFilters) {
+export async function fetchExecutiveDashboard(filters: ExecutiveDashboardFilters, init: RequestInit = {}) {
   const params = new URLSearchParams();
 
   Object.entries(filters).forEach(([key, value]) => {
@@ -171,6 +171,5 @@ export async function fetchExecutiveDashboard(filters: ExecutiveDashboardFilters
     params.set(key, String(value));
   });
 
-  return apiRequest<ExecutiveDashboardResponse>(`/dashboard/executive?${params.toString()}`);
+  return apiRequest<ExecutiveDashboardResponse>(`/dashboard/executive?${params.toString()}`, init);
 }
-

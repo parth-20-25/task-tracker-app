@@ -13,10 +13,12 @@ const { startEscalationWorker } = require("./services/escalationWorkerService");
 const { startPerformanceAnalyticsWorker } = require("./services/performanceAnalyticsWorkerService");
 
 console.log("SERVER STARTING...");
+console.log("HOST:", process.env.HOST);
 console.log("PORT:", process.env.PORT);
 registerProcessErrorHandlers();
 
 const app = createApp();
+let activeServer = null;
 
 async function startServer() {
   validateBackendEnv();
@@ -25,13 +27,17 @@ async function startServer() {
 
   return new Promise((resolve) => {
     const PORT = env.port;
-    const server = app.listen(PORT, () => {
+    const HOST = env.host;
+    const server = app.listen(PORT, HOST, () => {
+      activeServer = server;
       startEscalationWorker();
       startPerformanceAnalyticsWorker();
-      console.log(`Server running on port ${PORT}`);
+      console.log(`Server running on ${HOST}:${PORT}`);
 
       resolve(server);
     });
+
+    activeServer = server;
   });
 }
 
@@ -44,5 +50,6 @@ if (require.main === module) {
 
 module.exports = {
   app,
+  getActiveServer: () => activeServer,
   startServer,
 };

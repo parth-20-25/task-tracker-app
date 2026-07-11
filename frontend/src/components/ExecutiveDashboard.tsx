@@ -18,7 +18,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-const STORAGE_KEY = "taskcontrol.executive-dashboard.department";
 const PAGE_SIZE = 7;
 
 const periodOptions: Array<{ value: ExecutiveDashboardPeriod; label: string }> = [
@@ -98,12 +97,12 @@ function todayInputValue() {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 }
 
-function readStoredDepartment() {
-  return typeof window === "undefined" ? null : window.localStorage.getItem(STORAGE_KEY);
-}
-
-function storeDepartment(value: string) {
-  if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, value);
+function departmentLabelFromValue(value: string | null | undefined) {
+  const key = String(value || "").trim().toLowerCase();
+  if (key === "all" || key === "all_departments") return "All Departments";
+  if (key === "design") return "Design Department";
+  if (key === "control") return "Control Department";
+  return value ? value : "Department";
 }
 
 function formatNumber(value: number | null | undefined) {
@@ -234,8 +233,7 @@ export function ExecutiveDashboard() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const canSelectAllDepartments = isProjectAuthorityUser(user) || access?.canViewAllDepartmentsAnalytics === true;
-  const storedDepartment = readStoredDepartment();
-  const fallbackDepartment = canSelectAllDepartments ? storedDepartment || "all" : user?.department_id || "all";
+  const fallbackDepartment = canSelectAllDepartments ? "all" : user?.department_id || "all";
 
   const filters = useMemo<ExecutiveDashboardFilters>(() => {
     const period = optionValue(searchParams.get("period"), periodOptions, "this_week");
@@ -281,21 +279,21 @@ export function ExecutiveDashboard() {
     if (changed) setSearchParams(next, { replace: true });
   }, [filters.department, filters.end, filters.page, filters.period, filters.risk, filters.start, filters.status, searchParams, setSearchParams]);
 
-  useEffect(() => {
-    if (filters.department) storeDepartment(filters.department);
-  }, [filters.department]);
-
   const dashboardQuery = useQuery({
     queryKey: executiveDashboardQueryKeys.filtered(filters),
-    queryFn: () => fetchExecutiveDashboard(filters),
+    queryFn: ({ signal }) => fetchExecutiveDashboard(filters, { signal }),
     enabled: Boolean(user?.employee_id),
     staleTime: 30_000,
+    retry: false,
+    placeholderData: (previousData) => previousData,
   });
 
   const data = dashboardQuery.data;
+  const showBlockingError = dashboardQuery.isError && !data;
+  const isInitialLoading = dashboardQuery.isLoading && !showBlockingError;
   const selectedDepartment = data?.selected_department || {
     id: filters.department === "all" ? null : filters.department || null,
-    label: filters.department === "all" ? "All Departments" : filters.department || "Department",
+    label: departmentLabelFromValue(filters.department),
     mode: filters.department === "all" ? "all" as const : "department" as const,
   };
   const dashboardConfig = getDashboardConfigForDepartment(selectedDepartment.mode === "all" ? "all" : selectedDepartment.id);
@@ -324,7 +322,6 @@ export function ExecutiveDashboard() {
       if (!next.get("start")) next.set("start", today);
       if (!next.get("end")) next.set("end", today);
     }
-    if (updates.department) storeDepartment(String(updates.department));
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
@@ -334,9 +331,10 @@ export function ExecutiveDashboard() {
 
   const table = data?.table;
   const page = table?.page || filters.page || 1;
-  const totalPages = table?.total_pages || 1;
+  const totalPages = table?.total_pages ?? 1;
   const rows = table?.rows || [];
-  const pageNumbers = Array.from({ length: Math.min(3, totalPages) }, (_, index) => index + 1);
+  const visiblePage = rows.length ? page : 0;
+  const pageNumbers = totalPages > 0 ? Array.from({ length: Math.min(3, totalPages) }, (_, index) => index + 1) : [];
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-slate-50/80 px-4 py-5 sm:px-6 lg:px-8">
@@ -344,7 +342,7 @@ export function ExecutiveDashboard() {
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-normal text-slate-950">Executive Dashboard</h1>
-            <p className="mt-1 text-sm text-slate-500">{selectedDepartment.label} - {data?.filters.period_label || periodOptions.find((option) => option.value === filters.period)?.label || "This Week"}</p>
+            <p className="mt-1 text-sm text-slate-500">{selectedDepartment.label} • {data?.filters.period_label || periodOptions.find((option) => option.value === filters.period)?.label || "This Week"}</p>
           </div>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div className="inline-flex w-full rounded-md border border-slate-200 bg-white p-1 shadow-sm lg:w-auto">
@@ -381,16 +379,25 @@ export function ExecutiveDashboard() {
         ) : null}
 
         {dashboardQuery.isError ? (
-          <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertTitle>Dashboard unavailable</AlertTitle><AlertDescription>{dashboardQuery.error instanceof Error ? dashboardQuery.error.message : "Could not load executive dashboard data."}</AlertDescription></Alert>
+          <Alert variant="destructive" className="flex items-start justify-between gap-3">
+            <AlertCircle className="mt-0.5 h-4 w-4" />
+            <div className="min-w-0 flex-1">
+              <AlertTitle>Dashboard unavailable</AlertTitle>
+              <AlertDescription>{dashboardQuery.error instanceof Error ? dashboardQuery.error.message : "Could not load executive dashboard data."}</AlertDescription>
+            </div>
+            <Button type="button" variant="outline" size="sm" className="shrink-0 bg-white" onClick={() => dashboardQuery.refetch()}>Retry</Button>
+          </Alert>
         ) : null}
 
+        {!showBlockingError ? (
+          <>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-          {(data?.kpis || Array.from({ length: 6 })).map((kpi, index) => <KpiCard key={(kpi as ExecutiveDashboardKpi | undefined)?.id || index} kpi={kpi as ExecutiveDashboardKpi | undefined} loading={dashboardQuery.isLoading} />)}
+          {(data?.kpis || Array.from({ length: 6 })).map((kpi, index) => <KpiCard key={(kpi as ExecutiveDashboardKpi | undefined)?.id || index} kpi={kpi as ExecutiveDashboardKpi | undefined} loading={isInitialLoading} />)}
         </div>
 
         <div className="grid gap-3 xl:grid-cols-[1.05fr_1.55fr_1.35fr_1.2fr]">
           <Panel title="Needs Attention" icon={AlertCircle}>
-            {dashboardQuery.isLoading ? (
+            {isInitialLoading ? (
               <div className="space-y-3">{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-12 w-full" />)}</div>
             ) : data?.needs_attention.length ? (
               <div className="divide-y divide-slate-100">
@@ -406,7 +413,7 @@ export function ExecutiveDashboard() {
           </Panel>
 
           <Panel title={data?.overview.title || `${selectedDepartment.label} Overview`}>
-            {dashboardQuery.isLoading || !data ? (
+            {isInitialLoading || !data ? (
               <div className="space-y-5"><div className="grid grid-cols-4 gap-4">{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-16" />)}</div><Skeleton className="h-3 w-full" /><Skeleton className="h-5 w-40" /></div>
             ) : (
               <div className="space-y-5">
@@ -429,7 +436,7 @@ export function ExecutiveDashboard() {
           </Panel>
 
           <Panel title="Department Progress Comparison" icon={UsersRound}>
-            {dashboardQuery.isLoading || !data ? (
+            {isInitialLoading || !data ? (
               <div className="space-y-3">{Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className="h-8 w-full" />)}</div>
             ) : (
               <div className="overflow-hidden rounded-md border border-slate-100">
@@ -465,7 +472,7 @@ export function ExecutiveDashboard() {
           </Panel>
 
           <Panel title={data?.owner_workload.title || "Owner Workload"}>
-            {dashboardQuery.isLoading || !data ? (
+            {isInitialLoading || !data ? (
               <div className="space-y-4">{Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className="h-10 w-full" />)}</div>
             ) : data.owner_workload.items.length ? (
               <div className="space-y-4">
@@ -504,7 +511,7 @@ export function ExecutiveDashboard() {
                     <TableRow className="hover:bg-transparent">{dashboardConfig.tableColumns.map((column) => <TableHead key={column.key} className={cn("h-10 px-3 text-xs font-semibold text-slate-500", column.className)}>{column.label}</TableHead>)}</TableRow>
                   </TableHeader>
                   <TableBody>
-                    {dashboardQuery.isLoading ? (
+                    {isInitialLoading ? (
                       Array.from({ length: PAGE_SIZE }).map((_, rowIndex) => <TableRow key={rowIndex}>{dashboardConfig.tableColumns.map((column) => <TableCell key={column.key} className="px-3 py-3"><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>)
                     ) : rows.length ? (
                       rows.map((row) => (
@@ -519,7 +526,7 @@ export function ExecutiveDashboard() {
                 </Table>
               </div>
               <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs text-slate-500">Page {page} of {totalPages}</div>
+                <div className="text-xs text-slate-500">Page {visiblePage} of {totalPages}</div>
                 <div className="flex items-center gap-2">
                   <Button type="button" variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => updateFilters({ page: page - 1 })}><ChevronLeft className="h-4 w-4" /></Button>
                   {pageNumbers.map((pageNumber) => <Button key={pageNumber} type="button" variant={page === pageNumber ? "default" : "outline"} size="sm" className="h-8 min-w-8" onClick={() => updateFilters({ page: pageNumber })}>{pageNumber}</Button>)}
@@ -532,7 +539,7 @@ export function ExecutiveDashboard() {
           </Card>
 
           <Panel title="Approvals Summary" icon={Clock3}>
-            {dashboardQuery.isLoading || !data ? (
+            {isInitialLoading || !data ? (
               <div className="space-y-3">{Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-11 w-full" />)}</div>
             ) : (
               <div className="space-y-3">
@@ -551,8 +558,9 @@ export function ExecutiveDashboard() {
             )}
           </Panel>
         </div>
+          </>
+        ) : null}
       </div>
     </div>
   );
 }
-

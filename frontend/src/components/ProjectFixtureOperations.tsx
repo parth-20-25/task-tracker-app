@@ -17,8 +17,12 @@ import {
 } from "lucide-react";
 import {
   createDesignTask,
+  completeOutsourcedFixture,
   fetchFixtureFullProgress,
+  fetchRecentOutsourceSuppliers,
+  bringFixtureInHouse,
   manipulateFixtureStage,
+  outsourceFixture,
   reopenFixtureStage,
   releaseFixtureWorkflow,
   validateFixtureAssignment,
@@ -27,11 +31,6 @@ import {
   type FixtureRevisionType,
 } from "@/api/designApi";
 import { cancelTask as cancelTaskRequest, fetchTaskAssignmentUsers, fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
-import { fetchFixtureReleasePackage, type FixtureReleasePackageResponse } from "@/api/releaseDeliverablesApi";
-import { fetchProjectOutsourceAssignments } from "@/api/outsourceAssignmentsApi";
-import { BulkOutsourceDialog } from "@/components/BulkOutsourceDialog";
-import { FixtureOutsourceAssignmentsTable } from "@/components/FixtureOutsourceAssignmentsTable";
-import { ReleaseDeliverablesPanel } from "@/components/ReleaseDeliverablesPanel";
 import { SafeImage } from "@/components/SafeImage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,20 +53,24 @@ import { toast } from "@/hooks/use-toast";
 import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, projectQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { cn } from "@/lib/utils";
-import { hasAnyUserPermission, hasUserPermission, PERMISSIONS as UI_PERMISSIONS } from "@/lib/permissions";
 import { resolveImageUrl } from "@/lib/imageUrl";
 import {
   compactWorkflowCode,
+  getCurrentFixtureStageLabel,
   getFixtureCurrentRevisionLabel,
+  getFixtureOutsourceStatus,
   getFixtureWorkflowCode,
   isFixtureActiveOutsourcedSection,
   isFixtureCurrentStageOutsourced,
+  isFixtureOutsourcePlanActive,
   normalizeStageKey,
 } from "@/lib/outsourceWorkflowDisplay";
-import type { DesignFixtureOption, Priority, Task, User as AppUser } from "@/types";
+import type { DesignFixtureOption, OutsourceStage, Priority, Task, User as AppUser } from "@/types";
 
 const OPEN_TASK_STATUSES = new Set(["assigned", "in_progress", "on_hold", "under_review", "rework"]);
 const ASSIGNMENT_BLOCKED_STATES = new Set(["VERIFICATION", "REWORK", "IN_PROGRESS", "ASSIGNED", "WORKFLOW_COMPLETE"]);
+const RECENT_SUPPLIERS_STORAGE_KEY = "parc_recent_outsource_suppliers";
+const OUTSOURCE_STAGE_OPTIONS: OutsourceStage[] = ["Concept", "3D", "2D"];
 
 type FixtureOperationalState = "VERIFICATION" | "REWORK" | "UNASSIGNED" | "IN_PROGRESS" | "ASSIGNED" | "WORKFLOW_COMPLETE";
 
@@ -109,6 +112,45 @@ function isReleaseStageName(value: string | null | undefined) {
   return normalized === "release" || normalized === "released";
 }
 
+function mergeRecentSupplierNames(...groups: Array<Array<string | null | undefined>>) {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  groups.flat().forEach((supplier) => {
+    const value = String(supplier || "").trim();
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    merged.push(value);
+  });
+
+  return merged.slice(0, 6);
+}
+
+function readRecentSupplierNames() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(RECENT_SUPPLIERS_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? mergeRecentSupplierNames(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentSupplierName(supplierName: string, current: string[] = []) {
+  const next = mergeRecentSupplierNames([supplierName], current);
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(RECENT_SUPPLIERS_STORAGE_KEY, JSON.stringify(next));
+  }
+  return next;
+}
+
 function getStageWorkflowCode(stage: FixtureFullProgress["stages"][number] | null | undefined) {
   return compactWorkflowCode(stage?.revision_code)
     || (stage ? `Stage${stage.stage_order}` : "Workflow");
@@ -143,7 +185,7 @@ function getAssignableWorkflowOptions(progress: FixtureFullProgress | null | und
       stage_version: 0,
       revision_code: "REL 00",
       stage_order: lastStageOrder + 1,
-      status: "PENDING" as const,
+      status: "PENDING",
       assigned_to: null,
       assigned_at: null,
       started_at: null,
@@ -229,6 +271,11 @@ function getFixtureReleasedBy(fixture: DesignFixtureOption) {
   }
 
   return formatEmployeeDisplay(fixture.workflow_released_by || null, fixture.workflow_released_by_name);
+}
+
+function isDapStageName(value: string | null | undefined) {
+  const normalized = normalizeStageKey(value);
+  return normalized === "dap" || normalized === "d_a_p";
 }
 
 function isTwoDStageName(value: string | null | undefined) {
@@ -452,28 +499,7 @@ interface ProjectFixtureOperationsGridProps {
   fixtures: DesignFixtureOption[];
   projectId: string;
   departmentId?: string | null;
-  readOnly?: boolean;
-  projectLabel?: string;
 }
-type FixtureReleaseFilter = "ALL" | "WORKFLOW_ACTIVE" | "PENDING_DELIVERABLES" | "READY_FOR_RELEASE" | "RELEASED";
-
-const FIXTURE_RELEASE_FILTERS: Array<{ value: FixtureReleaseFilter; label: string }> = [
-  { value: "ALL", label: "All" },
-  { value: "WORKFLOW_ACTIVE", label: "Workflow Active" },
-  { value: "PENDING_DELIVERABLES", label: "Pending Deliverables" },
-  { value: "READY_FOR_RELEASE", label: "Ready for Release" },
-  { value: "RELEASED", label: "Released" },
-];
-
-function fixtureReleaseState(fixture: DesignFixtureOption): Exclude<FixtureReleaseFilter, "ALL"> {
-  if (fixture.fixture_release_state) {
-    return fixture.fixture_release_state as Exclude<FixtureReleaseFilter, "ALL">;
-  }
-  return fixture.workflow_released_at || fixture.is_workflow_complete
-    ? "RELEASED"
-    : "WORKFLOW_ACTIVE";
-}
-
 function applyReleasedFixtureState(fixture: DesignFixtureOption, releaseState: FixtureCurrentStage | undefined) {
   if (!releaseState?.is_complete) {
     return fixture;
@@ -490,7 +516,6 @@ function applyReleasedFixtureState(fixture: DesignFixtureOption, releaseState: F
     workflow_stage_version: releaseState.stage_version,
     workflow_assigned_to: null,
     workflow_assigned_to_name: null,
-    fixture_release_state: "RELEASED",
   };
 }
 
@@ -605,13 +630,11 @@ export function ProjectFixtureOperationsGrid({
   fixtures,
   projectId,
   departmentId,
-  readOnly = false,
-  projectLabel = projectId,
 }: ProjectFixtureOperationsGridProps) {
   const { access, user } = useAuth();
   const { tasks, refreshTasks } = useTasks();
   const queryClient = useQueryClient();
-  const fallbackAssignableUsersQuery = useAssignableUsersQuery(!readOnly && access.canAssignTasks);
+  const fallbackAssignableUsersQuery = useAssignableUsersQuery();
   const assignmentUsersQuery = useQuery({
     queryKey: ["task-assignment", "assignable-users", "department-workflow", departmentId || "self", projectId],
     queryFn: () => fetchTaskAssignmentUsers({
@@ -619,7 +642,7 @@ export function ProjectFixtureOperationsGrid({
       department_id: departmentId || null,
       project_id: projectId,
     }),
-    enabled: Boolean(!readOnly && user?.employee_id && access.canAssignTasks && departmentId),
+    enabled: Boolean(user?.employee_id && access.canAssignTasks && departmentId),
   });
   const twoDAssignmentUsersQuery = useQuery({
     queryKey: ["task-assignment", "assignable-users", "department-workflow", departmentId || "self", projectId, "2D Finish"],
@@ -629,25 +652,11 @@ export function ProjectFixtureOperationsGrid({
       project_id: projectId,
       stage_name: "2D Finish",
     }),
-    enabled: Boolean(!readOnly && user?.employee_id && access.canAssignTasks && departmentId),
-  });
-  const canViewStageOutsourceAssignments = hasAnyUserPermission(user, [
-    UI_PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE,
-    UI_PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_MANAGE,
-    UI_PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_CANCEL,
-    UI_PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_REVIEW,
-  ]);
-  const canBulkOutsource = hasUserPermission(user, UI_PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE)
-    && hasUserPermission(user, UI_PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_BULK);
-  const stageOutsourceAssignmentsQuery = useQuery({
-    queryKey: ["design", "outsource", "assignments", projectId],
-    queryFn: () => fetchProjectOutsourceAssignments(projectId),
-    enabled: Boolean(user?.employee_id && canViewStageOutsourceAssignments),
-    retry: false,
+    enabled: Boolean(user?.employee_id && access.canAssignTasks && departmentId),
   });
   const [bulkPanelOpen, setBulkPanelOpen] = useState(false);
-  const [releaseFilter, setReleaseFilter] = useState<FixtureReleaseFilter>("ALL");
   const [selectedFixtureIds, setSelectedFixtureIds] = useState<string[]>([]);
+  const [localRecentSupplierNames, setLocalRecentSupplierNames] = useState<string[]>(() => readRecentSupplierNames());
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     UNASSIGNED: true,
     ASSIGNED: true,
@@ -679,26 +688,6 @@ export function ProjectFixtureOperationsGrid({
     [fixtures, releasedFixtureStatesById],
   );
 
-  const filteredVisibleFixtures = useMemo(
-    () => releaseFilter === "ALL"
-      ? visibleFixtures
-      : visibleFixtures.filter((fixture) => fixtureReleaseState(fixture) === releaseFilter),
-    [releaseFilter, visibleFixtures],
-  );
-
-  const stageOutsourceAssignments = useMemo(
-    () => stageOutsourceAssignmentsQuery.data ?? [],
-    [stageOutsourceAssignmentsQuery.data],
-  );
-  const activeStageOutsourceAssignments = useMemo(
-    () => stageOutsourceAssignments.filter((assignment) => assignment.status !== "CANCELLED"),
-    [stageOutsourceAssignments],
-  );
-  const activeStageOutsourceFixtureIds = useMemo(
-    () => new Set(activeStageOutsourceAssignments.map((assignment) => assignment.fixture_id)),
-    [activeStageOutsourceAssignments],
-  );
-
   const rememberReleasedFixtureState = useCallback((fixtureId: string, releaseState: FixtureCurrentStage) => {
     if (!releaseState.is_complete) {
       return;
@@ -713,13 +702,27 @@ export function ProjectFixtureOperationsGrid({
   const verificationQuery = useQuery({
     queryKey: taskQueryKeys.verificationQueue,
     queryFn: fetchVerificationTasks,
-    enabled: Boolean(!readOnly && user?.employee_id && access.canViewVerifications),
+    enabled: Boolean(user?.employee_id && access.canViewVerifications),
   });
 
+  const recentSuppliersQuery = useQuery({
+    queryKey: ["design", "outsourcing", "suppliers", departmentId || "self"],
+    queryFn: () => fetchRecentOutsourceSuppliers(departmentId || undefined),
+    enabled: access.canAccessProjectFixtures && access.canChangeFixtureStage,
+  });
+
+  const recentSupplierNames = useMemo(
+    () => mergeRecentSupplierNames(localRecentSupplierNames, recentSuppliersQuery.data ?? []),
+    [localRecentSupplierNames, recentSuppliersQuery.data],
+  );
   const assignableUsers = assignmentUsersQuery.data ?? fallbackAssignableUsersQuery.data ?? [];
   const twoDAssignableUsers = twoDAssignmentUsersQuery.data ?? assignableUsers;
   const isLoadingAssignableUsers = assignmentUsersQuery.isLoading || (!assignmentUsersQuery.data && fallbackAssignableUsersQuery.isLoading);
   const isLoadingTwoDAssignableUsers = twoDAssignmentUsersQuery.isLoading || isLoadingAssignableUsers;
+
+  const rememberSupplierName = useCallback((supplierName: string) => {
+    setLocalRecentSupplierNames((current) => saveRecentSupplierName(supplierName, current));
+  }, []);
 
   const combinedTasks = useMemo(() => {
     const fixtureIds = new Set(visibleFixtures.map((fixture) => fixture.fixture_id));
@@ -751,12 +754,11 @@ export function ProjectFixtureOperationsGrid({
   }, [fixtureTaskById, visibleFixtures]);
 
   const assignableFixtures = useMemo(
-    () => readOnly ? [] : visibleFixtures.filter((fixture) => (
+    () => visibleFixtures.filter((fixture) => (
       !isFixtureActiveOutsourcedSection(fixture)
-      && !activeStageOutsourceFixtureIds.has(fixture.fixture_id)
       && operationalResolutionByFixtureId.get(fixture.fixture_id)?.assignable === true
     )),
-    [activeStageOutsourceFixtureIds, readOnly, visibleFixtures, operationalResolutionByFixtureId],
+    [visibleFixtures, operationalResolutionByFixtureId],
   );
   const assignableFixtureIds = useMemo(
     () => new Set(assignableFixtures.map((fixture) => fixture.fixture_id)),
@@ -775,13 +777,12 @@ export function ProjectFixtureOperationsGrid({
     const seen = new Set<string>();
 
     return FIXTURE_SECTION_ORDER.map((section) => {
-      const sectionFixtures = filteredVisibleFixtures.filter((fixture) => {
+      const sectionFixtures = visibleFixtures.filter((fixture) => {
         if (seen.has(fixture.fixture_id)) {
           return false;
         }
 
-        const isActiveOutsourced = isFixtureActiveOutsourcedSection(fixture)
-          || activeStageOutsourceFixtureIds.has(fixture.fixture_id);
+        const isActiveOutsourced = isFixtureActiveOutsourcedSection(fixture);
         const matches = section.key === "OUTSOURCED"
           ? isActiveOutsourced
           : !isActiveOutsourced && operationalResolutionByFixtureId.get(fixture.fixture_id)?.state === section.key;
@@ -796,7 +797,7 @@ export function ProjectFixtureOperationsGrid({
         fixtures: sortSectionFixtures(section.key, sectionFixtures, fixtureTaskById),
       };
     });
-  }, [activeStageOutsourceFixtureIds, filteredVisibleFixtures, fixtureTaskById, operationalResolutionByFixtureId]);
+  }, [fixtureTaskById, visibleFixtures, operationalResolutionByFixtureId]);
 
   const invalidateOperationalState = useCallback(async () => {
     await Promise.all([
@@ -812,7 +813,6 @@ export function ProjectFixtureOperationsGrid({
       queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
       queryClient.invalidateQueries({ queryKey: ["workflow"] }),
       queryClient.invalidateQueries({ queryKey: ["design", "outsourcing", "suppliers"] }),
-      queryClient.invalidateQueries({ queryKey: ["design", "outsource", "assignments", projectId] }),
     ]);
   }, [departmentId, projectId, queryClient, refreshTasks]);
 
@@ -826,7 +826,7 @@ export function ProjectFixtureOperationsGrid({
 
   return (
     <div className="space-y-2">
-      {!readOnly ? <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end">
         <Button
           type="button"
           size="sm"
@@ -838,35 +838,14 @@ export function ProjectFixtureOperationsGrid({
           <CheckSquare className="mr-1.5 h-3.5 w-3.5" />
           Assign All
         </Button>
-      </div> : null}
-
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Fixture release filter">
-        {FIXTURE_RELEASE_FILTERS.map((option) => (
-          <Button
-            key={option.value}
-            type="button"
-            size="sm"
-            variant={releaseFilter === option.value ? "secondary" : "ghost"}
-            className="h-7 px-2.5 text-xs"
-            aria-pressed={releaseFilter === option.value}
-            onClick={() => {
-              setSelectedFixtureIds([]);
-              setReleaseFilter(option.value);
-            }}
-          >
-            {option.label}
-          </Button>
-        ))}
       </div>
 
-      {!readOnly && bulkPanelOpen ? (
+      {bulkPanelOpen ? (
         <BulkFixtureAssignmentPanel
           assignableFixtures={assignableFixtures}
           selectedFixtureIds={eligibleSelectedFixtureIds}
           projectId={projectId}
-          projectLabel={projectLabel}
           departmentId={departmentId || undefined}
-          canBulkOutsource={canBulkOutsource}
           assignableUsers={assignableUsers}
           twoDAssignableUsers={twoDAssignableUsers}
           isLoadingUsers={isLoadingAssignableUsers}
@@ -880,12 +859,6 @@ export function ProjectFixtureOperationsGrid({
       <div className="space-y-3">
         {fixtureSections.map((section) => {
           const sectionStyle = FIXTURE_SECTION_STYLES[section.key];
-          const legacyOutsourcedFixtures = section.key === "OUTSOURCED"
-            ? section.fixtures.filter(isFixtureActiveOutsourcedSection)
-            : [];
-          const sectionCount = section.key === "OUTSOURCED"
-            ? stageOutsourceAssignments.length + legacyOutsourcedFixtures.length
-            : section.fixtures.length;
 
           return (
             <Collapsible
@@ -927,33 +900,25 @@ export function ProjectFixtureOperationsGrid({
                       color: sectionStyle.text,
                     }}
                   >
-                    {sectionCount} {section.key === "OUTSOURCED" ? "record" : "fixture"}{sectionCount === 1 ? "" : "s"}
+                    {section.fixtures.length} fixture{section.fixtures.length === 1 ? "" : "s"}
                   </Badge>
                   <ChevronDown className={cn("h-4 w-4 transition-transform", openSections[section.key] ? "rotate-180" : "")} />
                 </span>
               </CollapsibleTrigger>
               <CollapsibleContent className="border-t bg-background p-3" style={{ borderTopColor: sectionStyle.accent }}>
-                {section.key === "OUTSOURCED" ? (
-                  <div className="space-y-4">
-                    <FixtureOutsourceAssignmentsTable
-                      assignments={stageOutsourceAssignments}
-                      isLoading={stageOutsourceAssignmentsQuery.isLoading}
-                      error={stageOutsourceAssignmentsQuery.error instanceof Error ? stageOutsourceAssignmentsQuery.error : null}
-                      onRetry={() => void stageOutsourceAssignmentsQuery.refetch()}
-                    />
-                    {legacyOutsourcedFixtures.length ? (
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Historical fixture-level outsourcing</p>
-                        <OutsourcedFixturesTable
-                          fixtures={legacyOutsourcedFixtures}
-                          fixtureTaskById={fixtureTaskById}
-                          operationalResolutionByFixtureId={operationalResolutionByFixtureId}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                ) : section.fixtures.length === 0 ? (
+                {section.fixtures.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
+                ) : section.key === "OUTSOURCED" ? (
+                  <OutsourcedFixturesTable
+                    fixtures={section.fixtures}
+                    fixtureTaskById={fixtureTaskById}
+                    projectId={projectId}
+                    departmentId={departmentId || undefined}
+                    assignableUsers={assignableUsers}
+                    isLoadingUsers={isLoadingAssignableUsers}
+                    invalidateOperationalState={invalidateOperationalState}
+                    operationalResolutionByFixtureId={operationalResolutionByFixtureId}
+                  />
                 ) : (
                   <div className="space-y-2">
                     {section.fixtures.map((fixture) => (
@@ -969,9 +934,10 @@ export function ProjectFixtureOperationsGrid({
                         isLoadingTwoDUsers={isLoadingTwoDAssignableUsers}
                         invalidateOperationalState={invalidateOperationalState}
                         operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
+                        recentSupplierNames={recentSupplierNames}
+                        onSupplierUsed={rememberSupplierName}
                         onFixtureReleased={rememberReleasedFixtureState}
-                        readOnly={readOnly || fixtureReleaseState(fixture) === "RELEASED"}
-                        selectable={!readOnly && bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
+                        selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
                         selected={selectedFixtureIds.includes(fixture.fixture_id)}
                         onSelectedChange={toggleSelectedFixture}
                       />
@@ -990,12 +956,22 @@ export function ProjectFixtureOperationsGrid({
 interface OutsourcedFixturesTableProps {
   fixtures: DesignFixtureOption[];
   fixtureTaskById: Map<string, Task | null>;
+  projectId: string;
+  departmentId?: string;
+  assignableUsers: Array<{ employee_id: string; name: string }>;
+  isLoadingUsers: boolean;
+  invalidateOperationalState: () => Promise<void>;
   operationalResolutionByFixtureId: Map<string, FixtureOperationalResolution>;
 }
 
 function OutsourcedFixturesTable({
   fixtures,
   fixtureTaskById,
+  projectId,
+  departmentId,
+  assignableUsers,
+  isLoadingUsers,
+  invalidateOperationalState,
   operationalResolutionByFixtureId,
 }: OutsourcedFixturesTableProps) {
   return (
@@ -1005,61 +981,464 @@ function OutsourcedFixturesTable({
           <TableRow>
             <TableHead className="w-[130px]">Fixture No</TableHead>
             <TableHead className="min-w-[200px]">Fixture Name</TableHead>
-            <TableHead className="min-w-[160px]">Historical supplier</TableHead>
+            <TableHead className="min-w-[160px]">Supplier</TableHead>
             <TableHead className="min-w-[150px]">Current Revision</TableHead>
             <TableHead className="min-w-[170px]">Current Status</TableHead>
             <TableHead className="min-w-[130px]">Outsourced Date</TableHead>
+            <TableHead className="min-w-[260px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {fixtures.map((fixture) => {
-            const currentStageOutsourced = isFixtureCurrentStageOutsourced(fixture);
-            const operationalResolution = operationalResolutionByFixtureId.get(fixture.fixture_id)
-              || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null);
-            return (
-              <TableRow key={fixture.fixture_id}>
-                <TableCell className="align-top font-semibold">{fixture.fixture_no}</TableCell>
-                <TableCell className="align-top">
-                  <div className="max-w-[260px] whitespace-normal text-xs leading-snug">{fixture.part_name || "Not named"}</div>
-                </TableCell>
-                <TableCell className="align-top">
-                  <div className="max-w-[220px] whitespace-normal text-xs font-medium">{fixture.vendor_name || "Not set"}</div>
-                  <div className="text-[11px] text-muted-foreground">Historical vendor record; not an employee</div>
-                </TableCell>
-                <TableCell className="align-top">
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "text-[11px] font-semibold",
-                      currentStageOutsourced
-                        ? "border-cyan-300 bg-cyan-50 text-cyan-800"
-                        : "border-indigo-300 bg-indigo-50 text-indigo-800",
-                    )}
-                  >
-                    {getFixtureCurrentRevisionLabel(fixture)}
-                  </Badge>
-                </TableCell>
-                <TableCell className="align-top">
-                  <div className="flex flex-col gap-1">
-                    <span className="w-fit text-xs font-medium text-slate-700">
-                      {fixtureStageStatusLabel(fixture.workflow_status || fixture.operational_state)}
-                    </span>
-                    {operationalResolution.activeAssigneeName ? (
-                      <span className="text-[11px] text-muted-foreground">{operationalResolution.activeAssigneeName}</span>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell className="align-top text-xs text-muted-foreground">
-                  {formatDisplayDate(fixture.outsourced_at)}
-                </TableCell>
-              </TableRow>
-            );
-          })}
+          {fixtures.map((fixture) => (
+            <OutsourcedFixtureRow
+              key={fixture.fixture_id}
+              fixture={fixture}
+              projectId={projectId}
+              departmentId={departmentId}
+              assignableUsers={assignableUsers}
+              isLoadingUsers={isLoadingUsers}
+              invalidateOperationalState={invalidateOperationalState}
+              operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
+            />
+          ))}
         </TableBody>
       </Table>
     </div>
   );
 }
+
+interface OutsourcedFixtureRowProps {
+  fixture: DesignFixtureOption;
+  projectId: string;
+  departmentId?: string;
+  assignableUsers: Array<{ employee_id: string; name: string }>;
+  isLoadingUsers: boolean;
+  invalidateOperationalState: () => Promise<void>;
+  operationalResolution: FixtureOperationalResolution;
+}
+
+function OutsourcedFixtureRow({
+  fixture,
+  projectId,
+  departmentId,
+  assignableUsers,
+  isLoadingUsers,
+  invalidateOperationalState,
+  operationalResolution,
+}: OutsourcedFixtureRowProps) {
+  const { access } = useAuth();
+  const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
+  const [inHouseDialogOpen, setInHouseDialogOpen] = useState(false);
+  const outsourceStatus = getFixtureOutsourceStatus(fixture);
+  const currentStageOutsourced = isFixtureCurrentStageOutsourced(fixture);
+  const supplierCompleted = outsourceStatus === "completed" && !currentStageOutsourced;
+  const canToggleOutsourcing = access.canAccessProjectFixtures && access.canChangeFixtureStage;
+
+  const completeMutation = useMutation({
+    mutationFn: () => completeOutsourcedFixture(fixture.fixture_id, { department_id: departmentId }),
+    onSuccess: async (updatedFixture) => {
+      await invalidateOperationalState();
+      setCompleteDialogOpen(false);
+      toast({
+        title: updatedFixture.workflow_marked_complete ? "Workflow completed" : "Outsourced stage completed",
+        description: updatedFixture.workflow_marked_complete
+          ? "The final outsourced workflow stage was completed."
+          : "The fixture advanced to the next workflow stage.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Completion failed",
+        description: error instanceof Error ? error.message : "Could not complete outsourced work",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const inHouseMutation = useMutation({
+    mutationFn: () => bringFixtureInHouse(fixture.fixture_id, { department_id: departmentId }),
+    onSuccess: async () => {
+      await invalidateOperationalState();
+      setInHouseDialogOpen(false);
+      toast({
+        title: "Fixture brought in-house",
+        description: "Outsource history remains attached to the same fixture record.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Bring in-house failed",
+        description: error instanceof Error ? error.message : "Could not bring fixture in-house",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const actionsDisabled = completeMutation.isPending || inHouseMutation.isPending;
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="align-top font-semibold">{fixture.fixture_no}</TableCell>
+        <TableCell className="align-top">
+          <div className="max-w-[260px] whitespace-normal text-xs leading-snug">{fixture.part_name || "Not named"}</div>
+        </TableCell>
+        <TableCell className="align-top">
+          <div className="max-w-[220px] whitespace-normal text-xs font-medium">{fixture.vendor_name || "Not set"}</div>
+        </TableCell>
+        <TableCell className="align-top">
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-[11px] font-semibold",
+              currentStageOutsourced
+                ? "border-cyan-300 bg-cyan-50 text-cyan-800"
+                : "border-indigo-300 bg-indigo-50 text-indigo-800",
+            )}
+          >
+            {getFixtureCurrentRevisionLabel(fixture)}
+          </Badge>
+        </TableCell>
+        <TableCell className="align-top">
+          <div className="flex flex-col gap-1">
+            <span className="w-fit text-xs font-medium text-slate-700">
+              {fixtureStageStatusLabel(fixture.workflow_status || fixture.operational_state)}
+            </span>
+            {operationalResolution.activeAssigneeName ? (
+              <span className="text-[11px] text-muted-foreground">{operationalResolution.activeAssigneeName}</span>
+            ) : null}
+          </div>
+        </TableCell>
+        <TableCell className="align-top text-xs text-muted-foreground">
+          {formatDisplayDate(fixture.outsourced_at)}
+        </TableCell>
+        <TableCell className="align-top">
+          <div className="flex flex-wrap justify-end gap-1.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[11px]"
+              disabled={supplierCompleted || !currentStageOutsourced || !canToggleOutsourcing || actionsDisabled}
+              onClick={() => setCompleteDialogOpen(true)}
+            >
+              {completeMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <CheckSquare className="mr-1 h-3 w-3" />}
+              {supplierCompleted ? "Completed" : currentStageOutsourced ? "Mark Completed" : "Awaiting Stage"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[11px]"
+              disabled={!canToggleOutsourcing || actionsDisabled}
+              onClick={() => setInHouseDialogOpen(true)}
+            >
+              {inHouseMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Factory className="mr-1 h-3 w-3" />}
+              Bring In-House
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+
+      <Dialog open={completeDialogOpen} onOpenChange={(open) => {
+        if (!open && !completeMutation.isPending) {
+          setCompleteDialogOpen(false);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Mark Outsourced Work Completed</DialogTitle>
+            <DialogDescription>
+              Confirm completion for the current outsourced stage, {getCurrentFixtureStageLabel(fixture)}, from {fixture.vendor_name || "supplier"}.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCompleteDialogOpen(false)}
+              disabled={completeMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={completeMutation.isPending}
+              onClick={() => completeMutation.mutate()}
+            >
+              {completeMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckSquare className="mr-1.5 h-4 w-4" />}
+              Mark Completed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={inHouseDialogOpen} onOpenChange={(open) => {
+        if (!open && !inHouseMutation.isPending) {
+          setInHouseDialogOpen(false);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bring In-House</DialogTitle>
+            <DialogDescription>
+              Bring {fixture.fixture_no} back in-house?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setInHouseDialogOpen(false)}
+              disabled={inHouseMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={inHouseMutation.isPending}
+              onClick={() => inHouseMutation.mutate()}
+            >
+              {inHouseMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Factory className="mr-1.5 h-4 w-4" />}
+              Bring In-House
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+interface OutsourcedDapAssignmentPanelProps {
+  fixture: DesignFixtureOption;
+  projectId: string;
+  departmentId?: string;
+  assignableUsers: Array<{ employee_id: string; name: string }>;
+  isLoadingUsers: boolean;
+  invalidateOperationalState: () => Promise<void>;
+  onDone: () => void;
+  onCancel: () => void;
+}
+
+function OutsourcedDapAssignmentPanel({
+  fixture,
+  projectId,
+  departmentId,
+  assignableUsers,
+  isLoadingUsers,
+  invalidateOperationalState,
+  onDone,
+  onCancel,
+}: OutsourcedDapAssignmentPanelProps) {
+  const [assignedTo, setAssignedTo] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [priority, setPriority] = useState<Priority>("high");
+  const [reasonType, setReasonType] = useState<FixtureRevisionType | "">("");
+
+  const progressQuery = useQuery({
+    queryKey: ["workflow", "progress", departmentId || "self", fixture.fixture_id],
+    queryFn: () => fetchFixtureFullProgress(fixture.fixture_id, departmentId),
+  });
+
+  const validationQuery = useQuery({
+    queryKey: ["workflow", "validate", departmentId || "self", fixture.fixture_id],
+    queryFn: () => validateFixtureAssignment(fixture.fixture_id, departmentId),
+    enabled: false,
+  });
+
+  const progress = progressQuery.data;
+  const currentProgressStage = useMemo(() => getCurrentProgressStage(progress), [progress]);
+  const dapStage = useMemo(
+    () => progress?.stages?.find((stage) => isDapStageName(stage.stage_name)) || null,
+    [progress],
+  );
+  const workflowChanged = Boolean(dapStage && currentProgressStage && dapStage.stage_name !== currentProgressStage.stage_name);
+  const dapApproved = String(dapStage?.status || "").toUpperCase() === "APPROVED";
+  const workflowTarget = dapStage?.stage_name || "";
+  const assignmentBlockedReason = !workflowChanged ? validationQuery.data?.reason || null : null;
+  const refetchValidation = validationQuery.refetch;
+
+  useEffect(() => {
+    if (!dapStage || workflowChanged || dapApproved) {
+      return;
+    }
+
+    void refetchValidation();
+  }, [dapApproved, dapStage?.stage_name, dapStage?.status, refetchValidation, workflowChanged]);
+
+  const assignDapMutation = useMutation({
+    mutationFn: async () => {
+      if (!dapStage) {
+        throw new Error("DAP stage is not configured for this workflow");
+      }
+
+      if (dapApproved) {
+        throw new Error("DAP is already approved");
+      }
+
+      if (!assignedTo || !deadline) {
+        throw new Error("Assignee and deadline are required");
+      }
+
+      if (workflowChanged) {
+        if (!reasonType) {
+          throw new Error("Reason Type is required when workflow is changed");
+        }
+
+        if (reasonType === "MANUAL_OVERRIDE") {
+          await manipulateFixtureStage({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+            target_stage_name: workflowTarget,
+            target_status: "PENDING",
+            reason_type: "MANUAL_OVERRIDE",
+            revision_type: "MANUAL_OVERRIDE",
+            revision_reason: "Manual override selected during outsourced DAP assignment",
+            remarks: "Manual override selected during outsourced DAP assignment",
+          });
+        } else {
+          await reopenFixtureStage({
+            fixture_id: fixture.fixture_id,
+            department_id: departmentId,
+            target_stage_name: workflowTarget,
+            revision_type: reasonType,
+          });
+        }
+      } else {
+        const validation = await validateFixtureAssignment(fixture.fixture_id, departmentId);
+        if (validation.canAssign !== true) {
+          throw new Error(validation.reason || "DAP is not currently assignable");
+        }
+      }
+
+      await createDesignTask({
+        department_id: departmentId,
+        project_id: projectId,
+        fixture_id: fixture.fixture_id,
+        description: fixture.part_name || fixture.fixture_no,
+        assigned_to: assignedTo,
+        assignee_ids: [assignedTo],
+        priority,
+        deadline: normalizeDeadlineToEndOfDayIso(deadline),
+      });
+    },
+    onSuccess: async () => {
+      await invalidateOperationalState();
+      onDone();
+      toast({
+        title: "DAP assigned",
+        description: "The existing design assignment flow created the internal DAP task.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "DAP assignment failed",
+        description: error instanceof Error ? error.message : "Could not assign DAP",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const assignmentDisabled = !assignedTo
+    || !deadline
+    || !workflowTarget
+    || !dapStage
+    || dapApproved
+    || progressQuery.isLoading
+    || assignDapMutation.isPending
+    || (workflowChanged && !reasonType)
+    || (!workflowChanged && (validationQuery.isLoading || validationQuery.data?.canAssign !== true));
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-background p-3">
+      <div className="grid gap-2 lg:grid-cols-4">
+        <div className="space-y-1">
+          <Label className="text-xs">Employee</Label>
+          <Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}>
+            <SelectTrigger className="h-9 bg-white text-xs" disabled={isLoadingUsers || assignDapMutation.isPending}>
+              <SelectValue placeholder={isLoadingUsers ? "Loading..." : "Employee"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Employee</SelectItem>
+              {assignableUsers.map((employee) => (
+                <SelectItem key={employee.employee_id} value={employee.employee_id}>
+                  {formatAssigneeOption(employee)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Deadline</Label>
+          <DateOnlyDeadlinePicker value={deadline} onChange={setDeadline} disabled={assignDapMutation.isPending} />
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Priority</Label>
+          <Select value={priority} onValueChange={(value) => setPriority(value as Priority)}>
+            <SelectTrigger className="h-9 bg-white text-xs" disabled={assignDapMutation.isPending}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {priorityOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs">Workflow</Label>
+          <div className="flex h-9 items-center rounded-md border bg-slate-50 px-3 text-xs">
+            {progressQuery.isLoading ? (
+              <span className="text-muted-foreground">Loading...</span>
+            ) : dapStage ? (
+              <span className="truncate">{getStageWorkflowCode(dapStage)} - {fixtureStageStatusLabel(dapStage.status)}</span>
+            ) : (
+              <span className="text-red-600">DAP unavailable</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {workflowChanged ? (
+        <div className="mt-2 max-w-sm space-y-1">
+          <Label className="text-xs">Reason Type</Label>
+          <Select value={reasonType || "__none__"} onValueChange={(value) => setReasonType(value === "__none__" ? "" : value as FixtureRevisionType)}>
+            <SelectTrigger className="h-9 bg-white text-xs" disabled={assignDapMutation.isPending}>
+              <SelectValue placeholder="Reason Type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Reason Type</SelectItem>
+              {revisionReasonOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
+
+      {assignmentBlockedReason ? (
+        <p className="mt-2 text-xs text-red-600">{assignmentBlockedReason}</p>
+      ) : null}
+      {dapApproved ? (
+        <p className="mt-2 text-xs text-emerald-700">DAP is already approved.</p>
+      ) : null}
+
+      <div className="mt-3 flex justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={assignDapMutation.isPending}>
+          Cancel
+        </Button>
+        <Button type="button" size="sm" onClick={() => assignDapMutation.mutate()} disabled={assignmentDisabled}>
+          {assignDapMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+          Assign DAP
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function AdditionalAssigneePicker({
   users,
   primaryAssigneeId,
@@ -1168,9 +1547,7 @@ interface BulkFixtureAssignmentPanelProps {
   assignableFixtures: DesignFixtureOption[];
   selectedFixtureIds: string[];
   projectId: string;
-  projectLabel: string;
   departmentId?: string;
-  canBulkOutsource: boolean;
   assignableUsers: Array<{ employee_id: string; name: string }>;
   twoDAssignableUsers: Array<{ employee_id: string; name: string }>;
   isLoadingUsers: boolean;
@@ -1180,32 +1557,11 @@ interface BulkFixtureAssignmentPanelProps {
   onCancel: () => void;
 }
 
-function resolveBulkFixtureScope(
-  assignableFixtures: DesignFixtureOption[],
-  selectedFixtureIds: string[],
-) {
-  const useSelectedScope = selectedFixtureIds.length > 0;
-  const selectedIds = new Set(selectedFixtureIds);
-  const targetFixtures = useSelectedScope
-    ? assignableFixtures.filter((fixture) => selectedIds.has(fixture.fixture_id))
-    : assignableFixtures;
-
-  return {
-    targetFixtures,
-    selectedFixtureIds: useSelectedScope
-      ? targetFixtures.map((fixture) => fixture.fixture_id)
-      : [],
-    internalScope: useSelectedScope ? "selected" as const : "all_unassigned" as const,
-    outsourceScope: useSelectedScope ? "selected" as const : "all_assignable" as const,
-  };
-}
 function BulkFixtureAssignmentPanel({
   assignableFixtures,
   selectedFixtureIds,
   projectId,
-  projectLabel,
   departmentId,
-  canBulkOutsource,
   assignableUsers,
   twoDAssignableUsers,
   isLoadingUsers,
@@ -1221,13 +1577,17 @@ function BulkFixtureAssignmentPanel({
   const [priority, setPriority] = useState<Priority>("high");
   const [workflowTarget, setWorkflowTarget] = useState("");
   const [reasonType, setReasonType] = useState<FixtureRevisionType | "">("");
-  const [outsourceDialogOpen, setOutsourceDialogOpen] = useState(false);
-  const fixtureScope = useMemo(
-    () => resolveBulkFixtureScope(assignableFixtures, selectedFixtureIds),
-    [assignableFixtures, selectedFixtureIds],
-  );
-  const { internalScope: scope, outsourceScope, targetFixtures } = fixtureScope;
-  const selectedFixtureCount = fixtureScope.selectedFixtureIds.length;
+  const selectedFixtureCount = selectedFixtureIds.length;
+  const scope: "all_unassigned" | "selected" = selectedFixtureCount > 0 ? "selected" : "all_unassigned";
+
+  const targetFixtures = useMemo(() => {
+    if (scope === "selected") {
+      const selected = new Set(selectedFixtureIds);
+      return assignableFixtures.filter((fixture) => selected.has(fixture.fixture_id));
+    }
+
+    return assignableFixtures;
+  }, [assignableFixtures, scope, selectedFixtureIds]);
 
   const progressQueries = useQueries({
     queries: targetFixtures.map((fixture) => ({
@@ -1264,29 +1624,6 @@ function BulkFixtureAssignmentPanel({
   });
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
   const releaseSelected = isReleaseStageName(selectedWorkflowStage?.stage_name || workflowTarget);
-  const releaseGateQueries = useQueries({
-    queries: targetFixtures.map((fixture) => ({
-      queryKey: ["workflow", "release-package", fixture.fixture_id, departmentId || "self"],
-      queryFn: () => fetchFixtureReleasePackage(fixture.fixture_id, departmentId),
-      enabled: releaseSelected,
-      retry: false,
-    })),
-  });
-  const releaseGateBusy = releaseSelected && releaseGateQueries.some((query) => query.isLoading);
-  const releaseGateErrors = releaseSelected
-    ? releaseGateQueries.flatMap((query, index) => query.error instanceof Error
-      ? [{ fixture_no: targetFixtures[index]?.fixture_no || "Fixture", message: query.error.message }]
-      : [])
-    : [];
-  const bulkReleaseBlockers = releaseSelected
-    ? releaseGateQueries.flatMap((query, index) => (query.data?.blockers || []).map((blocker) => ({
-      fixture_no: targetFixtures[index]?.fixture_no || "Fixture",
-      message: blocker.message,
-    })))
-    : [];
-  const releaseGateReady = releaseSelected
-    && targetFixtures.length > 0
-    && releaseGateQueries.every((query) => query.data?.available_actions.includes("RELEASE") === true);
   const isTwoDWorkflowTarget = isTwoDStageName(selectedWorkflowStage?.stage_name || workflowTarget);
   const assignmentUsersForTarget = isTwoDWorkflowTarget ? twoDAssignableUsers : assignableUsers;
   const isLoadingUsersForTarget = isTwoDWorkflowTarget ? isLoadingTwoDUsers : isLoadingUsers;
@@ -1430,23 +1767,10 @@ function BulkFixtureAssignmentPanel({
     || !workflowChangeAllowed
     || (requiresReasonType && !reasonType)
     || bulkAssignMutation.isPending
-    || (releaseSelected && (!releaseGateReady || releaseGateBusy || releaseGateErrors.length > 0))
     || (!releaseSelected && isLoadingUsersForTarget);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
-      <BulkOutsourceDialog
-        open={outsourceDialogOpen}
-        onOpenChange={setOutsourceDialogOpen}
-        projectId={projectId}
-        projectLabel={projectLabel}
-        workflowStage={workflowTarget}
-        scope={outsourceScope}
-        fixtureIds={fixtureScope.selectedFixtureIds}
-        requestedCount={targetFixtures.length}
-        coordinators={assignmentUsersForTarget}
-        onCompleted={invalidateOperationalState}
-      />
       <div className="grid gap-2 lg:grid-cols-4">
         {!releaseSelected ? (
           <>
@@ -1546,19 +1870,6 @@ function BulkFixtureAssignmentPanel({
         </div>
       ) : null}
 
-      {releaseSelected && releaseGateBusy ? (
-        <p className="mt-2 text-xs text-muted-foreground">Checking backend release gates...</p>
-      ) : null}
-      {releaseSelected && (bulkReleaseBlockers.length > 0 || releaseGateErrors.length > 0) ? (
-        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900" role="alert">
-          <p className="font-semibold">Release blocked</p>
-          <ul className="mt-1 list-disc space-y-1 pl-4">
-            {[...bulkReleaseBlockers, ...releaseGateErrors].map((blocker, index) => (
-              <li key={`${blocker.fixture_no}-${blocker.message}-${index}`}>{blocker.fixture_no}: {blocker.message}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
       <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
           <Label className="text-xs">Assignment Scope</Label>
@@ -1581,17 +1892,6 @@ function BulkFixtureAssignmentPanel({
           <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={bulkAssignMutation.isPending}>
             Cancel
           </Button>
-          {canBulkOutsource ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!workflowTarget || progressLoading || selectedScopeEmpty || bulkAssignMutation.isPending}
-              onClick={() => setOutsourceDialogOpen(true)}
-            >
-              <Factory className="mr-1.5 h-3.5 w-3.5" /> Outsource
-            </Button>
-          ) : null}
           <Button type="button" size="sm" onClick={() => bulkAssignMutation.mutate()} disabled={disabled}>
             {bulkAssignMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
             {releaseSelected ? "Release" : "Assign All"}
@@ -1613,8 +1913,9 @@ interface ProjectFixtureCardProps {
   isLoadingTwoDUsers: boolean;
   invalidateOperationalState: () => Promise<void>;
   operationalResolution: FixtureOperationalResolution;
+  recentSupplierNames: string[];
+  onSupplierUsed: (supplierName: string) => void;
   onFixtureReleased: (fixtureId: string, releaseState: FixtureCurrentStage) => void;
-  readOnly: boolean;
   selectable?: boolean;
   selected?: boolean;
   onSelectedChange?: (fixtureId: string, checked: boolean) => void;
@@ -1631,8 +1932,9 @@ function ProjectFixtureCard({
   isLoadingTwoDUsers,
   invalidateOperationalState,
   operationalResolution,
+  recentSupplierNames,
+  onSupplierUsed,
   onFixtureReleased,
-  readOnly,
   selectable = false,
   selected = false,
   onSelectedChange,
@@ -1653,22 +1955,24 @@ function ProjectFixtureCard({
   const [rejectionReason, setRejectionReason] = useState("");
   const [inlineOperationalReason, setInlineOperationalReason] = useState<string | null>(null);
   const [openingAssign, setOpeningAssign] = useState(false);
-  const [releasePackageStatus, setReleasePackageStatus] = useState<FixtureReleasePackageResponse | null>(null);
+  const [outsourceDialogOpen, setOutsourceDialogOpen] = useState(false);
+  const [inHouseDialogOpen, setInHouseDialogOpen] = useState(false);
+  const [supplierName, setSupplierName] = useState(fixture.vendor_name || "");
+  const [selectedOutsourceStages, setSelectedOutsourceStages] = useState<OutsourceStage[]>([]);
+  const [outsourceValidationMessage, setOutsourceValidationMessage] = useState<string | null>(null);
 
-  const canDeployDesignTask = !readOnly && access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
+  const canDeployDesignTask = access.canAssignTasks && access.canCreateTasks && access.canChangeFixtureStage;
   const fixtureAtReleaseStage = isReleaseStageName(fixture.workflow_stage || fixture.workflow_stage_label);
   const completedPercent = Math.max(0, Math.min(100, Number(task?.completion_percent ?? 0)));
   const remainingPercent = Math.max(0, 100 - completedPercent);
   const canTransferTask = Boolean(
-    !readOnly
-    && task
+    task
     && remainingPercent > 0
     && (access.canTransferTasks || access.canAssignTasks)
     && !["closed", "cancelled", "under_review"].includes(task.status),
   );
   const canReviewTask = Boolean(
-    !readOnly
-    && task
+    task
     && task.status === "under_review"
     && task.verification_status === "pending"
     && (access.canApproveCompletedTasks || access.canApproveQuality),
@@ -1677,7 +1981,7 @@ function ProjectFixtureCard({
   const progressQuery = useQuery({
     queryKey: ["workflow", "progress", departmentId || "self", fixture.fixture_id],
     queryFn: () => fetchFixtureFullProgress(fixture.fixture_id, departmentId),
-    enabled: !readOnly && expanded === "assign",
+    enabled: expanded === "assign",
   });
 
   const validationQuery = useQuery({
@@ -1705,35 +2009,42 @@ function ProjectFixtureCard({
     setWorkflowTarget(currentProgressStage.stage_name);
   }, [currentProgressStage?.stage_name, expanded, workflowTarget]);
 
+  useEffect(() => {
+    if (!outsourceDialogOpen) {
+      setSupplierName(fixture.vendor_name || "");
+      setSelectedOutsourceStages([]);
+      setOutsourceValidationMessage(null);
+    }
+  }, [fixture.vendor_name, outsourceDialogOpen]);
+
   const selectedWorkflowStage = workflowOptions.find((stage) => stage.stage_name === workflowTarget) || null;
   const releaseSelected = isReleaseStageName(selectedWorkflowStage?.stage_name || workflowTarget);
   const isTwoDWorkflowTarget = isTwoDStageName(selectedWorkflowStage?.stage_name || workflowTarget);
   const assignmentUsersForTarget = isTwoDWorkflowTarget ? twoDAssignableUsers : assignableUsers;
   const isLoadingUsersForTarget = isTwoDWorkflowTarget ? isLoadingTwoDUsers : isLoadingUsers;
   const selectedAssigneeIds = buildSelectedAssigneeIds(assignedTo, additionalAssigneeIds, isTwoDWorkflowTarget);
-  const canOpenWorkflowAction = !readOnly && (
-    isWorkflowCompleteReassign
-      ? canDeployDesignTask
-      : fixtureAtReleaseStage
-        ? access.canChangeFixtureStage
-        : canDeployDesignTask
-  );
-  const canSubmitWorkflowAction = !readOnly && (releaseSelected ? access.canChangeFixtureStage : canDeployDesignTask);
+  const canOpenWorkflowAction = isWorkflowCompleteReassign
+    ? canDeployDesignTask
+    : fixtureAtReleaseStage
+      ? access.canChangeFixtureStage
+      : canDeployDesignTask;
+  const canSubmitWorkflowAction = releaseSelected ? access.canChangeFixtureStage : canDeployDesignTask;
   const workflowChanged = Boolean(workflowTarget && workflowTarget !== currentProgressStage?.stage_name);
   const canAssignCurrent = validationQuery.data?.canAssign === true;
   const assignmentBlockedReason = validationQuery.data?.reason || null;
   const workflowChangeAllowed = workflowChanged && Boolean(selectedWorkflowStage);
   const canSubmitAssignment = releaseSelected || (workflowChanged ? workflowChangeAllowed : canAssignCurrent);
   const requiresReasonType = workflowChanged && !releaseSelected && !isWorkflowCompleteReassign;
-  const releaseEnabledByBackend = releasePackageStatus?.available_actions.includes("RELEASE") === true;
 
   const proofImage = getProofImage(task);
+  const hasActiveOutsourcePlan = isFixtureOutsourcePlanActive(fixture);
   const isSubmittedForVerification = canonicalOperationalState === "VERIFICATION";
   const isAssigned = canonicalOperationalState !== "UNASSIGNED" && canonicalOperationalState !== "WORKFLOW_COMPLETE";
   const workflowCode = getFixtureWorkflowCode(fixture);
   const releaseDateLabel = formatDisplayDate(getFixtureReleaseDate(fixture), "Not recorded");
   const releasedByLabel = getFixtureReleasedBy(fixture);
-  const canCancelTask = !readOnly && canCancelFixtureOperationalTask(task, canonicalOperationalState, user, access);
+  const canCancelTask = canCancelFixtureOperationalTask(task, canonicalOperationalState, user, access);
+  const canToggleOutsourcing = access.canAccessProjectFixtures && access.canChangeFixtureStage;
 
   const resetAssignForm = () => {
     setAssignedTo("");
@@ -1954,6 +2265,49 @@ function ProjectFixtureCard({
     },
   });
 
+  const outsourceMutation = useMutation({
+    mutationFn: async (
+      variables:
+        | { action: "outsource"; supplierName: string; stages: OutsourceStage[] }
+        | { action: "bring_in_house" },
+    ) => {
+      if (variables.action === "outsource") {
+        await outsourceFixture(fixture.fixture_id, {
+          department_id: departmentId,
+          supplier_name: variables.supplierName,
+          outsourced_stages: variables.stages,
+        });
+        return;
+      }
+
+      await bringFixtureInHouse(fixture.fixture_id, {
+        department_id: departmentId,
+      });
+    },
+    onSuccess: async (_, variables) => {
+      if (variables.action === "outsource") {
+        onSupplierUsed(variables.supplierName);
+      }
+      await invalidateOperationalState();
+      setExpanded(null);
+      setOutsourceDialogOpen(false);
+      setInHouseDialogOpen(false);
+      setSelectedOutsourceStages([]);
+      setOutsourceValidationMessage(null);
+      toast({
+        title: variables.action === "outsource" ? "Fixture outsourced" : "Fixture brought in-house",
+        description: "Fixture history, task history, reports, and analytics continue to use the same fixture record.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: hasActiveOutsourcePlan ? "Bring in-house failed" : "Outsource failed",
+        description: error instanceof Error ? error.message : "Could not update fixture outsourcing state",
+        variant: "destructive",
+      });
+    },
+  });
+
   const assignmentDisabled = !canSubmitWorkflowAction
     || (!releaseSelected && (!assignedTo || !deadline))
     || !workflowTarget
@@ -1962,13 +2316,48 @@ function ProjectFixtureCard({
     || !canSubmitAssignment
     || (requiresReasonType && !reasonType)
     || assignMutation.isPending
-    || (releaseSelected && !releaseEnabledByBackend)
     || (!releaseSelected && isLoadingUsersForTarget);
 
   const transferDisabled = !task
     || !transferTo
     || remainingPercent <= 0
     || transferMutation.isPending;
+  const trimmedSupplierName = supplierName.trim();
+  const supplierOptions = mergeRecentSupplierNames(recentSupplierNames, [fixture.vendor_name]);
+  const allOutsourceStagesSelected = selectedOutsourceStages.length === OUTSOURCE_STAGE_OPTIONS.length;
+
+  const toggleOutsourceStage = (stage: OutsourceStage, checked: boolean) => {
+    setOutsourceValidationMessage(null);
+    setSelectedOutsourceStages((current) => (
+      checked
+        ? Array.from(new Set([...current, stage]))
+        : current.filter((item) => item !== stage)
+    ));
+  };
+
+  const setAllOutsourceStages = (checked: boolean) => {
+    setOutsourceValidationMessage(null);
+    setSelectedOutsourceStages(checked ? [...OUTSOURCE_STAGE_OPTIONS] : []);
+  };
+
+  const confirmOutsource = () => {
+    if (!trimmedSupplierName) {
+      setOutsourceValidationMessage("Supplier name is required.");
+      return;
+    }
+
+    if (selectedOutsourceStages.length === 0) {
+      setOutsourceValidationMessage("Select at least one outsourced stage.");
+      return;
+    }
+
+    outsourceMutation.mutate({
+      action: "outsource",
+      supplierName: trimmedSupplierName,
+      stages: selectedOutsourceStages,
+    });
+  };
+
   return (
     <div
       className={cn(
@@ -2114,6 +2503,28 @@ function ProjectFixtureCard({
                 </Button>
               ) : null}
             </div>
+            {canToggleOutsourcing ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                disabled={outsourceMutation.isPending}
+                onClick={() => {
+                  if (hasActiveOutsourcePlan) {
+                    setInHouseDialogOpen(true);
+                  } else {
+                    setSupplierName(fixture.vendor_name || "");
+                    setSelectedOutsourceStages(fixture.outsourced_stages || []);
+                    setOutsourceValidationMessage(null);
+                    setOutsourceDialogOpen(true);
+                  }
+                }}
+              >
+                {outsourceMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Factory className="mr-1 h-3 w-3" />}
+                {hasActiveOutsourcePlan ? "Bring In-House" : "Outsource"}
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -2275,14 +2686,6 @@ function ProjectFixtureCard({
             <p className="text-xs text-red-600">{assignmentBlockedReason}</p>
           ) : null}
 
-          {releaseSelected && releasePackageStatus?.blockers.length ? (
-            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-              {releasePackageStatus.blockers.map((blocker, index) => (
-                <p key={blocker.code + "-" + index}>{blocker.message}</p>
-              ))}
-            </div>
-          ) : null}
-
           <div className="flex justify-end gap-2">
             <Button
               type="button"
@@ -2365,16 +2768,6 @@ function ProjectFixtureCard({
           </div>
         </div>
       ) : null}
-
-      <div className="mt-3 border-t pt-3">
-        <ReleaseDeliverablesPanel
-          fixtureId={fixture.fixture_id}
-          departmentId={departmentId}
-          assignableUsers={twoDAssignableUsers}
-          readOnly={readOnly}
-          onStatusChange={setReleasePackageStatus}
-        />
-      </div>
 
       <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
         <DialogContent className="max-w-3xl">
@@ -2476,6 +2869,138 @@ function ProjectFixtureCard({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={outsourceDialogOpen} onOpenChange={(open) => {
+        if (!open && !outsourceMutation.isPending) {
+          setOutsourceDialogOpen(false);
+          setSupplierName(fixture.vendor_name || "");
+          setSelectedOutsourceStages([]);
+          setOutsourceValidationMessage(null);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Outsource Fixture</DialogTitle>
+            <DialogDescription>
+              {fixture.fixture_no}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor={`supplier-${fixture.fixture_id}`} className="text-xs">Supplier Name</Label>
+              <Input
+                id={`supplier-${fixture.fixture_id}`}
+                value={supplierName}
+                onChange={(event) => {
+                  setSupplierName(event.target.value);
+                  setOutsourceValidationMessage(null);
+                }}
+                disabled={outsourceMutation.isPending}
+                autoFocus
+              />
+            </div>
+            {supplierOptions.length > 0 ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Recent Suppliers</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {supplierOptions.map((supplier) => (
+                    <Button
+                      key={supplier}
+                      type="button"
+                      size="sm"
+                      variant={supplierName.trim().toLowerCase() === supplier.toLowerCase() ? "secondary" : "outline"}
+                      className="h-7 max-w-full px-2 text-[11px]"
+                      disabled={outsourceMutation.isPending}
+                      onClick={() => {
+                        setSupplierName(supplier);
+                        setOutsourceValidationMessage(null);
+                      }}
+                    >
+                      <span className="truncate">{supplier}</span>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="space-y-2">
+              <Label className="text-xs">Outsourced Stages</Label>
+              <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                <Checkbox
+                  checked={allOutsourceStagesSelected}
+                  disabled={outsourceMutation.isPending}
+                  onCheckedChange={(checked) => setAllOutsourceStages(checked === true)}
+                />
+                <span className="font-medium">Select All</span>
+              </label>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {OUTSOURCE_STAGE_OPTIONS.map((stage) => (
+                  <label key={stage} className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                    <Checkbox
+                      checked={selectedOutsourceStages.includes(stage)}
+                      disabled={outsourceMutation.isPending}
+                      onCheckedChange={(checked) => toggleOutsourceStage(stage, checked === true)}
+                    />
+                    <span>{stage}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {outsourceValidationMessage ? (
+              <p className="text-sm font-medium text-red-600">{outsourceValidationMessage}</p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOutsourceDialogOpen(false)}
+              disabled={outsourceMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={outsourceMutation.isPending}
+              onClick={confirmOutsource}
+            >
+              {outsourceMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Factory className="mr-1.5 h-4 w-4" />}
+              Confirm Outsource
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={inHouseDialogOpen} onOpenChange={(open) => {
+        if (!open && !outsourceMutation.isPending) {
+          setInHouseDialogOpen(false);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bring In-House</DialogTitle>
+            <DialogDescription>
+              Bring this fixture back in-house?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setInHouseDialogOpen(false)}
+              disabled={outsourceMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={outsourceMutation.isPending}
+              onClick={() => outsourceMutation.mutate({ action: "bring_in_house" })}
+            >
+              {outsourceMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Factory className="mr-1.5 h-4 w-4" />}
+              Bring In-House
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

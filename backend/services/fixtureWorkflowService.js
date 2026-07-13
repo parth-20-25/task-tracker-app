@@ -4,7 +4,6 @@ const { pool } = require("../db");
 const {
   getDesignStageDisplayName,
   normalizeDesignStageName,
-  TWO_D_DESIGN_STAGE_KEY,
 } = require("../lib/designWorkflowStages");
 const {
   formatStageVersionLabel,
@@ -41,7 +40,6 @@ const {
 } = require("../repositories/designStageContributionRepository");
 const { insertCompletionSnapshot } = require("../repositories/designCompletionRepository");
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
-const { findActiveFixtureOutsourceAssignment } = require("../repositories/fixtureOutsourceAssignmentRepository");
 const { canAssignTo } = require("./accessControlService");
 const { getDepartmentWorkflowStagesResponse } = require("./workflowRecoveryService");
 const {
@@ -49,10 +47,6 @@ const {
   buildRevisionTimelineEntry,
   executeDesignStageRework,
 } = require("./designRevisionService");
-const {
-  ensureFixtureReleasePackage,
-  getFixtureReleaseReadiness,
-} = require("./fixtureReleaseDeliverablesService");
 
 const FIXTURE_REVISION_TYPES = new Set([
   "CUSTOMER_CHANGE",
@@ -117,8 +111,8 @@ function buildInactiveProjectReason(projectStatus) {
     : "Project is completed and cannot continue active fixture workflow";
 }
 
-async function assertFixtureProjectIsActive(fixtureId, departmentId, client = pool, options = {}) {
-  const fixture = await getFixtureWorkflowContext(fixtureId, client, options);
+async function assertFixtureProjectIsActive(fixtureId, departmentId, client = pool) {
+  const fixture = await getFixtureWorkflowContext(fixtureId, client);
   if (!fixture) {
     throw new AppError(404, "Fixture not found");
   }
@@ -150,14 +144,10 @@ async function requireWorkflow(departmentId, client = pool) {
  * Ensures progress rows exist for the fixture, initialising them if needed.
  * Returns the progress rows ordered by stage_order.
  */
-async function ensureProgressInitialized(fixtureId, departmentId, workflow, providedClient = null) {
-  const client = providedClient || await pool.connect();
-  const managesTransaction = !providedClient;
-
+async function ensureProgressInitialized(fixtureId, departmentId, workflow) {
+  const client = await pool.connect();
   try {
-    if (managesTransaction) {
-      await client.query("BEGIN");
-    }
+    await client.query("BEGIN");
     await initProgressForFixture(fixtureId, departmentId, workflow.stages, client);
     await client.query(
       `
@@ -178,22 +168,16 @@ async function ensureProgressInitialized(fixtureId, departmentId, workflow, prov
       `,
       [fixtureId, departmentId, WORKFLOW_STATUSES.APPROVED],
     );
-    const progress = await getProgressForFixture(fixtureId, departmentId, client);
-    if (managesTransaction) {
-      await client.query("COMMIT");
-    }
-    return progress;
+    await client.query("COMMIT");
   } catch (err) {
-    if (managesTransaction) {
-      await client.query("ROLLBACK");
-    }
+    await client.query("ROLLBACK");
     throw err;
   } finally {
-    if (managesTransaction) {
-      client.release();
-    }
+    client.release();
   }
+  return getProgressForFixture(fixtureId, departmentId);
 }
+
 /**
  * Returns the stage row that is still awaiting review/action.
  * currentStage = first progress row whose status is not APPROVED.
@@ -397,6 +381,22 @@ function resolveOperationalState(progressRow) {
   return OPERATIONAL_STATES.UNASSIGNED;
 }
 
+function calculateStageDurationMinutes(startValue, endValue) {
+  if (!startValue || !endValue) {
+    return null;
+  }
+
+  const start = startValue instanceof Date ? startValue : new Date(startValue);
+  const end = endValue instanceof Date ? endValue : new Date(endValue);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return null;
+  }
+
+  const diffMinutes = Math.round((end.getTime() - start.getTime()) / 60000);
+  return diffMinutes > 0 ? diffMinutes : null;
+}
+
 function roundContributionPercent(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
@@ -543,16 +543,15 @@ async function getCurrentStageForFixture(fixtureId, departmentId = null) {
  * Returns { stage, status, stage_order } for the fixture's current active stage
  * within the caller's department workflow.
  */
-async function getCurrentStage(fixtureId, departmentId, client = null) {
+async function getCurrentStage(fixtureId, departmentId) {
   if (!fixtureId) throw new AppError(400, "fixture_id is required");
   if (!departmentId) throw new AppError(400, "department_id is required");
 
-  const db = client || pool;
-  await assertFixtureBelongsToDepartment(fixtureId, departmentId, db);
+  await assertFixtureBelongsToDepartment(fixtureId, departmentId);
 
-  const workflow = await requireWorkflow(departmentId, db);
+  const workflow = await requireWorkflow(departmentId);
 
-  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow, client);
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
   return buildCurrentStageResponse(progress, workflow);
 }
@@ -561,47 +560,24 @@ async function getCurrentStage(fixtureId, departmentId, client = null) {
  * Validates whether a fixture is assignable and returns the blocking reason if not.
  * Returns { canAssign: boolean, reason: string | null, currentStage: row | null }
  */
-async function validateAssignment(
-  fixtureId,
-  departmentId,
-  client = null,
-  { lock = false } = {},
-) {
+async function validateAssignment(fixtureId, departmentId) {
   if (!fixtureId || !departmentId) {
     return { canAssign: false, reason: "fixture_id and department_id are required", currentStage: null };
   }
-  if (lock && !client) {
-    throw new Error("validateAssignment lock requires a transaction client");
-  }
 
-  const db = client || pool;
-  const fixture = await getFixtureWorkflowContext(fixtureId, db, { lockProject: lock });
+  const fixture = await getFixtureWorkflowContext(fixtureId);
   const projectStatus = fixture?.project_status || PROJECT_STATUSES.ACTIVE;
   if (projectStatus !== PROJECT_STATUSES.ACTIVE) {
     return { canAssign: false, reason: buildInactiveProjectReason(projectStatus), currentStage: null };
   }
 
   // Rule 1: no workflow
-  const workflow = await getActiveWorkflowForDepartment(departmentId, db);
+  const workflow = await getActiveWorkflowForDepartment(departmentId);
   if (!workflow || !workflow.stages || workflow.stages.length === 0) {
     return { canAssign: false, reason: "No workflow configured for this department", currentStage: null };
   }
 
-  let progress = await ensureProgressInitialized(fixtureId, departmentId, workflow, client);
-  if (lock) {
-    await db.query(
-      `
-        SELECT id
-        FROM fixture_workflow_progress
-        WHERE fixture_id = $1::uuid
-          AND department_id = $2
-        ORDER BY id
-        FOR UPDATE
-      `,
-      [fixtureId, departmentId],
-    );
-    progress = await getProgressForFixture(fixtureId, departmentId, db);
-  }
+  const progress = await ensureProgressInitialized(fixtureId, departmentId, workflow);
 
   const current = deriveCurrentStageByStatus(progress);
 
@@ -631,86 +607,54 @@ async function validateAssignment(
     return { canAssign: false, reason: `Stage is not assignable in status ${current.status}`, currentStage: current };
   }
 
-  const activeOutsource = await findActiveFixtureOutsourceAssignment(
-    fixtureId,
-    current.stage_name,
-    current.stage_version,
-    db,
-  );
-  if (activeOutsource) {
-    return { canAssign: false, reason: "Stage is outsourced", currentStage: current };
-  }
-
-  // PENDING or REJECTED with no active task or outsourcing record for this stage → allowed
+  // PENDING or REJECTED with no active task for this stage → allowed
   return { canAssign: true, reason: null, currentStage: current };
 }
+
 /**
  * POST /api/workflows/assign
  * Sets the current stage to IN_PROGRESS.
  */
 async function assignFixtureStage(fixtureId, departmentId, assignedTo, actor = null) {
-  const client = await pool.connect();
+  await assertFixtureBelongsToDepartment(fixtureId, departmentId);
+  await assertFixtureProjectIsActive(fixtureId, departmentId);
 
-  try {
-    await client.query("BEGIN");
-    await assertFixtureBelongsToDepartment(fixtureId, departmentId, client);
-    await assertFixtureProjectIsActive(fixtureId, departmentId, client);
-
-    const assignee = await findUserByEmployeeId(assignedTo, client);
-    if (!assignee) {
-      throw new AppError(400, "Assigned user not found");
-    }
-
-    if (assignee.department_id !== departmentId) {
-      throw new AppError(400, "Assigned user does not belong to the selected department");
-    }
-
-    if (actor && !canAssignTo(actor, assignee)) {
-      throw new AppError(403, "Cannot assign to this user");
-    }
-
-    const { canAssign, reason, currentStage } = await validateAssignment(
-      fixtureId,
-      departmentId,
-      client,
-      { lock: true },
-    );
-    if (!canAssign) {
-      throw new AppError(reason === "Stage already assigned" ? 400 : 409, reason);
-    }
-
-    if (isReleaseStageName(currentStage?.stage_name)) {
-      throw new AppError(400, "Release is not a task assignment stage. Use the workflow release action.");
-    }
-
-    const timestamp = new Date();
-
-    await updateProgressRow(fixtureId, currentStage.stage_name, {
-      status: "IN_PROGRESS",
-      assigned_to: assignedTo,
-      assigned_at: timestamp,
-      started_at: timestamp,
-      completed_at: null,
-      duration_minutes: null,
-    }, client);
-    await startStageAttempt(
-      fixtureId,
-      departmentId,
-      currentStage.stage_name,
-      assignedTo,
-      timestamp,
-      client,
-    );
-    const result = await getCurrentStage(fixtureId, departmentId, client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
+  const assignee = await findUserByEmployeeId(assignedTo);
+  if (!assignee) {
+    throw new AppError(400, "Assigned user not found");
   }
+
+  if (assignee.department_id !== departmentId) {
+    throw new AppError(400, "Assigned user does not belong to the selected department");
+  }
+
+  if (actor && !canAssignTo(actor, assignee)) {
+    throw new AppError(403, "Cannot assign to this user");
+  }
+
+  const { canAssign, reason, currentStage } = await validateAssignment(fixtureId, departmentId);
+  if (!canAssign) {
+    throw new AppError(reason === "Stage already assigned" ? 400 : 409, reason);
+  }
+
+  if (isReleaseStageName(currentStage?.stage_name)) {
+    throw new AppError(400, "Release is not a task assignment stage. Use the workflow release action.");
+  }
+
+  const timestamp = new Date();
+
+  await updateProgressRow(fixtureId, currentStage.stage_name, {
+    status: "IN_PROGRESS",
+    assigned_to: assignedTo,
+    assigned_at: timestamp,
+    started_at: timestamp,
+    completed_at: null,
+    duration_minutes: null,
+  });
+  await startStageAttempt(fixtureId, departmentId, currentStage.stage_name, assignedTo, timestamp);
+  return getCurrentStage(fixtureId, departmentId);
 }
+
 async function submitFixtureStageForVerification({ task, actor, client = pool }) {
   if (!task?.fixture_id || !task?.department_id) {
     throw new AppError(400, "Workflow task is missing fixture execution identity");
@@ -920,10 +864,6 @@ async function advanceFixtureWorkflowStage(identity) {
       return null;
     }
 
-    if (isReleaseStageName(current.stage_name)) {
-      throw new AppError(409, "Release can only be completed through the workflow release action");
-    }
-
     // STEP 2 — VALIDATE STATE
     if (current.status !== WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION) {
       throw new Error(
@@ -949,13 +889,6 @@ async function advanceFixtureWorkflowStage(identity) {
       client
     );
     await approveStageAttempt(fixtureId, current.stage_name, new Date(), client);
-
-    if (normalizeDesignStageName(current.stage_name) === TWO_D_DESIGN_STAGE_KEY) {
-      await ensureFixtureReleasePackage({
-        fixtureId,
-        createdBy: identity?.actor_employee_id || null,
-      }, client);
-    }
 
     // STEP 4 — FIND NEXT STAGE
     const next = progress.find(
@@ -1034,15 +967,7 @@ async function advanceFixtureWorkflowStage(identity) {
  * ❌ Never advance workflow from taskService directly.
  * ❌ Never use task.current_stage_id to drive workflow logic.
  */
-async function advanceWorkflowAfterTaskApproval({
-  project_id,
-  fixture_no,
-  department_id,
-  fixture_id,
-  task_id = null,
-  actor_employee_id = null,
-  client = null,
-}) {
+async function advanceWorkflowAfterTaskApproval({ project_id, fixture_no, department_id, fixture_id, task_id = null, client = null }) {
   if ((!project_id || !fixture_no) && !fixture_id) {
     console.warn("[WORKFLOW] advanceWorkflowAfterTaskApproval — canonical fixture identity missing, skipping", {
       project_id,
@@ -1085,7 +1010,6 @@ async function advanceWorkflowAfterTaskApproval({
   await advanceFixtureWorkflowStage({
     ...resolvedIdentity,
     task_id,
-    actor_employee_id,
     client,
   });
 }
@@ -1156,7 +1080,7 @@ async function releaseFixtureWorkflow({ actor = null, fixtureId, departmentId })
     await client.query("BEGIN");
 
     await assertFixtureBelongsToDepartment(fixtureId, departmentId, client);
-    await assertFixtureProjectIsActive(fixtureId, departmentId, client, { lockProject: true });
+    const fixtureBeforeRelease = await assertFixtureProjectIsActive(fixtureId, departmentId, client);
     const workflow = await requireWorkflow(departmentId, client);
 
     await initProgressForFixture(fixtureId, departmentId, workflow.stages, client);
@@ -1171,39 +1095,53 @@ async function releaseFixtureWorkflow({ actor = null, fixtureId, departmentId })
       throw new AppError(409, "Release stage is not configured for this department workflow");
     }
 
-    const fixtureAlreadyReleased = lockedReleaseStage.status === WORKFLOW_STATUSES.APPROVED;
+    const timestamp = new Date();
+    const releaseStageOrder = Number(lockedReleaseStage.stage_order || 0);
+    const stagesToApprove = progress.filter((stage) => (
+      Number(stage.stage_order || 0) <= releaseStageOrder
+      && stage.status !== WORKFLOW_STATUSES.APPROVED
+    ));
+    const fixtureAlreadyReleased = fixtureBeforeRelease?.is_workflow_complete === true
+      && stagesToApprove.length === 0
+      && progress.every((stage) => stage.status === WORKFLOW_STATUSES.APPROVED);
 
     let finalProgress = progress;
 
     if (!fixtureAlreadyReleased) {
-      const readiness = await getFixtureReleaseReadiness(fixtureId, progress, client);
-      if (readiness.blockers.length > 0) {
-        throw new AppError(
-          409,
-          "Fixture release is blocked",
-          {
-            code: "FIXTURE_RELEASE_BLOCKED",
-            blockers: readiness.blockers,
-          },
-          "FIXTURE_RELEASE_BLOCKED",
-        );
+      for (const stage of stagesToApprove) {
+        if (!isReleaseStageName(stage.stage_name)) {
+          await tryFinalizeStageContributions({
+            fixtureId,
+            departmentId,
+            stage,
+            assignedTo: stage.assigned_to,
+            changedBy: actor?.employee_id || stage.assigned_to,
+            taskId: null,
+            client,
+          });
+        }
+
+        const completedAt = stage.completed_at || timestamp;
+        const fields = {
+          status: WORKFLOW_STATUSES.APPROVED,
+          completed_at: completedAt,
+        };
+
+        if (stage.duration_minutes == null && stage.started_at && completedAt) {
+          fields.duration_minutes = calculateStageDurationMinutes(stage.started_at, completedAt);
+        }
+
+        if (isReleaseStageName(stage.stage_name)) {
+          fields.assigned_to = null;
+          fields.assigned_at = null;
+          fields.started_at = null;
+          fields.duration_minutes = null;
+        }
+
+        await updateProgressRow(fixtureId, stage.stage_name, fields, client);
+        await approveStageAttempt(fixtureId, stage.stage_name, timestamp, client);
       }
 
-      const timestamp = new Date();
-      await updateProgressRow(
-        fixtureId,
-        lockedReleaseStage.stage_name,
-        {
-          status: WORKFLOW_STATUSES.APPROVED,
-          assigned_to: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: timestamp,
-          duration_minutes: null,
-        },
-        client,
-      );
-      await approveStageAttempt(fixtureId, lockedReleaseStage.stage_name, timestamp, client);
       await markFixtureComplete(fixtureId, client);
       finalProgress = await getProgressForFixture(fixtureId, departmentId, client);
 
@@ -1354,24 +1292,6 @@ async function reopenFixtureStage({
     approvedBy,
   });
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await markFixtureIncomplete(fixtureId, client);
-    if (isReleaseStageName(targetStage.stage_name)) {
-      await ensureFixtureReleasePackage({
-        fixtureId,
-        createdBy: actor?.employee_id || null,
-      }, client);
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-
   return getFullProgressForFixture(fixtureId, departmentId);
 }
 
@@ -1415,9 +1335,6 @@ async function manipulateFixtureStage({
   if (!targetStage) {
     throw new AppError(400, "Target stage was not found in the fixture workflow");
   }
-  if (isReleaseStageName(targetStage.stage_name)) {
-    throw new AppError(409, "Release can only be completed through the workflow release action");
-  }
 
   const fromStage = deriveCurrentStageByStatus(progress) || getLastStage(progress);
   if (!fromStage) {
@@ -1427,7 +1344,6 @@ async function manipulateFixtureStage({
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await assertFixtureProjectIsActive(fixtureId, departmentId, client, { lockProject: true });
     await initProgressForFixture(fixtureId, departmentId, workflow.stages, client);
     const lockedProgress = await getProgressForFixture(fixtureId, departmentId, client);
     const lockedTargetStage = resolveStageFromProgress(lockedProgress, { targetStageName, targetStageOrder });
@@ -1435,9 +1351,6 @@ async function manipulateFixtureStage({
 
     if (!lockedTargetStage || !lockedFromStage) {
       throw new AppError(409, "Fixture workflow changed while processing manual override");
-    }
-    if (isReleaseStageName(lockedTargetStage.stage_name)) {
-      throw new AppError(409, "Release can only be completed through the workflow release action");
     }
 
     const nextRevisionNo = await incrementFixtureRevision(fixtureId, client);
@@ -1462,16 +1375,6 @@ async function manipulateFixtureStage({
       await markFixtureComplete(fixtureId, client);
     } else {
       await markFixtureIncomplete(fixtureId, client);
-    }
-
-    if (
-      normalizedTargetStatus === WORKFLOW_STATUSES.APPROVED
-      && normalizeDesignStageName(lockedTargetStage.stage_name) === TWO_D_DESIGN_STAGE_KEY
-    ) {
-      await ensureFixtureReleasePackage({
-        fixtureId,
-        createdBy: actor?.employee_id || null,
-      }, client);
     }
 
     await recordFixtureRevision({

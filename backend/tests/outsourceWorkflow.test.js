@@ -117,7 +117,7 @@ test("3D outsourced completion advances to internal 2D without completing workfl
   assert.equal(canCompleteWorkflowAfterOutsource(progressRows, ["3D"]), false);
 });
 
-test("2D outsourced completion hands off to Release without completing workflow", () => {
+test("2D outsourced completion closes the workflow when it is the final design stage", () => {
   const progressRows = [
     { stage_name: "Concept", status: "APPROVED" },
     { stage_name: "DAP", status: "APPROVED" },
@@ -129,10 +129,10 @@ test("2D outsourced completion hands off to Release without completing workflow"
   const transition = resolveOutsourceStageCompletion(progressRows, ["2D"]);
   assert.equal(transition.canComplete, true);
   assert.equal(transition.currentStageName, "2D Finish");
-  assert.equal(transition.nextStageName, "Release");
-  assert.equal(transition.workflowMarkedComplete, false);
-  assert.deepEqual(transition.stageNamesToApprove, ["2D Finish"]);
-  assert.equal(canCompleteWorkflowAfterOutsource(progressRows, ["2D"]), false);
+  assert.equal(transition.nextStageName, null);
+  assert.equal(transition.workflowMarkedComplete, true);
+  assert.deepEqual(transition.stageNamesToApprove, ["2D Finish", "Release"]);
+  assert.equal(canCompleteWorkflowAfterOutsource(progressRows, ["2D"]), true);
 });
 
 test("concept plus 3D outsourced leaves DAP internal and advances 3D to internal 2D", () => {
@@ -211,6 +211,6 @@ test("concept plus 3D plus 2D outsourced follows the expected staged sequence", 
   ], ["Concept", "3D", "2D"]);
   assert.equal(twoDTransition.currentStageName, "2D Finish");
   assert.equal(twoDTransition.nextStageName, null);
-  assert.equal(twoDTransition.workflowMarkedComplete, false);
+  assert.equal(twoDTransition.workflowMarkedComplete, true);
   assert.deepEqual(twoDTransition.remainingOutsourcedStageNames, []);
 });

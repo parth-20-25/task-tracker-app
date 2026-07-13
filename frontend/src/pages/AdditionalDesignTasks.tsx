@@ -53,7 +53,7 @@ export default function AdditionalDesignTasks() {
         <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary"><Layers3 className="h-5 w-5" /></div>
         <div>
           <h1 className="text-2xl font-bold">Additional Design Tasks</h1>
-          <p className="text-sm text-muted-foreground">Historical 2D tasks remain visible here. New additional work is 3D-only; new 2D work uses fixture Release Deliverables.</p>
+          <p className="text-sm text-muted-foreground">Independent 2D and 3D work. These tasks never change the fixture’s Concept, DAP, 3D, or 2D stage.</p>
         </div>
       </div>
 

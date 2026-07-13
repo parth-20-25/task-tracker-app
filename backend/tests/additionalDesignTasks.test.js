@@ -3,7 +3,6 @@ const test = require("node:test");
 
 const {
   ADDITIONAL_DESIGN_TASK_KINDS,
-  isRetiredAdditionalDesignTask,
   normalizeAdditionalDesignTaskKind,
   normalizeAdditionalDesignTeam,
   userBelongsToAdditionalDesignTeam,
@@ -37,12 +36,6 @@ test("assignees must belong to the selected Design subdivision", () => {
   assert.equal(userBelongsToAdditionalDesignTeam(user, "3D"), true);
   assert.equal(userBelongsToAdditionalDesignTeam(user, "2D"), false);
   assert.equal(userBelongsToAdditionalDesignTeam({}, "3D"), false);
-});
-
-test("legacy 2D creation is retired while unrelated 3D tasks remain available", () => {
-  assert.equal(isRetiredAdditionalDesignTask("Drafting", "2D"), true);
-  assert.equal(isRetiredAdditionalDesignTask("Drafting", "3D"), false);
-  assert.equal(isRetiredAdditionalDesignTask("Unknown", "2D"), false);
 });
 
 test("proof upload allowlist accepts required deliverables and rejects executable extensions", () => {

@@ -16,7 +16,7 @@ import { formatProjectNumber } from "@/lib/projectDisplay";
 import { taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import type { AdditionalDesignTaskKind, DesignTeam, Priority } from "@/types";
 
-const ADDITIONAL_DESIGN_TASK_KINDS: AdditionalDesignTaskKind[] = [
+export const ADDITIONAL_DESIGN_TASK_KINDS: AdditionalDesignTaskKind[] = [
   "Drafting",
   "Print & Drafting Checking",
   "BOM Checking",
@@ -111,7 +111,7 @@ export function AdditionalDesignTaskAssignment() {
       ]);
       setAssigneeId("");
       setNotes("");
-      toast({ title: "Additional task assigned", description: `${taskKind} was added to the 3D queue.` });
+      toast({ title: "Additional task assigned", description: `${taskKind} was added to the ${designTeam} queue.` });
     },
     onError: (error) => {
       toast({
@@ -135,7 +135,7 @@ export function AdditionalDesignTaskAssignment() {
           <CalendarPlus className="h-4 w-4 text-primary" />
           <h2 className="text-base font-semibold">Assign Additional Design Task</h2>
         </div>
-        <p className="text-sm text-muted-foreground">Assign independent 3D work without changing the fixture workflow stage.</p>
+        <p className="text-sm text-muted-foreground">Assign independent 2D or 3D work without changing the fixture workflow stage.</p>
       </CardHeader>
       <CardContent className="space-y-4 p-4 pt-0">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -191,10 +191,10 @@ export function AdditionalDesignTaskAssignment() {
             }}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="2D">2D</SelectItem>
                 <SelectItem value="3D">3D</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">2D work now uses fixture Release Deliverables.</p>
           </div>
 
           <div className="space-y-1.5">

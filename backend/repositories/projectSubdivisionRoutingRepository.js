@@ -53,32 +53,6 @@ function assignedTo2DLeaderProjectSql(projectAlias = "p", employeeIdExpression =
   `;
 }
 
-function assignedTo2DTeamProjectSql(projectAlias = "p", employeeIdExpression = "root.employee_id") {
-  return `
-    EXISTS (
-      SELECT 1
-      FROM design.project_subdivision_assignments psa_2d_team
-      JOIN department_subdivisions ds_2d_team
-        ON ds_2d_team.id = psa_2d_team.subdivision_id
-      WHERE psa_2d_team.project_id = ${projectAlias}.id
-        AND psa_2d_team.is_active = TRUE
-        AND ds_2d_team.is_active = TRUE
-        AND ${twoDSubdivisionSql("ds_2d_team")}
-        AND EXISTS (
-          ${buildVisibleUsersCte("psa_2d_team.assigned_leader_id", "assigned_2d_team_members")}
-          SELECT 1
-          FROM assigned_2d_team_members assigned_2d_team_member
-          JOIN users assigned_2d_user
-            ON assigned_2d_user.employee_id = assigned_2d_team_member.employee_id
-          WHERE assigned_2d_team_member.employee_id = ${employeeIdExpression}
-            AND assigned_2d_user.subdivision_id = psa_2d_team.subdivision_id
-            AND COALESCE(assigned_2d_user.is_active, TRUE) = TRUE
-          LIMIT 1
-        )
-    )
-  `;
-}
-
 function current2DWorkflowStageFixtureSql(fixtureAlias = "f", projectAlias = "p") {
   return `
     EXISTS (
@@ -352,21 +326,6 @@ async function isProjectAssignedTo2DLeader(projectId, employeeId, client = pool)
   return result.rowCount > 0;
 }
 
-async function isProjectAssignedTo2DTeamMember(projectId, employeeId, client = pool) {
-  const result = await client.query(
-    `
-      SELECT 1
-      FROM design.projects p
-      WHERE p.id = $1
-        AND ${assignedTo2DTeamProjectSql("p", "$2")}
-      LIMIT 1
-    `,
-    [projectId, employeeId],
-  );
-
-  return result.rowCount > 0;
-}
-
 async function listAssigned2DLeaderTeamEmployeeIds(projectId, client = pool) {
   const leadersResult = await client.query(
     `
@@ -517,7 +476,6 @@ module.exports = {
   DESIGN_2D_STAGE_KEYS,
   DESIGN_2D_SUBDIVISION_NAME,
   assignedTo2DLeaderProjectSql,
-  assignedTo2DTeamProjectSql,
   assignProjectTo2DLeader,
   canManageProject2DRouting,
   current2DWorkflowStageFixtureSql,
@@ -525,7 +483,6 @@ module.exports = {
   is2DLeaderUser,
   is2DSubdivisionUser,
   isProjectAssignedTo2DLeader,
-  isProjectAssignedTo2DTeamMember,
   listAssigned2DLeaderTeamEmployeeIds,
   list2DLeadersForProject,
   listProjectSubdivisionAssignments,

@@ -2,7 +2,6 @@ const { env } = require("../config/env");
 const {
   DEPRECATED_PERMISSION_IDS,
   CONTROL_DESIGN_ROLE_PERMISSION_BUNDLES,
-  DESIGN_OUTSOURCE_ROLE_PERMISSION_BUNDLES,
   PERMISSIONS,
   PERMISSION_DEFINITIONS,
 } = require("../config/constants");
@@ -212,15 +211,6 @@ async function syncControlDesignProjectPermissions(client) {
   }
 }
 
-async function syncDesignOutsourcePermissions(client) {
-  for (const [roleId, permissionIds] of Object.entries(DESIGN_OUTSOURCE_ROLE_PERMISSION_BUNDLES)) {
-    await assignPermissionsToRole(roleId, permissionIds, client, {
-      autoCreateMissingPermissions: true,
-      source: "permissionRepository.syncDesignOutsourcePermissions",
-    });
-  }
-}
-
 async function syncRolePermissionJson(client) {
   await client.query(
     `
@@ -373,7 +363,6 @@ async function alignPermissionData(client) {
   );
 
   await syncControlDesignProjectPermissions(client);
-  await syncDesignOutsourcePermissions(client);
   await syncNativeUploadPermissionFromLegacy(client);
   await syncRolePermissionJson(client);
 }
@@ -387,6 +376,5 @@ module.exports = {
   normalizeGrantablePermissionIds,
   normalizePermissionIds,
   seedPermissions,
-  syncDesignOutsourcePermissions,
   syncNativeUploadPermissionFromLegacy,
 };

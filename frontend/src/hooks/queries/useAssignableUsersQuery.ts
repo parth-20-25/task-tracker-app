@@ -3,10 +3,10 @@ import { fetchUsers } from "@/api/adminApi";
 import { getStoredToken } from "@/api/http";
 import { adminQueryKeys } from "@/lib/queryKeys";
 
-export function useAssignableUsersQuery(enabled = true) {
+export function useAssignableUsersQuery() {
   return useQuery({
     queryKey: adminQueryKeys.users("assignable"),
     queryFn: () => fetchUsers("assignable"),
-    enabled: enabled && !!getStoredToken(),
+    enabled: !!getStoredToken(),
   });
 }

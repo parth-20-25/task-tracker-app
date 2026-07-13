@@ -95,7 +95,7 @@ export function isFixtureNextOutsourcedStagePending(fixture: DesignFixtureOption
   }
 
   const nextStage = WORKFLOW_STAGE_ORDER[currentIndex + 1] || null;
-  return Boolean(nextStage && nextStage !== "DAP" && fixture.outsourced_stages?.includes(nextStage));
+  return Boolean(nextStage && fixture.outsourced_stages?.includes(nextStage));
 }
 
 export function isFixtureActiveOutsourcedSection(fixture: DesignFixtureOption) {

@@ -5,14 +5,12 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const {
-  assignedTo2DTeamProjectSql,
   assignProjectTo2DLeader,
   current2DWorkflowStageFixtureSql,
   deleteProjectSubdivisionAssignment,
-  isProjectAssignedTo2DTeamMember,
   twoDStageNameSql,
 } = require("../repositories/projectSubdivisionRoutingRepository");
-const { visibleFixturePredicate, visibleProjectPredicate } = require("../repositories/projectVisibility");
+const { visibleFixturePredicate } = require("../repositories/projectVisibility");
 const { buildTaskAccessPredicate } = require("../services/accessControlService");
 
 function make2DUser(overrides = {}) {
@@ -80,43 +78,11 @@ test("2D assignees can see their additional tasks without fixture stage coupling
   assert.match(sql, /task\.assigned_to = \$1/);
 });
 
-test("2D project and fixture visibility use assigned team membership without workflow coupling", () => {
-  const teamSql = assignedTo2DTeamProjectSql("project", "requesting_root.employee_id");
-  const projectSql = visibleProjectPredicate("project");
-  const fixtureSql = visibleFixturePredicate("fixture", "project");
+test("fixture visibility predicate includes 2D Finish for subdivision-routed users", () => {
+  const sql = visibleFixturePredicate("fixture", "project");
 
-  [teamSql, projectSql, fixtureSql].forEach((sql) => {
-    assert.match(sql, /project_subdivision_assignments/);
-    assert.match(sql, /assigned_2d_team_members/);
-    assert.match(sql, /psa_2d_team\.project_id = project\.id/);
-    assert.match(sql, /assigned_2d_team_member\.employee_id = requesting_root\.employee_id/);
-    assert.doesNotMatch(sql, /current_assignee_progress/);
-    assert.doesNotMatch(sql, /current_2d_progress/);
-    assert.doesNotMatch(sql, /stage_name/);
-  });
-});
-
-test("project 2D team membership is resolved in one query for assigned and other-team users", async () => {
-  const calls = [];
-  const assignedEmployeeIds = new Set(["EMP2D1", "EMP2D2"]);
-  const client = {
-    async query(sql, params) {
-      calls.push({ sql: sql.replace(/\s+/g, " ").trim(), params });
-      return assignedEmployeeIds.has(params[1])
-        ? { rowCount: 1, rows: [{ exists: true }] }
-        : { rowCount: 0, rows: [] };
-    },
-  };
-
-  assert.equal(await isProjectAssignedTo2DTeamMember("project-1", "EMP2D2", client), true);
-  assert.equal(await isProjectAssignedTo2DTeamMember("project-1", "OTHER2D", client), false);
-  assert.equal(calls.length, 2);
-  calls.forEach((call) => {
-    assert.deepEqual(call.params[0], "project-1");
-    assert.match(call.sql, /WITH RECURSIVE/);
-    assert.match(call.sql, /assigned_2d_team_members/);
-    assert.match(call.sql, /psa_2d_team\.project_id = p\.id/);
-  });
+  assert.match(sql, /'2d_finish'/);
+  assert.match(sql, /current_assignee_progress\.assigned_to = root\.employee_id/);
 });
 
 test("duplicate 2D leader assignment is rejected before insert", async () => {

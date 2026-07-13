@@ -698,10 +698,6 @@ export interface DesignFixtureOption {
   workflow_released_at?: string | null;
   workflow_released_by?: string | null;
   workflow_released_by_name?: string | null;
-  release_package_status?: string | null;
-  release_deliverables_approved_count?: number;
-  release_deliverables_total_count?: number;
-  fixture_release_state?: "WORKFLOW_ACTIVE" | "PENDING_DELIVERABLES" | "READY_FOR_RELEASE" | "RELEASED" | string;
   workflow_progress_percent?: number | null;
   workflow_stage_active?: boolean;
   review_pending?: boolean;

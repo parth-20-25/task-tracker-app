@@ -39,28 +39,6 @@ function defaultProgress() {
   ];
 }
 
-function readyProgress(releaseStatus = "PENDING") {
-  return [
-    progressRow("Concept", 1, "APPROVED", { completed_at: "2026-06-01T08:00:00.000Z" }),
-    progressRow("DAP", 2, "APPROVED", { completed_at: "2026-06-02T08:00:00.000Z" }),
-    progressRow("3D Finish", 3, "APPROVED", { completed_at: "2026-06-03T08:00:00.000Z" }),
-    progressRow("2D Finish", 4, "APPROVED", { completed_at: "2026-06-04T08:00:00.000Z" }),
-    progressRow("Release", 5, releaseStatus, {
-      completed_at: releaseStatus === "APPROVED" ? "2026-06-05T08:00:00.000Z" : null,
-      revision_code: "REL00",
-    }),
-  ];
-}
-
-function submitted2DProgress() {
-  const progress = readyProgress();
-  progress[3] = progressRow("2D Finish", 4, "SUBMITTED_FOR_VERIFICATION", {
-    assigned_to: "2D-1",
-    completed_at: "2026-06-04T08:00:00.000Z",
-  });
-  return progress;
-}
-
 function workflowDefinition() {
   return {
     id: "workflow-design",
@@ -85,8 +63,6 @@ function installReleaseMocks(options = {}) {
   const workflowRepository = require("../repositories/fixtureWorkflowRepository");
   const completionRepository = require("../repositories/designCompletionRepository");
   const contributionRepository = require("../repositories/designStageContributionRepository");
-  const releaseDeliverablesService = require("../services/fixtureReleaseDeliverablesService");
-  const revisionService = require("../services/designRevisionService");
 
   const originals = {
     connect: db.pool.connect,
@@ -99,16 +75,10 @@ function installReleaseMocks(options = {}) {
     approveStageAttempt: workflowRepository.approveStageAttempt,
     getLatestStageAttempt: workflowRepository.getLatestStageAttempt,
     markFixtureComplete: workflowRepository.markFixtureComplete,
-    markFixtureIncomplete: workflowRepository.markFixtureIncomplete,
-    listFixtureRevisions: workflowRepository.listFixtureRevisions,
     insertCompletionSnapshot: completionRepository.insertCompletionSnapshot,
     listStageContributions: contributionRepository.listStageContributions,
-    listContributionsForFixtures: contributionRepository.listContributionsForFixtures,
     insertStageContribution: contributionRepository.insertStageContribution,
     markRemainingContributionActual: contributionRepository.markRemainingContributionActual,
-    ensureFixtureReleasePackage: releaseDeliverablesService.ensureFixtureReleasePackage,
-    getFixtureReleaseReadiness: releaseDeliverablesService.getFixtureReleaseReadiness,
-    executeDesignStageRework: revisionService.executeDesignStageRework,
   };
 
   let committedProgress = clone(options.progress || defaultProgress());
@@ -134,10 +104,6 @@ function installReleaseMocks(options = {}) {
     approvals: [],
     snapshots: [],
     markComplete: 0,
-    markIncomplete: 0,
-    reworks: [],
-    packageEnsures: [],
-    readinessChecks: [],
   };
 
   const client = {
@@ -213,67 +179,15 @@ function installReleaseMocks(options = {}) {
     calls.markComplete += 1;
     transactionFixture.is_workflow_complete = true;
   };
-  workflowRepository.markFixtureIncomplete = async (_fixtureId, txClient) => {
-    assert.equal(txClient, client);
-    calls.markIncomplete += 1;
-    transactionFixture.is_workflow_complete = false;
-  };
-  workflowRepository.listFixtureRevisions = async () => [];
   completionRepository.insertCompletionSnapshot = async (snapshot, txClient) => {
     assert.equal(txClient, client);
     transactionSnapshots.push(clone(snapshot));
     return { id: `snapshot-${transactionSnapshots.length}`, captured_at: "2026-06-26T00:00:00.000Z" };
   };
-  contributionRepository.listStageContributions = async () => clone(options.stageContributions || []);
-  contributionRepository.listContributionsForFixtures = async () => [];
+  contributionRepository.listStageContributions = async () => [];
   contributionRepository.insertStageContribution = async () => null;
   contributionRepository.markRemainingContributionActual = async () => null;
-  releaseDeliverablesService.ensureFixtureReleasePackage = async (input, txClient) => {
-    calls.packageEnsures.push({ ...clone(input), clientMatched: txClient === client });
-    return {
-      id: "release-package-1",
-      fixture_id: FIXTURE_ID,
-      status: "IN_PROGRESS",
-      deliverables: [],
-    };
-  };
-  releaseDeliverablesService.getFixtureReleaseReadiness = async (fixtureId, progressRows, txClient) => {
-    calls.readinessChecks.push({
-      fixtureId,
-      progress: clone(progressRows),
-      clientMatched: txClient === client,
-    });
-    return {
-      package: { id: "release-package-1", fixture_id: FIXTURE_ID, status: "READY_FOR_RELEASE" },
-      status: "READY_FOR_RELEASE",
-      blockers: clone(options.releaseBlockers || []),
-    };
-  };
 
-  revisionService.executeDesignStageRework = async (input) => {
-    calls.reworks.push(clone(input));
-    const target = committedProgress.find((stage) => (
-      stage.stage_name === input.targetStageName
-      || Number(stage.stage_order) === Number(input.targetStageOrder)
-    ));
-    if (!target) {
-      throw new Error("Mock rework target was not found");
-    }
-    if (target.status === "APPROVED") {
-      target.stage_version = Number(target.stage_version || 0) + 1;
-    }
-    Object.assign(target, {
-      status: "PENDING",
-      assigned_to: null,
-      assigned_at: null,
-      started_at: null,
-      completed_at: null,
-      duration_minutes: null,
-      updated_at: "2026-06-27T00:00:00.000Z",
-    });
-    fixtureContext.revision_no += 1;
-    return { revisionCode: "REL01", stageVersion: target.stage_version };
-  };
   clearServiceCache();
 
   return {
@@ -296,73 +210,17 @@ function installReleaseMocks(options = {}) {
       workflowRepository.approveStageAttempt = originals.approveStageAttempt;
       workflowRepository.getLatestStageAttempt = originals.getLatestStageAttempt;
       workflowRepository.markFixtureComplete = originals.markFixtureComplete;
-      workflowRepository.markFixtureIncomplete = originals.markFixtureIncomplete;
-      workflowRepository.listFixtureRevisions = originals.listFixtureRevisions;
       completionRepository.insertCompletionSnapshot = originals.insertCompletionSnapshot;
       contributionRepository.listStageContributions = originals.listStageContributions;
-      contributionRepository.listContributionsForFixtures = originals.listContributionsForFixtures;
       contributionRepository.insertStageContribution = originals.insertStageContribution;
       contributionRepository.markRemainingContributionActual = originals.markRemainingContributionActual;
-      releaseDeliverablesService.ensureFixtureReleasePackage = originals.ensureFixtureReleasePackage;
-      releaseDeliverablesService.getFixtureReleaseReadiness = originals.getFixtureReleaseReadiness;
-      revisionService.executeDesignStageRework = originals.executeDesignStageRework;
       clearServiceCache();
     },
   };
 }
 
-test("release returns structured blockers and performs no mutations while readiness is unresolved", async () => {
-  const initialProgress = defaultProgress();
-  const blockers = [
-    {
-      code: "MAIN_WORKFLOW_INCOMPLETE",
-      stage: "DAP",
-      message: "DAP is not approved",
-    },
-    {
-      code: "DELIVERABLE_PENDING_APPROVAL",
-      deliverable: "CMM_DATA",
-      message: "CMM Data is pending approval",
-    },
-  ];
-  const mocks = installReleaseMocks({ progress: initialProgress, releaseBlockers: blockers });
-
-  try {
-    const { releaseFixtureWorkflow } = require("../services/fixtureWorkflowService");
-
-    await assert.rejects(
-      () => releaseFixtureWorkflow({
-        actor: { employee_id: "MGR-1" },
-        fixtureId: FIXTURE_ID,
-        departmentId: DEPARTMENT_ID,
-      }),
-      (error) => {
-        assert.equal(error.statusCode, 409);
-        assert.equal(error.errorCode, "FIXTURE_RELEASE_BLOCKED");
-        assert.equal(error.details?.code, "FIXTURE_RELEASE_BLOCKED");
-        assert.deepEqual(error.details?.blockers, blockers);
-        return true;
-      },
-    );
-
-    assert.deepEqual(mocks.getState().progress, initialProgress);
-    assert.equal(mocks.getState().fixture.is_workflow_complete, false);
-    assert.equal(mocks.calls.progressUpdates.length, 0);
-    assert.equal(mocks.calls.approvals.length, 0);
-    assert.equal(mocks.calls.markComplete, 0);
-    assert.equal(mocks.getState().snapshots.length, 0);
-    assert.equal(mocks.calls.readinessChecks.length, 1);
-    assert.equal(mocks.calls.readinessChecks[0].clientMatched, true);
-    assert.ok(mocks.calls.tx.includes("ROLLBACK"));
-    assert.equal(mocks.calls.tx.includes("COMMIT"), false);
-  } finally {
-    mocks.restore();
-  }
-});
-
-test("ready release approves only Release and repeated release is idempotent", async () => {
-  const initialProgress = readyProgress();
-  const mocks = installReleaseMocks({ progress: initialProgress });
+test("release approves incomplete previous stages, completes release, and is idempotent", async () => {
+  const mocks = installReleaseMocks();
 
   try {
     const { releaseFixtureWorkflow } = require("../services/fixtureWorkflowService");
@@ -375,17 +233,31 @@ test("ready release approves only Release and repeated release is idempotent", a
 
     assert.equal(firstResult.is_complete, true);
     assert.equal(firstResult.status, "APPROVED");
+
     const firstState = mocks.getState();
-    assert.deepEqual(firstState.progress.slice(0, 4), initialProgress.slice(0, 4));
-    assert.equal(firstState.progress[4].status, "APPROVED");
-    assert.ok(firstState.progress[4].completed_at);
-    assert.deepEqual(mocks.calls.progressUpdates.map((call) => call.stageName), ["Release"]);
-    assert.deepEqual(mocks.calls.approvals.map((call) => call.stageName), ["Release"]);
-    assert.equal(mocks.calls.markComplete, 1);
+    assert.equal(firstState.fixture.is_workflow_complete, true);
+    assert.deepEqual(firstState.progress.map((row) => [row.stage_name, row.status]), [
+      ["Concept", "APPROVED"],
+      ["DAP", "APPROVED"],
+      ["3D Finish", "APPROVED"],
+      ["2D Finish", "APPROVED"],
+      ["Release", "APPROVED"],
+    ]);
+    assert.equal(firstState.progress[0].completed_at, "2026-06-01T08:00:00.000Z");
+    assert.ok(firstState.progress.find((row) => row.stage_name === "Release").completed_at);
+    assert.deepEqual(mocks.calls.progressUpdates.map((call) => call.stageName), ["DAP", "3D Finish", "2D Finish", "Release"]);
+    assert.deepEqual(mocks.calls.approvals.map((call) => call.stageName), ["DAP", "3D Finish", "2D Finish", "Release"]);
     assert.equal(firstState.snapshots.length, 1);
     assert.equal(firstState.snapshots[0].trigger, "workflow_release");
     assert.equal(firstState.snapshots[0].payload.release.released_by, "MGR-1");
-    assert.equal(mocks.calls.readinessChecks.length, 1);
+    assert.deepEqual(
+      firstState.snapshots[0].payload.progress.map((row) => [row.stage_name, row.status]),
+      firstState.progress.map((row) => [row.stage_name, "APPROVED"]),
+    );
+
+    const updateCount = mocks.calls.progressUpdates.length;
+    const approvalCount = mocks.calls.approvals.length;
+    const snapshotCount = firstState.snapshots.length;
 
     const secondResult = await releaseFixtureWorkflow({
       actor: { employee_id: "MGR-1" },
@@ -394,11 +266,9 @@ test("ready release approves only Release and repeated release is idempotent", a
     });
 
     assert.equal(secondResult.is_complete, true);
-    assert.deepEqual(mocks.calls.progressUpdates.map((call) => call.stageName), ["Release"]);
-    assert.deepEqual(mocks.calls.approvals.map((call) => call.stageName), ["Release"]);
-    assert.equal(mocks.calls.markComplete, 1);
-    assert.equal(mocks.getState().snapshots.length, 1);
-    assert.equal(mocks.calls.readinessChecks.length, 1);
+    assert.equal(mocks.calls.progressUpdates.length, updateCount);
+    assert.equal(mocks.calls.approvals.length, approvalCount);
+    assert.equal(mocks.getState().snapshots.length, snapshotCount);
   } finally {
     mocks.restore();
   }
@@ -426,11 +296,11 @@ test("ordinary non-release assignment validation still rejects unmet prerequisit
   }
 });
 
-test("release rolls back the entire transaction when the Release-stage update fails", async () => {
-  const initialProgress = readyProgress();
+test("release rolls back the entire transaction when a database step fails", async () => {
+  const initialProgress = defaultProgress();
   const mocks = installReleaseMocks({
     progress: initialProgress,
-    failOnStageName: "Release",
+    failOnStageName: "3D Finish",
   });
 
   try {
@@ -442,142 +312,15 @@ test("release rolls back the entire transaction when the Release-stage update fa
         fixtureId: FIXTURE_ID,
         departmentId: DEPARTMENT_ID,
       }),
-      /forced update failure for Release/,
+      /forced update failure for 3D Finish/,
     );
 
     const state = mocks.getState();
     assert.deepEqual(state.progress, initialProgress);
     assert.equal(state.fixture.is_workflow_complete, false);
     assert.equal(state.snapshots.length, 0);
-    assert.equal(mocks.calls.markComplete, 0);
-    assert.equal(mocks.calls.readinessChecks.length, 1);
     assert.ok(mocks.calls.tx.includes("ROLLBACK"));
     assert.equal(mocks.calls.tx.includes("COMMIT"), false);
-  } finally {
-    mocks.restore();
-  }
-});
-
-test("an already released fixture remains unchanged", async () => {
-  const initialProgress = readyProgress("APPROVED");
-  const mocks = installReleaseMocks({
-    progress: initialProgress,
-    fixtureComplete: true,
-  });
-
-  try {
-    const { releaseFixtureWorkflow } = require("../services/fixtureWorkflowService");
-    const result = await releaseFixtureWorkflow({
-      actor: { employee_id: "MGR-1" },
-      fixtureId: FIXTURE_ID,
-      departmentId: DEPARTMENT_ID,
-    });
-
-    assert.equal(result.is_complete, true);
-    assert.deepEqual(mocks.getState().progress, initialProgress);
-    assert.equal(mocks.getState().fixture.is_workflow_complete, true);
-    assert.equal(mocks.calls.progressUpdates.length, 0);
-    assert.equal(mocks.calls.approvals.length, 0);
-    assert.equal(mocks.calls.markComplete, 0);
-    assert.equal(mocks.getState().snapshots.length, 0);
-    assert.equal(mocks.calls.readinessChecks.length, 0);
-  } finally {
-    mocks.restore();
-  }
-});
-
-test("normal 2D task approval creates the release package with the approving actor", async () => {
-  const mocks = installReleaseMocks({
-    progress: submitted2DProgress(),
-    stageContributions: [{
-      id: "contribution-1",
-      contribution_kind: "ACTUAL",
-      contribution_percent: 100,
-    }],
-  });
-
-  try {
-    const { advanceWorkflowAfterTaskApproval } = require("../services/fixtureWorkflowService");
-    await advanceWorkflowAfterTaskApproval({
-      fixture_id: FIXTURE_ID,
-      department_id: DEPARTMENT_ID,
-      task_id: "task-2d",
-      actor_employee_id: "MGR-1",
-    });
-
-    const state = mocks.getState();
-    assert.equal(state.progress.find((row) => row.stage_name === "2D Finish").status, "APPROVED");
-    assert.equal(state.progress.find((row) => row.stage_name === "Release").status, "PENDING");
-    assert.deepEqual(mocks.calls.progressUpdates.map((call) => call.stageName), ["2D Finish", "Release"]);
-    assert.deepEqual(mocks.calls.approvals.map((call) => call.stageName), ["2D Finish"]);
-    assert.deepEqual(mocks.calls.packageEnsures, [{
-      fixtureId: FIXTURE_ID,
-      createdBy: "MGR-1",
-      clientMatched: true,
-    }]);
-    assert.equal(mocks.calls.markComplete, 0);
-  } finally {
-    mocks.restore();
-  }
-});
-
-test("task approval cannot advance or approve the Release stage", async () => {
-  const progress = readyProgress("SUBMITTED_FOR_VERIFICATION");
-  progress[4].assigned_to = "2D-1";
-  const mocks = installReleaseMocks({ progress });
-
-  try {
-    const { advanceWorkflowAfterTaskApproval } = require("../services/fixtureWorkflowService");
-    await assert.rejects(
-      () => advanceWorkflowAfterTaskApproval({
-        fixture_id: FIXTURE_ID,
-        department_id: DEPARTMENT_ID,
-        task_id: "stale-release-task",
-        actor_employee_id: "MGR-1",
-      }),
-      /Release can only be completed through the workflow release action/,
-    );
-
-    assert.deepEqual(mocks.getState().progress, progress);
-    assert.equal(mocks.calls.progressUpdates.length, 0);
-    assert.equal(mocks.calls.approvals.length, 0);
-    assert.equal(mocks.calls.markComplete, 0);
-    assert.equal(mocks.calls.readinessChecks.length, 0);
-    assert.ok(mocks.calls.tx.includes("ROLLBACK"));
-  } finally {
-    mocks.restore();
-  }
-});
-test("reopening a released Release stage marks the fixture incomplete and ensures a new package cycle", async () => {
-  const mocks = installReleaseMocks({
-    progress: readyProgress("APPROVED"),
-    fixtureComplete: true,
-  });
-
-  try {
-    const { reopenFixtureStage } = require("../services/fixtureWorkflowService");
-    const result = await reopenFixtureStage({
-      actor: { employee_id: "MGR-1" },
-      fixtureId: FIXTURE_ID,
-      departmentId: DEPARTMENT_ID,
-      targetStageName: "Release",
-      revisionType: "CUSTOMER_CHANGE",
-      revisionReason: "Customer requested a release revision",
-    });
-
-    const state = mocks.getState();
-    assert.equal(state.fixture.is_workflow_complete, false);
-    assert.equal(state.progress.find((stage) => stage.stage_name === "Release").status, "PENDING");
-    assert.equal(result.stages.find((stage) => stage.stage_name === "Release").status, "PENDING");
-    assert.equal(mocks.calls.markIncomplete, 1);
-    assert.equal(mocks.calls.reworks.length, 1);
-    assert.deepEqual(mocks.calls.packageEnsures, [{
-      fixtureId: FIXTURE_ID,
-      createdBy: "MGR-1",
-      clientMatched: true,
-    }]);
-    assert.equal(mocks.calls.tx.at(-2), "COMMIT");
-    assert.equal(mocks.calls.tx.at(-1), "RELEASE");
   } finally {
     mocks.restore();
   }

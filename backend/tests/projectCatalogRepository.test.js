@@ -8,7 +8,6 @@ const {
   listProjectSummariesForUser,
   listRecentOutsourceSuppliersForUser,
   rememberRecentOutsourceSupplier,
-  upsertFixture,
   upsertFixtureOutsourceRecord,
 } = require("../repositories/designProjectCatalogRepository");
 const {
@@ -55,43 +54,6 @@ test("fixture outsource upsert does not depend on a fixture_id unique constraint
   assert.deepEqual(record.outsourced_stages, ["Concept", "3D"]);
   assert.match(queries[0], /UPDATE\s+design\.fixture_outsource_records/i);
   assert.doesNotMatch(queries.join("\n"), /ON\s+CONFLICT\s*\(\s*fixture_id\s*\)/i);
-});
-
-test("fixture upsert locks and rechecks the project before changing fixture membership", async () => {
-  let capturedSql = "";
-  let capturedParams = [];
-  const client = {
-    query: async (sql, params) => {
-      capturedSql = String(sql).replace(/\s+/g, " ").trim();
-      capturedParams = params;
-      return { rows: [], rowCount: 0 };
-    },
-  };
-
-  await assert.rejects(
-    () => upsertFixture({
-      project_id: "project-1",
-      fixture_no: "FX-001",
-      part_name: "Fixture One",
-      fixture_type: "Checking",
-      qty: 1,
-    }, client),
-    (error) => {
-      assert.equal(error.statusCode, 409);
-      assert.match(error.message, /Project must be active/);
-      return true;
-    },
-  );
-
-  assert.match(
-    capturedSql,
-    /WITH active_project AS .*FROM design\.projects .*LOWER\(COALESCE\(status, 'active'\)\) = 'active'.*FOR UPDATE/,
-  );
-  assert.match(
-    capturedSql,
-    /INSERT INTO design\.fixtures .* SELECT active_project\.id, \$2/,
-  );
-  assert.deepEqual(capturedParams.slice(0, 2), ["project-1", "FX-001"]);
 });
 
 test("project fixture list falls back when recent outsource tables are not migrated", async () => {

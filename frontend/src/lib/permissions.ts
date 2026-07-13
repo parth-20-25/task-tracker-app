@@ -1,5 +1,4 @@
 import type { Role, User } from "@/types";
-import { isDesignDepartment } from "@/lib/departments";
 
 export const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
@@ -11,12 +10,6 @@ export const PERMISSIONS = {
   DELETE_WBS_BATCH: "delete_wbs_batch",
   REOPEN_FIXTURE_STAGE: "reopen_fixture_stage",
   MANIPULATE_FIXTURE_STAGE: "manipulate_fixture_stage",
-  DESIGN_FIXTURE_OUTSOURCE: "design.fixture.outsource",
-  DESIGN_FIXTURE_OUTSOURCE_BULK: "design.fixture.outsource.bulk",
-  DESIGN_FIXTURE_OUTSOURCE_MANAGE: "design.fixture.outsource.manage",
-  DESIGN_FIXTURE_OUTSOURCE_CANCEL: "design.fixture.outsource.cancel",
-  DESIGN_FIXTURE_OUTSOURCE_REVIEW: "design.fixture.outsource.review",
-  DESIGN_VENDOR_MANAGE: "design.vendor.manage",
   VIEW_SELF_TASKS: "can_view_self_tasks",
   VIEW_ALL_TASKS: "can_view_all_tasks",
   CREATE_TASK: "can_create_task",
@@ -82,12 +75,6 @@ export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[numbe
   [PERMISSIONS.VIEW_SELF_TASKS]: "View Self Tasks Only",
   [PERMISSIONS.VIEW_ALL_TASKS]: "View All Tasks",
   [PERMISSIONS.SELF_APPROVE]: "Self Approve",
-  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE]: "Outsource Design Fixture Stages",
-  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_BULK]: "Bulk Outsource Design Fixture Stages",
-  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_MANAGE]: "Manage Design Fixture Outsourcing",
-  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_CANCEL]: "Cancel Design Fixture Outsourcing",
-  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_REVIEW]: "Review Design Fixture Outsourcing",
-  [PERMISSIONS.DESIGN_VENDOR_MANAGE]: "Manage Design Vendors",
   [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW]: "View Control Design Workspace",
   [PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED]: "View Assigned Control Design Projects",
   [PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL]: "View All Control Design Projects",
@@ -333,21 +320,6 @@ export function isControlDesignSubdivisionUser(user: User | null | undefined) {
   return subdivisionId === "control_design" || subdivisionName === "control_design";
 }
 
-export function canShowAdditionalDesignTasksNavigation(user: User | null | undefined) {
-  return isProjectAuthorityUser(user)
-    || (isDesignDepartment(user) && !isDesign2DSubdivisionUser(user));
-}
-
-export function isDesign2DSubdivisionUser(user: User | null | undefined) {
-  const departmentId = normalizeRoleKey(user?.department_id);
-  const departmentName = normalizeRoleKey(user?.department?.name);
-  const subdivisionId = normalizeRoleKey(user?.subdivision_id);
-  const subdivisionName = normalizeRoleKey(user?.subdivision?.subdivision_name);
-
-  return (departmentId === "design" || departmentName === "design")
-    && (subdivisionId === "2d" || subdivisionName === "2d");
-}
-
 export function isControlDesignDashboardUser(user: User | null | undefined, _access?: unknown) {
   return isControlDepartmentUser(user)
     && isControlDesignSubdivisionUser(user)
@@ -386,8 +358,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
   const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);
   const canViewAllTasks = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_ALL_TASKS);
-  const canAccessProjectFixtures = operationalController
-    || (isDesign2DSubdivisionUser(user) && (canViewSelfTasks || canViewAllTasks));
   const canViewReports = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_REPORTS);
   const canExportReports = projectAuthority || hasUserPermission(user, PERMISSIONS.EXPORT_REPORTS);
   const canViewDepartmentAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS);
@@ -445,7 +415,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canExportReports,
     canViewTeamTasks: canViewAllTasks,
     canViewVerifications: operationalController && hasAnyUserPermission(user, [PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
-    canAccessProjectFixtures,
+    canAccessProjectFixtures: operationalController,
     canAccessAdminPanel: isAdminUser(user) || hasAnyUserPermission(user, ADMIN_PANEL_PERMISSIONS),
     canViewAuditLogs: isAdminUser(user),
     canViewDepartmentAnalytics,

@@ -632,6 +632,24 @@ function validateOutsourcePayload(payload = {}) {
   };
 }
 
+function bulkOutsourceFailure(fixtureId, error) {
+  const statusCode = Number(error?.statusCode || 500);
+  const defaultCode = statusCode === 404
+    ? "FIXTURE_NOT_FOUND"
+    : statusCode === 403
+      ? "FORBIDDEN"
+      : statusCode === 409
+        ? "FIXTURE_NOT_ELIGIBLE"
+        : "OUTSOURCE_FAILED";
+
+  return {
+    fixtureId,
+    success: false,
+    code: error?.errorCode && error.errorCode !== "APP_ERROR" ? error.errorCode : defaultCode,
+    message: statusCode < 500 ? error.message : "Could not outsource fixture",
+  };
+}
+
 function normalizeOutsourcingFlag(value) {
   if (value === true || value === false) {
     return value;
@@ -690,6 +708,14 @@ async function outsourceFixtureForUser(user, fixtureId, payload = {}) {
     await client.query("BEGIN");
 
     const { fixture } = await resolveVisibleFixtureForOutsource(user, fixtureId, payload.department_id, client);
+    if (fixture.outsource_status === OUTSOURCE_STATUSES.OUTSOURCED) {
+      throw new AppError(
+        409,
+        "Fixture is already outsourced",
+        { fixture_id: fixture.fixture_id },
+        "FIXTURE_NOT_ELIGIBLE",
+      );
+    }
 
     await upsertFixtureOutsourceRecord({
       fixtureId: fixture.fixture_id,
@@ -726,6 +752,78 @@ async function outsourceFixtureForUser(user, fixtureId, payload = {}) {
   } finally {
     client.release();
   }
+}
+
+async function bulkOutsourceFixturesForUser(user, payload = {}) {
+  const projectId = String(payload.projectId || "").trim();
+  if (!projectId) {
+    throw new AppError(400, "projectId is required");
+  }
+
+  if (!Array.isArray(payload.fixtureIds)) {
+    throw new AppError(400, "fixtureIds must be an array");
+  }
+
+  const fixtureIds = Array.from(new Set(payload.fixtureIds.map((fixtureId) => String(fixtureId || "").trim()).filter(Boolean)));
+  if (fixtureIds.length === 0) {
+    throw new AppError(400, "At least one fixtureId is required");
+  }
+
+  const outsourceData = payload.outsourceData && typeof payload.outsourceData === "object"
+    ? payload.outsourceData
+    : {};
+  const { supplierName, outsourcedStages } = validateOutsourcePayload(outsourceData);
+  const normalizedOutsourceData = {
+    ...outsourceData,
+    supplier_name: supplierName,
+    outsourced_stages: outsourcedStages,
+  };
+  const preflightFailures = new Map();
+
+  for (const fixtureId of fixtureIds) {
+    try {
+      const { fixture } = await resolveVisibleFixtureForOutsource(
+        user,
+        fixtureId,
+        normalizedOutsourceData.department_id,
+        pool,
+      );
+      if (String(fixture.project_id || "") !== projectId) {
+        preflightFailures.set(fixtureId, {
+          fixtureId,
+          success: false,
+          code: "FIXTURE_PROJECT_MISMATCH",
+          message: "Fixture does not belong to the selected project",
+        });
+      }
+    } catch (error) {
+      preflightFailures.set(fixtureId, bulkOutsourceFailure(fixtureId, error));
+    }
+  }
+
+  const results = [];
+  for (const fixtureId of fixtureIds) {
+    const preflightFailure = preflightFailures.get(fixtureId);
+    if (preflightFailure) {
+      results.push(preflightFailure);
+      continue;
+    }
+
+    try {
+      await outsourceFixtureForUser(user, fixtureId, normalizedOutsourceData);
+      results.push({ fixtureId, success: true });
+    } catch (error) {
+      results.push(bulkOutsourceFailure(fixtureId, error));
+    }
+  }
+
+  const succeeded = results.filter((result) => result.success).length;
+  return {
+    requested: fixtureIds.length,
+    succeeded,
+    failed: results.length - succeeded,
+    results,
+  };
 }
 
 async function bringOutsourcedFixtureInHouseForUser(user, fixtureId, payload = {}) {
@@ -902,6 +1000,7 @@ async function listRecentOutsourceSuppliersForUser(user, requestedDepartmentId =
 
 module.exports = instrumentModuleExports("service.projectCatalogService", {
   bringOutsourcedFixtureInHouseForUser,
+  bulkOutsourceFixturesForUser,
   completeOutsourcedFixtureForUser,
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,

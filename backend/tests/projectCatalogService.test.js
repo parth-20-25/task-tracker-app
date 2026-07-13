@@ -108,6 +108,103 @@ function installOutsourceMocks() {
   };
 }
 
+function installBulkOutsourceMocks() {
+  const db = require("../db");
+  const projectRepository = require("../repositories/designProjectCatalogRepository");
+  const auditRepository = require("../repositories/auditRepository");
+  const originals = {
+    connect: db.pool.connect,
+    findFixtureByIdForUser: projectRepository.findFixtureByIdForUser,
+    upsertFixtureOutsourceRecord: projectRepository.upsertFixtureOutsourceRecord,
+    touchProject: projectRepository.touchProject,
+    createAuditLog: auditRepository.createAuditLog,
+  };
+  const fixtures = new Map([
+    ["fixture-1", {
+      fixture_id: "fixture-1",
+      project_id: "project-1",
+      department_id: "design",
+      fixture_no: "F-001",
+      is_outsourced: false,
+      outsource_status: null,
+      vendor_name: null,
+    }],
+    ["fixture-active", {
+      fixture_id: "fixture-active",
+      project_id: "project-1",
+      department_id: "design",
+      fixture_no: "F-002",
+      is_outsourced: true,
+      outsource_status: "outsourced",
+      vendor_name: "Supplier Old",
+    }],
+    ["fixture-other", {
+      fixture_id: "fixture-other",
+      project_id: "project-2",
+      department_id: "design",
+      fixture_no: "F-003",
+      is_outsourced: false,
+      outsource_status: null,
+      vendor_name: null,
+    }],
+  ]);
+  const calls = {
+    upsert: [],
+    touchedProjects: [],
+    audit: [],
+    queries: [],
+  };
+
+  db.pool.connect = async () => {
+    const client = {
+      updatedFixtureId: null,
+      query: async (sql) => {
+        calls.queries.push(String(sql).trim());
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => calls.queries.push("RELEASE"),
+    };
+    return client;
+  };
+  projectRepository.findFixtureByIdForUser = async (fixtureId, _user, _departmentId, client) => {
+    const fixture = fixtures.get(fixtureId) || null;
+    if (!fixture || client === db.pool || client?.updatedFixtureId !== fixtureId) {
+      return fixture;
+    }
+
+    return {
+      ...fixture,
+      is_outsourced: true,
+      outsource_status: "outsourced",
+      vendor_name: "Supplier X",
+      outsourced_stages: ["Concept", "3D"],
+    };
+  };
+  projectRepository.upsertFixtureOutsourceRecord = async (entry, client) => {
+    client.updatedFixtureId = entry.fixtureId;
+    calls.upsert.push(entry);
+    return { fixture_id: entry.fixtureId };
+  };
+  projectRepository.touchProject = async (projectId) => {
+    calls.touchedProjects.push(projectId);
+  };
+  auditRepository.createAuditLog = async (entry) => {
+    calls.audit.push(entry);
+  };
+  clearProjectCatalogServiceCache();
+
+  return {
+    calls,
+    restore() {
+      db.pool.connect = originals.connect;
+      projectRepository.findFixtureByIdForUser = originals.findFixtureByIdForUser;
+      projectRepository.upsertFixtureOutsourceRecord = originals.upsertFixtureOutsourceRecord;
+      projectRepository.touchProject = originals.touchProject;
+      auditRepository.createAuditLog = originals.createAuditLog;
+      clearProjectCatalogServiceCache();
+    },
+  };
+}
 function installAssignmentMocks(stageName, options = {}) {
   const db = require("../db");
   const projectRepository = require("../repositories/designProjectCatalogRepository");
@@ -461,6 +558,57 @@ test("terminal projects stay hidden even when marked modified", async () => {
   }), true);
 });
 
+test("bulk outsourcing deduplicates IDs, verifies project membership, and preserves single-fixture side effects", async () => {
+  const mocks = installBulkOutsourceMocks();
+
+  try {
+    const { bulkOutsourceFixturesForUser } = require("../services/projectCatalogService");
+    const result = await bulkOutsourceFixturesForUser(
+      { employee_id: "MGR-1", department_id: "design" },
+      {
+        projectId: "project-1",
+        fixtureIds: ["fixture-1", "fixture-1", "fixture-active", "fixture-other"],
+        outsourceData: {
+          department_id: "design",
+          supplier_name: " Supplier X ",
+          outsourced_stages: ["Concept", "3D"],
+        },
+      },
+    );
+
+    assert.equal(result.requested, 3);
+    assert.equal(result.succeeded, 1);
+    assert.equal(result.failed, 2);
+    assert.deepEqual(result.results, [
+      { fixtureId: "fixture-1", success: true },
+      {
+        fixtureId: "fixture-active",
+        success: false,
+        code: "FIXTURE_NOT_ELIGIBLE",
+        message: "Fixture is already outsourced",
+      },
+      {
+        fixtureId: "fixture-other",
+        success: false,
+        code: "FIXTURE_PROJECT_MISMATCH",
+        message: "Fixture does not belong to the selected project",
+      },
+    ]);
+    assert.deepEqual(mocks.calls.upsert, [{
+      fixtureId: "fixture-1",
+      supplierName: "Supplier X",
+      outsourcedStages: ["Concept", "3D"],
+      changedBy: "MGR-1",
+    }]);
+    assert.deepEqual(mocks.calls.touchedProjects, ["project-1"]);
+    assert.equal(mocks.calls.audit.length, 1);
+    assert.equal(mocks.calls.audit[0].actionType, "DESIGN_FIXTURE_OUTSOURCED");
+    assert.equal(mocks.calls.queries.filter((query) => query === "COMMIT").length, 1);
+    assert.equal(mocks.calls.queries.filter((query) => query === "ROLLBACK").length, 1);
+  } finally {
+    mocks.restore();
+  }
+});
 test("legacy outsourcing toggle defaults omitted stages to all outsourceable workflow stages", async () => {
   const mocks = installOutsourceMocks();
 

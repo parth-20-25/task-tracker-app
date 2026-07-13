@@ -586,6 +586,7 @@ function OperationalDashboard() {
             <ProjectFixtureOperationsGrid
               fixtures={fixtures}
               projectId={selectedProjectId}
+              projectLabel={selectedProject ? `${formatProjectNumber(selectedProject)} — ${selectedProject.project_name}` : selectedProjectId}
               departmentId={selectedProjectDepartmentId}
             />
           </div>

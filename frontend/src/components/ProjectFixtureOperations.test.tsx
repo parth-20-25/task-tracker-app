@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectFixtureOperationsGrid } from "@/components/ProjectFixtureOperations";
 import type { DesignFixtureOption } from "@/types";
 
+const bulkOutsourceFixtures = vi.fn();
 const createDesignTask = vi.fn();
 const fetchFixtureFullProgress = vi.fn();
 const fetchRecentOutsourceSuppliers = vi.fn();
+const outsourceFixture = vi.fn();
 const releaseFixtureWorkflow = vi.fn();
 const validateFixtureAssignment = vi.fn();
 const fetchTaskAssignmentUsers = vi.fn();
@@ -32,12 +34,13 @@ const mockAssignableUsers = [{ employee_id: "DES-1", name: "Designer One" }];
 
 vi.mock("@/api/designApi", () => ({
   bringFixtureInHouse: vi.fn(),
+  bulkOutsourceFixtures: (...args: unknown[]) => bulkOutsourceFixtures(...args),
   completeOutsourcedFixture: vi.fn(),
   createDesignTask: (...args: unknown[]) => createDesignTask(...args),
   fetchFixtureFullProgress: (...args: unknown[]) => fetchFixtureFullProgress(...args),
   fetchRecentOutsourceSuppliers: (...args: unknown[]) => fetchRecentOutsourceSuppliers(...args),
   manipulateFixtureStage: vi.fn(),
-  outsourceFixture: vi.fn(),
+  outsourceFixture: (...args: unknown[]) => outsourceFixture(...args),
   reopenFixtureStage: vi.fn(),
   releaseFixtureWorkflow: (...args: unknown[]) => releaseFixtureWorkflow(...args),
   validateFixtureAssignment: (...args: unknown[]) => validateFixtureAssignment(...args),
@@ -155,16 +158,19 @@ function fixtureProgress() {
 function renderGrid(fixtures: DesignFixtureOption[] = [
   fixture(),
   fixture({ fixture_id: "fixture-2", fixture_no: "PARC25016002", part_name: "Inner pipe & outer pipe & Ring insertion Robot fixture" }),
-]) {
+], projectId = "project-1") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ProjectFixtureOperationsGrid fixtures={fixtures} projectId="project-1" departmentId="design" />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <ProjectFixtureOperationsGrid fixtures={fixtures} projectId={projectId} departmentId="design" />
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  };
 }
 
 async function openAssignPanel() {
@@ -198,6 +204,13 @@ describe("ProjectFixtureOperations assignment expansion", () => {
     fetchTaskAssignmentUsers.mockResolvedValue([{ employee_id: "DES-1", name: "Designer One" }]);
     fetchVerificationTasks.mockResolvedValue([]);
     refreshTasks.mockResolvedValue(undefined);
+    outsourceFixture.mockResolvedValue(fixture({ is_outsourced: true, outsource_status: "outsourced" }));
+    bulkOutsourceFixtures.mockImplementation(async ({ fixtureIds }: { fixtureIds: string[] }) => ({
+      requested: fixtureIds.length,
+      succeeded: fixtureIds.length,
+      failed: 0,
+      results: fixtureIds.map((fixtureId) => ({ fixtureId, success: true })),
+    }));
     validateFixtureAssignment.mockResolvedValue({ canAssign: true, reason: null, currentStage: null });
     releaseFixtureWorkflow.mockResolvedValue({
       stage: null,
@@ -267,4 +280,149 @@ describe("ProjectFixtureOperations assignment expansion", () => {
     expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Workflow Completed.*0 fixtures/i })).toBeInTheDocument();
   });
-});
+
+  it("keeps individual Outsource on the shared dialog and existing API", async () => {
+    renderGrid([fixture()]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Outsource" }));
+
+    expect(screen.getByRole("dialog")).toHaveTextContent("Selected project:");
+    expect(screen.getByRole("dialog")).toHaveTextContent("project-1");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Fixtures: 1");
+    expect(screen.getByRole("dialog")).toHaveTextContent("fixture-1");
+
+    fireEvent.change(screen.getByLabelText("Supplier Name"), { target: { value: "Supplier X" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Concept" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Outsource" }));
+
+    await waitFor(() => expect(outsourceFixture).toHaveBeenCalledWith("fixture-1", {
+      department_id: "design",
+      supplier_name: "Supplier X",
+      outsourced_stages: ["Concept"],
+    }));
+    expect(bulkOutsourceFixtures).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("selects only outsource-eligible fixtures and keeps Assign All selection independent", async () => {
+    renderGrid([
+      fixture(),
+      fixture({ fixture_id: "fixture-2", fixture_no: "PARC25016002", part_name: "Fixture two" }),
+      fixture({
+        fixture_id: "fixture-active",
+        fixture_no: "PARC25016003",
+        part_name: "Already outsourced",
+        is_outsourced: true,
+        outsource_status: "outsourced",
+        outsourced_stages: ["Concept"],
+      }),
+    ]);
+
+    const firstOutsourceCheckbox = screen.getByRole("checkbox", { name: "Select PARC25016001 for outsourcing" });
+    fireEvent.click(firstOutsourceCheckbox);
+    expect(screen.getByRole("checkbox", { name: "Select all eligible fixtures" })).toHaveAttribute("data-state", "indeterminate");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all eligible fixtures" }));
+    expect(screen.getByRole("button", { name: "Outsource Selected (2)" })).toBeEnabled();
+    expect(screen.queryByRole("checkbox", { name: "Select PARC25016003 for outsourcing" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Assign All" }));
+    expect(screen.getByRole("checkbox", { name: "Select PARC25016001" })).toHaveAttribute("data-state", "unchecked");
+    expect(screen.getByRole("button", { name: "Outsource Selected (2)" })).toBeEnabled();
+  });
+
+  it("clears outsource selection when the selected project changes", async () => {
+    const view = renderGrid([fixture()]);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select PARC25016001 for outsourcing" }));
+    expect(screen.getByRole("button", { name: "Outsource Selected (1)" })).toBeEnabled();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <ProjectFixtureOperationsGrid
+          fixtures={[fixture({ fixture_id: "fixture-project-2", project_id: "project-2", fixture_no: "PARC25026001" })]}
+          projectId="project-2"
+          departmentId="design"
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Outsource Selected (0)" })).toBeDisabled());
+  });
+
+  it("shows partial failures and keeps failed eligible fixtures selected for retry", async () => {
+    bulkOutsourceFixtures.mockResolvedValueOnce({
+      requested: 2,
+      succeeded: 1,
+      failed: 1,
+      results: [
+        { fixtureId: "fixture-1", success: true },
+        {
+          fixtureId: "fixture-2",
+          success: false,
+          code: "OUTSOURCE_FAILED",
+          message: "Supplier integration unavailable",
+        },
+      ],
+    });
+    renderGrid([
+      fixture(),
+      fixture({ fixture_id: "fixture-2", fixture_no: "PARC25016002", part_name: "Fixture two" }),
+    ]);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all eligible fixtures" }));
+    fireEvent.click(screen.getByRole("button", { name: "Outsource Selected (2)" }));
+    fireEvent.change(screen.getByLabelText("Supplier Name"), { target: { value: "Supplier X" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Concept" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Outsource" }));
+
+    await waitFor(() => expect(bulkOutsourceFixtures).toHaveBeenCalledWith({
+      projectId: "project-1",
+      fixtureIds: ["fixture-1", "fixture-2"],
+      outsourceData: {
+        department_id: "design",
+        supplier_name: "Supplier X",
+        outsourced_stages: ["Concept"],
+      },
+    }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("fixture-2");
+    expect(screen.getByRole("alert")).toHaveTextContent("Supplier integration unavailable");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Fixtures: 1");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Outsource Selected (1)" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Select PARC25016001 for outsourcing" })).toHaveAttribute("data-state", "unchecked");
+    expect(screen.getByRole("checkbox", { name: "Select PARC25016002 for outsourcing" })).toHaveAttribute("data-state", "checked");
+  });
+
+  it("prevents duplicate bulk outsource submissions", async () => {
+    let resolveBulk: ((value: {
+      requested: number;
+      succeeded: number;
+      failed: number;
+      results: Array<{ fixtureId: string; success: boolean }>;
+    }) => void) | undefined;
+    bulkOutsourceFixtures.mockReturnValueOnce(new Promise((resolve) => {
+      resolveBulk = resolve;
+    }));
+    renderGrid([fixture()]);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select PARC25016001 for outsourcing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Outsource Selected (1)" }));
+    fireEvent.change(screen.getByLabelText("Supplier Name"), { target: { value: "Supplier X" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Concept" }));
+
+    const confirmButton = screen.getByRole("button", { name: "Confirm Outsource" });
+    fireEvent.click(confirmButton);
+    await waitFor(() => expect(confirmButton).toBeDisabled());
+    fireEvent.click(confirmButton);
+    expect(bulkOutsourceFixtures).toHaveBeenCalledTimes(1);
+
+    resolveBulk?.({
+      requested: 1,
+      succeeded: 1,
+      failed: 0,
+      results: [{ fixtureId: "fixture-1", success: true }],
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });});

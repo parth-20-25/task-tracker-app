@@ -24,6 +24,7 @@ const {
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
   bringOutsourcedFixtureInHouseForUser,
+  bulkOutsourceFixturesForUser,
   completeOutsourcedFixtureForUser,
   createDesignTaskFromProject,
   listDepartmentProjectsForUser,
@@ -122,6 +123,17 @@ async function handleOutsourceFixtureRequest(req, res) {
   return sendSuccess(res, fixture, 200);
 }
 
+async function handleBulkOutsourceFixturesRequest(req, res) {
+  const result = await bulkOutsourceFixturesForUser(req.user, {
+    ...req.body,
+    outsourceData: {
+      ...req.body?.outsourceData,
+      department_id: req.body?.outsourceData?.department_id ?? req.query.department_id,
+    },
+  });
+  return sendSuccess(res, result, 200);
+}
+
 async function handleBringFixtureInHouseRequest(req, res) {
   const fixtureId = resolveFixtureIdFromRequest(req);
   const fixture = await bringOutsourcedFixtureInHouseForUser(req.user, fixtureId, {
@@ -199,6 +211,13 @@ router.post(
   requireOperationalController,
   authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
   asyncHandler(handleOutsourceFixtureRequest),
+);
+
+router.post(
+  "/design/fixtures/outsource/bulk",
+  requireOperationalController,
+  authorize(PERMISSIONS.CHANGE_FIXTURE_STAGE),
+  asyncHandler(handleBulkOutsourceFixturesRequest),
 );
 
 router.post(

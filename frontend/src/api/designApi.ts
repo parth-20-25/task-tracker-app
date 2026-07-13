@@ -194,6 +194,20 @@ export interface OutsourceFixturePayload {
   department_id?: string;
 }
 
+export interface BulkOutsourceFixtureResult {
+  fixtureId: string;
+  success: boolean;
+  code?: string;
+  message?: string;
+}
+
+export interface BulkOutsourceFixturesResponse {
+  requested: number;
+  succeeded: number;
+  failed: number;
+  results: BulkOutsourceFixtureResult[];
+}
+
 export type ProjectReactivationReason =
   | "customer_modification"
   | "internal_modification"
@@ -283,6 +297,17 @@ export function updateFixtureOutsourcing(
 
 export function outsourceFixture(fixtureId: string, payload: OutsourceFixturePayload) {
   return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/outsource`, {
+    method: "POST",
+    body: JSON.stringify(stripUndefined({ ...payload })),
+  });
+}
+
+export function bulkOutsourceFixtures(payload: {
+  projectId: string;
+  fixtureIds: string[];
+  outsourceData: OutsourceFixturePayload;
+}) {
+  return apiRequest<BulkOutsourceFixturesResponse>("/design/fixtures/outsource/bulk", {
     method: "POST",
     body: JSON.stringify(stripUndefined(payload)),
   });

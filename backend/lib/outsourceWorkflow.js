@@ -263,28 +263,8 @@ function resolveOutsourceStageCompletion(progressRows = [], outsourcedStages = [
       ? { ...stage, status: "APPROVED" }
       : stage
   ));
-  const hasPendingDesignStage = rowsAfterCurrentCompletion.some((stage) => (
-    !isApprovedWorkflowStatus(stage?.status) && !isReleaseWorkflowStage(stage?.stage_name)
-  ));
   const stageNamesToApprove = [currentStage.stage_name].filter(Boolean);
-
-  if (!hasPendingDesignStage) {
-    rowsAfterCurrentCompletion
-      .filter((stage) => !isApprovedWorkflowStatus(stage?.status))
-      .filter((stage) => isReleaseWorkflowStage(stage?.stage_name))
-      .forEach((stage) => {
-        if (stage.stage_name) {
-          stageNamesToApprove.push(stage.stage_name);
-        }
-      });
-  }
-
-  const rowsAfterAutoApproval = rowsAfterCurrentCompletion.map((stage) => (
-    stageNamesToApprove.includes(stage.stage_name)
-      ? { ...stage, status: "APPROVED" }
-      : stage
-  ));
-  const remainingOutsourcedStageNames = rowsAfterAutoApproval
+  const remainingOutsourcedStageNames = rowsAfterCurrentCompletion
     .filter((stage) => !isApprovedWorkflowStatus(stage?.status))
     .filter((stage) => {
       const stageKey = normalizeWorkflowStageKey(stage?.stage_name);
@@ -292,7 +272,7 @@ function resolveOutsourceStageCompletion(progressRows = [], outsourcedStages = [
     })
     .map((stage) => stage.stage_name)
     .filter(Boolean);
-  const nextStage = getNextDesignWorkflowStage(rowsAfterAutoApproval, currentStage);
+  const nextStage = getNextDesignWorkflowStage(rowsAfterCurrentCompletion, currentStage);
 
   return {
     canComplete: true,
@@ -305,7 +285,7 @@ function resolveOutsourceStageCompletion(progressRows = [], outsourcedStages = [
     nextStage,
     nextStageName: nextStage?.stage_name || null,
     remainingOutsourcedStageNames,
-    workflowMarkedComplete: !hasPendingDesignStage,
+    workflowMarkedComplete: false,
   };
 }
 

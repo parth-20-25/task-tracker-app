@@ -549,7 +549,7 @@ async function getFixtureWithDepartment(fixtureId, fallbackDepartmentId = null, 
   return result.rows[0] || null;
 }
 
-async function getFixtureWorkflowContext(fixtureId, client = pool) {
+async function getFixtureWorkflowContext(fixtureId, client = pool, { lockProject = false } = {}) {
   const result = await client.query(
     `SELECT
        df.id AS fixture_id,
@@ -565,7 +565,8 @@ async function getFixtureWorkflowContext(fixtureId, client = pool) {
      FROM design.fixtures df
      JOIN design.projects dp ON dp.id = df.project_id
      WHERE df.id = $1
-     LIMIT 1`,
+     LIMIT 1
+     ${lockProject ? "FOR UPDATE OF dp" : ""}`,
     [fixtureId],
   );
 

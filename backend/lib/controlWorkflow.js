@@ -29,6 +29,16 @@ const WORKFLOW_STATUSES = {
   CANCELLED: "cancelled",
 };
 
+const CONTROL_PROJECT_STATUSES = {
+  UNASSIGNED: "unassigned",
+  ASSIGNED: "assigned",
+  ACTIVE: "active",
+  BLOCKED: "blocked",
+  READY_FOR_DISPATCH: "ready_for_dispatch",
+  DISPATCHED: "dispatched",
+  CANCELLED: "cancelled",
+};
+
 const STAGE_STATUSES = {
   LOCKED: "locked",
   NOT_STARTED: "not_started",
@@ -49,6 +59,7 @@ const SUBMISSION_STATUSES = {
 
 const REVISION_STATUSES = {
   NOT_STARTED: "not_started",
+  CHANGES_REQUIRED: "changes_required",
   IN_PROGRESS: "in_progress",
   SUBMITTED_FOR_APPROVAL: "submitted_for_approval",
   APPROVED: "approved",
@@ -125,6 +136,27 @@ function isTerminalStageStatus(status) {
   return TERMINAL_STAGE_STATUSES.has(status);
 }
 
+function isOpenRevisionStatus(status) {
+  return status && status !== REVISION_STATUSES.APPROVED;
+}
+
+function hasPendingSubmission(stages = []) {
+  return stages.some((stage) => (stage.submissions || []).some((submission) => submission.status === SUBMISSION_STATUSES.PENDING));
+}
+
+function hasOpenRevision(stages = []) {
+  return stages.some((stage) => (stage.revisions || []).some((revision) => isOpenRevisionStatus(revision.status)));
+}
+
+function isReadyForDispatch(stages = []) {
+  const requiredStages = stages.filter((stage) => stage?.is_required !== false);
+  return requiredStages.length > 0
+    && requiredStages.every((stage) => isTerminalStageStatus(stage.status))
+    && !requiredStages.some((stage) => stage.status === STAGE_STATUSES.BLOCKED)
+    && !hasPendingSubmission(requiredStages)
+    && !hasOpenRevision(requiredStages);
+}
+
 function calculateWorkflowProgress(stages = []) {
   const requiredStages = stages.filter((stage) => stage?.is_required !== false);
   const denominator = requiredStages.length || 0;
@@ -175,6 +207,7 @@ function assertOtherReasonHasManualRemarks(reason, manualReason) {
 module.exports = {
   CONTROL_DEPARTMENT_ID,
   CONTROL_DEPARTMENT_NAME,
+  CONTROL_PROJECT_STATUSES,
   CONTROL_DESIGN_STAGES,
   CONTROL_DESIGN_TEMPLATE_NAME,
   CONTROL_SUB_DEPARTMENTS,
@@ -188,10 +221,14 @@ module.exports = {
   canStartStage,
   canSubmitStage,
   createInitialStageRows,
+  hasOpenRevision,
+  hasPendingSubmission,
   isApprovedForProgress,
   isControlDepartmentUser,
   isControlDesignSubdivisionUser,
   isControlDesignWorkspaceUser,
+  isOpenRevisionStatus,
+  isReadyForDispatch,
   isTerminalStageStatus,
   nextUnlockedStage,
   normalizeControlKey,

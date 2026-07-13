@@ -58,6 +58,35 @@ test("legacy fixture upload route returns retired 410 instead of authorizing leg
   }
 });
 
+test("legacy fixture-level outsourcing mutations return 410 with the stage-scoped replacement", async () => {
+  const server = await listen(createApp());
+  const retiredRoutes = [
+    ["POST", "/api/design/fixtures/outsource"],
+    ["POST", "/api/design/fixtures/fixture-1/outsource"],
+    ["POST", "/api/design/fixtures/bring-in-house"],
+    ["POST", "/api/design/fixtures/fixture-1/bring-in-house"],
+    ["POST", "/api/design/fixtures/outsource-complete"],
+    ["POST", "/api/design/fixtures/fixture-1/outsource-complete"],
+    ["PATCH", "/api/design/fixtures/fixture-1/outsourcing"],
+  ];
+
+  try {
+    const { port } = server.address();
+    for (const [method, path] of retiredRoutes) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, { method });
+      const body = await response.json();
+
+      assert.equal(response.status, 410, `${method} ${path}`);
+      assert.equal(
+        body.message,
+        "Legacy fixture-level outsourcing mutations are retired. Use stage-scoped fixture outsourcing.",
+      );
+      assert.equal(body.details.replacement, "/api/design/fixtures/outsource-bulk");
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
 test("production server app retires legacy fixture upload before auth", async () => {
   const { app: productionApp } = require("../server");
   const server = await listen(productionApp);

@@ -171,7 +171,7 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     await screen.findByRole("option", { name: "P-001 — First Project" });
     const selects = await screen.findAllByRole("combobox");
     const projectSelect = selects[1];
-    const teamSelect = selects[3];
+
 
     fireEvent.change(projectSelect, { target: { value: "project-1" } });
 
@@ -190,16 +190,8 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     expect(await screen.findByRole("option", { name: "EMP-3D-2 - Bob — Free" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Alice/ })).not.toBeInTheDocument();
 
-    fireEvent.change(teamSelect, { target: { value: "2D" } });
-
-    expect(await screen.findByRole("option", { name: "EMP-2D-2 - Cara — Free" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Bob/ })).not.toBeInTheDocument();
-    expect(fetchTaskAssignmentUsers).toHaveBeenLastCalledWith({
-      task_type: "department_workflow",
-      department_id: "design",
-      project_id: "project-2",
-      stage_name: "2D Finish",
-    });
+    expect(screen.queryByRole("option", { name: "2D" })).not.toBeInTheDocument();
+    expect(screen.getByText("2D work now uses fixture Release Deliverables.")).toBeInTheDocument();
   });
 
   it("shows the required empty state and disables assignment when the scoped source is empty", async () => {

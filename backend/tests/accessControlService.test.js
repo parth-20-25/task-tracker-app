@@ -8,11 +8,12 @@ const {
   buildTaskAccessPredicate,
   canAccessTask,
   canAccessDepartment,
+  canViewProjectFixtures,
   hasPermission,
   isOperationalControllerRole,
   isProjectAuthorityRole,
 } = require("../services/accessControlService");
-const { requireExecutiveDashboardAccess } = require("../middleware/authorize");
+const { requireExecutiveDashboardAccess, requireProjectFixtureViewer } = require("../middleware/authorize");
 
 function makeUser(overrides = {}) {
   return {
@@ -235,6 +236,39 @@ test("operational controller roles include General Manager, Team Leader, and Co-
   assert.equal(isOperationalControllerRole(makeUser({
     role: { id: "employee", name: "Employee", hierarchy_level: 6, permissions: {} },
   })), false);
+});
+
+test("Design 2D workers with task visibility can read project fixtures without mutation authority", () => {
+  const design2DWorker = makeUser({
+    department_id: "design",
+    department: { id: "design", name: "Design" },
+    subdivision_id: "subdivision-2d",
+    subdivision: { id: "subdivision-2d", subdivision_name: "2D" },
+    permissions: [PERMISSIONS.VIEW_SELF_TASKS],
+    role: { id: "r6", name: "Designer", hierarchy_level: 6, permissions: {} },
+  });
+  const design2DViewer = {
+    ...design2DWorker,
+    permissions: [PERMISSIONS.VIEW_ALL_TASKS],
+  };
+  const design3DWorker = {
+    ...design2DWorker,
+    subdivision: { id: "subdivision-3d", subdivision_name: "3D" },
+  };
+
+  assert.equal(isOperationalControllerRole(design2DWorker), false);
+  assert.equal(canViewProjectFixtures(design2DWorker), true);
+  assert.equal(canViewProjectFixtures(design2DViewer), true);
+  assert.equal(canViewProjectFixtures({ ...design2DWorker, permissions: [] }), false);
+  assert.equal(canViewProjectFixtures(design3DWorker), false);
+
+  let nextError = "not-called";
+  requireProjectFixtureViewer({ user: design2DWorker }, null, (error) => { nextError = error; });
+  assert.equal(nextError, undefined);
+
+  nextError = "not-called";
+  requireProjectFixtureViewer({ user: design3DWorker }, null, (error) => { nextError = error; });
+  assert.equal(nextError.statusCode, 403);
 });
 
 test("SQL access predicate separates self and all task scopes", () => {

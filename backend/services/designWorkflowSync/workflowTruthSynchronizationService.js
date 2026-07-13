@@ -1,4 +1,5 @@
 const { AppError } = require("../../lib/AppError");
+const { PROJECT_STATUSES } = require("../../config/constants");
 const { collapseWhitespaceTrim } = require("../designIngestion/normalize");
 const { fixtureCanonicalKey, canonicalFixtureNo } = require("./canonicalIdentity");
 const { CATALOG_MEMBERSHIP_MODES } = require("./mergeContract");
@@ -129,7 +130,13 @@ async function synchronizeDesignWorkflowTruthFromIngestion(client, params) {
     throw new AppError(400, "Catalog full_replace mode requires at least one fixture in the ingestion batch.");
   }
 
-  await lockDesignProjectFixtures(projectId, client);
+  const lockedProject = await lockDesignProjectFixtures(projectId, client);
+  if (!lockedProject) {
+    throw new AppError(404, "Project not found");
+  }
+  if ((lockedProject.project_status || PROJECT_STATUSES.ACTIVE) !== PROJECT_STATUSES.ACTIVE) {
+    throw new AppError(409, "Completed projects must be reactivated before fixtures can be changed");
+  }
 
   const dbRows = await loadDesignFixturesForIngestionMerge(projectId, client);
   const byKey = new Map();

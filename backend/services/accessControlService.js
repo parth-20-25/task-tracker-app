@@ -100,6 +100,16 @@ function isOperationalControllerRole(user) {
     || OPERATIONAL_CONTROLLER_ROLE_IDS.has(roleIdKey);
 }
 
+function isDesign2DSubdivisionUser(user) {
+  const departmentIdKey = normalizeRoleKey(user?.department_id);
+  const departmentNameKey = normalizeRoleKey(user?.department?.name);
+  const subdivisionIdKey = normalizeRoleKey(user?.subdivision_id);
+  const subdivisionNameKey = normalizeRoleKey(user?.subdivision?.subdivision_name);
+
+  return (departmentIdKey === "design" || departmentNameKey === "design")
+    && (subdivisionIdKey === "2d" || subdivisionNameKey === "2d");
+}
+
 function getRolePermissionFlags(user) {
   const roleDetails = getRoleDetails(user);
 
@@ -135,6 +145,17 @@ function hasPermission(user, permission) {
   }
 
   return grantedPermissions.has(normalizedPermission);
+}
+
+function canViewProjectFixtures(user) {
+  return isOperationalControllerRole(user)
+    || (
+      isDesign2DSubdivisionUser(user)
+      && (
+        hasPermission(user, PERMISSIONS.VIEW_SELF_TASKS)
+        || hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)
+      )
+    );
 }
 
 async function HasPermission(userOrId, permission, client = pool) {
@@ -576,6 +597,7 @@ module.exports = {
   canAccessDepartment,
   canAccessTask,
   canAssignTo,
+  canViewProjectFixtures,
   canVerifyTask,
   filterUsersForScope,
   getRoleId,

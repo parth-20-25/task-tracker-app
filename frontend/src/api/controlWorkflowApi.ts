@@ -83,7 +83,8 @@ export interface ControlWorkflowRevision {
   description: string;
   due_date: string;
   priority?: string | null;
-  status: "not_started" | "in_progress" | "submitted_for_approval" | "approved";
+  affected_stage_ids: string[];
+  status: "not_started" | "changes_required" | "in_progress" | "submitted_for_approval" | "approved";
   raised_by: string;
   raised_by_name?: string | null;
   assigned_to: string;
@@ -119,7 +120,11 @@ export interface ControlOverrideHistory {
   workflow_id: string;
   unlocked_by: string;
   unlocked_by_name?: string | null;
+  action_type: "override_unlock" | "skip_by_override";
   reason: string;
+  supporting_document_path?: string | null;
+  approved_by?: string | null;
+  approved_by_name?: string | null;
   remarks: string;
   created_at: string;
 }
@@ -164,6 +169,10 @@ export interface ControlProjectWorkflow {
   customer_name?: string | null;
   project_status?: string | null;
   dispatch_status?: string | null;
+  dispatched_by?: string | null;
+  dispatched_by_name?: string | null;
+  dispatched_at?: string | null;
+  dispatch_remarks?: string | null;
   department_id: string;
   department_name?: string | null;
   sub_department_id: string;
@@ -192,6 +201,10 @@ export interface ControlDesignCoRecord {
   budget_amount: number | null;
   budget_currency: string;
   status: "active" | "cancelled";
+  lifecycle_status: string;
+  dispatched_by?: string | null;
+  dispatched_at?: string | null;
+  dispatch_remarks?: string | null;
   created_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -210,12 +223,43 @@ export interface ControlDesignProject extends ProjectDashboardSummary {
     | "assigned_by_name"
     | "assigned_at"
     | "current_stage_id"
+    | "dispatched_by"
+    | "dispatched_by_name"
+    | "dispatched_at"
+    | "dispatch_remarks"
     | "status"
     | "template_id"
     | "template_name"
     | "created_at"
     | "updated_at"
   > | null;
+}
+
+export interface ControlDesignCapabilities {
+  canViewWorkspace: boolean;
+  canViewAssignedProjects: boolean;
+  canViewAllProjects: boolean;
+  canCreateProject: boolean;
+  canEditProject: boolean;
+  canAssignProject: boolean;
+  canReassignProject: boolean;
+  canCancelProject: boolean;
+  canStartStage: boolean;
+  canSubmitStage: boolean;
+  canUpdatePath: boolean;
+  canReview: boolean;
+  canApprove: boolean;
+  canRequestChanges: boolean;
+  canRaiseRevision: boolean;
+  canExecuteRevision: boolean;
+  canReviewRevision: boolean;
+  canMarkPreCompleted: boolean;
+  canOverrideUnlock: boolean;
+  canSkipStage: boolean;
+  canMarkDispatched: boolean;
+  canReopenAfterDispatch: boolean;
+  canViewAudit: boolean;
+  canViewReports: boolean;
 }
 
 export interface ControlApprovalQueueItem extends ControlWorkflowSubmission {
@@ -241,13 +285,17 @@ export function fetchControlDesignProjects() {
   return apiRequest<ControlDesignProject[]>("/control/design/projects");
 }
 
+export function fetchControlDesignCapabilities() {
+  return apiRequest<ControlDesignCapabilities>("/control/design/capabilities");
+}
+
 export function fetchControlDesignAssignableUsers() {
   return apiRequest<User[]>("/control/design/assignees");
 }
 
 export function createControlDesignProject(payload: {
-  project_id: string;
-  project_name: string;
+  projectId: string;
+  projectName: string;
   customer: string;
   budget: string;
 }) {
@@ -268,10 +316,10 @@ export function createControlDesignCo(payload: {
   });
 }
 
-export function assignControlDesignProjectOwner(projectId: string, assignedUserId: string) {
+export function assignControlDesignProjectOwner(projectId: string, assignedUserId: string, reason?: string) {
   return apiRequest<ControlProjectWorkflow>(`/control/design/projects/${encodeURIComponent(projectId)}/assign`, {
     method: "POST",
-    body: JSON.stringify({ assigned_user_id: assignedUserId }),
+    body: JSON.stringify(stripUndefined({ assigned_user_id: assignedUserId, reason })),
   });
 }
 
@@ -305,10 +353,10 @@ export function createControlProjectWorkflow(payload: {
   });
 }
 
-export function reassignControlProjectWorkflowOwner(workflowId: string, assignedUserId: string) {
+export function reassignControlProjectWorkflowOwner(workflowId: string, assignedUserId: string, reason?: string) {
   return apiRequest<ControlProjectWorkflow>(`/control/workflows/${encodeURIComponent(workflowId)}/owner`, {
     method: "PATCH",
-    body: JSON.stringify({ assigned_user_id: assignedUserId }),
+    body: JSON.stringify(stripUndefined({ assigned_user_id: assignedUserId, reason })),
   });
 }
 
@@ -338,6 +386,7 @@ export function markControlWorkflowStageRevisionRequired(stageId: string, payloa
   due_date?: string;
   priority?: string;
   remarks?: string;
+  affected_stage_ids?: string[];
 }) {
   return apiRequest<ControlProjectWorkflow>(`/control/workflow-stages/${encodeURIComponent(stageId)}/revision-required`, {
     method: "POST",
@@ -352,6 +401,7 @@ export function raiseControlWorkflowRevision(stageId: string, payload: {
   due_date: string;
   priority?: string;
   remarks?: string;
+  affected_stage_ids?: string[];
 }) {
   return apiRequest<ControlProjectWorkflow>(`/control/workflow-stages/${encodeURIComponent(stageId)}/revisions`, {
     method: "POST",
@@ -389,6 +439,24 @@ export function overrideUnlockControlWorkflowStage(stageId: string, payload: {
   });
 }
 
+export function skipControlWorkflowStageByOverride(stageId: string, payload: {
+  reason: string;
+  supporting_document_path: string;
+  approved_by: string;
+  remarks: string;
+}) {
+  return apiRequest<ControlProjectWorkflow>(`/control/workflow-stages/${encodeURIComponent(stageId)}/skip-by-override`, {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function markControlWorkflowDispatched(workflowId: string, payload: { dispatch_date: string; remarks: string }) {
+  return apiRequest<ControlProjectWorkflow>(`/control/workflows/${encodeURIComponent(workflowId)}/dispatch`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
 export function startControlWorkflowRevision(revisionId: string) {
   return apiRequest<ControlProjectWorkflow>(`/control/workflow-revisions/${encodeURIComponent(revisionId)}/start`, { method: "POST" });
 }
@@ -407,6 +475,13 @@ export function approveControlWorkflowRevision(revisionId: string, payload: { re
   });
 }
 
+
+export function markControlWorkflowRevisionChangesRequired(revisionId: string, payload: { review_remarks: string }) {
+  return apiRequest<ControlProjectWorkflow>(`/control/workflow-revisions/${encodeURIComponent(revisionId)}/changes-required`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
 export function fetchControlPendingApprovals() {
   return apiRequest<ControlApprovalQueueItem[]>("/control/workflows/approvals/pending");
 }

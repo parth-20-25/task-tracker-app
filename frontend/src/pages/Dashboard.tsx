@@ -255,10 +255,16 @@ function OperationalDashboard() {
     staleTime: 60_000,
   });
 
-  const projectSummaries = projectSummaryQuery.data ?? [];
+  const projectSummaries = useMemo(
+    () => projectSummaryQuery.data ?? [],
+    [projectSummaryQuery.data],
+  );
   const selectedProject = projectSummaries.find((project) => project.project_id === selectedProjectId);
   const selectedProjectDepartmentId = selectedProject?.department_id || user?.department_id;
   const selectedProjectActive = selectedProject?.project_status === "active";
+  const selectedProjectTerminal = selectedProject?.project_status === "completed"
+    || selectedProject?.project_status === "released";
+  const selectedProjectFixturesVisible = selectedProjectActive || selectedProjectTerminal;
 
   useEffect(() => {
     if (!requestedProjectId || !canAccessProjectFixtures) {
@@ -272,8 +278,8 @@ function OperationalDashboard() {
 
   const fixtureQuery = useQuery({
     queryKey: ["dashboard", "fixtures", selectedProjectId, selectedProjectDepartmentId],
-    queryFn: () => fetchDesignFixtures(selectedProjectId, selectedProjectDepartmentId, { activeOnly: true }),
-    enabled: !!selectedProjectId && selectedProjectActive && canAccessProjectFixtures,
+    queryFn: () => fetchDesignFixtures(selectedProjectId, selectedProjectDepartmentId, { activeOnly: false }),
+    enabled: !!selectedProjectId && selectedProjectFixturesVisible && canAccessProjectFixtures,
     staleTime: 60_000,
   });
 
@@ -384,7 +390,10 @@ function OperationalDashboard() {
     pendingFixtures: projectSummaries.reduce((sum, project) => sum + project.pending_tasks, 0),
   };
 
-  const fixtures = fixtureQuery.data ?? [];
+  const fixtures = useMemo(
+    () => fixtureQuery.data ?? [],
+    [fixtureQuery.data],
+  );
 
   const fixtureAssignmentSummary = useMemo(() => {
     const assigned = fixtures.filter((fixture) => ["ASSIGNED", "IN_PROGRESS", "VERIFICATION"].includes(String(fixture.operational_state || ""))).length;
@@ -530,6 +539,38 @@ function OperationalDashboard() {
           </Select>
         </div>
 
+        {projectSummaryQuery.isError ? (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Projects could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>{projectSummaryQuery.error instanceof Error ? projectSummaryQuery.error.message : 'Please try again.'}</span>
+              <Button type="button" size="sm" variant="outline" onClick={() => projectSummaryQuery.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {selectedProjectTerminal ? (
+          <Alert className="border-emerald-200 bg-emerald-50 text-emerald-900">
+            <PackageCheck className="h-4 w-4" />
+            <AlertTitle>Read-only project fixtures</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>This project is {selectedProject?.project_status}. Fixture history remains visible, but changes require project reactivation.</span>
+              {canReactivateProject(selectedProject) ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={reactivateMutation.isPending}
+                  onClick={() => setReactivatingProject(selectedProject || null)}
+                >
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Reactivate / Reopen for Modification
+                </Button>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         {!selectedProjectId ? (
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground">
@@ -537,29 +578,25 @@ function OperationalDashboard() {
               <p className="text-sm">Select a project above to view fixture-level operational status.</p>
             </CardContent>
           </Card>
-        ) : selectedProject && !selectedProjectActive ? (
+        ) : selectedProject?.project_status === "on_hold" ? (
           <Card>
             <CardContent className="space-y-4 p-8 text-center text-muted-foreground">
               <p className="text-sm">
-                {selectedProject.project_status === "on_hold"
-                  ? "This project is on hold. Fixtures are hidden from active workflows until it is activated."
-                  : "This project is released or completed. Fixtures are hidden from active workflows."}
+                This project is on hold. Fixtures are hidden from active workflows until it is activated.
               </p>
-              {(selectedProject.project_status === "completed" || selectedProject.project_status === "released") && canReactivateProject(selectedProject) ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={reactivateMutation.isPending}
-                  onClick={() => setReactivatingProject(selectedProject)}
-                >
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Reactivate / Reopen for Modification
-                </Button>
-              ) : null}
             </CardContent>
           </Card>
         ) : fixtureQuery.isLoading ? (
           <TaskGridSkeleton count={4} />
+        ) : fixtureQuery.isError ? (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Fixtures could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>{fixtureQuery.error instanceof Error ? fixtureQuery.error.message : 'Please try again.'}</span>
+              <Button type="button" size="sm" variant="outline" onClick={() => fixtureQuery.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
         ) : fixtures.length === 0 ? (
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground">
@@ -587,6 +624,8 @@ function OperationalDashboard() {
               fixtures={fixtures}
               projectId={selectedProjectId}
               departmentId={selectedProjectDepartmentId}
+              readOnly={!selectedProjectActive}
+              projectLabel={selectedProject ? `${formatProjectNumber(selectedProject)} — ${selectedProject.project_name}` : selectedProjectId}
             />
           </div>
         )}

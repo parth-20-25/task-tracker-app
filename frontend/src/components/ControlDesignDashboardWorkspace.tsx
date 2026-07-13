@@ -22,10 +22,12 @@ import {
   assignControlDesignProjectOwner,
   createControlDesignProject,
   fetchControlDesignAssignableUsers,
+  fetchControlDesignCapabilities,
   fetchControlDesignProjects,
   fetchControlProjectWorkflow,
   fetchControlSubDepartments,
   fetchControlWorkflowTemplate,
+  type ControlDesignCapabilities,
   type ControlDesignProject,
   type ControlWorkflowStageStatus,
 } from "@/api/controlWorkflowApi";
@@ -40,7 +42,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
-import { PERMISSIONS, hasUserPermission } from "@/lib/permissions";
 import {
   buildControlDesignWorkflowDisplay,
   type ControlDesignDisplayStage,
@@ -48,8 +49,37 @@ import {
 } from "@/lib/controlDesignWorkflowDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { cn } from "@/lib/utils";
+import { ControlWorkflowSection } from "@/components/ControlWorkflowSection";
 
 const CONTROL_DESIGN_NAME = "Control Design";
+
+const EMPTY_CONTROL_DESIGN_CAPABILITIES: ControlDesignCapabilities = {
+  canViewWorkspace: false,
+  canViewAssignedProjects: false,
+  canViewAllProjects: false,
+  canCreateProject: false,
+  canEditProject: false,
+  canAssignProject: false,
+  canReassignProject: false,
+  canCancelProject: false,
+  canStartStage: false,
+  canSubmitStage: false,
+  canUpdatePath: false,
+  canReview: false,
+  canApprove: false,
+  canRequestChanges: false,
+  canRaiseRevision: false,
+  canExecuteRevision: false,
+  canReviewRevision: false,
+  canMarkPreCompleted: false,
+  canOverrideUnlock: false,
+  canSkipStage: false,
+  canMarkDispatched: false,
+  canReopenAfterDispatch: false,
+  canViewAudit: false,
+  canViewReports: false,
+};
+
 
 const emptyCreateForm = {
   project_id: "",
@@ -139,7 +169,7 @@ function formatBudget(project: ControlDesignProject) {
 
 function projectOptionLabel(project: ControlDesignProject) {
   const code = formatProjectNumber(project) || project.project_id;
-  return `${code} - ${project.project_name || "Unnamed project"}`;
+  return `${code} \u2014 ${project.project_name || "Unnamed project"}`;
 }
 
 function WorkflowStatusBadge({ status }: { status: ControlWorkflowStageStatus }) {
@@ -304,15 +334,11 @@ function ControlDesignLifecycleTree({ stages }: { stages: ControlDesignDisplaySt
 function ProjectSelector({
   projects,
   selectedProjectId,
-  canCreateProjects,
   onSelectProject,
-  onNewProject,
 }: {
   projects: ControlDesignProject[];
   selectedProjectId: string;
-  canCreateProjects: boolean;
   onSelectProject: (projectId: string) => void;
-  onNewProject: () => void;
 }) {
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
@@ -334,12 +360,6 @@ function ProjectSelector({
               </SelectContent>
             </Select>
           </div>
-          {canCreateProjects ? (
-            <Button type="button" onClick={onNewProject} className="sm:w-auto">
-              <Plus className="mr-2 h-4 w-4" />
-              New Project
-            </Button>
-          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -427,27 +447,48 @@ function validateCreateForm(form: typeof emptyCreateForm) {
   return errors;
 }
 
+function createProjectErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "Server error";
+  }
+
+  const status = "status" in error ? Number((error as { status?: unknown }).status) : 0;
+  if (status === 409) return "Duplicate Project ID";
+  if (status === 403) return "Permission denied";
+  if (status === 400 && /budget/i.test(error.message)) return "Invalid budget";
+  if (status === 400) return "Missing required field";
+  if (status >= 500) return "Server error";
+  return error.message || "Server error";
+}
+
 export function ControlDesignDashboardWorkspace() {
   const queryClient = useQueryClient();
-  const { user, access } = useAuth();
+  const { user } = useAuth();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [assignedUserId, setAssignedUserId] = useState("");
+  const [assignmentReason, setAssignmentReason] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [createErrors, setCreateErrors] = useState<Partial<Record<keyof typeof emptyCreateForm | "submit", string>>>({});
 
-  const canCreateProjects = access.canCreateControlDesignProjects
-    || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS);
-  const canAssignProjects = access.canAssignControlDesignProjects
-    || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS);
-  const canReassignProjects = access.canReassignControlDesignProjects
-    || hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS)
-    || canAssignProjects;
+  const capabilitiesQuery = useQuery({
+    queryKey: ["control-design", "capabilities"],
+    queryFn: fetchControlDesignCapabilities,
+    enabled: Boolean(user?.employee_id),
+    staleTime: 60_000,
+  });
+
+  const capabilities = capabilitiesQuery.data ?? EMPTY_CONTROL_DESIGN_CAPABILITIES;
+  const canViewWorkspace = capabilities.canViewWorkspace;
+  const canCreateProjects = capabilities.canCreateProject;
+  const canAssignProjects = capabilities.canAssignProject;
+  const canReassignProjects = capabilities.canReassignProject;
+  const canManageAssignment = canAssignProjects || canReassignProjects;
 
   const projectsQuery = useQuery({
     queryKey: ["control-design", "projects"],
     queryFn: fetchControlDesignProjects,
-    enabled: Boolean(user?.employee_id),
+    enabled: Boolean(user?.employee_id && canViewWorkspace),
     staleTime: 60_000,
   });
 
@@ -467,12 +508,13 @@ export function ControlDesignDashboardWorkspace() {
 
   useEffect(() => {
     setAssignedUserId(selectedProject?.workflow?.assigned_user_id || "");
+    setAssignmentReason("");
   }, [selectedProject?.project_id, selectedProject?.workflow?.assigned_user_id]);
 
   const controlSubDepartmentsQuery = useQuery({
     queryKey: ["control-workflow", "sub-departments"],
     queryFn: fetchControlSubDepartments,
-    enabled: Boolean(user?.employee_id),
+    enabled: Boolean(user?.employee_id && canViewWorkspace),
     staleTime: 5 * 60_000,
   });
 
@@ -485,28 +527,28 @@ export function ControlDesignDashboardWorkspace() {
   const templateQuery = useQuery({
     queryKey: ["control-workflow", "template", controlDesignSubDepartment?.id || "none"],
     queryFn: () => fetchControlWorkflowTemplate(controlDesignSubDepartment?.id || ""),
-    enabled: Boolean(controlDesignSubDepartment?.id),
+    enabled: Boolean(canViewWorkspace && controlDesignSubDepartment?.id),
     staleTime: 5 * 60_000,
   });
 
   const workflowQuery = useQuery({
     queryKey: ["control-workflow", "project", selectedProject?.project_id || "none", controlDesignSubDepartment?.id || "none"],
     queryFn: () => fetchControlProjectWorkflow(selectedProject?.project_id || "", controlDesignSubDepartment?.id || ""),
-    enabled: Boolean(selectedProject?.project_id && controlDesignSubDepartment?.id),
+    enabled: Boolean(canViewWorkspace && selectedProject?.project_id && controlDesignSubDepartment?.id),
     staleTime: 60_000,
   });
 
   const assigneesQuery = useQuery({
     queryKey: ["control-design", "assignees"],
     queryFn: fetchControlDesignAssignableUsers,
-    enabled: Boolean(user?.employee_id && canAssignProjects),
+    enabled: Boolean(user?.employee_id && canManageAssignment),
     staleTime: 60_000,
   });
 
   const createProjectMutation = useMutation({
     mutationFn: () => createControlDesignProject({
-      project_id: createForm.project_id.trim(),
-      project_name: createForm.project_name.trim(),
+      projectId: createForm.project_id.trim(),
+      projectName: createForm.project_name.trim(),
       customer: createForm.customer.trim(),
       budget: createForm.budget.trim(),
     }),
@@ -519,6 +561,7 @@ export function ControlDesignDashboardWorkspace() {
       setCreateForm(emptyCreateForm);
       setCreateErrors({});
       setCreateOpen(false);
+      setAssignmentReason("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["control-design", "projects"] }),
         queryClient.invalidateQueries({ queryKey: ["control-workflow", "project"] }),
@@ -528,13 +571,13 @@ export function ControlDesignDashboardWorkspace() {
     onError: (error) => {
       setCreateErrors((current) => ({
         ...current,
-        submit: error instanceof Error ? error.message : "Unable to create project.",
+        submit: createProjectErrorMessage(error),
       }));
     },
   });
 
   const assignmentMutation = useMutation({
-    mutationFn: () => assignControlDesignProjectOwner(selectedProject?.project_id || "", assignedUserId),
+    mutationFn: () => assignControlDesignProjectOwner(selectedProject?.project_id || "", assignedUserId, assignmentReason.trim() || undefined),
     onSuccess: async () => {
       toast({ title: "Control Design project assigned" });
       await Promise.all([
@@ -574,17 +617,41 @@ export function ControlDesignDashboardWorkspace() {
     createProjectMutation.mutate();
   };
 
-  const loading = projectsQuery.isLoading
-    || controlSubDepartmentsQuery.isLoading
-    || (Boolean(controlDesignSubDepartment?.id) && templateQuery.isLoading);
+  const loading = capabilitiesQuery.isLoading
+    || (canViewWorkspace && projectsQuery.isLoading)
+    || (canViewWorkspace && controlSubDepartmentsQuery.isLoading)
+    || (canViewWorkspace && Boolean(controlDesignSubDepartment?.id) && templateQuery.isLoading);
   const selectedOwner = workflowQuery.data?.assigned_user_id || selectedProject?.workflow?.assigned_user_id || "";
+  const assignmentReasonRequired = Boolean(selectedOwner && assignedUserId && assignedUserId !== selectedOwner);
   const assignmentDisabled = !selectedProject
     || !assignedUserId
     || assignmentMutation.isPending
-    || (Boolean(selectedOwner) && !canReassignProjects);
+    || (!selectedOwner && !canAssignProjects)
+    || (Boolean(selectedOwner) && !canReassignProjects)
+    || (assignmentReasonRequired && !assignmentReason.trim());
   const emptyMessage = canCreateProjects
     ? "No Control Design projects have been created yet."
     : "No Control Design projects are currently assigned to you.";
+
+  if (!capabilitiesQuery.isLoading && !canViewWorkspace) {
+    return (
+      <main className="space-y-4 p-4 md:p-6">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-normal text-slate-950">Control Design</h1>
+            <p className="text-sm text-slate-600">{user?.name || user?.employee_id || "Signed-in user"}</p>
+          </div>
+        </div>
+
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-500">
+            <LockKeyhole className="h-10 w-10 opacity-30" />
+            <p>You do not have Control Design workspace access.</p>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
 
   return (
     <main className="space-y-4 p-4 md:p-6">
@@ -593,15 +660,21 @@ export function ControlDesignDashboardWorkspace() {
           <h1 className="text-2xl font-semibold tracking-normal text-slate-950">Control Design</h1>
           <p className="text-sm text-slate-600">{user?.name || user?.employee_id || "Signed-in user"}</p>
         </div>
-        {loading ? <Loader2 className="h-5 w-5 animate-spin text-slate-500" /> : null}
+        <div className="flex items-center gap-2">
+          {loading ? <Loader2 className="h-5 w-5 animate-spin text-slate-500" /> : null}
+          {canCreateProjects ? (
+            <Button type="button" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Project
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <ProjectSelector
         projects={projects}
         selectedProjectId={selectedProjectId}
-        canCreateProjects={canCreateProjects}
         onSelectProject={setSelectedProjectId}
-        onNewProject={() => setCreateOpen(true)}
       />
 
       {projectsQuery.isError ? (
@@ -647,10 +720,10 @@ export function ControlDesignDashboardWorkspace() {
         <div className="space-y-4">
           <ControlDesignProjectSummaryCard project={selectedProject} display={display} />
 
-          <div className={cn("grid gap-4", canAssignProjects && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
+          <div className={cn("grid gap-4", canManageAssignment && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
             <ControlDesignLifecycleTree stages={display.stages} />
 
-            {canAssignProjects ? (
+            {canManageAssignment ? (
               <Card className="border-slate-200 bg-white shadow-sm">
                 <CardHeader className="p-4 pb-2">
                   <CardTitle className="text-lg font-semibold tracking-normal text-slate-950">Ownership</CardTitle>
@@ -673,6 +746,17 @@ export function ControlDesignDashboardWorkspace() {
                     </Select>
                   </div>
 
+                  {assignmentReasonRequired ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="control-design-reassignment-reason">Reassignment Reason</Label>
+                      <Input
+                        id="control-design-reassignment-reason"
+                        value={assignmentReason}
+                        onChange={(event) => setAssignmentReason(event.target.value)}
+                      />
+                    </div>
+                  ) : null}
+
                   <Button
                     type="button"
                     className="w-full"
@@ -686,6 +770,8 @@ export function ControlDesignDashboardWorkspace() {
               </Card>
             ) : null}
           </div>
+
+          <ControlWorkflowSection project={selectedProject} capabilities={capabilities} />
         </div>
       )}
 

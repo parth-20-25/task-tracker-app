@@ -5,7 +5,11 @@ const { resolveAccessibleDepartmentId } = require("../lib/departmentContext");
 const { PERMISSIONS } = require("../config/constants");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
-const { authorize, requireOperationalController } = require("../middleware/authorize");
+const {
+  authorize,
+  requireOperationalController,
+  requireProjectFixtureViewer,
+} = require("../middleware/authorize");
 const { HasPermission } = require("../services/accessControlService");
 const { findFixtureByIdForUser } = require("../repositories/designProjectCatalogRepository");
 const {
@@ -21,6 +25,14 @@ const {
   reopenFixtureStage,
   releaseFixtureWorkflow,
 } = require("../services/fixtureWorkflowService");
+const {
+  assignReleaseDeliverable,
+  getFixtureReleasePackageResponse,
+  resolveMimicApplicability,
+  reviewReleaseDeliverable,
+  startReleaseDeliverable,
+  submitReleaseDeliverable,
+} = require("../services/fixtureReleaseDeliverablesService");
 
 const router = express.Router();
 
@@ -31,6 +43,29 @@ async function ensureVisibleFixtureForWorkflow(user, fixtureId, departmentId) {
   if (!fixture) {
     throw new AppError(404, "Fixture not found");
   }
+}
+
+async function resolveVisibleReleaseFixture(req) {
+  const fixtureId = String(req.params.fixtureId || "").trim();
+  if (!fixtureId) {
+    throw new AppError(400, "fixtureId is required");
+  }
+
+  const departmentId = resolveAccessibleDepartmentId(
+    req.user,
+    req.body?.department_id || req.query.department_id,
+    "A department is required to access fixture release deliverables",
+  );
+  await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
+  return { fixtureId, departmentId };
+}
+
+function requireReleaseDeliverableId(req) {
+  const deliverableId = String(req.params.deliverableId || "").trim();
+  if (!deliverableId) {
+    throw new AppError(400, "deliverableId is required");
+  }
+  return deliverableId;
 }
 
 async function logChangeFixtureStageTrace(req, context) {
@@ -118,6 +153,81 @@ router.get(
     await ensureVisibleFixtureForWorkflow(req.user, fixtureId, departmentId);
     const result = await getFullProgressForFixture(fixtureId, departmentId);
     return sendSuccess(res, result);
+  }),
+);
+
+router.get(
+  "/workflows/fixtures/:fixtureId/release-package",
+  requireProjectFixtureViewer,
+  asyncHandler(async (req, res) => {
+    const { fixtureId, departmentId } = await resolveVisibleReleaseFixture(req);
+    const progress = await getFullProgressForFixture(fixtureId, departmentId);
+    const response = await getFixtureReleasePackageResponse(
+      req.user,
+      fixtureId,
+      progress.stages,
+    );
+    return sendSuccess(res, response);
+  }),
+);
+
+router.post(
+  "/workflows/fixtures/:fixtureId/release-deliverables/:deliverableId/assign",
+  requireProjectFixtureViewer,
+  asyncHandler(async (req, res) => {
+    const { fixtureId } = await resolveVisibleReleaseFixture(req);
+    const deliverableId = requireReleaseDeliverableId(req);
+    const releasePackage = await assignReleaseDeliverable(req.user, fixtureId, deliverableId, req.body);
+    return sendSuccess(res, { release_package: releasePackage });
+  }),
+);
+
+router.post(
+  "/workflows/fixtures/:fixtureId/release-deliverables/:deliverableId/start",
+  requireProjectFixtureViewer,
+  asyncHandler(async (req, res) => {
+    const { fixtureId } = await resolveVisibleReleaseFixture(req);
+    const deliverableId = requireReleaseDeliverableId(req);
+    const releasePackage = await startReleaseDeliverable(req.user, fixtureId, deliverableId);
+    return sendSuccess(res, { release_package: releasePackage });
+  }),
+);
+
+router.post(
+  "/workflows/fixtures/:fixtureId/release-deliverables/:deliverableId/submit",
+  requireProjectFixtureViewer,
+  asyncHandler(async (req, res) => {
+    const { fixtureId } = await resolveVisibleReleaseFixture(req);
+    const deliverableId = requireReleaseDeliverableId(req);
+    const releasePackage = await submitReleaseDeliverable(req.user, fixtureId, deliverableId, req.body);
+    return sendSuccess(res, { release_package: releasePackage });
+  }),
+);
+
+router.post(
+  "/workflows/fixtures/:fixtureId/release-deliverables/:deliverableId/review",
+  requireProjectFixtureViewer,
+  asyncHandler(async (req, res) => {
+    const { fixtureId } = await resolveVisibleReleaseFixture(req);
+    const deliverableId = requireReleaseDeliverableId(req);
+    const releasePackage = await reviewReleaseDeliverable(req.user, fixtureId, deliverableId, req.body);
+    return sendSuccess(res, { release_package: releasePackage });
+  }),
+);
+
+router.post(
+  "/workflows/fixtures/:fixtureId/release-deliverables/:deliverableId/applicability",
+  requireProjectFixtureViewer,
+  asyncHandler(async (req, res) => {
+    const { fixtureId } = await resolveVisibleReleaseFixture(req);
+    const deliverableId = requireReleaseDeliverableId(req);
+    const releasePackage = await resolveMimicApplicability(
+      req.user,
+      fixtureId,
+      deliverableId,
+      req.body,
+    );
+    return sendSuccess(res, { release_package: releasePackage });
   }),
 );
 

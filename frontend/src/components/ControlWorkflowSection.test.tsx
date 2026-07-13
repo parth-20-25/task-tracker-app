@@ -4,21 +4,25 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ControlWorkflowSection } from "@/components/ControlWorkflowSection";
-import type { ControlProjectWorkflow, ControlWorkflowRevision, ControlWorkflowStage } from "@/api/controlWorkflowApi";
+import type { ControlDesignCapabilities, ControlProjectWorkflow, ControlWorkflowRevision, ControlWorkflowStage } from "@/api/controlWorkflowApi";
 import type { ProjectDashboardSummary } from "@/types";
 
 const controlApi = vi.hoisted(() => ({
   approveControlWorkflowRevision: vi.fn(),
   approveControlWorkflowStage: vi.fn(),
+  fetchControlDesignAssignableUsers: vi.fn(),
   createControlProjectWorkflow: vi.fn(),
   fetchControlPendingApprovals: vi.fn(),
   fetchControlProjectWorkflow: vi.fn(),
   fetchControlRevisionQueue: vi.fn(),
   fetchControlSubDepartments: vi.fn(),
   fetchControlWorkflowTemplate: vi.fn(),
+  markControlWorkflowDispatched: vi.fn(),
+  markControlWorkflowRevisionChangesRequired: vi.fn(),
   markControlWorkflowStagePreCompleted: vi.fn(),
   markControlWorkflowStageRevisionRequired: vi.fn(),
   overrideUnlockControlWorkflowStage: vi.fn(),
+  skipControlWorkflowStageByOverride: vi.fn(),
   raiseControlWorkflowRevision: vi.fn(),
   reassignControlProjectWorkflowOwner: vi.fn(),
   startControlWorkflowRevision: vi.fn(),
@@ -28,14 +32,11 @@ const controlApi = vi.hoisted(() => ({
   updateControlWorkflowDocumentPath: vi.fn(),
 }));
 
-const taskApi = vi.hoisted(() => ({
-  fetchTaskAssignmentUsers: vi.fn(),
-}));
-
 let mockAuth: {
   access: Record<string, boolean>;
   user: Record<string, unknown>;
 };
+let sectionCapabilities: ControlDesignCapabilities;
 
 vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/controlWorkflowApi")>();
@@ -43,15 +44,19 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
     ...actual,
     approveControlWorkflowRevision: (...args: unknown[]) => controlApi.approveControlWorkflowRevision(...args),
     approveControlWorkflowStage: (...args: unknown[]) => controlApi.approveControlWorkflowStage(...args),
+    fetchControlDesignAssignableUsers: (...args: unknown[]) => controlApi.fetchControlDesignAssignableUsers(...args),
     createControlProjectWorkflow: (...args: unknown[]) => controlApi.createControlProjectWorkflow(...args),
     fetchControlPendingApprovals: (...args: unknown[]) => controlApi.fetchControlPendingApprovals(...args),
     fetchControlProjectWorkflow: (...args: unknown[]) => controlApi.fetchControlProjectWorkflow(...args),
     fetchControlRevisionQueue: (...args: unknown[]) => controlApi.fetchControlRevisionQueue(...args),
     fetchControlSubDepartments: (...args: unknown[]) => controlApi.fetchControlSubDepartments(...args),
     fetchControlWorkflowTemplate: (...args: unknown[]) => controlApi.fetchControlWorkflowTemplate(...args),
+    markControlWorkflowDispatched: (...args: unknown[]) => controlApi.markControlWorkflowDispatched(...args),
+    markControlWorkflowRevisionChangesRequired: (...args: unknown[]) => controlApi.markControlWorkflowRevisionChangesRequired(...args),
     markControlWorkflowStagePreCompleted: (...args: unknown[]) => controlApi.markControlWorkflowStagePreCompleted(...args),
     markControlWorkflowStageRevisionRequired: (...args: unknown[]) => controlApi.markControlWorkflowStageRevisionRequired(...args),
     overrideUnlockControlWorkflowStage: (...args: unknown[]) => controlApi.overrideUnlockControlWorkflowStage(...args),
+    skipControlWorkflowStageByOverride: (...args: unknown[]) => controlApi.skipControlWorkflowStageByOverride(...args),
     raiseControlWorkflowRevision: (...args: unknown[]) => controlApi.raiseControlWorkflowRevision(...args),
     reassignControlProjectWorkflowOwner: (...args: unknown[]) => controlApi.reassignControlProjectWorkflowOwner(...args),
     startControlWorkflowRevision: (...args: unknown[]) => controlApi.startControlWorkflowRevision(...args),
@@ -61,10 +66,6 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
     updateControlWorkflowDocumentPath: (...args: unknown[]) => controlApi.updateControlWorkflowDocumentPath(...args),
   };
 });
-
-vi.mock("@/api/taskApi", () => ({
-  fetchTaskAssignmentUsers: (...args: unknown[]) => taskApi.fetchTaskAssignmentUsers(...args),
-}));
 
 vi.mock("@/contexts/useAuth", () => ({
   useAuth: () => mockAuth,
@@ -121,6 +122,36 @@ vi.mock("@/components/ui/checkbox", () => ({
   ),
 }));
 
+function buildCapabilities(overrides: Partial<ControlDesignCapabilities> = {}): ControlDesignCapabilities {
+  return {
+    canViewWorkspace: true,
+    canViewAssignedProjects: true,
+    canViewAllProjects: false,
+    canCreateProject: false,
+    canEditProject: false,
+    canAssignProject: false,
+    canReassignProject: false,
+    canCancelProject: false,
+    canStartStage: true,
+    canSubmitStage: true,
+    canUpdatePath: true,
+    canReview: false,
+    canApprove: false,
+    canRequestChanges: false,
+    canRaiseRevision: false,
+    canExecuteRevision: true,
+    canReviewRevision: false,
+    canMarkPreCompleted: false,
+    canOverrideUnlock: false,
+    canSkipStage: false,
+    canMarkDispatched: false,
+    canReopenAfterDispatch: false,
+    canViewAudit: false,
+    canViewReports: false,
+    ...overrides,
+  };
+}
+
 const project = {
   project_id: "project-1",
   project_no: "PARC-001",
@@ -150,6 +181,7 @@ function revision(overrides: Partial<ControlWorkflowRevision> = {}): ControlWork
     description: "Update drawing references",
     due_date: "2026-07-10T10:00:00.000Z",
     priority: "medium",
+    affected_stage_ids: [],
     status: "not_started",
     raised_by: "EMP-LEAD",
     raised_by_name: "Lead User",
@@ -265,11 +297,13 @@ function workflow(): ControlProjectWorkflow {
 }
 
 function setOwnerAuth() {
+  sectionCapabilities = buildCapabilities();
   mockAuth = {
     access: {
       canAssignTasks: false,
       canApproveCompletedTasks: false,
       canChangeFixtureStage: false,
+      canAssignControlDesignProjects: false,
     },
     user: {
       employee_id: "EMP-OWNER",
@@ -282,11 +316,28 @@ function setOwnerAuth() {
 }
 
 function setLeaderAuth() {
+  sectionCapabilities = buildCapabilities({
+    canViewAllProjects: true,
+    canAssignProject: true,
+    canReassignProject: true,
+    canReview: true,
+    canApprove: true,
+    canRequestChanges: true,
+    canRaiseRevision: true,
+    canReviewRevision: true,
+    canMarkPreCompleted: true,
+    canOverrideUnlock: true,
+    canSkipStage: true,
+    canMarkDispatched: true,
+    canViewAudit: true,
+    canViewReports: true,
+  });
   mockAuth = {
     access: {
       canAssignTasks: true,
       canApproveCompletedTasks: true,
       canChangeFixtureStage: true,
+      canAssignControlDesignProjects: true,
     },
     user: {
       employee_id: "EMP-LEAD",
@@ -305,7 +356,7 @@ function renderSection() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <ControlWorkflowSection project={project} />
+      <ControlWorkflowSection project={project} capabilities={sectionCapabilities} />
     </QueryClientProvider>,
   );
 }
@@ -354,7 +405,7 @@ describe("ControlWorkflowSection", () => {
       },
     ]);
     controlApi.fetchControlRevisionQueue.mockResolvedValue([revision({ id: "revision-queue-1" })]);
-    taskApi.fetchTaskAssignmentUsers.mockResolvedValue([
+    controlApi.fetchControlDesignAssignableUsers.mockResolvedValue([
       {
         employee_id: "EMP-OWNER",
         name: "Owner User",
@@ -394,12 +445,7 @@ describe("ControlWorkflowSection", () => {
     renderSection();
 
     expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
-    await waitFor(() => expect(taskApi.fetchTaskAssignmentUsers).toHaveBeenCalledWith({
-      task_type: "department_workflow",
-      department_id: "control",
-      project_id: "project-1",
-      stage_name: "Control Design",
-    }));
+    await waitFor(() => expect(controlApi.fetchControlDesignAssignableUsers).toHaveBeenCalled());
 
     expect(screen.getByText("Pending Approvals")).toBeInTheDocument();
     expect(screen.getAllByText("Revision Required").length).toBeGreaterThan(0);
@@ -420,5 +466,17 @@ describe("ControlWorkflowSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getAllByRole("button", { name: /^Mark Pre-Completed$/i })[0]);
     expect(screen.getByRole("heading", { name: "Mark Pre-Completed" })).toBeInTheDocument();
+  }, 15000);
+
+  it("does not expose reviewer controls from generic fixture permissions alone", async () => {
+    setLeaderAuth();
+    sectionCapabilities = buildCapabilities({ canViewAllProjects: true });
+    renderSection();
+
+    expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Approve$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Raise Revision$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Override Unlock$/i })).not.toBeInTheDocument();
+    expect(controlApi.fetchControlPendingApprovals).not.toHaveBeenCalled();
   }, 15000);
 });

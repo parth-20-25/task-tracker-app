@@ -1,6 +1,7 @@
 const {
   CONTROL_DEPARTMENT_ID,
   CONTROL_DEPARTMENT_NAME,
+  CONTROL_PROJECT_STATUSES,
   CONTROL_DESIGN_STAGES,
   CONTROL_DESIGN_TEMPLATE_NAME,
   CONTROL_SUB_DEPARTMENTS,
@@ -105,7 +106,11 @@ async function ensureControlWorkflowSchema(client) {
       budget_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
       budget_currency TEXT NOT NULL DEFAULT 'INR',
       status TEXT NOT NULL DEFAULT 'active',
+      lifecycle_status TEXT NOT NULL DEFAULT 'unassigned',
       created_by VARCHAR(50) REFERENCES users(employee_id),
+      dispatched_by VARCHAR(50) REFERENCES users(employee_id),
+      dispatched_at TIMESTAMPTZ,
+      dispatch_remarks TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT project_control_records_budget_non_negative_check CHECK (budget_amount >= 0),
@@ -131,6 +136,20 @@ async function ensureControlWorkflowSchema(client) {
   `);
 
   await client.query(`
+    ALTER TABLE project_control_records
+    ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'unassigned',
+    ADD COLUMN IF NOT EXISTS dispatched_by VARCHAR(50) REFERENCES users(employee_id),
+    ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS dispatch_remarks TEXT
+  `);
+
+  await client.query(`
+    UPDATE project_control_records
+    SET lifecycle_status = COALESCE(NULLIF(lifecycle_status, ''), 'unassigned')
+    WHERE lifecycle_status IS NULL OR lifecycle_status = ''
+  `);
+
+  await client.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
@@ -143,6 +162,25 @@ async function ensureControlWorkflowSchema(client) {
         CHECK (budget_amount >= 0);
       END IF;
     END $$;
+  `);
+
+  await client.query(`
+    ALTER TABLE project_control_records
+    DROP CONSTRAINT IF EXISTS project_control_records_lifecycle_status_check
+  `);
+
+  await client.query(`
+    ALTER TABLE project_control_records
+    ADD CONSTRAINT project_control_records_lifecycle_status_check
+    CHECK (lifecycle_status IN (
+      '${CONTROL_PROJECT_STATUSES.UNASSIGNED}',
+      '${CONTROL_PROJECT_STATUSES.ASSIGNED}',
+      '${CONTROL_PROJECT_STATUSES.ACTIVE}',
+      '${CONTROL_PROJECT_STATUSES.BLOCKED}',
+      '${CONTROL_PROJECT_STATUSES.READY_FOR_DISPATCH}',
+      '${CONTROL_PROJECT_STATUSES.DISPATCHED}',
+      '${CONTROL_PROJECT_STATUSES.CANCELLED}'
+    ))
   `);
 
   await client.query(`
@@ -215,6 +253,7 @@ async function ensureControlWorkflowSchema(client) {
       description TEXT NOT NULL,
       due_date TIMESTAMPTZ NOT NULL,
       priority TEXT,
+      affected_stage_ids UUID[] NOT NULL DEFAULT '{}'::uuid[],
       status TEXT NOT NULL DEFAULT 'not_started',
       raised_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
       assigned_to VARCHAR(50) NOT NULL REFERENCES users(employee_id),
@@ -226,9 +265,25 @@ async function ensureControlWorkflowSchema(client) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT workflow_stage_revisions_status_check CHECK (
-        status IN ('not_started', 'in_progress', 'submitted_for_approval', 'approved')
+        status IN ('not_started', 'changes_required', 'in_progress', 'submitted_for_approval', 'approved')
       )
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_stage_revisions
+    ADD COLUMN IF NOT EXISTS affected_stage_ids UUID[] NOT NULL DEFAULT '{}'::uuid[]
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_stage_revisions
+    DROP CONSTRAINT IF EXISTS workflow_stage_revisions_status_check
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_stage_revisions
+    ADD CONSTRAINT workflow_stage_revisions_status_check
+    CHECK (status IN ('not_started', 'changes_required', 'in_progress', 'submitted_for_approval', 'approved'))
   `);
 
   await client.query(`
@@ -268,10 +323,70 @@ async function ensureControlWorkflowSchema(client) {
       workflow_stage_id UUID NOT NULL REFERENCES project_workflow_stages(id) ON DELETE CASCADE,
       workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,
       unlocked_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      action_type TEXT NOT NULL DEFAULT 'override_unlock',
       reason TEXT NOT NULL,
+      supporting_document_path TEXT,
+      approved_by VARCHAR(50) REFERENCES users(employee_id),
       remarks TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_unlock_overrides
+    ADD COLUMN IF NOT EXISTS action_type TEXT NOT NULL DEFAULT 'override_unlock',
+    ADD COLUMN IF NOT EXISTS supporting_document_path TEXT,
+    ADD COLUMN IF NOT EXISTS approved_by VARCHAR(50) REFERENCES users(employee_id)
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_unlock_overrides
+    DROP CONSTRAINT IF EXISTS workflow_unlock_overrides_action_type_check
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_unlock_overrides
+    ADD CONSTRAINT workflow_unlock_overrides_action_type_check
+    CHECK (action_type IN ('override_unlock', 'skip_by_override'))
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS workflow_assignment_history (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,
+      old_assigned_user_id VARCHAR(50) REFERENCES users(employee_id),
+      new_assigned_user_id VARCHAR(50) REFERENCES users(employee_id),
+      changed_by VARCHAR(50) REFERENCES users(employee_id),
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS control_workflow_notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id UUID REFERENCES project_workflows(id) ON DELETE CASCADE,
+      project_id UUID REFERENCES design.projects(id) ON DELETE CASCADE,
+      recipient_user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'unread',
+      idempotency_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT control_workflow_notifications_status_check CHECK (status IN ('unread', 'read', 'acknowledged'))
+    )
+  `);
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_control_workflow_notifications_idempotency
+    ON control_workflow_notifications (idempotency_key)
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_control_workflow_notifications_recipient_status
+    ON control_workflow_notifications (recipient_user_id, status, created_at DESC)
   `);
 
   await client.query(`
@@ -282,6 +397,12 @@ async function ensureControlWorkflowSchema(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_workflow_stage_submissions_pending
     ON workflow_stage_submissions (status, created_at)
+  `);
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_stage_submissions_one_pending
+    ON workflow_stage_submissions (workflow_stage_id)
+    WHERE status = 'pending'
   `);
 
   await client.query(`

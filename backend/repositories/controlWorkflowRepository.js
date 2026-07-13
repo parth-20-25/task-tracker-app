@@ -66,6 +66,10 @@ function mapWorkflow(row, stages = []) {
     customer_name: row.customer_name || null,
     project_status: row.project_status || null,
     dispatch_status: row.dispatch_status || null,
+    dispatched_by: row.dispatched_by || null,
+    dispatched_by_name: row.dispatched_by_name || null,
+    dispatched_at: row.dispatched_at || null,
+    dispatch_remarks: row.dispatch_remarks || null,
     department_id: row.department_id,
     department_name: row.department_name || null,
     sub_department_id: row.sub_department_id,
@@ -117,6 +121,7 @@ function mapRevision(row) {
     description: row.description,
     due_date: row.due_date,
     priority: row.priority || null,
+    affected_stage_ids: Array.isArray(row.affected_stage_ids) ? row.affected_stage_ids : [],
     status: row.status,
     raised_by: row.raised_by,
     raised_by_name: row.raised_by_name || null,
@@ -153,7 +158,11 @@ function mapOverride(row) {
     workflow_id: row.workflow_id,
     unlocked_by: row.unlocked_by,
     unlocked_by_name: row.unlocked_by_name || null,
+    action_type: row.action_type || "override_unlock",
     reason: row.reason,
+    supporting_document_path: row.supporting_document_path || null,
+    approved_by: row.approved_by || null,
+    approved_by_name: row.approved_by_name || null,
     remarks: row.remarks,
     created_at: row.created_at,
   };
@@ -281,7 +290,7 @@ async function insertProjectWorkflow(values, client = pool) {
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END, 'active', NOW(), NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $5::varchar IS NULL THEN NULL ELSE NOW() END, 'active', NOW(), NOW(), NOW())
       RETURNING id
     `,
     [
@@ -351,17 +360,36 @@ async function updateWorkflowStatus(workflowId, status, client = pool) {
   );
 }
 
-async function updateWorkflowOwner(workflowId, assignedUserId, assignedBy, client = pool) {
+async function updateWorkflowOwner(workflowId, assignedUserId, assignedBy, reason = null, client = pool) {
   await client.query(
     `
-      UPDATE project_workflows
-      SET assigned_user_id = $2,
-          assigned_by = $3,
-          assigned_at = NOW(),
-          updated_at = NOW()
-      WHERE id = $1
+      WITH previous AS (
+        SELECT id, assigned_user_id
+        FROM project_workflows
+        WHERE id = $1
+      ), updated AS (
+        UPDATE project_workflows
+        SET assigned_user_id = $2,
+            assigned_by = $3,
+            assigned_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, assigned_user_id
+      )
+      INSERT INTO workflow_assignment_history (
+        workflow_id,
+        old_assigned_user_id,
+        new_assigned_user_id,
+        changed_by,
+        reason,
+        created_at
+      )
+      SELECT updated.id, previous.assigned_user_id, updated.assigned_user_id, $3, $4, NOW()
+      FROM updated
+      JOIN previous ON previous.id = updated.id
+      WHERE previous.assigned_user_id IS DISTINCT FROM updated.assigned_user_id
     `,
-    [workflowId, assignedUserId, assignedBy || null],
+    [workflowId, assignedUserId, assignedBy || null, reason || null],
   );
 }
 
@@ -372,8 +400,16 @@ function workflowSelectSql(whereClause) {
       p.project_no,
       p.project_name,
       p.customer_name,
-      COALESCE(p.status, 'active') AS project_status,
-      NULL::text AS dispatch_status,
+      COALESCE(pcr.lifecycle_status, p.status, 'active') AS project_status,
+      CASE
+        WHEN pcr.lifecycle_status = 'dispatched' THEN 'Dispatched'
+        WHEN pcr.lifecycle_status = 'ready_for_dispatch' THEN 'Ready for Dispatch'
+        ELSE 'Not dispatched'
+      END AS dispatch_status,
+      pcr.dispatched_by,
+      dispatcher.name AS dispatched_by_name,
+      pcr.dispatched_at,
+      pcr.dispatch_remarks,
       d.name AS department_name,
       ds.subdivision_name AS sub_department_name,
       wt.template_name,
@@ -384,6 +420,11 @@ function workflowSelectSql(whereClause) {
     JOIN departments d ON d.id = pw.department_id
     JOIN department_subdivisions ds ON ds.id = pw.sub_department_id
     JOIN workflow_templates wt ON wt.id = pw.template_id
+    LEFT JOIN project_control_records pcr
+      ON pcr.project_id = pw.project_id
+     AND pcr.sub_department_id = pw.sub_department_id
+     AND pcr.status = 'active'
+    LEFT JOIN users dispatcher ON ${userIdentifierMatchSql("dispatcher", "pcr.dispatched_by")}
     LEFT JOIN users owner ON ${userIdentifierMatchSql("owner", "pw.assigned_user_id")}
     LEFT JOIN users assigner ON ${userIdentifierMatchSql("assigner", "pw.assigned_by")}
     ${whereClause}
@@ -398,7 +439,7 @@ async function findActiveProjectWorkflow({ projectId, subDepartmentId, templateI
         WHERE pw.project_id = $1
           AND pw.sub_department_id = $2
           AND ($3::uuid IS NULL OR pw.template_id = $3)
-          AND pw.status = 'active'
+          AND pw.status <> 'cancelled'
       `)}
       ORDER BY pw.created_at DESC
       LIMIT 1
@@ -573,6 +614,7 @@ async function insertRevision(values, client = pool) {
         description,
         due_date,
         priority,
+        affected_stage_ids,
         status,
         raised_by,
         assigned_to,
@@ -580,7 +622,7 @@ async function insertRevision(values, client = pool) {
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'not_started', $8, $9, $10, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid[], 'not_started', $9, $10, $11, NOW(), NOW())
       RETURNING id
     `,
     [
@@ -591,6 +633,7 @@ async function insertRevision(values, client = pool) {
       values.description,
       values.due_date,
       values.priority || null,
+      values.affected_stage_ids || [],
       values.raised_by,
       values.assigned_to,
       values.remarks || null,
@@ -678,17 +721,23 @@ async function insertOverride(values, client = pool) {
         workflow_stage_id,
         workflow_id,
         unlocked_by,
+        action_type,
         reason,
+        supporting_document_path,
+        approved_by,
         remarks,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
     `,
     [
       values.workflow_stage_id,
       values.workflow_id,
       values.unlocked_by,
+      values.action_type || "override_unlock",
       values.reason,
+      values.supporting_document_path || null,
+      values.approved_by || null,
       values.remarks,
     ],
   );
@@ -772,9 +821,10 @@ async function listDocumentHistoryForWorkflow(workflowId, client = pool) {
 async function listOverridesForWorkflow(workflowId, client = pool) {
   const result = await client.query(
     `
-      SELECT override_row.*, unlocker.name AS unlocked_by_name
+      SELECT override_row.*, unlocker.name AS unlocked_by_name, approver.name AS approved_by_name
       FROM workflow_unlock_overrides override_row
       LEFT JOIN users unlocker ON ${userIdentifierMatchSql("unlocker", "override_row.unlocked_by")}
+      LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "override_row.approved_by")}
       WHERE override_row.workflow_id = $1
       ORDER BY override_row.created_at DESC
     `,
@@ -873,7 +923,11 @@ function mapControlRecord(row) {
       : Number(row.control_record_budget_amount),
     budget_currency: row.control_record_budget_currency || "INR",
     status: row.control_record_status || "active",
+    lifecycle_status: row.control_record_lifecycle_status || "unassigned",
     created_by: row.control_record_created_by || null,
+    dispatched_by: row.control_record_dispatched_by || null,
+    dispatched_at: row.control_record_dispatched_at || null,
+    dispatch_remarks: row.control_record_dispatch_remarks || null,
     created_at: row.control_record_created_at || null,
     updated_at: row.control_record_updated_at || null,
   };
@@ -930,7 +984,11 @@ async function findProjectControlRecord(projectId, subDepartmentId, client = poo
         budget_amount AS control_record_budget_amount,
         budget_currency AS control_record_budget_currency,
         status AS control_record_status,
+        lifecycle_status AS control_record_lifecycle_status,
         created_by AS control_record_created_by,
+        dispatched_by AS control_record_dispatched_by,
+        dispatched_at AS control_record_dispatched_at,
+        dispatch_remarks AS control_record_dispatch_remarks,
         created_at AS control_record_created_at,
         updated_at AS control_record_updated_at
       FROM project_control_records
@@ -954,16 +1012,18 @@ async function upsertProjectControlRecord(values, client = pool) {
         budget_amount,
         budget_currency,
         status,
+        lifecycle_status,
         created_by,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, 'active', $5, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, 'active', COALESCE($5, 'unassigned'), $6, NOW(), NOW())
       ON CONFLICT (project_id, sub_department_id)
       WHERE status = 'active'
       DO UPDATE
       SET budget_amount = EXCLUDED.budget_amount,
           budget_currency = EXCLUDED.budget_currency,
+          lifecycle_status = COALESCE(NULLIF($5, ''), project_control_records.lifecycle_status),
           updated_at = NOW()
       RETURNING
         id AS control_record_id,
@@ -972,7 +1032,11 @@ async function upsertProjectControlRecord(values, client = pool) {
         budget_amount AS control_record_budget_amount,
         budget_currency AS control_record_budget_currency,
         status AS control_record_status,
+        lifecycle_status AS control_record_lifecycle_status,
         created_by AS control_record_created_by,
+        dispatched_by AS control_record_dispatched_by,
+        dispatched_at AS control_record_dispatched_at,
+        dispatch_remarks AS control_record_dispatch_remarks,
         created_at AS control_record_created_at,
         updated_at AS control_record_updated_at
     `,
@@ -981,6 +1045,7 @@ async function upsertProjectControlRecord(values, client = pool) {
       values.sub_department_id,
       values.budget_amount,
       values.budget_currency,
+      values.lifecycle_status || null,
       values.created_by || null,
     ],
   );
@@ -988,6 +1053,85 @@ async function upsertProjectControlRecord(values, client = pool) {
   return mapControlRecord(result.rows[0]);
 }
 
+async function updateProjectControlLifecycle(values, client = pool) {
+  const result = await client.query(
+    `
+      UPDATE project_control_records
+      SET lifecycle_status = $3,
+          dispatched_by = CASE WHEN $4::boolean THEN $5 ELSE dispatched_by END,
+          dispatched_at = CASE WHEN $4::boolean THEN COALESCE($6::timestamptz, NOW()) ELSE dispatched_at END,
+          dispatch_remarks = CASE WHEN $4::boolean THEN $7 ELSE dispatch_remarks END,
+          updated_at = NOW()
+      WHERE project_id = $1
+        AND sub_department_id = $2
+        AND status = 'active'
+      RETURNING
+        id AS control_record_id,
+        project_id,
+        sub_department_id AS control_record_sub_department_id,
+        budget_amount AS control_record_budget_amount,
+        budget_currency AS control_record_budget_currency,
+        status AS control_record_status,
+        lifecycle_status AS control_record_lifecycle_status,
+        created_by AS control_record_created_by,
+        dispatched_by AS control_record_dispatched_by,
+        dispatched_at AS control_record_dispatched_at,
+        dispatch_remarks AS control_record_dispatch_remarks,
+        created_at AS control_record_created_at,
+        updated_at AS control_record_updated_at
+    `,
+    [
+      values.project_id,
+      values.sub_department_id,
+      values.lifecycle_status,
+      values.mark_dispatched === true,
+      values.dispatched_by || null,
+      values.dispatched_at || null,
+      values.dispatch_remarks || null,
+    ],
+  );
+
+  return mapControlRecord(result.rows[0]);
+}
+
+async function insertControlNotification(values, client = pool) {
+  if (!values.recipient_user_id) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      INSERT INTO control_workflow_notifications (
+        workflow_id,
+        project_id,
+        recipient_user_id,
+        notification_type,
+        title,
+        message,
+        idempotency_key,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+      ON CONFLICT (idempotency_key) DO UPDATE
+      SET title = EXCLUDED.title,
+          message = EXCLUDED.message,
+          updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      values.workflow_id || null,
+      values.project_id || null,
+      values.recipient_user_id,
+      values.notification_type,
+      values.title,
+      values.message,
+      values.idempotency_key,
+    ],
+  );
+
+  return result.rows[0] || null;
+}
 function controlDesignProjectSelect(whereClause) {
   return `
     WITH active_workflow AS (
@@ -995,7 +1139,7 @@ function controlDesignProjectSelect(whereClause) {
         pw.*
       FROM project_workflows pw
       WHERE pw.sub_department_id = $1
-        AND pw.status = 'active'
+        AND pw.status <> 'cancelled'
       ORDER BY pw.project_id, pw.updated_at DESC, pw.created_at DESC
     )
     SELECT
@@ -1005,7 +1149,7 @@ function controlDesignProjectSelect(whereClause) {
       p.customer_name,
       p.department_id,
       d.name AS department_name,
-      COALESCE(p.status, 'active') AS project_status,
+      COALESCE(pcr.lifecycle_status, p.status, 'active') AS project_status,
       p.created_at,
       p.updated_at,
       pcr.id AS control_record_id,
@@ -1013,7 +1157,11 @@ function controlDesignProjectSelect(whereClause) {
       pcr.budget_amount AS control_record_budget_amount,
       pcr.budget_currency AS control_record_budget_currency,
       pcr.status AS control_record_status,
+      pcr.lifecycle_status AS control_record_lifecycle_status,
       pcr.created_by AS control_record_created_by,
+      pcr.dispatched_by AS control_record_dispatched_by,
+      pcr.dispatched_at AS control_record_dispatched_at,
+      pcr.dispatch_remarks AS control_record_dispatch_remarks,
       pcr.created_at AS control_record_created_at,
       pcr.updated_at AS control_record_updated_at,
       aw.id AS workflow_id,
@@ -1093,6 +1241,7 @@ module.exports = {
   listControlDesignProjects,
   insertDocumentHistory,
   insertOverride,
+  insertControlNotification,
   insertProjectWorkflow,
   insertProjectWorkflowStage,
   insertRevision,
@@ -1102,6 +1251,7 @@ module.exports = {
   listRevisionQueue,
   listTemplateStages,
   listWorkflowStages,
+  updateProjectControlLifecycle,
   updateRevision,
   updateStage,
   updateSubmissionReview,

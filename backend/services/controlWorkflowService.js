@@ -8,14 +8,16 @@ const {
   SUBMISSION_STATUSES,
   REVISION_STATUSES,
   CONTROL_DESIGN_TEMPLATE_NAME,
+  CONTROL_PROJECT_STATUSES,
   WORKFLOW_STATUSES,
   assertOtherReasonHasManualRemarks,
   calculateWorkflowProgress,
   canStartStage,
   canSubmitStage,
   createInitialStageRows,
+  hasOpenRevision,
   isControlDesignWorkspaceUser,
-  isTerminalStageStatus,
+  isReadyForDispatch,
   nextUnlockedStage,
   normalizeControlText,
   normalizeRevisionReason,
@@ -23,7 +25,6 @@ const {
 const {
   canAccessDepartment,
   canAccessUser,
-  canAssignTo,
   hasPermission,
 } = require("./accessControlService");
 const { findProjectByIdForDepartment, insertProjectByNumber } = require("../repositories/designProjectCatalogRepository");
@@ -63,30 +64,69 @@ function requireNonEmpty(value, fieldName) {
   return normalized;
 }
 
+function hasControlDesignPermission(actor, permission) {
+  return hasPermission(actor, permission);
+}
+
+function hasControlDesignWorkspacePermission(actor) {
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW);
+}
+
+function hasControlDesignViewAssignedPermission(actor) {
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED);
+}
+
 function hasControlDesignViewAllPermission(actor) {
-  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS)
-    || hasControlDesignCreatePermission(actor)
-    || hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS)
-    || hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS);
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL);
 }
 
 function hasControlDesignCreatePermission(actor) {
-  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS);
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE);
 }
 
 function hasControlDesignAssignPermission(actor) {
-  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS);
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN);
 }
 
 function hasControlDesignReassignPermission(actor) {
-  return hasPermission(actor, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS)
-    || hasControlDesignAssignPermission(actor);
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN);
 }
 
-function hasControlDesignReviewPermission(actor) {
-  return hasPermission(actor, PERMISSIONS.APPROVE_COMPLETED_TASK)
-    || hasPermission(actor, PERMISSIONS.CHANGE_FIXTURE_STAGE)
-    || hasControlDesignAssignPermission(actor);
+function hasControlDesignRevisionReviewPermission(actor) {
+  return hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW);
+}
+
+function buildControlDesignCapabilities(actor, subDepartmentId = null) {
+  const inScope = Boolean(getActorId(actor) && isControlDesignWorkspaceUser(actor, subDepartmentId));
+  const canViewWorkspace = inScope && hasControlDesignWorkspacePermission(actor);
+  const can = (permission) => canViewWorkspace && hasControlDesignPermission(actor, permission);
+
+  return {
+    canViewWorkspace,
+    canViewAssignedProjects: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED),
+    canViewAllProjects: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL),
+    canCreateProject: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE),
+    canEditProject: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_EDIT),
+    canAssignProject: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN),
+    canReassignProject: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN),
+    canCancelProject: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_CANCEL),
+    canStartStage: can(PERMISSIONS.CONTROL_DESIGN_STAGES_START),
+    canSubmitStage: can(PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT),
+    canUpdatePath: can(PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE),
+    canReview: can(PERMISSIONS.CONTROL_DESIGN_APPROVALS_REVIEW),
+    canApprove: can(PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE),
+    canRequestChanges: can(PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES),
+    canRaiseRevision: can(PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE),
+    canExecuteRevision: can(PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE),
+    canReviewRevision: can(PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW),
+    canMarkPreCompleted: can(PERMISSIONS.CONTROL_DESIGN_STAGES_MARK_PRE_COMPLETED),
+    canOverrideUnlock: can(PERMISSIONS.CONTROL_DESIGN_STAGES_OVERRIDE_UNLOCK),
+    canSkipStage: can(PERMISSIONS.CONTROL_DESIGN_STAGES_SKIP_OVERRIDE),
+    canMarkDispatched: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED),
+    canReopenAfterDispatch: can(PERMISSIONS.CONTROL_DESIGN_PROJECTS_REOPEN_AFTER_DISPATCH),
+    canViewAudit: can(PERMISSIONS.CONTROL_DESIGN_AUDIT_VIEW),
+    canViewReports: can(PERMISSIONS.CONTROL_DESIGN_REPORTS_VIEW),
+  };
 }
 
 function requireControlDesignWorkspaceAccess(actor, subDepartmentId = null) {
@@ -94,13 +134,20 @@ function requireControlDesignWorkspaceAccess(actor, subDepartmentId = null) {
   if (!isControlDesignWorkspaceUser(actor, subDepartmentId)) {
     throw new AppError(403, "Control Design workspace access requires Control department and Control Design subdivision membership");
   }
+  if (!hasControlDesignWorkspacePermission(actor)) {
+    throw new AppError(403, "Control Design workspace view permission is required");
+  }
+}
+
+function requireControlDesignPermission(actor, permission, message) {
+  if (!hasControlDesignPermission(actor, permission)) {
+    throw new AppError(403, message || `Control Design permission is required: ${permission}`);
+  }
 }
 
 function requireControlDesignCreatePermission(actor, subDepartmentId = null) {
   requireControlDesignWorkspaceAccess(actor, subDepartmentId);
-  if (!hasControlDesignCreatePermission(actor)) {
-    throw new AppError(403, "Control Design project creation permission is required");
-  }
+  requireControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE, "Control Design project creation permission is required");
 }
 
 function canCreateControlDesignProject(actor, subDepartmentId = null) {
@@ -121,18 +168,14 @@ async function resolveControlDesignSubDepartment(client = pool) {
   return subDepartment;
 }
 
-function isWorkflowOwner(actor, workflow) {
-  return Boolean(getActorId(actor) && workflow?.assigned_user_id === getActorId(actor));
+async function getControlDesignCapabilities(actor) {
+  requireActor(actor);
+  const controlDesign = await resolveControlDesignSubDepartment();
+  return buildControlDesignCapabilities(actor, controlDesign.id);
 }
 
-function canReviewWorkflow(actor, workflow) {
-  return Boolean(
-    actor
-    && workflow
-    && isControlDesignWorkspaceUser(actor, workflow.sub_department_id)
-    && hasControlDesignReviewPermission(actor)
-    && canAccessDepartment(actor, workflow.department_id)
-  );
+function isWorkflowOwner(actor, workflow) {
+  return Boolean(getActorId(actor) && workflow?.assigned_user_id === getActorId(actor));
 }
 
 function canReadWorkflow(actor, workflow) {
@@ -140,7 +183,7 @@ function canReadWorkflow(actor, workflow) {
     return false;
   }
 
-  return isWorkflowOwner(actor, workflow) || hasControlDesignViewAllPermission(actor);
+  return (isWorkflowOwner(actor, workflow) && hasControlDesignViewAssignedPermission(actor)) || hasControlDesignViewAllPermission(actor);
 }
 
 function requireWorkflowOwner(actor, workflow) {
@@ -150,20 +193,117 @@ function requireWorkflowOwner(actor, workflow) {
   }
 }
 
-function requireWorkflowReviewer(actor, workflow) {
+function requireWorkflowScopedPermission(actor, workflow, permission, message) {
   requireControlDesignWorkspaceAccess(actor, workflow?.sub_department_id || null);
-  if (!canReviewWorkflow(actor, workflow)) {
-    throw new AppError(403, "Control Design workflow review requires approval or assignment permission");
+  if (!canAccessDepartment(actor, workflow?.department_id || null)) {
+    throw new AppError(403, "Control Design workflow is outside your department scope");
   }
+  if (!canReadWorkflow(actor, workflow)) {
+    throw new AppError(404, "Control Design workflow not found");
+  }
+  requireControlDesignPermission(actor, permission, message);
 }
 
 function requireWorkflowReadable(actor, workflow) {
   requireControlDesignWorkspaceAccess(actor, workflow?.sub_department_id || null);
   if (!canReadWorkflow(actor, workflow)) {
-    throw new AppError(403, "You do not have access to this Control Design workflow");
+    throw new AppError(404, "Control Design workflow not found");
+  }
+}
+function requireWorkflowEditable(workflow) {
+  if (workflow?.status === WORKFLOW_STATUSES.COMPLETED || workflow?.project_status === CONTROL_PROJECT_STATUSES.DISPATCHED) {
+    throw new AppError(409, "Dispatched Control Design workflows cannot be edited");
   }
 }
 
+function requireReassignmentReason(workflow, assignedUserId, reason) {
+  if (workflow?.assigned_user_id && workflow.assigned_user_id !== assignedUserId && !normalizeControlText(reason)) {
+    throw new AppError(400, "Reassignment reason is required");
+  }
+}
+
+function requireNotSelfReview(actor, submittedBy) {
+  if (getActorId(actor) && submittedBy === getActorId(actor) && !hasPermission(actor, PERMISSIONS.SELF_APPROVE)) {
+    throw new AppError(403, "Self approval requires explicit override permission");
+  }
+}
+
+function deriveLifecycleStatus(workflow) {
+  if (!workflow) {
+    return CONTROL_PROJECT_STATUSES.UNASSIGNED;
+  }
+
+  if (workflow.project_status === CONTROL_PROJECT_STATUSES.DISPATCHED || workflow.status === WORKFLOW_STATUSES.COMPLETED) {
+    return CONTROL_PROJECT_STATUSES.DISPATCHED;
+  }
+
+  const stages = workflow.stages || [];
+  if (isReadyForDispatch(stages)) {
+    return CONTROL_PROJECT_STATUSES.READY_FOR_DISPATCH;
+  }
+
+  if (stages.some((stage) => stage.status === STAGE_STATUSES.BLOCKED)) {
+    return CONTROL_PROJECT_STATUSES.BLOCKED;
+  }
+
+  if (!workflow.assigned_user_id) {
+    return CONTROL_PROJECT_STATUSES.UNASSIGNED;
+  }
+
+  if (hasOpenRevision(stages) || stages.some((stage) => [
+    STAGE_STATUSES.IN_PROGRESS,
+    STAGE_STATUSES.SUBMITTED_FOR_APPROVAL,
+    STAGE_STATUSES.REVISION_REQUIRED,
+  ].includes(stage.status))) {
+    return CONTROL_PROJECT_STATUSES.ACTIVE;
+  }
+
+  return CONTROL_PROJECT_STATUSES.ASSIGNED;
+}
+
+async function syncWorkflowLifecycle(workflowId, client) {
+  const workflow = await loadWorkflowDetails(workflowId, client);
+  if (!workflow) {
+    return null;
+  }
+
+  const lifecycleStatus = deriveLifecycleStatus(workflow);
+  await controlWorkflowRepository.updateProjectControlLifecycle({
+    project_id: workflow.project_id,
+    sub_department_id: workflow.sub_department_id,
+    lifecycle_status: lifecycleStatus,
+  }, client);
+  return lifecycleStatus;
+}
+
+function normalizeAffectedStageIds(payload, workflow, sourceStageId) {
+  const incoming = Array.isArray(payload?.affected_stage_ids)
+    ? payload.affected_stage_ids
+    : Array.isArray(payload?.affectedStageIds)
+      ? payload.affectedStageIds
+      : [];
+  const validStageIds = new Set((workflow?.stages || []).map((stage) => stage.id));
+
+  return [...new Set(incoming.map(normalizeControlText))]
+    .filter((stageId) => stageId && stageId !== sourceStageId && validStageIds.has(stageId));
+}
+
+async function notifyWorkflow(workflow, values, client) {
+  const recipient = normalizeControlText(values.recipient_user_id);
+  if (!recipient || !workflow?.id) {
+    return null;
+  }
+
+  return controlWorkflowRepository.insertControlNotification({
+    workflow_id: workflow.id,
+    project_id: workflow.project_id,
+    recipient_user_id: recipient,
+    notification_type: values.notification_type,
+    title: values.title,
+    message: values.message,
+    idempotency_key: `${workflow.id}:${values.notification_type}:${values.idempotency_key}`,
+  }, client);
+}
 async function requireAssignableOwner(actor, assignedUserId, subDepartmentId, client) {
   const assignee = await findUserByEmployeeId(assignedUserId, client);
   if (!assignee || assignee.is_active === false) {
@@ -174,7 +314,7 @@ async function requireAssignableOwner(actor, assignedUserId, subDepartmentId, cl
     throw new AppError(400, "Assigned user must belong to the active Control Design subdivision");
   }
 
-  if (!canAssignTo(actor, assignee) && !(canAccessUser(actor, assignee) && actor.department_id === assignee.department_id)) {
+  if (actor.department_id !== assignee.department_id && !canAccessUser(actor, assignee)) {
     throw new AppError(403, "Assigned user is outside your assignable scope");
   }
 
@@ -223,11 +363,12 @@ async function refreshCurrentStage(workflowId, client) {
 
   if (!current) {
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflowId, null, client);
-    await controlWorkflowRepository.updateWorkflowStatus(workflowId, WORKFLOW_STATUSES.COMPLETED, client);
+    await syncWorkflowLifecycle(workflowId, client);
     return null;
   }
 
   await controlWorkflowRepository.updateWorkflowCurrentStage(workflowId, current.id, client);
+  await syncWorkflowLifecycle(workflowId, client);
   return current;
 }
 
@@ -296,6 +437,7 @@ async function insertWorkflowWithStages({ projectId, template, assignedUserId, a
   }
 
   await controlWorkflowRepository.updateWorkflowCurrentStage(workflowId, firstStageId, client);
+  await syncWorkflowLifecycle(workflowId, client);
   return loadWorkflowDetails(workflowId, client);
 }
 
@@ -305,9 +447,7 @@ async function createProjectWorkflow(actor, payload = {}) {
   const subDepartmentId = requireNonEmpty(payload.sub_department_id, "sub_department_id");
   const assignedUserId = requireNonEmpty(payload.assigned_user_id, "assigned_user_id");
   requireControlDesignWorkspaceAccess(actor, subDepartmentId);
-  if (!hasControlDesignAssignPermission(actor)) {
-    throw new AppError(403, "Control Design project assignment permission is required");
-  }
+  requireControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN, "Control Design project assignment permission is required");
 
   return withTransaction(async (client) => {
     const template = await ensureControlDesignTemplate(subDepartmentId, client, payload.template_id || null);
@@ -335,7 +475,7 @@ async function createProjectWorkflow(actor, payload = {}) {
   });
 }
 
-async function reassignProjectWorkflowOwner(actor, workflowId, assignedUserId) {
+async function reassignProjectWorkflowOwner(actor, workflowId, assignedUserId, reason = null) {
   requireActor(actor);
   return withTransaction(async (client) => {
     const workflow = await controlWorkflowRepository.findWorkflowById(requireNonEmpty(workflowId, "workflow_id"), client);
@@ -343,12 +483,31 @@ async function reassignProjectWorkflowOwner(actor, workflowId, assignedUserId) {
       throw new AppError(404, "Workflow not found");
     }
     requireControlDesignWorkspaceAccess(actor, workflow.sub_department_id);
-    if (!hasControlDesignReassignPermission(actor)) {
-      throw new AppError(403, "Control Design project reassignment permission is required");
+    requireControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN, "Control Design project reassignment permission is required");
+    const normalizedAssignedUserId = requireNonEmpty(assignedUserId, "assigned_user_id");
+    requireWorkflowEditable(workflow);
+    requireReassignmentReason(workflow, normalizedAssignedUserId, reason);
+    await requireAssignableOwner(actor, normalizedAssignedUserId, workflow.sub_department_id, client);
+    await controlWorkflowRepository.updateWorkflowOwner(workflow.id, normalizedAssignedUserId, getActorId(actor), reason, client);
+    await syncWorkflowLifecycle(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: normalizedAssignedUserId,
+      notification_type: "CONTROL_PROJECT_REASSIGNED",
+      title: "Control Design project reassigned",
+      message: `${updated.project_no || updated.project_id} has been assigned to you.`,
+      idempotency_key: `reassigned:${normalizedAssignedUserId}:${updated.assigned_at || Date.now()}`,
+    }, client);
+    if (workflow.assigned_user_id && workflow.assigned_user_id !== normalizedAssignedUserId) {
+      await notifyWorkflow(updated, {
+        recipient_user_id: workflow.assigned_user_id,
+        notification_type: "CONTROL_PROJECT_REASSIGNED_FROM_YOU",
+        title: "Control Design project reassigned",
+        message: `${updated.project_no || updated.project_id} was reassigned from you.`,
+        idempotency_key: `reassigned-from:${workflow.assigned_user_id}:${updated.assigned_at || Date.now()}`,
+      }, client);
     }
-    await requireAssignableOwner(actor, requireNonEmpty(assignedUserId, "assigned_user_id"), workflow.sub_department_id, client);
-    await controlWorkflowRepository.updateWorkflowOwner(workflow.id, assignedUserId, getActorId(actor), client);
-    return loadWorkflowDetails(workflow.id, client);
+    return updated;
   });
 }
 
@@ -374,6 +533,9 @@ async function getProjectWorkflow(actor, payload = {}) {
 async function listControlDesignProjects(actor) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
+  if (!hasControlDesignViewAllPermission(actor) && !hasControlDesignViewAssignedPermission(actor)) {
+    throw new AppError(403, "Control Design project visibility permission is required");
+  }
   return controlWorkflowRepository.listControlDesignProjects({
     subDepartmentId: controlDesign.id,
     assignedUserId: hasControlDesignViewAllPermission(actor) ? null : getActorId(actor),
@@ -446,6 +608,7 @@ async function createControlDesignProject(actor, payload = {}) {
       budget_amount: normalized.budget_amount,
       budget_currency: "INR",
       created_by: getActorId(actor),
+      lifecycle_status: CONTROL_PROJECT_STATUSES.UNASSIGNED,
     }, client);
 
     const existing = await controlWorkflowRepository.findActiveProjectWorkflow({
@@ -470,9 +633,7 @@ async function createControlDesignProject(actor, payload = {}) {
 async function createControlDesignCo(actor, payload = {}) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  if (!hasControlDesignAssignPermission(actor)) {
-    throw new AppError(403, "Control Design CO creation requires assignment permission");
-  }
+  requireControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_EDIT, "Control Design project edit permission is required");
 
   const projectId = requireNonEmpty(payload.project_id, "project_id");
   const budgetAmount = normalizeBudgetAmount(payload.budget_amount);
@@ -497,7 +658,7 @@ async function createControlDesignCo(actor, payload = {}) {
 async function listControlDesignAssignableUsers(actor) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  if (!hasControlDesignAssignPermission(actor)) {
+  if (!hasControlDesignAssignPermission(actor) && !hasControlDesignReassignPermission(actor)) {
     throw new AppError(403, "Control Design assignment permission is required");
   }
 
@@ -506,17 +667,14 @@ async function listControlDesignAssignableUsers(actor) {
     .filter((candidate) => (
       candidate?.is_active !== false
       && isControlDesignWorkspaceUser(candidate, controlDesign.id)
-      && (canAssignTo(actor, candidate) || (canAccessUser(actor, candidate) && actor.department_id === candidate.department_id))
+      && (actor.department_id === candidate.department_id || canAccessUser(actor, candidate))
     ))
     .sort((left, right) => String(left.name || left.employee_id).localeCompare(String(right.name || right.employee_id)));
 }
 
-async function assignControlDesignProjectOwner(actor, projectId, assignedUserId) {
+async function assignControlDesignProjectOwner(actor, projectId, assignedUserId, reason = null) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  if (!hasControlDesignAssignPermission(actor)) {
-    throw new AppError(403, "Control Design project assignment permission is required");
-  }
 
   const normalizedProjectId = requireNonEmpty(projectId, "project_id");
   const normalizedAssignedUserId = requireNonEmpty(assignedUserId, "assigned_user_id");
@@ -528,7 +686,6 @@ async function assignControlDesignProjectOwner(actor, projectId, assignedUserId)
       throw new AppError(404, "Control Design project not found");
     }
 
-    await requireAssignableOwner(actor, normalizedAssignedUserId, controlDesign.id, client);
     const existing = await controlWorkflowRepository.findActiveProjectWorkflow({
       projectId: normalizedProjectId,
       subDepartmentId: controlDesign.id,
@@ -539,23 +696,56 @@ async function assignControlDesignProjectOwner(actor, projectId, assignedUserId)
       if (!hasControlDesignReassignPermission(actor)) {
         throw new AppError(403, "Control Design project reassignment permission is required");
       }
-      await controlWorkflowRepository.updateWorkflowOwner(existing.id, normalizedAssignedUserId, getActorId(actor), client);
-      return loadWorkflowDetails(existing.id, client);
+      requireWorkflowEditable(existing);
+      requireReassignmentReason(existing, normalizedAssignedUserId, reason);
+      await requireAssignableOwner(actor, normalizedAssignedUserId, controlDesign.id, client);
+      await controlWorkflowRepository.updateWorkflowOwner(existing.id, normalizedAssignedUserId, getActorId(actor), reason, client);
+      await syncWorkflowLifecycle(existing.id, client);
+      const updated = await loadWorkflowDetails(existing.id, client);
+      await notifyWorkflow(updated, {
+        recipient_user_id: normalizedAssignedUserId,
+        notification_type: existing.assigned_user_id ? "CONTROL_PROJECT_REASSIGNED" : "CONTROL_PROJECT_ASSIGNED",
+        title: "Control Design project assigned",
+        message: `${updated.project_no || updated.project_id} has been assigned to you.`,
+        idempotency_key: `assigned:${normalizedAssignedUserId}:${updated.assigned_at || Date.now()}`,
+      }, client);
+      if (existing.assigned_user_id && existing.assigned_user_id !== normalizedAssignedUserId) {
+        await notifyWorkflow(updated, {
+          recipient_user_id: existing.assigned_user_id,
+          notification_type: "CONTROL_PROJECT_REASSIGNED_FROM_YOU",
+          title: "Control Design project reassigned",
+          message: `${updated.project_no || updated.project_id} was reassigned from you.`,
+          idempotency_key: `reassigned-from:${existing.assigned_user_id}:${updated.assigned_at || Date.now()}`,
+        }, client);
+      }
+      return updated;
     }
 
-    return insertWorkflowWithStages({
+    requireControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN, "Control Design project assignment permission is required");
+    await requireAssignableOwner(actor, normalizedAssignedUserId, controlDesign.id, client);
+    const workflow = await insertWorkflowWithStages({
       projectId: normalizedProjectId,
       template,
       assignedUserId: normalizedAssignedUserId,
       assignedBy: getActorId(actor),
     }, client);
+    await notifyWorkflow(workflow, {
+      recipient_user_id: normalizedAssignedUserId,
+      notification_type: "CONTROL_PROJECT_ASSIGNED",
+      title: "Control Design project assigned",
+      message: `${workflow.project_no || workflow.project_id} has been assigned to you.`,
+      idempotency_key: `assigned:${normalizedAssignedUserId}:${workflow.assigned_at || Date.now()}`,
+    }, client);
+    return workflow;
   });
 }
 async function startStage(actor, stageId) {
   requireActor(actor);
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_STAGES_START, "Control Design stage start permission is required");
     requireWorkflowOwner(actor, workflow);
+    requireWorkflowEditable(workflow);
     if (!canStartStage(stage)) {
       throw new AppError(409, `Stage cannot be started from status ${stage.status}`);
     }
@@ -565,6 +755,7 @@ async function startStage(actor, stageId) {
       touch_started_at: true,
     }, client);
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
+    await syncWorkflowLifecycle(workflow.id, client);
     return loadWorkflowDetails(workflow.id, client);
   });
 }
@@ -574,7 +765,9 @@ async function updateDocumentPath(actor, stageId, payload = {}) {
   const newPath = requireNonEmpty(payload.document_path, "document_path");
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE, "Control Design path update permission is required");
     requireWorkflowOwner(actor, workflow);
+    requireWorkflowEditable(workflow);
 
     if (stage.current_document_path !== newPath) {
       await controlWorkflowRepository.insertDocumentHistory({
@@ -590,6 +783,7 @@ async function updateDocumentPath(actor, stageId, payload = {}) {
       current_document_path: newPath,
       remarks: payload.remarks || stage.remarks || null,
     }, client);
+    await syncWorkflowLifecycle(workflow.id, client);
     return loadWorkflowDetails(workflow.id, client);
   });
 }
@@ -599,9 +793,14 @@ async function submitStageForApproval(actor, stageId, payload = {}) {
   const submittedDocumentPath = requireNonEmpty(payload.submitted_document_path, "submitted_document_path");
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT, "Control Design stage submit permission is required");
     requireWorkflowOwner(actor, workflow);
+    requireWorkflowEditable(workflow);
     if (!canSubmitStage(stage)) {
       throw new AppError(409, `Stage cannot be submitted from status ${stage.status}`);
+    }
+    if (await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client)) {
+      throw new AppError(409, "A pending submission already exists for this stage");
     }
 
     if (stage.current_document_path !== submittedDocumentPath) {
@@ -620,12 +819,20 @@ async function submitStageForApproval(actor, stageId, payload = {}) {
       touch_submitted_at: true,
       remarks: payload.remarks || null,
     }, client);
-    await controlWorkflowRepository.insertSubmission({
+    const submissionId = await controlWorkflowRepository.insertSubmission({
       workflow_stage_id: stage.id,
       workflow_id: workflow.id,
       submitted_by: getActorId(actor),
       submitted_document_path: submittedDocumentPath,
       remarks: payload.remarks || null,
+    }, client);
+    await syncWorkflowLifecycle(workflow.id, client);
+    await notifyWorkflow(workflow, {
+      recipient_user_id: workflow.assigned_by,
+      notification_type: "CONTROL_STAGE_SUBMITTED",
+      title: "Control Design stage submitted",
+      message: `${stage.stage_name} was submitted for ${workflow.project_no || workflow.project_id}.`,
+      idempotency_key: `stage-submitted:${stage.id}:${submissionId}`,
     }, client);
     return loadWorkflowDetails(workflow.id, client);
   });
@@ -635,11 +842,13 @@ async function approveStageSubmission(actor, stageId, payload = {}) {
   requireActor(actor);
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
-    requireWorkflowReviewer(actor, workflow);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE, "Control Design approval permission is required");
+    requireWorkflowEditable(workflow);
     const submission = await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client);
     if (!submission) {
       throw new AppError(409, "No pending submission exists for this stage");
     }
+    requireNotSelfReview(actor, submission.submitted_by);
 
     await controlWorkflowRepository.updateSubmissionReview(submission.id, {
       status: SUBMISSION_STATUSES.APPROVED,
@@ -653,39 +862,46 @@ async function approveStageSubmission(actor, stageId, payload = {}) {
       remarks: payload.review_remarks || stage.remarks || null,
     }, client);
     await refreshCurrentStage(workflow.id, client);
-    return loadWorkflowDetails(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_STAGE_APPROVED",
+      title: "Control Design stage approved",
+      message: `${stage.stage_name} was approved for ${updated.project_no || updated.project_id}.`,
+      idempotency_key: `stage-approved:${stage.id}:${submission.id}`,
+    }, client);
+    return updated;
   });
 }
 
 async function markStageRevisionRequired(actor, stageId, payload = {}) {
   requireActor(actor);
-  const remarks = requireNonEmpty(payload.review_remarks || payload.description || payload.remarks, "review_remarks");
-  const shouldCreateRevision = Boolean(payload.description || payload.due_date || payload.revision_reason);
-  let revisionPayload = null;
-
-  if (shouldCreateRevision) {
-    const reason = normalizeRevisionReason(payload.revision_reason || "Internal Correction");
-    if (!reason) {
-      throw new AppError(400, "revision_reason is invalid");
-    }
-    assertOtherReasonHasManualRemarks(reason, payload.manual_reason);
-    revisionPayload = {
-      revision_reason: reason,
-      manual_reason: payload.manual_reason || null,
-      description: requireNonEmpty(payload.description || remarks, "description"),
-      due_date: requireNonEmpty(payload.due_date, "due_date"),
-      priority: payload.priority || null,
-      remarks: payload.remarks || null,
-    };
+  const requiredChanges = requireNonEmpty(payload.description || payload.required_changes, "required_changes");
+  const dueDate = requireNonEmpty(payload.due_date, "due_date");
+  const remarks = requireNonEmpty(payload.review_remarks || payload.remarks, "review_remarks");
+  const reason = normalizeRevisionReason(payload.revision_reason || "Internal Correction");
+  if (!reason) {
+    throw new AppError(400, "revision_reason is invalid");
   }
+  assertOtherReasonHasManualRemarks(reason, payload.manual_reason);
+  const revisionPayload = {
+    revision_reason: reason,
+    manual_reason: payload.manual_reason || null,
+    description: requiredChanges,
+    due_date: dueDate,
+    priority: payload.priority || null,
+    remarks,
+  };
 
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
-    requireWorkflowReviewer(actor, workflow);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES, "Control Design changes-required permission is required");
+    requireWorkflowEditable(workflow);
     const submission = await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client);
     if (!submission) {
       throw new AppError(409, "No pending submission exists for this stage");
     }
+    requireNotSelfReview(actor, submission.submitted_by);
 
     await controlWorkflowRepository.updateSubmissionReview(submission.id, {
       status: SUBMISSION_STATUSES.REVISION_REQUIRED,
@@ -713,7 +929,16 @@ async function markStageRevisionRequired(actor, stageId, payload = {}) {
       remarks,
     }, client);
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
-    return loadWorkflowDetails(workflow.id, client);
+    await syncWorkflowLifecycle(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_STAGE_CHANGES_REQUIRED",
+      title: "Control Design changes required",
+      message: stage.stage_name + " needs changes for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "stage-changes-required:" + stage.id + ":" + submission.id,
+    }, client);
+    return updated;
   });
 }
 
@@ -729,9 +954,18 @@ async function raiseRevision(actor, stageId, payload = {}) {
 
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
-    requireWorkflowReviewer(actor, workflow);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE, "Control Design revision raise permission is required");
+    requireWorkflowEditable(workflow);
+    if (![STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status)) {
+      throw new AppError(409, "Only approved or pre-completed stages can have post-approval revisions raised");
+    }
+    if (!workflow.assigned_user_id) {
+      throw new AppError(409, "A project owner is required before raising a revision");
+    }
 
-    await controlWorkflowRepository.insertRevision({
+    const hydrated = await loadWorkflowDetails(workflow.id, client);
+    const affectedStageIds = normalizeAffectedStageIds(payload, hydrated, stage.id);
+    const revisionId = await controlWorkflowRepository.insertRevision({
       workflow_stage_id: stage.id,
       workflow_id: workflow.id,
       revision_reason: reason,
@@ -739,19 +973,23 @@ async function raiseRevision(actor, stageId, payload = {}) {
       description,
       due_date: dueDate,
       priority: payload.priority || null,
+      affected_stage_ids: affectedStageIds,
       raised_by: getActorId(actor),
       assigned_to: workflow.assigned_user_id,
       remarks: payload.remarks || null,
     }, client);
-    await controlWorkflowRepository.updateStage(stage.id, {
-      status: STAGE_STATUSES.REVISION_REQUIRED,
-      remarks: description,
+    await syncWorkflowLifecycle(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_REVISION_RAISED",
+      title: "Control Design revision raised",
+      message: stage.stage_name + " has a revision for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "revision-raised:" + revisionId,
     }, client);
-    await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
-    return loadWorkflowDetails(workflow.id, client);
+    return updated;
   });
 }
-
 async function startRevision(actor, revisionId) {
   requireActor(actor);
   return withTransaction(async (client) => {
@@ -759,10 +997,13 @@ async function startRevision(actor, revisionId) {
     if (!revision) {
       throw new AppError(404, "Revision not found");
     }
+    const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE, "Control Design revision execution permission is required");
+    requireWorkflowEditable(workflow);
     if (revision.assigned_to !== getActorId(actor)) {
       throw new AppError(403, "Only the assigned project owner can start this revision");
     }
-    if (revision.status !== REVISION_STATUSES.NOT_STARTED) {
+    if (![REVISION_STATUSES.NOT_STARTED, REVISION_STATUSES.CHANGES_REQUIRED].includes(revision.status)) {
       throw new AppError(409, `Revision cannot be started from status ${revision.status}`);
     }
 
@@ -770,6 +1011,7 @@ async function startRevision(actor, revisionId) {
       status: REVISION_STATUSES.IN_PROGRESS,
       touch_started_at: true,
     }, client);
+    await syncWorkflowLifecycle(revision.workflow_id, client);
     return loadWorkflowDetails(revision.workflow_id, client);
   });
 }
@@ -782,6 +1024,9 @@ async function submitRevisionForApproval(actor, revisionId, payload = {}) {
     if (!revision) {
       throw new AppError(404, "Revision not found");
     }
+    const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE, "Control Design revision execution permission is required");
+    requireWorkflowEditable(workflow);
     if (revision.assigned_to !== getActorId(actor)) {
       throw new AppError(403, "Only the assigned project owner can submit this revision");
     }
@@ -790,24 +1035,45 @@ async function submitRevisionForApproval(actor, revisionId, payload = {}) {
     }
 
     const stage = await controlWorkflowRepository.findWorkflowStage(revision.workflow_stage_id, client);
+    if (await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client)) {
+      throw new AppError(409, "A pending submission already exists for this stage");
+    }
+    if (stage.current_document_path !== submittedDocumentPath) {
+      await controlWorkflowRepository.insertDocumentHistory({
+        workflow_stage_id: stage.id,
+        old_path: stage.current_document_path || null,
+        new_path: submittedDocumentPath,
+        changed_by: getActorId(actor),
+        change_remarks: payload.remarks || "Revision submission document path",
+      }, client);
+    }
+
     await controlWorkflowRepository.updateRevision(revision.id, {
       status: REVISION_STATUSES.SUBMITTED_FOR_APPROVAL,
       touch_submitted_at: true,
       remarks: payload.remarks || revision.remarks || null,
     }, client);
     await controlWorkflowRepository.updateStage(stage.id, {
-      status: STAGE_STATUSES.SUBMITTED_FOR_APPROVAL,
-      current_document_path: submittedDocumentPath,
+      status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.SUBMITTED_FOR_APPROVAL,
+      current_document_path: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? stage.current_document_path : submittedDocumentPath,
       touch_submitted_at: true,
       remarks: payload.remarks || stage.remarks || null,
     }, client);
-    await controlWorkflowRepository.insertSubmission({
+    const submissionId = await controlWorkflowRepository.insertSubmission({
       workflow_stage_id: stage.id,
       workflow_id: revision.workflow_id,
       revision_id: revision.id,
       submitted_by: getActorId(actor),
       submitted_document_path: submittedDocumentPath,
       remarks: payload.remarks || null,
+    }, client);
+    await syncWorkflowLifecycle(revision.workflow_id, client);
+    await notifyWorkflow(workflow, {
+      recipient_user_id: workflow.assigned_by,
+      notification_type: "CONTROL_REVISION_SUBMITTED",
+      title: "Control Design revision submitted",
+      message: stage.stage_name + " revision was submitted for " + (workflow.project_no || workflow.project_id) + ".",
+      idempotency_key: "revision-submitted:" + revision.id + ":" + submissionId,
     }, client);
     return loadWorkflowDetails(revision.workflow_id, client);
   });
@@ -821,19 +1087,23 @@ async function approveRevision(actor, revisionId, payload = {}) {
       throw new AppError(404, "Revision not found");
     }
     const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
-    requireWorkflowReviewer(actor, workflow);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW, "Control Design revision review permission is required");
+    requireWorkflowEditable(workflow);
     if (revision.status !== REVISION_STATUSES.SUBMITTED_FOR_APPROVAL) {
       throw new AppError(409, `Revision cannot be approved from status ${revision.status}`);
     }
 
+    const stage = await controlWorkflowRepository.findWorkflowStage(revision.workflow_stage_id, client);
     const submission = await controlWorkflowRepository.findPendingSubmissionForStage(revision.workflow_stage_id, client);
-    if (submission) {
-      await controlWorkflowRepository.updateSubmissionReview(submission.id, {
-        status: SUBMISSION_STATUSES.APPROVED,
-        reviewed_by: getActorId(actor),
-        review_remarks: payload.review_remarks || null,
-      }, client);
+    if (!submission) {
+      throw new AppError(409, "No pending revision submission exists");
     }
+    requireNotSelfReview(actor, submission.submitted_by);
+    await controlWorkflowRepository.updateSubmissionReview(submission.id, {
+      status: SUBMISSION_STATUSES.APPROVED,
+      reviewed_by: getActorId(actor),
+      review_remarks: payload.review_remarks || null,
+    }, client);
     await controlWorkflowRepository.updateRevision(revision.id, {
       status: REVISION_STATUSES.APPROVED,
       approved_by: getActorId(actor),
@@ -841,16 +1111,70 @@ async function approveRevision(actor, revisionId, payload = {}) {
       remarks: payload.review_remarks || revision.remarks || null,
     }, client);
     await controlWorkflowRepository.updateStage(revision.workflow_stage_id, {
-      status: STAGE_STATUSES.APPROVED,
+      status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.APPROVED,
+      current_document_path: submission.submitted_document_path,
       touch_approved_at: true,
       approved_by: getActorId(actor),
-      remarks: payload.review_remarks || null,
+      remarks: payload.review_remarks || stage.remarks || null,
     }, client);
     await refreshCurrentStage(workflow.id, client);
-    return loadWorkflowDetails(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_REVISION_APPROVED",
+      title: "Control Design revision approved",
+      message: stage.stage_name + " revision was approved for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "revision-approved:" + revision.id + ":" + submission.id,
+    }, client);
+    return updated;
   });
 }
 
+async function markRevisionChangesRequired(actor, revisionId, payload = {}) {
+  requireActor(actor);
+  const remarks = requireNonEmpty(payload.review_remarks || payload.required_changes || payload.remarks, "review_remarks");
+  return withTransaction(async (client) => {
+    const revision = await controlWorkflowRepository.findRevisionById(requireNonEmpty(revisionId, "revision_id"), client);
+    if (!revision) {
+      throw new AppError(404, "Revision not found");
+    }
+    const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW, "Control Design revision review permission is required");
+    requireWorkflowEditable(workflow);
+    if (revision.status !== REVISION_STATUSES.SUBMITTED_FOR_APPROVAL) {
+      throw new AppError(409, `Revision cannot be marked changes required from status ${revision.status}`);
+    }
+    const stage = await controlWorkflowRepository.findWorkflowStage(revision.workflow_stage_id, client);
+    const submission = await controlWorkflowRepository.findPendingSubmissionForStage(revision.workflow_stage_id, client);
+    if (!submission) {
+      throw new AppError(409, "No pending revision submission exists");
+    }
+    requireNotSelfReview(actor, submission.submitted_by);
+    await controlWorkflowRepository.updateSubmissionReview(submission.id, {
+      status: SUBMISSION_STATUSES.REVISION_REQUIRED,
+      reviewed_by: getActorId(actor),
+      review_remarks: remarks,
+    }, client);
+    await controlWorkflowRepository.updateRevision(revision.id, {
+      status: REVISION_STATUSES.CHANGES_REQUIRED,
+      remarks,
+    }, client);
+    await controlWorkflowRepository.updateStage(stage.id, {
+      status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.REVISION_REQUIRED,
+      remarks,
+    }, client);
+    await syncWorkflowLifecycle(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_REVISION_CHANGES_REQUIRED",
+      title: "Control Design revision changes required",
+      message: stage.stage_name + " revision needs changes for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "revision-changes-required:" + revision.id + ":" + submission.id,
+    }, client);
+    return updated;
+  });
+}
 async function markStagePreCompleted(actor, stageId, payload = {}) {
   requireActor(actor);
   const completionDate = requireNonEmpty(payload.completion_date, "completion_date");
@@ -859,7 +1183,8 @@ async function markStagePreCompleted(actor, stageId, payload = {}) {
 
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
-    requireWorkflowReviewer(actor, workflow);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_STAGES_MARK_PRE_COMPLETED, "Control Design pre-complete permission is required");
+    requireWorkflowEditable(workflow);
 
     if (stage.current_document_path !== documentPath) {
       await controlWorkflowRepository.insertDocumentHistory({
@@ -880,7 +1205,15 @@ async function markStagePreCompleted(actor, stageId, payload = {}) {
       remarks: payload.remarks || null,
     }, client);
     await refreshCurrentStage(workflow.id, client);
-    return loadWorkflowDetails(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_STAGE_PRE_COMPLETED",
+      title: "Control Design stage pre-completed",
+      message: stage.stage_name + " was marked pre-completed for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "stage-pre-completed:" + stage.id + ":" + completionDate,
+    }, client);
+    return updated;
   });
 }
 
@@ -894,20 +1227,10 @@ async function overrideUnlockStage(actor, stageId, payload = {}) {
 
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
-    requireWorkflowReviewer(actor, workflow);
-    const stages = await controlWorkflowRepository.listWorkflowStages(workflow.id, client);
-    const sorted = [...stages].sort((left, right) => left.sequence_order - right.sequence_order);
-
-    for (const candidate of sorted) {
-      if (candidate.sequence_order >= stage.sequence_order) {
-        break;
-      }
-      if (!isTerminalStageStatus(candidate.status)) {
-        await controlWorkflowRepository.updateStage(candidate.id, {
-          status: STAGE_STATUSES.SKIPPED_BY_OVERRIDE,
-          remarks: `Bypassed by override before ${stage.stage_name}: ${reason}`,
-        }, client);
-      }
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_STAGES_OVERRIDE_UNLOCK, "Control Design override unlock permission is required");
+    requireWorkflowEditable(workflow);
+    if (stage.status !== STAGE_STATUSES.LOCKED) {
+      throw new AppError(409, "Only locked stages can be override-unlocked");
     }
 
     await controlWorkflowRepository.updateStage(stage.id, {
@@ -918,27 +1241,129 @@ async function overrideUnlockStage(actor, stageId, payload = {}) {
       workflow_stage_id: stage.id,
       workflow_id: workflow.id,
       unlocked_by: getActorId(actor),
+      action_type: "override_unlock",
       reason,
       remarks,
     }, client);
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
-    return loadWorkflowDetails(workflow.id, client);
+    await syncWorkflowLifecycle(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_OVERRIDE_UNLOCK",
+      title: "Control Design stage override-unlocked",
+      message: stage.stage_name + " was override-unlocked for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "override-unlock:" + stage.id + ":" + reason,
+    }, client);
+    return updated;
   });
 }
 
+async function skipStageByOverride(actor, stageId, payload = {}) {
+  requireActor(actor);
+  const reason = requireNonEmpty(payload.reason, "reason");
+  const supportingDocumentPath = requireNonEmpty(payload.supporting_document_path || payload.document_path, "supporting_document_path");
+  const remarks = requireNonEmpty(payload.remarks, "remarks");
+  const approvedBy = requireNonEmpty(payload.approved_by || getActorId(actor), "approved_by");
+
+  return withTransaction(async (client) => {
+    const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_STAGES_SKIP_OVERRIDE, "Control Design skip override permission is required");
+    requireWorkflowEditable(workflow);
+    if ([STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status)) {
+      throw new AppError(409, "Approved stages cannot be skipped by override");
+    }
+    if (stage.current_document_path !== supportingDocumentPath) {
+      await controlWorkflowRepository.insertDocumentHistory({
+        workflow_stage_id: stage.id,
+        old_path: stage.current_document_path || null,
+        new_path: supportingDocumentPath,
+        changed_by: getActorId(actor),
+        change_remarks: remarks,
+      }, client);
+    }
+    await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.SKIPPED_BY_OVERRIDE,
+      current_document_path: supportingDocumentPath,
+      approved_by: approvedBy,
+      touch_approved_at: true,
+      remarks,
+    }, client);
+    await controlWorkflowRepository.insertOverride({
+      workflow_stage_id: stage.id,
+      workflow_id: workflow.id,
+      unlocked_by: getActorId(actor),
+      action_type: "skip_by_override",
+      reason,
+      supporting_document_path: supportingDocumentPath,
+      approved_by: approvedBy,
+      remarks,
+    }, client);
+    await refreshCurrentStage(workflow.id, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_STAGE_SKIPPED_BY_OVERRIDE",
+      title: "Control Design stage skipped by override",
+      message: stage.stage_name + " was skipped by override for " + (updated.project_no || updated.project_id) + ".",
+      idempotency_key: "skip-by-override:" + stage.id + ":" + reason,
+    }, client);
+    return updated;
+  });
+}
+
+async function markWorkflowDispatched(actor, workflowId, payload = {}) {
+  requireActor(actor);
+  const dispatchDate = requireNonEmpty(payload.dispatch_date, "dispatch_date");
+  const remarks = requireNonEmpty(payload.remarks, "remarks");
+
+  return withTransaction(async (client) => {
+    const workflow = await controlWorkflowRepository.findWorkflowById(requireNonEmpty(workflowId, "workflow_id"), client);
+    if (!workflow) {
+      throw new AppError(404, "Workflow not found");
+    }
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED, "Control Design dispatch permission is required");
+    requireWorkflowEditable(workflow);
+    const hydrated = await loadWorkflowDetails(workflow.id, client);
+    if (!isReadyForDispatch(hydrated.stages || [])) {
+      throw new AppError(409, "Control Design project is not ready for dispatch");
+    }
+    await controlWorkflowRepository.updateProjectControlLifecycle({
+      project_id: workflow.project_id,
+      sub_department_id: workflow.sub_department_id,
+      lifecycle_status: CONTROL_PROJECT_STATUSES.DISPATCHED,
+      mark_dispatched: true,
+      dispatched_by: getActorId(actor),
+      dispatched_at: dispatchDate,
+      dispatch_remarks: remarks,
+    }, client);
+    await controlWorkflowRepository.updateWorkflowStatus(workflow.id, WORKFLOW_STATUSES.COMPLETED, client);
+    const updated = await loadWorkflowDetails(workflow.id, client);
+    await notifyWorkflow(updated, {
+      recipient_user_id: updated.assigned_user_id,
+      notification_type: "CONTROL_PROJECT_DISPATCHED",
+      title: "Control Design project dispatched",
+      message: (updated.project_no || updated.project_id) + " has been marked dispatched.",
+      idempotency_key: "project-dispatched:" + workflow.id + ":" + dispatchDate,
+    }, client);
+    return updated;
+  });
+}
 async function listPendingApprovals(actor) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  if (!hasControlDesignReviewPermission(actor)) {
-    return [];
-  }
+  requireControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_APPROVALS_REVIEW, "Control Design approval queue permission is required");
   return controlWorkflowRepository.listPendingApprovalQueue({ departmentId: controlDesign.department_id });
 }
 
 async function listRevisionQueue(actor) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  const reviewer = hasControlDesignReviewPermission(actor);
+  const reviewer = hasControlDesignRevisionReviewPermission(actor);
+  const executor = hasControlDesignPermission(actor, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE);
+  if (!reviewer && !executor) {
+    throw new AppError(403, "Control Design revision queue permission is required");
+  }
   return controlWorkflowRepository.listRevisionQueue({
     departmentId: controlDesign.department_id,
     assignedTo: reviewer ? null : getActorId(actor),
@@ -953,6 +1378,7 @@ module.exports = {
   createControlDesignCo,
   createControlDesignProject,
   createProjectWorkflow,
+  getControlDesignCapabilities,
   getProjectWorkflow,
   getWorkflowTemplateBySubDepartment,
   listControlDesignAssignableUsers,
@@ -960,14 +1386,17 @@ module.exports = {
   listControlSubDepartments,
   listPendingApprovals,
   listRevisionQueue,
+  markRevisionChangesRequired,
   markStagePreCompleted,
   markStageRevisionRequired,
   normalizeBudgetAmount,
   normalizeControlDesignProjectPayload,
+  markWorkflowDispatched,
   overrideUnlockStage,
   raiseRevision,
   reassignProjectWorkflowOwner,
   requireControlDesignCreatePermission,
+  skipStageByOverride,
   startRevision,
   startStage,
   submitRevisionForApproval,

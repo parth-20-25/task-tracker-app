@@ -14,8 +14,8 @@ import { Separator } from '@/components/ui/separator';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { isDesignDepartment } from '@/lib/departments';
-import { isProjectAuthorityUser } from '@/lib/permissions';
+
+import { canShowAdditionalDesignTasksNavigation, isProjectAuthorityUser } from '@/lib/permissions';
 import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
 
 export function AppSidebar() {
@@ -40,7 +40,7 @@ export function AppSidebar() {
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
     { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
     { title: 'Projects', url: '/batches', icon: PackageCheck },
-    ...(isDesignDepartment(user) || isProjectAuthorityUser(user)
+    ...(canShowAdditionalDesignTasksNavigation(user)
       ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
       : []),
   ];

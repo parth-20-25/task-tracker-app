@@ -217,74 +217,18 @@ function projectAssignmentInVisibleUsersSql(projectAlias = "p", cteName = "visib
   `;
 }
 
-function current2DWorkflowStageFixtureSql(fixtureAlias = "f", projectAlias = "p") {
+function twoDTeamProjectVisibilitySql(projectAlias = "p") {
   const {
-    current2DWorkflowStageFixtureSql: current2DWorkflowStageFixturePredicate,
-  } = require("./projectSubdivisionRoutingRepository");
-
-  return current2DWorkflowStageFixturePredicate(fixtureAlias, projectAlias);
-}
-
-function twoDLeaderProjectVisibilitySql(projectAlias = "p") {
-  const {
-    assignedTo2DLeaderProjectSql,
-    userIs2DLeaderSql,
+    assignedTo2DTeamProjectSql,
+    userIs2DSubdivisionSql,
   } = require("./projectSubdivisionRoutingRepository");
 
   return `
     EXISTS (
       SELECT 1
-      FROM root_user root
-      WHERE ${userIs2DLeaderSql("root")}
-        AND ${assignedTo2DLeaderProjectSql(projectAlias, "root.employee_id")}
-    )
-  `;
-}
-
-function twoDLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p") {
-  const {
-    assignedTo2DLeaderProjectSql,
-    userIs2DLeaderSql,
-  } = require("./projectSubdivisionRoutingRepository");
-
-  return `
-    EXISTS (
-      SELECT 1
-      FROM root_user root
-      WHERE ${userIs2DLeaderSql("root")}
-        AND ${assignedTo2DLeaderProjectSql(projectAlias, "root.employee_id")}
-        AND ${current2DWorkflowStageFixtureSql(fixtureAlias, projectAlias)}
-    )
-  `;
-}
-
-function twoDNonLeaderFixtureVisibilitySql(fixtureAlias = "f", projectAlias = "p") {
-  const {
-    twoDStageNameSql,
-    userIs2DNonLeaderSql,
-  } = require("./projectSubdivisionRoutingRepository");
-
-  return `
-    EXISTS (
-      SELECT 1
-      FROM root_user root
-      WHERE ${userIs2DNonLeaderSql("root")}
-        AND EXISTS (
-          SELECT 1
-          FROM fixture_workflow_progress current_assignee_progress
-          WHERE current_assignee_progress.fixture_id = ${fixtureAlias}.id
-            AND current_assignee_progress.department_id = ${projectAlias}.department_id
-            AND current_assignee_progress.status <> 'APPROVED'
-            AND ${twoDStageNameSql("current_assignee_progress.stage_name")}
-            AND current_assignee_progress.assigned_to = root.employee_id
-            AND current_assignee_progress.stage_order = (
-              SELECT MIN(active_assignee_progress.stage_order)
-              FROM fixture_workflow_progress active_assignee_progress
-              WHERE active_assignee_progress.fixture_id = ${fixtureAlias}.id
-                AND active_assignee_progress.department_id = ${projectAlias}.department_id
-                AND active_assignee_progress.status <> 'APPROVED'
-            )
-        )
+      FROM root_user requesting_root
+      WHERE ${userIs2DSubdivisionSql("requesting_root")}
+        AND ${assignedTo2DTeamProjectSql(projectAlias, "requesting_root.employee_id")}
     )
   `;
 }
@@ -307,7 +251,7 @@ function visibleProjectPredicate(projectAlias = "p", cteName = "visible_users") 
       )
       OR (
         ${rootUserIsSubdivisionRoutedSql()}
-        AND (${twoDLeaderProjectVisibilitySql(projectAlias)})
+        AND ${twoDTeamProjectVisibilitySql(projectAlias)}
       )
       OR (
         NOT ${rootUserIsSubdivisionRoutedSql()}
@@ -330,10 +274,7 @@ function visibleFixturePredicate(fixtureAlias = "f", projectAlias = "p", cteName
       )
       OR (
         ${rootUserIsSubdivisionRoutedSql()}
-        AND (
-          ${twoDLeaderFixtureVisibilitySql(fixtureAlias, projectAlias)}
-          OR ${twoDNonLeaderFixtureVisibilitySql(fixtureAlias, projectAlias)}
-        )
+        AND ${twoDTeamProjectVisibilitySql(projectAlias)}
       )
       OR (
         NOT ${rootUserIsSubdivisionRoutedSql()}

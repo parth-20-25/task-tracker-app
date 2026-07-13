@@ -18,14 +18,18 @@ import {
   approveControlWorkflowRevision,
   approveControlWorkflowStage,
   createControlProjectWorkflow,
+  fetchControlDesignAssignableUsers,
   fetchControlPendingApprovals,
   fetchControlProjectWorkflow,
   fetchControlRevisionQueue,
   fetchControlSubDepartments,
   fetchControlWorkflowTemplate,
+  markControlWorkflowDispatched,
+  markControlWorkflowRevisionChangesRequired,
   markControlWorkflowStagePreCompleted,
   markControlWorkflowStageRevisionRequired,
   overrideUnlockControlWorkflowStage,
+  skipControlWorkflowStageByOverride,
   raiseControlWorkflowRevision,
   reassignControlProjectWorkflowOwner,
   startControlWorkflowRevision,
@@ -34,12 +38,12 @@ import {
   submitControlWorkflowStage,
   updateControlWorkflowDocumentPath,
   type ControlApprovalQueueItem,
+  type ControlDesignCapabilities,
   type ControlProjectWorkflow,
   type ControlRevisionReason,
   type ControlWorkflowRevision,
   type ControlWorkflowStage,
 } from "@/api/controlWorkflowApi";
-import { fetchTaskAssignmentUsers } from "@/api/taskApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -54,7 +58,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
-import { isOperationalControllerUser, isProjectAuthorityUser } from "@/lib/permissions";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { cn } from "@/lib/utils";
 import type { ProjectDashboardSummary } from "@/types";
@@ -107,6 +110,9 @@ type ModalState =
   | { type: "revisionRequired"; stage: ControlWorkflowStage }
   | { type: "raiseRevision"; stage: ControlWorkflowStage | null }
   | { type: "override"; stage: ControlWorkflowStage }
+  | { type: "skipOverride"; stage: ControlWorkflowStage }
+  | { type: "dispatch" }
+  | { type: "revisionChangesRequired"; revision: ControlWorkflowRevision }
   | { type: "preCompleted"; stage: ControlWorkflowStage }
   | { type: "document"; stage: ControlWorkflowStage }
   | { type: "submitRevision"; revision: ControlWorkflowRevision }
@@ -155,19 +161,21 @@ function isOwner(userId: string | undefined, workflow: ControlProjectWorkflow | 
 
 interface ControlWorkflowSectionProps {
   project: ProjectDashboardSummary;
+  capabilities: ControlDesignCapabilities;
 }
 
-export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps) {
-  const { access, user } = useAuth();
+export function ControlWorkflowSection({ project, capabilities }: ControlWorkflowSectionProps) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [ownerId, setOwnerId] = useState("");
+  const [ownerReason, setOwnerReason] = useState("");
   const [modal, setModal] = useState<ModalState>(null);
   const [form, setForm] = useState<Record<string, string | boolean>>({});
 
   const controlSubDepartmentsQuery = useQuery({
     queryKey: ["control-workflow", "sub-departments"],
     queryFn: fetchControlSubDepartments,
-    enabled: Boolean(user?.employee_id),
+    enabled: Boolean(user?.employee_id && capabilities.canViewWorkspace),
   });
 
   const controlDesignSubDepartment = (controlSubDepartmentsQuery.data ?? []).find(
@@ -177,45 +185,37 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
   const templateQuery = useQuery({
     queryKey: ["control-workflow", "template", controlDesignSubDepartment?.id || "none"],
     queryFn: () => fetchControlWorkflowTemplate(controlDesignSubDepartment?.id || ""),
-    enabled: Boolean(controlDesignSubDepartment?.id),
+    enabled: Boolean(capabilities.canViewWorkspace && controlDesignSubDepartment?.id),
   });
 
   const workflowQuery = useQuery({
     queryKey: ["control-workflow", "project", project.project_id, controlDesignSubDepartment?.id || "none"],
     queryFn: () => fetchControlProjectWorkflow(project.project_id, controlDesignSubDepartment?.id || ""),
-    enabled: Boolean(project.project_id && controlDesignSubDepartment?.id),
+    enabled: Boolean(capabilities.canViewWorkspace && project.project_id && controlDesignSubDepartment?.id),
   });
 
   const approvalsQuery = useQuery({
     queryKey: ["control-workflow", "approvals"],
     queryFn: fetchControlPendingApprovals,
-    enabled: Boolean(user?.employee_id),
+    enabled: Boolean(user?.employee_id && (capabilities.canReview || capabilities.canApprove || capabilities.canRequestChanges)),
   });
 
   const revisionsQuery = useQuery({
     queryKey: ["control-workflow", "revisions"],
     queryFn: fetchControlRevisionQueue,
-    enabled: Boolean(user?.employee_id),
+    enabled: Boolean(user?.employee_id && (capabilities.canExecuteRevision || capabilities.canReviewRevision)),
   });
 
-  const canReview = isProjectAuthorityUser(user)
-    || (
-      isOperationalControllerUser(user)
-      && (access.canApproveCompletedTasks || access.canChangeFixtureStage || access.canAssignTasks)
-    );
   const workflow = workflowQuery.data || null;
   const owner = isOwner(user?.employee_id, workflow);
-  const canAssignOwner = canReview && access.canAssignTasks;
+  const canAssignOwner = workflow ? capabilities.canReassignProject : capabilities.canAssignProject;
+  const workflowClosed = workflow?.status === "completed" || workflow?.project_status === "dispatched";
+  const ownerReasonRequired = Boolean(workflow?.assigned_user_id && ownerId && ownerId !== workflow.assigned_user_id);
 
   const assigneesQuery = useQuery({
-    queryKey: ["control-workflow", "assignable-users", controlDesignSubDepartment?.department_id || "control", project.project_id],
-    queryFn: () => fetchTaskAssignmentUsers({
-      task_type: "department_workflow",
-      department_id: controlDesignSubDepartment?.department_id || "control",
-      project_id: project.project_id,
-      stage_name: CONTROL_DESIGN_NAME,
-    }),
-    enabled: canAssignOwner,
+    queryKey: ["control-workflow", "assignable-users", "control-design"],
+    queryFn: fetchControlDesignAssignableUsers,
+    enabled: Boolean(user?.employee_id && canAssignOwner),
   });
 
   const assignees = assigneesQuery.data ?? [];
@@ -234,6 +234,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
       setModal(null);
       setForm({});
       setOwnerId("");
+      setOwnerReason("");
       await invalidateControlWorkflow();
     },
     onError: (error) => {
@@ -254,6 +255,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
     }),
     onSuccess: async () => {
       setOwnerId("");
+      setOwnerReason("");
       await invalidateControlWorkflow();
       toast({ title: "Control Design workflow assigned" });
     },
@@ -267,9 +269,10 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
   });
 
   const reassignMutation = useMutation({
-    mutationFn: () => reassignControlProjectWorkflowOwner(workflow?.id || "", ownerId),
+    mutationFn: () => reassignControlProjectWorkflowOwner(workflow?.id || "", ownerId, ownerReason.trim() || undefined),
     onSuccess: async () => {
       setOwnerId("");
+      setOwnerReason("");
       await invalidateControlWorkflow();
       toast({ title: "Control Design owner updated" });
     },
@@ -315,6 +318,12 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
       });
     } else if (nextModal.type === "override") {
       setForm({ reason: "", remarks: "", confirm_history_record: false });
+    } else if (nextModal.type === "skipOverride") {
+      setForm({ reason: "", supporting_document_path: nextModal.stage.current_document_path || "", approved_by: user?.employee_id || "", remarks: "" });
+    } else if (nextModal.type === "dispatch") {
+      setForm({ dispatch_date: defaultDateTimeLocal(0), remarks: "" });
+    } else if (nextModal.type === "revisionChangesRequired") {
+      setForm({ review_remarks: "" });
     } else if (nextModal.type === "preCompleted") {
       setForm({
         completion_date: defaultDateTimeLocal(0),
@@ -329,6 +338,10 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
       setForm({ review_remarks: "" });
     }
   };
+
+  const selectedAffectedStageIds = () => Object.entries(form)
+    .filter(([key, value]) => key.startsWith("affected_stage_") && value === true)
+    .map(([key]) => key.slice("affected_stage_".length));
 
   const runModalAction = () => {
     if (!modal) return;
@@ -364,12 +377,20 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
         due_date: new Date(String(form.due_date)).toISOString(),
         priority: String(form.priority || ""),
         remarks: String(form.remarks || ""),
+        affected_stage_ids: selectedAffectedStageIds(),
       }));
     } else if (modal.type === "override") {
       workflowMutation.mutate(() => overrideUnlockControlWorkflowStage(modal.stage.id, {
         reason: String(form.reason || ""),
         remarks: String(form.remarks || ""),
         confirm_history_record: form.confirm_history_record === true,
+      }));
+    } else if (modal.type === "skipOverride") {
+      workflowMutation.mutate(() => skipControlWorkflowStageByOverride(modal.stage.id, {
+        reason: String(form.reason || ""),
+        supporting_document_path: String(form.supporting_document_path || ""),
+        approved_by: String(form.approved_by || user?.employee_id || ""),
+        remarks: String(form.remarks || ""),
       }));
     } else if (modal.type === "preCompleted") {
       workflowMutation.mutate(() => markControlWorkflowStagePreCompleted(modal.stage.id, {
@@ -383,26 +404,39 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
         submitted_document_path: String(form.submitted_document_path || ""),
         remarks: String(form.remarks || ""),
       }));
+    } else if (modal.type === "revisionChangesRequired") {
+      workflowMutation.mutate(() => markControlWorkflowRevisionChangesRequired(modal.revision.id, {
+        review_remarks: String(form.review_remarks || ""),
+      }));
+    } else if (modal.type === "dispatch" && workflow) {
+      workflowMutation.mutate(() => markControlWorkflowDispatched(workflow.id, {
+        dispatch_date: new Date(String(form.dispatch_date)).toISOString(),
+        remarks: String(form.remarks || ""),
+      }));
     }
   };
 
   const canRunModalAction = Boolean(!workflowMutation.isPending && (
     !modal
-    || modal.type === "review"
-    || (modal.type === "submit" && String(form.submitted_document_path || "").trim())
-    || (modal.type === "document" && String(form.document_path || "").trim())
-    || (modal.type === "revisionRequired" && String(form.description || "").trim() && String(form.due_date || "").trim())
+    || (modal.type === "review" && capabilities.canApprove)
+    || (modal.type === "submit" && capabilities.canSubmitStage && String(form.submitted_document_path || "").trim())
+    || (modal.type === "document" && capabilities.canUpdatePath && String(form.document_path || "").trim())
+    || (modal.type === "revisionRequired" && capabilities.canRequestChanges && String(form.description || "").trim() && String(form.due_date || "").trim() && String(form.remarks || "").trim())
     || (
       modal.type === "raiseRevision"
+      && capabilities.canRaiseRevision
       && String(form.stage_id || modal.stage?.id || "").trim()
       && String(form.revision_reason || "").trim()
       && String(form.description || "").trim()
       && String(form.due_date || "").trim()
       && (form.revision_reason !== "Other" || String(form.manual_reason || "").trim())
     )
-    || (modal.type === "override" && String(form.reason || "").trim() && String(form.remarks || "").trim() && form.confirm_history_record === true)
-    || (modal.type === "preCompleted" && String(form.completion_date || "").trim() && String(form.document_path || "").trim() && String(form.approved_by || "").trim())
-    || (modal.type === "submitRevision" && String(form.submitted_document_path || "").trim())
+    || (modal.type === "override" && capabilities.canOverrideUnlock && String(form.reason || "").trim() && String(form.remarks || "").trim() && form.confirm_history_record === true)
+    || (modal.type === "skipOverride" && capabilities.canSkipStage && String(form.reason || "").trim() && String(form.supporting_document_path || "").trim() && String(form.approved_by || "").trim() && String(form.remarks || "").trim())
+    || (modal.type === "dispatch" && capabilities.canMarkDispatched && String(form.dispatch_date || "").trim() && String(form.remarks || "").trim())
+    || (modal.type === "revisionChangesRequired" && capabilities.canReviewRevision && String(form.review_remarks || "").trim())
+    || (modal.type === "preCompleted" && capabilities.canMarkPreCompleted && String(form.completion_date || "").trim() && String(form.document_path || "").trim() && String(form.approved_by || "").trim())
+    || (modal.type === "submitRevision" && capabilities.canExecuteRevision && String(form.submitted_document_path || "").trim())
   ));
 
   const startStage = (stage: ControlWorkflowStage) => {
@@ -460,16 +494,30 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                     ))}
                   </SelectContent>
                 </Select>
-                <Button size="sm" variant="outline" disabled={!ownerId || reassignMutation.isPending} onClick={() => reassignMutation.mutate()}>
+                {ownerReasonRequired ? (
+                  <Input
+                    className="h-9 w-[260px] text-xs"
+                    value={ownerReason}
+                    placeholder="Reassignment reason"
+                    onChange={(event) => setOwnerReason(event.target.value)}
+                  />
+                ) : null}
+                <Button size="sm" variant="outline" disabled={!canAssignOwner || !ownerId || reassignMutation.isPending || (ownerReasonRequired && !ownerReason.trim())} onClick={() => reassignMutation.mutate()}>
                   {reassignMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
                   Reassign
                 </Button>
               </>
             ) : null}
-            {workflow && canReview ? (
+            {workflow && capabilities.canRaiseRevision && !workflowClosed ? (
               <Button size="sm" variant="outline" onClick={() => openModal({ type: "raiseRevision", stage: workflow.current_stage || null })}>
                 <FilePenLine className="mr-1.5 h-3.5 w-3.5" />
                 Raise Revision
+              </Button>
+            ) : null}
+            {workflow && capabilities.canMarkDispatched && !workflowClosed && workflow.project_status === "ready_for_dispatch" ? (
+              <Button size="sm" onClick={() => openModal({ type: "dispatch" })}>
+                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                Mark Dispatched
               </Button>
             ) : null}
           </div>
@@ -495,7 +543,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                 </Select>
                 {!canAssignOwner ? <p className="text-xs text-muted-foreground">Read-only until a leader assigns the workflow owner.</p> : null}
               </div>
-              <Button disabled={!ownerId || createMutation.isPending || !templateQuery.data} onClick={() => createMutation.mutate()}>
+              <Button disabled={!canAssignOwner || !ownerId || createMutation.isPending || !templateQuery.data} onClick={() => createMutation.mutate()}>
                 {createMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
                 Assign Control Design Project
               </Button>
@@ -533,7 +581,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
               </div>
               <div className="rounded-md border bg-slate-50/50 p-3">
                 <p className="text-xs text-muted-foreground">Project Status</p>
-                <p className="font-medium capitalize">{project.project_status.replace(/_/g, " ")}</p>
+                <p className="font-medium capitalize">{(workflow.project_status || project.project_status || "active").replace(/_/g, " ")}</p>
               </div>
               <div className="rounded-md border bg-slate-50/50 p-3">
                 <p className="text-xs text-muted-foreground">Dispatch Status</p>
@@ -552,8 +600,11 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                 const pending = pendingSubmission(stage);
                 const revision = latestRevision(stage);
                 const locked = stage.status === "locked";
-                const ownerActions = owner && !workflowMutation.isPending;
-                const reviewerActions = canReview && !workflowMutation.isPending;
+                const impactedRevision = workflow.stages
+                  .flatMap((candidate) => candidate.revisions.map((item, index) => ({ item, index })))
+                  .find(({ item }) => (item.affected_stage_ids || []).includes(stage.id));
+                const ownerActions = owner && !workflowMutation.isPending && !workflowClosed;
+                const workflowActionsReady = !workflowMutation.isPending && !workflowClosed;
 
                 return (
                   <div key={stage.id} className="relative rounded-md border border-slate-200 bg-white p-3">
@@ -581,60 +632,80 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                             Revision Required: {revision.revision_reason} · due {formatDate(revision.due_date)}
                           </p>
                         ) : null}
+                        {impactedRevision ? (
+                          <p className="text-xs text-amber-800">
+                            Potentially impacted by revision {impactedRevision.index + 1}
+                          </p>
+                        ) : null}
                       </div>
 
                       <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
-                        {ownerActions && ["not_started", "revision_required"].includes(stage.status) ? (
+                        {ownerActions && capabilities.canStartStage && ["not_started", "revision_required"].includes(stage.status) ? (
                           <Button size="sm" variant="outline" onClick={() => startStage(stage)}>
                             <Play className="mr-1.5 h-3.5 w-3.5" /> Start
                           </Button>
                         ) : null}
-                        {ownerActions && ["in_progress", "revision_required"].includes(stage.status) ? (
+                        {ownerActions && capabilities.canSubmitStage && ["in_progress", "revision_required"].includes(stage.status) ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "submit", stage })}>
                             <Clock3 className="mr-1.5 h-3.5 w-3.5" /> Submit for Approval
                           </Button>
                         ) : null}
-                        {ownerActions && !locked ? (
+                        {ownerActions && capabilities.canUpdatePath && !locked ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "document", stage })}>
                             <PencilLine className="mr-1.5 h-3.5 w-3.5" /> Update Document Path
                           </Button>
                         ) : null}
-                        {ownerActions && revision?.status === "not_started" ? (
+                        {ownerActions && capabilities.canExecuteRevision && revision && ["not_started", "changes_required"].includes(revision.status) ? (
                           <Button size="sm" variant="outline" onClick={() => startRevision(revision)}>
                             <Play className="mr-1.5 h-3.5 w-3.5" /> Start Revision
                           </Button>
                         ) : null}
-                        {ownerActions && revision?.status === "in_progress" ? (
+                        {ownerActions && capabilities.canExecuteRevision && revision && revision.status === "in_progress" ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "submitRevision", revision })}>
                             <Clock3 className="mr-1.5 h-3.5 w-3.5" /> Submit Revision
                           </Button>
                         ) : null}
-                        {reviewerActions && pending ? (
+                        {workflowActionsReady && capabilities.canReviewRevision && revision && revision.status === "submitted_for_approval" ? (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => approveRevision(revision)}>
+                              Approve Revision
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => openModal({ type: "revisionChangesRequired", revision })}>
+                              Changes Required
+                            </Button>
+                          </>
+                        ) : null}
+                        {workflowActionsReady && capabilities.canApprove && pending ? (
                           <Button size="sm" onClick={() => openModal({ type: "review", stage, submission: null })}>
                             <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Approve
                           </Button>
                         ) : null}
-                        {reviewerActions && pending ? (
+                        {workflowActionsReady && capabilities.canRequestChanges && pending ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "revisionRequired", stage })}>
                             Revision Required
                           </Button>
                         ) : null}
-                        {reviewerActions ? (
+                        {workflowActionsReady && capabilities.canRaiseRevision ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "raiseRevision", stage })}>
                             Raise Revision
                           </Button>
                         ) : null}
-                        {reviewerActions && locked ? (
+                        {workflowActionsReady && capabilities.canOverrideUnlock && locked ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "override", stage })}>
                             <Unlock className="mr-1.5 h-3.5 w-3.5" /> Override Unlock
                           </Button>
                         ) : null}
-                        {reviewerActions && !["approved", "pre_completed"].includes(stage.status) ? (
+                        {workflowActionsReady && capabilities.canMarkPreCompleted && !["approved", "pre_completed", "skipped_by_override"].includes(stage.status) ? (
                           <Button size="sm" variant="outline" onClick={() => openModal({ type: "preCompleted", stage })}>
                             <ShieldCheck className="mr-1.5 h-3.5 w-3.5" /> Mark Pre-Completed
                           </Button>
                         ) : null}
-                        {!ownerActions && !reviewerActions && locked ? <LockKeyhole className="h-4 w-4 text-slate-400" /> : null}
+                        {workflowActionsReady && capabilities.canSkipStage && !["approved", "pre_completed", "skipped_by_override"].includes(stage.status) ? (
+                          <Button size="sm" variant="outline" onClick={() => openModal({ type: "skipOverride", stage })}>
+                            Skipped by Override
+                          </Button>
+                        ) : null}
+                        {!ownerActions && !(workflowActionsReady && capabilities.canOverrideUnlock && locked) && locked ? <LockKeyhole className="h-4 w-4 text-slate-400" /> : null}
                       </div>
                     </div>
                   </div>
@@ -660,7 +731,7 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={!canReview}
+                        disabled={!capabilities.canApprove}
                         onClick={() => {
                           const stage = workflow.stages.find((candidate) => candidate.id === item.workflow_stage_id);
                           if (stage) openModal({ type: "review", stage, submission: item });
@@ -688,10 +759,13 @@ export function ControlWorkflowSection({ project }: ControlWorkflowSectionProps)
                     <TableCell>{formatDate(item.due_date)}</TableCell>
                     <TableCell>{item.status.replace(/_/g, " ")}</TableCell>
                     <TableCell>
-                      {owner && item.status === "not_started" ? (
+                      {owner && capabilities.canExecuteRevision && ["not_started", "changes_required"].includes(item.status) ? (
                         <Button size="sm" variant="outline" onClick={() => startRevision(item)}>Start Revision</Button>
-                      ) : canReview && item.status === "submitted_for_approval" ? (
-                        <Button size="sm" variant="outline" onClick={() => approveRevision(item)}>Approve</Button>
+                      ) : capabilities.canReviewRevision && item.status === "submitted_for_approval" ? (
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" onClick={() => approveRevision(item)}>Approve</Button>
+                          <Button size="sm" variant="outline" onClick={() => openModal({ type: "revisionChangesRequired", revision: item })}>Changes Required</Button>
+                        </div>
                       ) : null}
                     </TableCell>
                   </TableRow>
@@ -784,7 +858,10 @@ function WorkflowModal({
             : modal?.type === "preCompleted" ? "Mark Pre-Completed"
               : modal?.type === "document" ? "Update Document Path"
                 : modal?.type === "submitRevision" ? "Submit Revision"
-                  : "";
+                  : modal?.type === "skipOverride" ? "Skipped by Override"
+                    : modal?.type === "dispatch" ? "Mark Dispatched"
+                      : modal?.type === "revisionChangesRequired" ? "Revision Changes Required"
+                        : "";
 
   const confirmLabel = modal?.type === "submit" ? "Confirm submit"
     : modal?.type === "review" ? "Approve"
@@ -792,7 +869,10 @@ function WorkflowModal({
         : modal?.type === "override" ? "Unlock Stage"
           : modal?.type === "preCompleted" ? "Mark as Pre-Completed"
             : modal?.type === "submitRevision" ? "Submit Revision"
-              : "Save";
+              : modal?.type === "skipOverride" ? "Mark Skipped"
+                : modal?.type === "dispatch" ? "Mark Dispatched"
+                  : modal?.type === "revisionChangesRequired" ? "Changes Required"
+                    : "Save";
 
   const description = modal?.type === "submit" ? "Submit the current Control workflow stage for approval."
     : modal?.type === "review" ? "Review a submitted Control workflow stage."
@@ -869,6 +949,22 @@ function WorkflowModal({
             <Field label="Due date/time" type="datetime-local" value={String(form.due_date || "")} onChange={(value) => onFormChange("due_date", value)} />
             <Field label="Priority optional" value={String(form.priority || "")} onChange={(value) => onFormChange("priority", value)} />
             <TextField label="Remarks optional" value={String(form.remarks || "")} onChange={(value) => onFormChange("remarks", value)} />
+            <div className="space-y-2">
+              <Label>Affected stages optional</Label>
+              <div className="max-h-36 space-y-2 overflow-auto rounded-md border p-2">
+                {(workflow?.stages ?? [])
+                  .filter((item) => item.id !== String(form.stage_id || ""))
+                  .map((item) => (
+                    <label key={item.id} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={form["affected_stage_" + item.id] === true}
+                        onCheckedChange={(checked) => onFormChange("affected_stage_" + item.id, checked === true)}
+                      />
+                      <span>{item.stage_name}</span>
+                    </label>
+                  ))}
+              </div>
+            </div>
             <p className="text-xs text-muted-foreground">Assign to project owner by default</p>
           </div>
         ) : null}
@@ -885,6 +981,30 @@ function WorkflowModal({
               />
               <span>I understand this will be recorded in workflow history</span>
             </label>
+          </div>
+        ) : null}
+
+        {modal?.type === "skipOverride" ? (
+          <div className="space-y-3">
+            <Field label="Stage" value={modal.stage.stage_name} readOnly />
+            <Field label="Reason" value={String(form.reason || "")} onChange={(value) => onFormChange("reason", value)} />
+            <Field label="Supporting document path" value={String(form.supporting_document_path || "")} onChange={(value) => onFormChange("supporting_document_path", value)} />
+            <Field label="Approved by" value={String(form.approved_by || "")} onChange={(value) => onFormChange("approved_by", value)} />
+            <TextField label="Remarks" value={String(form.remarks || "")} onChange={(value) => onFormChange("remarks", value)} />
+          </div>
+        ) : null}
+
+        {modal?.type === "dispatch" ? (
+          <div className="space-y-3">
+            <Field label="Dispatch date" type="datetime-local" value={String(form.dispatch_date || "")} onChange={(value) => onFormChange("dispatch_date", value)} />
+            <TextField label="Remarks" value={String(form.remarks || "")} onChange={(value) => onFormChange("remarks", value)} />
+          </div>
+        ) : null}
+
+        {modal?.type === "revisionChangesRequired" ? (
+          <div className="space-y-3">
+            <Field label="Stage" value={modal.revision.stage_name || "Revision"} readOnly />
+            <TextField label="Required changes" value={String(form.review_remarks || "")} onChange={(value) => onFormChange("review_remarks", value)} />
           </div>
         ) : null}
 

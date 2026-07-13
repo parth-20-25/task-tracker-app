@@ -7,7 +7,6 @@ import {
   DesignExcelUploadResponse,
   DesignFixtureOption,
   DesignProjectOption,
-  OutsourceStage,
   ProjectDashboardSummary,
   Task,
   ValidateRejectedDesignRowResponse,
@@ -188,12 +187,6 @@ export interface Project2DRouting {
   assignments: ProjectSubdivisionAssignment[];
 }
 
-export interface OutsourceFixturePayload {
-  supplier_name: string;
-  outsourced_stages: OutsourceStage[];
-  department_id?: string;
-}
-
 export type ProjectReactivationReason =
   | "customer_modification"
   | "internal_modification"
@@ -231,7 +224,7 @@ export interface ReactivateProjectResponse {
   message: string;
 }
 
-function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
+function stripUndefined<T extends object>(payload: T): T {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => value !== undefined),
   ) as T;
@@ -269,40 +262,6 @@ export function fetchDesignFixtures(projectId: string, departmentId?: string, op
   }
 
   return apiRequest<DesignFixtureOption[]>(`/design/fixtures?${params.toString()}`);
-}
-
-export function updateFixtureOutsourcing(
-  fixtureId: string,
-  payload: { is_outsourced: boolean; department_id?: string; vendor_name?: string; outsourced_stages?: OutsourceStage[] },
-) {
-  return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/outsourcing`, {
-    method: "PATCH",
-    body: JSON.stringify(stripUndefined(payload)),
-  });
-}
-
-export function outsourceFixture(fixtureId: string, payload: OutsourceFixturePayload) {
-  return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/outsource`, {
-    method: "POST",
-    body: JSON.stringify(stripUndefined(payload)),
-  });
-}
-
-export function bringFixtureInHouse(fixtureId: string, payload: { department_id?: string } = {}) {
-  return apiRequest<DesignFixtureOption>(`/design/fixtures/${encodeURIComponent(fixtureId)}/bring-in-house`, {
-    method: "POST",
-    body: JSON.stringify(stripUndefined(payload)),
-  });
-}
-
-export function completeOutsourcedFixture(fixtureId: string, payload: { department_id?: string } = {}) {
-  return apiRequest<DesignFixtureOption & { workflow_marked_complete?: boolean }>(
-    `/design/fixtures/${encodeURIComponent(fixtureId)}/outsource-complete`,
-    {
-      method: "POST",
-      body: JSON.stringify(stripUndefined(payload)),
-    },
-  );
 }
 
 export function fetchProjectOutsourcedFixtures(projectId: string, departmentId?: string) {

@@ -1,4 +1,5 @@
 const { AppError } = require("../lib/AppError");
+const { PROJECT_STATUSES } = require("../config/constants");
 const { pool } = require("../db");
 const { isDesignDepartment } = require("../lib/designDepartment");
 const {
@@ -16,6 +17,7 @@ const {
 } = require("../lib/designRevisionTypes");
 const {
   getProgressForFixture,
+  getFixtureWorkflowContext,
   incrementFixtureRevision,
   recordFixtureRevision,
   updateProgressRow,
@@ -169,6 +171,19 @@ async function executeDesignStageRework({
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    const lockedFixture = await getFixtureWorkflowContext(fixtureId, client, { lockProject: true });
+    if (!lockedFixture || lockedFixture.department_id !== departmentId) {
+      throw new AppError(404, "Fixture not found for the selected department");
+    }
+    if ((lockedFixture.project_status || PROJECT_STATUSES.ACTIVE) !== PROJECT_STATUSES.ACTIVE) {
+      throw new AppError(
+        409,
+        lockedFixture.project_status === PROJECT_STATUSES.ON_HOLD
+          ? "Project is on hold and cannot continue active fixture workflow"
+          : "Project is completed and cannot continue active fixture workflow",
+      );
+    }
 
     const lockedProgress = await getProgressForFixture(fixtureId, departmentId, client);
     const lockedTargetStage = resolveStageFromProgress(lockedProgress, { targetStageName, targetStageOrder });

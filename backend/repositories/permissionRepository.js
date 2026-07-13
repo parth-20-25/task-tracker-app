@@ -1,6 +1,8 @@
 const { env } = require("../config/env");
 const {
   DEPRECATED_PERMISSION_IDS,
+  CONTROL_DESIGN_ROLE_PERMISSION_BUNDLES,
+  DESIGN_OUTSOURCE_ROLE_PERMISSION_BUNDLES,
   PERMISSIONS,
   PERMISSION_DEFINITIONS,
 } = require("../config/constants");
@@ -13,11 +15,14 @@ const LEGACY_PERMISSION_MIGRATIONS = {
   can_assign_task: "can_assign_tasks",
   can_verify_task: "approve_completed_task",
   can_upload_data: "upload_native_design_data",
+  "control_design.create_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE,
+  "control_design.view_all_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL,
+  "control_design.assign_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN,
+  "control_design.reassign_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN,
 };
 const STALE_PERMISSION_IDS = ["tasks_assign", ...Object.keys(LEGACY_PERMISSION_MIGRATIONS)];
 const LEGACY_UPLOAD_COMPATIBILITY_ROLE_IDS = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10"];
 const deprecatedPermissionIdSet = new Set(DEPRECATED_PERMISSION_IDS);
-const CONTROL_DESIGN_PROJECT_LEADERSHIP_ROLE_IDS = ["r1", "r2", "r3", "r4"];
 
 function normalizePermissionId(permissionId) {
   if (typeof permissionId !== "string") {
@@ -25,7 +30,7 @@ function normalizePermissionId(permissionId) {
   }
 
   const trimmedPermissionId = permissionId.trim();
-  return trimmedPermissionId;
+  return LEGACY_PERMISSION_MIGRATIONS[trimmedPermissionId] || trimmedPermissionId;
 }
 
 function normalizePermissionIds(permissionIds = []) {
@@ -199,25 +204,21 @@ async function syncNativeUploadPermissionFromLegacy(client) {
 }
 
 async function syncControlDesignProjectPermissions(client) {
-  await client.query(
-    `
-      INSERT INTO role_permissions (role_id, permission_id)
-      SELECT roles.id, permission.permission_id
-      FROM roles
-      CROSS JOIN unnest($2::text[]) AS permission(permission_id)
-      WHERE roles.id = ANY($1::text[])
-      ON CONFLICT (role_id, permission_id) DO NOTHING
-    `,
-    [
-      CONTROL_DESIGN_PROJECT_LEADERSHIP_ROLE_IDS,
-      [
-        PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS,
-        PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS,
-        PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS,
-        PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS,
-      ],
-    ],
-  );
+  for (const [roleId, permissionIds] of Object.entries(CONTROL_DESIGN_ROLE_PERMISSION_BUNDLES)) {
+    await assignPermissionsToRole(roleId, permissionIds, client, {
+      autoCreateMissingPermissions: true,
+      source: "permissionRepository.syncControlDesignProjectPermissions",
+    });
+  }
+}
+
+async function syncDesignOutsourcePermissions(client) {
+  for (const [roleId, permissionIds] of Object.entries(DESIGN_OUTSOURCE_ROLE_PERMISSION_BUNDLES)) {
+    await assignPermissionsToRole(roleId, permissionIds, client, {
+      autoCreateMissingPermissions: true,
+      source: "permissionRepository.syncDesignOutsourcePermissions",
+    });
+  }
 }
 
 async function syncRolePermissionJson(client) {
@@ -372,6 +373,7 @@ async function alignPermissionData(client) {
   );
 
   await syncControlDesignProjectPermissions(client);
+  await syncDesignOutsourcePermissions(client);
   await syncNativeUploadPermissionFromLegacy(client);
   await syncRolePermissionJson(client);
 }
@@ -385,5 +387,6 @@ module.exports = {
   normalizeGrantablePermissionIds,
   normalizePermissionIds,
   seedPermissions,
+  syncDesignOutsourcePermissions,
   syncNativeUploadPermissionFromLegacy,
 };

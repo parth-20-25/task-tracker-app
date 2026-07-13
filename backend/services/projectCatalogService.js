@@ -25,6 +25,7 @@ const {
   upsertProjectByNumber,
 } = require("../repositories/designProjectCatalogRepository");
 const { createAuditLog } = require("../repositories/auditRepository");
+const { findActiveFixtureOutsourceAssignment } = require("../repositories/fixtureOutsourceAssignmentRepository");
 const {
   getConfiguredWorkflowForDepartment,
   getProgressForFixture,
@@ -42,6 +43,7 @@ const {
 } = require("../lib/outsourceWorkflow");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
+const { ensureFixtureReleasePackage } = require("./fixtureReleaseDeliverablesService");
 const {
   DESIGN_2D_SUBDIVISION_NAME,
   is2DLeaderUser,
@@ -434,6 +436,19 @@ async function createDesignTaskFromProject(user, payload = {}) {
       throw new AppError(409, "Fixture is fully completed");
     }
 
+    if (normalizeDesignStageName(lockedCurrentStage.stage_name) === "release") {
+      throw new AppError(400, "Release is not a task assignment stage. Use the workflow release action.");
+    }
+
+    const activeOutsource = await findActiveFixtureOutsourceAssignment(
+      fixture.fixture_id,
+      lockedCurrentStage.stage_name,
+      lockedCurrentStage.stage_version,
+      client,
+    );
+    if (activeOutsource) {
+      throw new AppError(409, "Stage is outsourced and cannot be assigned internally");
+    }
     if (!["PENDING", "REJECTED"].includes(lockedCurrentStage.status)) {
       throw new AppError(409, `Stage is not assignable in status ${lockedCurrentStage.status}`);
     }
@@ -794,6 +809,13 @@ async function completeOutsourcedFixtureForUser(user, fixtureId, payload = {}) {
         409,
         completion.transition?.reason || "Current workflow stage is not actively outsourced",
       );
+    }
+
+    if (is2DStage(completion.transition.currentStageName)) {
+      await ensureFixtureReleasePackage({
+        fixtureId: fixture.fixture_id,
+        createdBy: user.employee_id,
+      }, client);
     }
 
     const updatedFixture = await findFixtureByIdForUser(fixture.fixture_id, user, fixture.department_id, client);

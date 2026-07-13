@@ -9,16 +9,21 @@ const {
   CONTROL_DESIGN_STAGES,
   CONTROL_SUB_DEPARTMENTS,
   REVISION_REASONS,
+  REVISION_STATUSES,
   STAGE_STATUSES,
+  SUBMISSION_STATUSES,
   assertOtherReasonHasManualRemarks,
   calculateWorkflowProgress,
   canStartStage,
   canSubmitStage,
   createInitialStageRows,
+  hasOpenRevision,
+  hasPendingSubmission,
   isApprovedForProgress,
   isControlDepartmentUser,
   isControlDesignSubdivisionUser,
   isControlDesignWorkspaceUser,
+  isReadyForDispatch,
   isTerminalStageStatus,
   nextUnlockedStage,
   normalizeControlKey,
@@ -31,6 +36,7 @@ const {
   normalizeControlDesignProjectPayload,
   requireControlDesignCreatePermission,
 } = require("../services/controlWorkflowService");
+const { insertProjectWorkflow } = require("../repositories/controlWorkflowRepository");
 
 function templateStages() {
   return CONTROL_DESIGN_STAGES.map((stageName, index) => ({
@@ -108,6 +114,33 @@ test("workflow progress counts approved and pre-completed but not override-skipp
   });
 });
 
+test("ready for dispatch requires terminal stages with no pending submissions or open revisions", () => {
+  const rows = createInitialStageRows(templateStages());
+  rows.forEach((row) => { row.status = STAGE_STATUSES.APPROVED; });
+  rows[2].status = STAGE_STATUSES.PRE_COMPLETED;
+  rows[4].status = STAGE_STATUSES.SKIPPED_BY_OVERRIDE;
+
+  assert.equal(isReadyForDispatch(rows), true);
+
+  rows[0].submissions = [{ status: SUBMISSION_STATUSES.PENDING }];
+  assert.equal(hasPendingSubmission(rows), true);
+  assert.equal(isReadyForDispatch(rows), false);
+
+  rows[0].submissions = [];
+  rows[1].revisions = [{ status: REVISION_STATUSES.CHANGES_REQUIRED }];
+  assert.equal(hasOpenRevision(rows), true);
+  assert.equal(isReadyForDispatch(rows), false);
+
+  rows[1].revisions = [{ status: REVISION_STATUSES.APPROVED }];
+  rows[3].status = STAGE_STATUSES.BLOCKED;
+  assert.equal(isReadyForDispatch(rows), false);
+});
+
+test("revision changes-required is a canonical open revision status", () => {
+  assert.equal(REVISION_STATUSES.CHANGES_REQUIRED, "changes_required");
+  assert.equal(hasOpenRevision([{ revisions: [{ status: REVISION_STATUSES.CHANGES_REQUIRED }] }]), true);
+});
+
 test("revision reasons are constrained and Other requires manual remarks", () => {
   assert.equal(REVISION_REASONS.includes("Other"), true);
   assert.equal(normalizeRevisionReason("customer change"), "Customer Change");
@@ -175,7 +208,7 @@ test("Control Design project creation requires scoped create permission", () => 
     subdivision_id: subDepartmentId,
     subdivision: { id: subDepartmentId, department_id: "control", subdivision_name: "Control Design" },
     role: { id: "r4", name: "Team Leader", permissions: {} },
-    permissions: [PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS],
+    permissions: [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE],
   };
 
   assert.equal(canCreateControlDesignProject(controlDesignLeader, subDepartmentId), true);
@@ -185,7 +218,7 @@ test("Control Design project creation requires scoped create permission", () => 
     ...controlDesignLeader,
     employee_id: "EMP-CD-1",
     role: { id: "r6", name: "Engineer", permissions: {} },
-    permissions: [],
+    permissions: [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED],
   };
   assert.equal(canCreateControlDesignProject(regularControlDesignUser, subDepartmentId), false);
   assert.throws(
@@ -218,26 +251,95 @@ test("Control Design project creation requires scoped create permission", () => 
   );
 });
 
-test("Control Design create permission is seeded for leadership roles only", () => {
+test("Control Design permissions are seeded through role-id bundles", () => {
+  const hasPermission = (roleId, permissionId) => ROLE_DEFAULT_PERMISSIONS[roleId].includes(permissionId);
+
   for (const roleId of ["r1", "r2", "r3", "r4"]) {
-    assert.equal(ROLE_DEFAULT_PERMISSIONS[roleId].includes(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED), true);
   }
 
-  for (const roleId of ["r5", "r6", "r7"]) {
-    assert.equal(ROLE_DEFAULT_PERMISSIONS[roleId].includes(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS), false);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW), true);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL), true);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_APPROVALS_REVIEW), true);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE), true);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE), false);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN), false);
+  assert.equal(hasPermission("r5", PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE), false);
+
+  for (const roleId of ["r6", "r7"]) {
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_STAGES_START), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE), false);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN), false);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE), false);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE), false);
   }
 });
 
-test("frontend and backend declare the same Control Design create permission", () => {
+test("frontend and backend declare the same canonical Control Design permissions", () => {
   const frontendPermissions = fs.readFileSync(
     path.resolve(__dirname, "../../frontend/src/lib/permissions.ts"),
     "utf8",
   );
+  const canonicalPermissions = [
+    PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW,
+    PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED,
+    PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL,
+    PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE,
+    PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN,
+    PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN,
+    PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE,
+    PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES,
+    PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE,
+    PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE,
+    PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW,
+    PERMISSIONS.CONTROL_DESIGN_STAGES_OVERRIDE_UNLOCK,
+    PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED,
+  ];
 
-  assert.equal(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS, "control_design.create_projects");
-  assert.match(frontendPermissions, /CONTROL_DESIGN_CREATE_PROJECTS:\s*"control_design\.create_projects"/);
+  assert.equal(PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE, "control_design.projects.create");
+  assert.equal(PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE);
+
+  for (const permissionId of canonicalPermissions) {
+    assert.match(frontendPermissions, new RegExp(permissionId.replace(/\./g, "\\.")));
+  }
+  assert.match(frontendPermissions, /"control_design\.create_projects": PERMISSIONS\.CONTROL_DESIGN_PROJECTS_CREATE/);
 });
 
+test("project workflow insert supports initially unassigned Control Design projects", async () => {
+  let capturedSql = "";
+  let capturedParams = [];
+  const client = {
+    async query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params;
+      return { rows: [{ id: "workflow-1" }] };
+    },
+  };
+
+  const workflowId = await insertProjectWorkflow({
+    project_id: "project-1",
+    department_id: "control",
+    sub_department_id: "sub-control-design",
+    template_id: "template-1",
+    assigned_user_id: null,
+    assigned_by: null,
+  }, client);
+
+  assert.equal(workflowId, "workflow-1");
+  assert.equal(capturedParams[4], null);
+  assert.match(capturedSql, /CASE WHEN \$5::varchar IS NULL THEN NULL ELSE NOW\(\) END/);
+});
 test("Control Design project creation validation trims required fields and normalizes INR budget", () => {
   assert.deepEqual(normalizeControlDesignProjectPayload({
     projectId: " PARC2600M029 ",

@@ -155,6 +155,54 @@ const FIXTURE_RELEASE_FALLBACK_SELECT = `
         NULL::text AS workflow_released_by_name
 `;
 
+const FIXTURE_RELEASE_PACKAGE_SELECT = `
+        release_package_summary.release_package_status,
+        COALESCE(release_package_summary.approved_count, 0) AS release_deliverables_approved_count,
+        COALESCE(release_package_summary.total_count, 0) AS release_deliverables_total_count,
+        CASE
+          WHEN di.is_workflow_complete IS TRUE OR release_snapshot.captured_at IS NOT NULL THEN 'RELEASED'
+          WHEN release_package_summary.release_package_status = 'READY_FOR_RELEASE' THEN 'READY_FOR_RELEASE'
+          WHEN release_package_summary.release_package_id IS NOT NULL THEN 'PENDING_DELIVERABLES'
+          ELSE 'WORKFLOW_ACTIVE'
+        END AS fixture_release_state
+`;
+
+const FIXTURE_RELEASE_PACKAGE_JOIN = `
+      LEFT JOIN LATERAL (
+        SELECT
+          latest_package.id AS release_package_id,
+          latest_package.status AS release_package_status,
+          COUNT(deliverable.id) FILTER (
+            WHERE deliverable.status = 'APPROVED'
+              AND (
+                deliverable.deliverable_code <> 'MIMIC_DISPLAY'
+                OR deliverable.applicability_status = 'REQUIRED'
+              )
+          )::integer AS approved_count,
+          COUNT(deliverable.id) FILTER (
+            WHERE deliverable.deliverable_code <> 'MIMIC_DISPLAY'
+              OR deliverable.applicability_status = 'REQUIRED'
+          )::integer AS total_count
+        FROM (
+          SELECT release_package.id, release_package.status
+          FROM design.fixture_release_packages release_package
+          WHERE release_package.fixture_id = di.id
+          ORDER BY release_package.version DESC, release_package.created_at DESC, release_package.id DESC
+          LIMIT 1
+        ) latest_package
+        LEFT JOIN design.fixture_release_deliverables deliverable
+          ON deliverable.package_id = latest_package.id
+        GROUP BY latest_package.id, latest_package.status
+      ) release_package_summary ON TRUE
+`;
+
+const FIXTURE_RELEASE_PACKAGE_FALLBACK_SELECT = `
+        NULL::text AS release_package_status,
+        0::integer AS release_deliverables_approved_count,
+        0::integer AS release_deliverables_total_count,
+        CASE WHEN di.is_workflow_complete IS TRUE THEN 'RELEASED' ELSE 'WORKFLOW_ACTIVE' END AS fixture_release_state
+`;
+
 function fixtureOptionalFragments(includeOptionalTables = true) {
   return includeOptionalTables
     ? {
@@ -163,6 +211,8 @@ function fixtureOptionalFragments(includeOptionalTables = true) {
         releaseSelect: FIXTURE_RELEASE_SELECT,
         revisionProgressJoin: FIXTURE_REVISION_PROGRESS_JOIN,
         releaseSnapshotJoin: FIXTURE_RELEASE_SNAPSHOT_JOIN,
+        releasePackageSelect: FIXTURE_RELEASE_PACKAGE_SELECT,
+        releasePackageJoin: FIXTURE_RELEASE_PACKAGE_JOIN,
       }
     : {
         outsourceSelect: FIXTURE_OUTSOURCE_FALLBACK_SELECT,
@@ -170,6 +220,8 @@ function fixtureOptionalFragments(includeOptionalTables = true) {
         releaseSelect: FIXTURE_RELEASE_FALLBACK_SELECT,
         revisionProgressJoin: "",
         releaseSnapshotJoin: "",
+        releasePackageSelect: FIXTURE_RELEASE_PACKAGE_FALLBACK_SELECT,
+        releasePackageJoin: "",
       };
 }
 
@@ -180,7 +232,9 @@ function isMissingOptionalFixtureRelation(error) {
 
   const relation = String(error.relation || error.message || "");
   return relation.includes("fixture_outsource_records")
-    || relation.includes("workflow_completion_snapshots");
+    || relation.includes("workflow_completion_snapshots")
+    || relation.includes("fixture_release_packages")
+    || relation.includes("fixture_release_deliverables");
 }
 
 const DEPARTMENT_PROJECT_SELECT = `
@@ -421,6 +475,12 @@ function mapFixtureOptionRow(row) {
     workflow_released_at: row.workflow_released_at || null,
     workflow_released_by: row.workflow_released_by || null,
     workflow_released_by_name: row.workflow_released_by_name || null,
+    release_package_status: row.release_package_status || null,
+    release_deliverables_approved_count: Number(row.release_deliverables_approved_count || 0),
+    release_deliverables_total_count: Number(row.release_deliverables_total_count || 0),
+    fixture_release_state: row.fixture_release_state || (
+      row.is_workflow_complete === true ? "RELEASED" : "WORKFLOW_ACTIVE"
+    ),
     workflow_progress_percent: row.workflow_progress_percent === null || row.workflow_progress_percent === undefined
       ? null
       : Number(row.workflow_progress_percent),
@@ -1248,6 +1308,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
         ${fragments.releaseSelect},
+        ${fragments.releasePackageSelect},
         current_progress.status AS workflow_status,
         COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
         COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
@@ -1266,6 +1327,7 @@ async function listFixturesByProjectForDepartment(projectId, departmentId, { act
       ${currentProgressLateral("di", "dp", "current_progress")}
       ${fragments.revisionProgressJoin}
       ${fragments.releaseSnapshotJoin}
+      ${fragments.releasePackageJoin}
       LEFT JOIN users workflow_assignee
         ON ${userIdentifierMatchSql("workflow_assignee", "COALESCE(operational_task.assigned_to, current_progress.assigned_to)")}
      WHERE dp.id = $1
@@ -1335,6 +1397,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
         current_progress.total_stages AS workflow_stage_total,
         current_progress.stage_version AS workflow_stage_version,
         ${fragments.releaseSelect},
+        ${fragments.releasePackageSelect},
         current_progress.status AS workflow_status,
         COALESCE(operational_task.assigned_to, current_progress.assigned_to) AS workflow_assigned_to,
         COALESCE(operational_task.started_at, current_progress.started_at) AS workflow_started_at,
@@ -1353,6 +1416,7 @@ async function listFixturesByProjectForUser(projectId, user, departmentId, { act
       ${currentProgressLateral("di", "dp", "current_progress")}
       ${fragments.revisionProgressJoin}
       ${fragments.releaseSnapshotJoin}
+      ${fragments.releasePackageJoin}
       LEFT JOIN users workflow_assignee
         ON ${userIdentifierMatchSql("workflow_assignee", "COALESCE(operational_task.assigned_to, current_progress.assigned_to)")}
       WHERE dp.id = $2
@@ -2307,6 +2371,13 @@ async function updateFixtureOutsourcingState({
 async function upsertFixture(fixtureData, client = pool) {
   const result = await client.query(
     `
+      WITH active_project AS (
+        SELECT id
+        FROM design.projects
+        WHERE id = $1
+          AND LOWER(COALESCE(status, 'active')) = 'active'
+        FOR UPDATE
+      )
       INSERT INTO design.fixtures (
         project_id,
         fixture_no,
@@ -2320,7 +2391,8 @@ async function upsertFixture(fixtureData, client = pool) {
         ingestion_source,
         batch_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      SELECT active_project.id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+      FROM active_project
       ON CONFLICT (project_id, fixture_no) DO UPDATE
       SET
         project_id = EXCLUDED.project_id,
@@ -2364,6 +2436,10 @@ async function upsertFixture(fixtureData, client = pool) {
       fixtureData.batch_id || null,
     ],
   );
+
+  if (!result.rows[0]) {
+    throw new AppError(409, "Project must be active before fixtures can be changed");
+  }
 
   return mapFixtureOptionRow(result.rows[0]);
 }

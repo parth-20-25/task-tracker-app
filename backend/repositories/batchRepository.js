@@ -738,6 +738,22 @@ async function setProjectLifecycleStatus(projectId, status, client = pool) {
   return result.rowCount > 0;
 }
 
+async function lockProjectForRelease(projectId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        id AS project_id,
+        COALESCE(status, $2) AS project_status
+      FROM design.projects
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [projectId, PROJECT_STATUSES.ACTIVE],
+  );
+
+  return result.rows[0] || null;
+}
+
 async function reactivateProjectForModification(projectId, client = pool) {
   const result = await client.query(
     `
@@ -1255,48 +1271,6 @@ async function restoreProjectWorkflowForReactivation(projectId, client = pool) {
 async function releaseProject(projectId, releasedBy, client = pool) {
   await captureProjectReleaseSnapshot(projectId, releasedBy, client);
   await setProjectLifecycleStatus(projectId, PROJECT_STATUSES.COMPLETED, client);
-
-  await client.query(
-    `
-      UPDATE design.fixtures
-      SET is_workflow_complete = TRUE,
-          updated_at = NOW()
-      WHERE project_id = $1
-    `,
-    [projectId],
-  );
-
-  await client.query(
-    `
-      UPDATE fixture_workflow_progress fwp
-      SET status = 'APPROVED',
-          completed_at = COALESCE(fwp.completed_at, NOW()),
-          updated_at = NOW()
-      FROM design.fixtures f
-      WHERE f.id = fwp.fixture_id
-        AND f.project_id = $1
-        AND fwp.status <> 'APPROVED'
-    `,
-    [projectId],
-  );
-
-  await client.query(
-    `
-      UPDATE tasks
-      SET status = 'closed',
-          verification_status = 'approved',
-          completion_percent = 100,
-          lifecycle_status = 'completed',
-          completed_at = COALESCE(completed_at, NOW()),
-          closed_at = COALESCE(closed_at, NOW()),
-          approved_at = COALESCE(approved_at, NOW()),
-          approved_by = COALESCE(approved_by, $2),
-          updated_at = NOW()
-      WHERE project_id = $1
-        AND status <> 'cancelled'
-    `,
-    [projectId, releasedBy || null],
-  );
 }
 
 async function deleteFromOptionalTaskTable(tableName, taskIds, client) {
@@ -1379,6 +1353,7 @@ module.exports = instrumentModuleExports("repository.batchRepository", {
   getProjectLifecycleContextByIdForUser,
   listBatchesWithSummary,
   listBatchesWithSummaryForUser,
+  lockProjectForRelease,
   reactivateProjectForModification,
   releaseProject,
   restoreProjectWorkflowForReactivation,

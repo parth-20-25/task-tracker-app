@@ -1,4 +1,5 @@
 import type { Role, User } from "@/types";
+import { isDesignDepartment } from "@/lib/departments";
 
 export const PERMISSIONS = {
   ASSIGN_TASK: "can_assign_tasks",
@@ -10,6 +11,12 @@ export const PERMISSIONS = {
   DELETE_WBS_BATCH: "delete_wbs_batch",
   REOPEN_FIXTURE_STAGE: "reopen_fixture_stage",
   MANIPULATE_FIXTURE_STAGE: "manipulate_fixture_stage",
+  DESIGN_FIXTURE_OUTSOURCE: "design.fixture.outsource",
+  DESIGN_FIXTURE_OUTSOURCE_BULK: "design.fixture.outsource.bulk",
+  DESIGN_FIXTURE_OUTSOURCE_MANAGE: "design.fixture.outsource.manage",
+  DESIGN_FIXTURE_OUTSOURCE_CANCEL: "design.fixture.outsource.cancel",
+  DESIGN_FIXTURE_OUTSOURCE_REVIEW: "design.fixture.outsource.review",
+  DESIGN_VENDOR_MANAGE: "design.vendor.manage",
   VIEW_SELF_TASKS: "can_view_self_tasks",
   VIEW_ALL_TASKS: "can_view_all_tasks",
   CREATE_TASK: "can_create_task",
@@ -39,22 +46,70 @@ export const PERMISSIONS = {
   VIEW_EFFICIENCY_ANALYTICS: "view_efficiency_analytics",
   VIEW_WORKFLOW_HEALTH: "view_workflow_health",
   VIEW_PREDICTIVE_ANALYTICS: "view_predictive_analytics",
-  CONTROL_DESIGN_CREATE_PROJECTS: "control_design.create_projects",
-  CONTROL_DESIGN_VIEW_ALL_PROJECTS: "control_design.view_all_projects",
-  CONTROL_DESIGN_ASSIGN_PROJECTS: "control_design.assign_projects",
-  CONTROL_DESIGN_REASSIGN_PROJECTS: "control_design.reassign_projects",
+  CONTROL_DESIGN_WORKSPACE_VIEW: "control_design.workspace.view",
+  CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED: "control_design.projects.view_assigned",
+  CONTROL_DESIGN_PROJECTS_VIEW_ALL: "control_design.projects.view_all",
+  CONTROL_DESIGN_PROJECTS_CREATE: "control_design.projects.create",
+  CONTROL_DESIGN_PROJECTS_EDIT: "control_design.projects.edit",
+  CONTROL_DESIGN_PROJECTS_ASSIGN: "control_design.projects.assign",
+  CONTROL_DESIGN_PROJECTS_REASSIGN: "control_design.projects.reassign",
+  CONTROL_DESIGN_PROJECTS_CANCEL: "control_design.projects.cancel",
+  CONTROL_DESIGN_STAGES_START: "control_design.stages.start",
+  CONTROL_DESIGN_STAGES_SUBMIT: "control_design.stages.submit",
+  CONTROL_DESIGN_PATHS_UPDATE: "control_design.paths.update",
+  CONTROL_DESIGN_APPROVALS_REVIEW: "control_design.approvals.review",
+  CONTROL_DESIGN_APPROVALS_APPROVE: "control_design.approvals.approve",
+  CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES: "control_design.approvals.request_changes",
+  CONTROL_DESIGN_REVISIONS_RAISE: "control_design.revisions.raise",
+  CONTROL_DESIGN_REVISIONS_EXECUTE: "control_design.revisions.execute",
+  CONTROL_DESIGN_REVISIONS_REVIEW: "control_design.revisions.review",
+  CONTROL_DESIGN_STAGES_MARK_PRE_COMPLETED: "control_design.stages.mark_pre_completed",
+  CONTROL_DESIGN_STAGES_OVERRIDE_UNLOCK: "control_design.stages.override_unlock",
+  CONTROL_DESIGN_STAGES_SKIP_OVERRIDE: "control_design.stages.skip_override",
+  CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED: "control_design.projects.mark_dispatched",
+  CONTROL_DESIGN_PROJECTS_REOPEN_AFTER_DISPATCH: "control_design.projects.reopen_after_dispatch",
+  CONTROL_DESIGN_AUDIT_VIEW: "control_design.audit.view",
+  CONTROL_DESIGN_REPORTS_VIEW: "control_design.reports.view",
+  CONTROL_DESIGN_CREATE_PROJECTS: "control_design.projects.create",
+  CONTROL_DESIGN_VIEW_ALL_PROJECTS: "control_design.projects.view_all",
+  CONTROL_DESIGN_ASSIGN_PROJECTS: "control_design.projects.assign",
+  CONTROL_DESIGN_REASSIGN_PROJECTS: "control_design.projects.reassign",
 } as const;
 
-export const PERMISSION_OPTIONS = Object.values(PERMISSIONS);
+export const PERMISSION_OPTIONS = [...new Set(Object.values(PERMISSIONS))];
 
 export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[number], string>> = {
   [PERMISSIONS.VIEW_SELF_TASKS]: "View Self Tasks Only",
   [PERMISSIONS.VIEW_ALL_TASKS]: "View All Tasks",
   [PERMISSIONS.SELF_APPROVE]: "Self Approve",
-  [PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS]: "Create Control Design Projects",
-  [PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS]: "View All Control Design Projects",
-  [PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS]: "Assign Control Design Projects",
-  [PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS]: "Reassign Control Design Projects",
+  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE]: "Outsource Design Fixture Stages",
+  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_BULK]: "Bulk Outsource Design Fixture Stages",
+  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_MANAGE]: "Manage Design Fixture Outsourcing",
+  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_CANCEL]: "Cancel Design Fixture Outsourcing",
+  [PERMISSIONS.DESIGN_FIXTURE_OUTSOURCE_REVIEW]: "Review Design Fixture Outsourcing",
+  [PERMISSIONS.DESIGN_VENDOR_MANAGE]: "Manage Design Vendors",
+  [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW]: "View Control Design Workspace",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED]: "View Assigned Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL]: "View All Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE]: "Create Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_EDIT]: "Edit Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN]: "Assign Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN]: "Reassign Control Design Projects",
+  [PERMISSIONS.CONTROL_DESIGN_STAGES_START]: "Start Control Design Stages",
+  [PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT]: "Submit Control Design Stages",
+  [PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE]: "Update Control Design Paths",
+  [PERMISSIONS.CONTROL_DESIGN_APPROVALS_REVIEW]: "Review Control Design Approvals",
+  [PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE]: "Approve Control Design Submissions",
+  [PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES]: "Request Control Design Changes",
+  [PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE]: "Raise Control Design Revisions",
+  [PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE]: "Execute Control Design Revisions",
+  [PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW]: "Review Control Design Revisions",
+  [PERMISSIONS.CONTROL_DESIGN_STAGES_MARK_PRE_COMPLETED]: "Mark Control Design Stages Pre-Completed",
+  [PERMISSIONS.CONTROL_DESIGN_STAGES_OVERRIDE_UNLOCK]: "Override Unlock Control Design Stages",
+  [PERMISSIONS.CONTROL_DESIGN_STAGES_SKIP_OVERRIDE]: "Skip Control Design Stages By Override",
+  [PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED]: "Mark Control Design Projects Dispatched",
+  [PERMISSIONS.CONTROL_DESIGN_AUDIT_VIEW]: "View Control Design Audit",
+  [PERMISSIONS.CONTROL_DESIGN_REPORTS_VIEW]: "View Control Design Reports",
 };
 
 export function getPermissionLabel(permission: string) {
@@ -118,14 +173,40 @@ export interface UiAccess {
   canViewDepartmentAnalytics: boolean;
   canViewAllDepartmentsAnalytics: boolean;
   canViewAllUsersAnalytics: boolean;
-  canCreateControlDesignProjects: boolean;
+  canViewControlDesignWorkspace: boolean;
+  canViewAssignedControlDesignProjects: boolean;
   canViewAllControlDesignProjects: boolean;
+  canCreateControlDesignProjects: boolean;
+  canEditControlDesignProjects: boolean;
   canAssignControlDesignProjects: boolean;
   canReassignControlDesignProjects: boolean;
+  canStartControlDesignStages: boolean;
+  canSubmitControlDesignStages: boolean;
+  canUpdateControlDesignPaths: boolean;
+  canReviewControlDesignApprovals: boolean;
+  canApproveControlDesignSubmissions: boolean;
+  canRequestControlDesignChanges: boolean;
+  canRaiseControlDesignRevisions: boolean;
+  canExecuteControlDesignRevisions: boolean;
+  canReviewControlDesignRevisions: boolean;
+  canMarkControlDesignPreCompleted: boolean;
+  canOverrideUnlockControlDesignStages: boolean;
+  canSkipControlDesignStages: boolean;
+  canMarkControlDesignDispatched: boolean;
+  canViewControlDesignAudit: boolean;
+  canViewControlDesignReports: boolean;
 }
 
+const LEGACY_PERMISSION_MIGRATIONS: Record<string, string> = {
+  "control_design.create_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE,
+  "control_design.view_all_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL,
+  "control_design.assign_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN,
+  "control_design.reassign_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN,
+};
+
 export function normalizePermissionId(permission: string) {
-  return permission;
+  const trimmed = String(permission || "").trim();
+  return LEGACY_PERMISSION_MIGRATIONS[trimmed] || trimmed;
 }
 
 export function buildRolePermissionSet(role: Role | null | undefined) {
@@ -252,8 +333,25 @@ export function isControlDesignSubdivisionUser(user: User | null | undefined) {
   return subdivisionId === "control_design" || subdivisionName === "control_design";
 }
 
+export function canShowAdditionalDesignTasksNavigation(user: User | null | undefined) {
+  return isProjectAuthorityUser(user)
+    || (isDesignDepartment(user) && !isDesign2DSubdivisionUser(user));
+}
+
+export function isDesign2DSubdivisionUser(user: User | null | undefined) {
+  const departmentId = normalizeRoleKey(user?.department_id);
+  const departmentName = normalizeRoleKey(user?.department?.name);
+  const subdivisionId = normalizeRoleKey(user?.subdivision_id);
+  const subdivisionName = normalizeRoleKey(user?.subdivision?.subdivision_name);
+
+  return (departmentId === "design" || departmentName === "design")
+    && (subdivisionId === "2d" || subdivisionName === "2d");
+}
+
 export function isControlDesignDashboardUser(user: User | null | undefined, _access?: unknown) {
-  return isControlDepartmentUser(user) && isControlDesignSubdivisionUser(user);
+  return isControlDepartmentUser(user)
+    && isControlDesignSubdivisionUser(user)
+    && hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW);
 }
 function normalizeRoleKey(value: unknown) {
   return String(value || "")
@@ -288,19 +386,36 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
   const canViewSelfTasks = hasUserPermission(user, PERMISSIONS.VIEW_SELF_TASKS);
   const canViewAllTasks = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_ALL_TASKS);
+  const canAccessProjectFixtures = operationalController
+    || (isDesign2DSubdivisionUser(user) && (canViewSelfTasks || canViewAllTasks));
   const canViewReports = projectAuthority || hasUserPermission(user, PERMISSIONS.VIEW_REPORTS);
   const canExportReports = projectAuthority || hasUserPermission(user, PERMISSIONS.EXPORT_REPORTS);
   const canViewDepartmentAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS);
   const canViewAllDepartmentsAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS);
   const canViewAllUsersAnalytics = hasUserPermission(user, PERMISSIONS.VIEW_ALL_USERS_ANALYTICS);
   const canViewAnalytics = hasAnyUserPermission(user, ANALYTICS_VISIBILITY_PERMISSIONS);
-  const canCreateControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_CREATE_PROJECTS);
-  const canAssignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_ASSIGN_PROJECTS);
-  const canReassignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REASSIGN_PROJECTS) || canAssignControlDesignProjects;
-  const canViewAllControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_VIEW_ALL_PROJECTS)
-    || canCreateControlDesignProjects
-    || canAssignControlDesignProjects
-    || canReassignControlDesignProjects;
+  const canViewControlDesignWorkspace = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW);
+  const canViewAssignedControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED);
+  const canViewAllControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL);
+  const canCreateControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE);
+  const canEditControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_EDIT);
+  const canAssignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN);
+  const canReassignControlDesignProjects = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN);
+  const canStartControlDesignStages = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_STAGES_START);
+  const canSubmitControlDesignStages = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT);
+  const canUpdateControlDesignPaths = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE);
+  const canReviewControlDesignApprovals = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_APPROVALS_REVIEW);
+  const canApproveControlDesignSubmissions = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE);
+  const canRequestControlDesignChanges = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES);
+  const canRaiseControlDesignRevisions = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE);
+  const canExecuteControlDesignRevisions = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE);
+  const canReviewControlDesignRevisions = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW);
+  const canMarkControlDesignPreCompleted = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_STAGES_MARK_PRE_COMPLETED);
+  const canOverrideUnlockControlDesignStages = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_STAGES_OVERRIDE_UNLOCK);
+  const canSkipControlDesignStages = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_STAGES_SKIP_OVERRIDE);
+  const canMarkControlDesignDispatched = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED);
+  const canViewControlDesignAudit = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_AUDIT_VIEW);
+  const canViewControlDesignReports = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REPORTS_VIEW);
 
   return {
     canAssignTasks,
@@ -330,15 +445,33 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canExportReports,
     canViewTeamTasks: canViewAllTasks,
     canViewVerifications: operationalController && hasAnyUserPermission(user, [PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
-    canAccessProjectFixtures: operationalController,
+    canAccessProjectFixtures,
     canAccessAdminPanel: isAdminUser(user) || hasAnyUserPermission(user, ADMIN_PANEL_PERMISSIONS),
     canViewAuditLogs: isAdminUser(user),
     canViewDepartmentAnalytics,
     canViewAllDepartmentsAnalytics,
     canViewAllUsersAnalytics,
-    canCreateControlDesignProjects,
+    canViewControlDesignWorkspace,
+    canViewAssignedControlDesignProjects,
     canViewAllControlDesignProjects,
+    canCreateControlDesignProjects,
+    canEditControlDesignProjects,
     canAssignControlDesignProjects,
     canReassignControlDesignProjects,
+    canStartControlDesignStages,
+    canSubmitControlDesignStages,
+    canUpdateControlDesignPaths,
+    canReviewControlDesignApprovals,
+    canApproveControlDesignSubmissions,
+    canRequestControlDesignChanges,
+    canRaiseControlDesignRevisions,
+    canExecuteControlDesignRevisions,
+    canReviewControlDesignRevisions,
+    canMarkControlDesignPreCompleted,
+    canOverrideUnlockControlDesignStages,
+    canSkipControlDesignStages,
+    canMarkControlDesignDispatched,
+    canViewControlDesignAudit,
+    canViewControlDesignReports,
   };
 }

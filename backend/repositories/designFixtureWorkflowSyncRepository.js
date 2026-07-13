@@ -11,13 +11,30 @@ function chunkArray(items, size) {
 }
 
 /**
- * Row-level lock on all fixtures for the project so membership / merge commits stay atomic vs concurrent writers.
+ * Lock the project before its fixture rows so membership changes serialize with project release.
+ * The shared lock order is project first, then fixture rows.
  */
 async function lockDesignProjectFixtures(projectId, client) {
+  const projectResult = await client.query(
+    `
+      SELECT id AS project_id, COALESCE(status, 'active') AS project_status
+      FROM design.projects
+      WHERE id = $1::uuid
+      FOR UPDATE
+    `,
+    [projectId],
+  );
+
+  if (projectResult.rowCount === 0) {
+    return null;
+  }
+
   await client.query(
     `SELECT 1 FROM design.fixtures WHERE project_id = $1::uuid FOR UPDATE`,
     [projectId],
   );
+
+  return projectResult.rows[0];
 }
 
 async function loadDesignFixturesForIngestionMerge(projectId, client) {

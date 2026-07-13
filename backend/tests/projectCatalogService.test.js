@@ -183,6 +183,10 @@ function installAssignmentMocks(stageName, options = {}) {
     stage_version: 0,
     status: "PENDING",
   };
+  const lockedProgressRow = {
+    ...progressRow,
+    stage_name: options.lockedStageName || progressRow.stage_name,
+  };
 
   db.pool.connect = async () => client;
   projectRepository.findProjectByIdForUser = async () => project;
@@ -208,7 +212,7 @@ function installAssignmentMocks(stageName, options = {}) {
     id: "workflow-design",
     stages: [workflowStage],
   });
-  workflowRepository.getProgressForFixture = async () => [progressRow];
+  workflowRepository.getProgressForFixture = async () => [lockedProgressRow];
   workflowRepository.updateProgressRow = async (fixtureId, updatedStageName, fields, txClient) => {
     assert.equal(txClient, client);
     calls.progressUpdates.push({ fixtureId, stageName: updatedStageName, fields });
@@ -400,6 +404,36 @@ test("2D assignment supports multiple assignees with trackable contribution rows
       Math.round(mocks.calls.contributions.reduce((sum, row) => sum + Number(row.contribution_percent), 0) * 100) / 100,
       100,
     );
+  } finally {
+    mocks.restore();
+  }
+});
+
+test("design assignment rechecks and rejects Release after locking workflow progress", async () => {
+  const mocks = installAssignmentMocks("2D Finish", { lockedStageName: "Release" });
+
+  try {
+    const { createDesignTaskFromProject } = require("../services/projectCatalogService");
+    await assert.rejects(
+      () => createDesignTaskFromProject(
+        {
+          employee_id: "MGR-1",
+          department_id: "design",
+          role: { id: "r1", role_key: "admin" },
+        },
+        {
+          department_id: "design",
+          project_id: "project-1",
+          fixture_id: "11111111-1111-1111-1111-111111111111",
+          assigned_to: "DES-1",
+        },
+      ),
+      /Release is not a task assignment stage/,
+    );
+
+    assert.equal(mocks.calls.progressUpdates.length, 0);
+    assert.equal(mocks.calls.tasks.length, 0);
+    assert.ok(mocks.calls.tx.includes("ROLLBACK"));
   } finally {
     mocks.restore();
   }

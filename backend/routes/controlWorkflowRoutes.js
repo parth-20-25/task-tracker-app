@@ -22,6 +22,11 @@ router.get(
 );
 
 router.get(
+  "/control/design/capabilities",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.getControlDesignCapabilities(req.user))),
+);
+
+router.get(
   "/control/design/projects",
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listControlDesignProjects(req.user))),
 );
@@ -49,6 +54,7 @@ router.post(
       req.user,
       req.params.projectId,
       req.body?.assigned_user_id,
+      req.body?.reason || req.body?.reassignment_reason,
     ),
   )),
 );
@@ -87,6 +93,7 @@ router.patch(
       req.user,
       req.params.workflowId,
       req.body?.assigned_user_id,
+      req.body?.reason || req.body?.reassignment_reason,
     ),
   )),
 );
@@ -154,6 +161,22 @@ router.post(
 );
 
 router.post(
+  "/control/workflow-stages/:stageId/skip-by-override",
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.skipStageByOverride(req.user, req.params.stageId, req.body),
+  )),
+);
+
+router.post(
+  "/control/workflows/:workflowId/dispatch",
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.markWorkflowDispatched(req.user, req.params.workflowId, req.body),
+  )),
+);
+
+router.post(
   "/control/workflow-revisions/:revisionId/start",
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.startRevision(req.user, req.params.revisionId))),
 );
@@ -171,6 +194,14 @@ router.post(
   asyncHandler(async (req, res) => sendSuccess(
     res,
     await controlWorkflowService.approveRevision(req.user, req.params.revisionId, req.body),
+  )),
+);
+
+router.post(
+  "/control/workflow-revisions/:revisionId/changes-required",
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.markRevisionChangesRequired(req.user, req.params.revisionId, req.body),
   )),
 );
 

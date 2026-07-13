@@ -13,10 +13,12 @@ const {
   deleteBatchCascade,
   reactivateProjectForModification,
   releaseProject,
+  lockProjectForRelease,
   restoreProjectWorkflowForReactivation,
   setProjectLifecycleStatus,
 } = require("../repositories/batchRepository");
 const { canAccessDepartment, hasPermission, isAdmin, isProjectAuthorityRole } = require("./accessControlService");
+const { assertProjectFixturesReleased } = require("./fixtureReleaseDeliverablesService");
 
 const PROJECT_REACTIVATION_REASONS = {
   customer_modification: "Customer modification",
@@ -440,18 +442,25 @@ async function releaseProjectForBatch(user, batchId) {
     throw new AppError(403, "You do not have permission to release this project");
   }
 
-  if (isTerminalProjectStatus(batch.project_status)) {
-    return {
-      project_id: batch.project_id,
-      batch_id: batchId,
-      status: batch.project_status,
-      message: `Project ${batch.project_no} is already released or completed.`,
-    };
-  }
-
+  let previousStatus = batch.project_status;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const lockedProject = await lockProjectForRelease(batch.project_id, client);
+    if (!lockedProject) {
+      throw new AppError(404, "Project not found");
+    }
+    previousStatus = lockedProject.project_status;
+    if (isTerminalProjectStatus(lockedProject.project_status)) {
+      await client.query("COMMIT");
+      return {
+        project_id: batch.project_id,
+        batch_id: batchId,
+        status: lockedProject.project_status,
+        message: `Project ${batch.project_no} is already released or completed.`,
+      };
+    }
+    await assertProjectFixturesReleased(batch.project_id, client);
     await releaseProject(batch.project_id, user.employee_id, client);
     await client.query("COMMIT");
   } catch (err) {
@@ -469,7 +478,7 @@ async function releaseProjectForBatch(user, batchId) {
     metadata: {
       batch_id: batchId,
       project_no: batch.project_no,
-      previous_status: batch.project_status,
+      previous_status: previousStatus,
       next_status: PROJECT_STATUSES.COMPLETED,
     },
   });

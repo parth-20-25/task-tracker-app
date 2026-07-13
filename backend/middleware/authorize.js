@@ -2,6 +2,7 @@ const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
 const {
   HasPermission,
+  canViewProjectFixtures,
   isAdmin,
   isExecutiveDashboardRole,
   isOperationalControllerRole,
@@ -69,6 +70,18 @@ function requireOperationalController(req, _res, next) {
 
   if (!isOperationalControllerRole(req.user)) {
     return next(new AppError(403, "Project fixture controls are limited to operational controllers"));
+  }
+
+  return next();
+}
+
+function requireProjectFixtureViewer(req, _res, next) {
+  if (!req.user) {
+    return next(new AppError(401, "Unauthorized: User not authenticated"));
+  }
+
+  if (!canViewProjectFixtures(req.user)) {
+    return next(new AppError(403, "Project fixture access requires an operational controller or assigned Design 2D viewer"));
   }
 
   return next();
@@ -160,6 +173,7 @@ module.exports = {
   requireAdmin,
   requireExecutiveDashboardAccess,
   requireOperationalController,
+  requireProjectFixtureViewer,
   authorize,
   loadPermissions,
 };

@@ -21,6 +21,7 @@ const { isDesignDepartment } = require("../lib/designDepartment");
 const {
   normalizeAdditionalDesignTaskKind,
   normalizeAdditionalDesignTeam,
+  isRetiredAdditionalDesignTask,
   userBelongsToAdditionalDesignTeam,
 } = require("../lib/additionalDesignTasks");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
@@ -985,6 +986,15 @@ async function createTaskForUser(user, payload = {}, options = {}) {
 
     if (!designTeam) {
       throw new AppError(400, "design_team must be either 2D or 3D");
+    }
+
+    if (isRetiredAdditionalDesignTask(additionalTaskKind, designTeam)) {
+      throw new AppError(
+        409,
+        "Design 2D additional-task creation is retired. Use the fixture 2D Release Deliverables workflow.",
+        { code: "DESIGN_2D_ADDITIONAL_TASK_RETIRED" },
+        "DESIGN_2D_ADDITIONAL_TASK_RETIRED",
+      );
     }
 
     if (!isDesignDepartment(primaryAssignee) || !userBelongsToAdditionalDesignTeam(primaryAssignee, designTeam)) {
@@ -2148,6 +2158,7 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
         department_id: lockedTask.department_id,
         fixture_id: lockedTask.fixture_id,
         task_id: lockedTask.id,
+        actor_employee_id: user.employee_id,
         client,
       });
     } else if (workflowProgressRow && next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {

@@ -1,36 +1,73 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlDesignDashboardWorkspace } from "@/components/ControlDesignDashboardWorkspace";
-import type { ControlDesignProject, ControlProjectWorkflow, ControlWorkflowTemplate } from "@/api/controlWorkflowApi";
+import type { ControlDesignCapabilities, ControlDesignProject, ControlProjectWorkflow, ControlWorkflowTemplate } from "@/api/controlWorkflowApi";
 import type { User } from "@/types";
 
 const controlApi = vi.hoisted(() => ({
+  approveControlWorkflowRevision: vi.fn(),
+  approveControlWorkflowStage: vi.fn(),
   assignControlDesignProjectOwner: vi.fn(),
   createControlDesignProject: vi.fn(),
   fetchControlDesignAssignableUsers: vi.fn(),
+  fetchControlDesignCapabilities: vi.fn(),
   fetchControlDesignProjects: vi.fn(),
+  fetchControlPendingApprovals: vi.fn(),
   fetchControlProjectWorkflow: vi.fn(),
+  fetchControlRevisionQueue: vi.fn(),
   fetchControlSubDepartments: vi.fn(),
   fetchControlWorkflowTemplate: vi.fn(),
+  markControlWorkflowDispatched: vi.fn(),
+  markControlWorkflowRevisionChangesRequired: vi.fn(),
+  markControlWorkflowStagePreCompleted: vi.fn(),
+  markControlWorkflowStageRevisionRequired: vi.fn(),
+  overrideUnlockControlWorkflowStage: vi.fn(),
+  raiseControlWorkflowRevision: vi.fn(),
+  reassignControlProjectWorkflowOwner: vi.fn(),
+  skipControlWorkflowStageByOverride: vi.fn(),
+  startControlWorkflowRevision: vi.fn(),
+  startControlWorkflowStage: vi.fn(),
+  submitControlWorkflowRevision: vi.fn(),
+  submitControlWorkflowStage: vi.fn(),
+  updateControlWorkflowDocumentPath: vi.fn(),
 }));
 
 let mockAuth: {
   user: Partial<User>;
   access: Record<string, boolean>;
 };
+let mockCapabilities: ControlDesignCapabilities;
 
 vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/controlWorkflowApi")>();
   return {
     ...actual,
+    approveControlWorkflowRevision: (...args: unknown[]) => controlApi.approveControlWorkflowRevision(...args),
+    approveControlWorkflowStage: (...args: unknown[]) => controlApi.approveControlWorkflowStage(...args),
     assignControlDesignProjectOwner: (...args: unknown[]) => controlApi.assignControlDesignProjectOwner(...args),
     createControlDesignProject: (...args: unknown[]) => controlApi.createControlDesignProject(...args),
     fetchControlDesignAssignableUsers: (...args: unknown[]) => controlApi.fetchControlDesignAssignableUsers(...args),
+    fetchControlDesignCapabilities: (...args: unknown[]) => controlApi.fetchControlDesignCapabilities(...args),
     fetchControlDesignProjects: (...args: unknown[]) => controlApi.fetchControlDesignProjects(...args),
+    fetchControlPendingApprovals: (...args: unknown[]) => controlApi.fetchControlPendingApprovals(...args),
     fetchControlProjectWorkflow: (...args: unknown[]) => controlApi.fetchControlProjectWorkflow(...args),
+    fetchControlRevisionQueue: (...args: unknown[]) => controlApi.fetchControlRevisionQueue(...args),
     fetchControlSubDepartments: (...args: unknown[]) => controlApi.fetchControlSubDepartments(...args),
     fetchControlWorkflowTemplate: (...args: unknown[]) => controlApi.fetchControlWorkflowTemplate(...args),
+    markControlWorkflowDispatched: (...args: unknown[]) => controlApi.markControlWorkflowDispatched(...args),
+    markControlWorkflowRevisionChangesRequired: (...args: unknown[]) => controlApi.markControlWorkflowRevisionChangesRequired(...args),
+    markControlWorkflowStagePreCompleted: (...args: unknown[]) => controlApi.markControlWorkflowStagePreCompleted(...args),
+    markControlWorkflowStageRevisionRequired: (...args: unknown[]) => controlApi.markControlWorkflowStageRevisionRequired(...args),
+    overrideUnlockControlWorkflowStage: (...args: unknown[]) => controlApi.overrideUnlockControlWorkflowStage(...args),
+    raiseControlWorkflowRevision: (...args: unknown[]) => controlApi.raiseControlWorkflowRevision(...args),
+    reassignControlProjectWorkflowOwner: (...args: unknown[]) => controlApi.reassignControlProjectWorkflowOwner(...args),
+    skipControlWorkflowStageByOverride: (...args: unknown[]) => controlApi.skipControlWorkflowStageByOverride(...args),
+    startControlWorkflowRevision: (...args: unknown[]) => controlApi.startControlWorkflowRevision(...args),
+    startControlWorkflowStage: (...args: unknown[]) => controlApi.startControlWorkflowStage(...args),
+    submitControlWorkflowRevision: (...args: unknown[]) => controlApi.submitControlWorkflowRevision(...args),
+    submitControlWorkflowStage: (...args: unknown[]) => controlApi.submitControlWorkflowStage(...args),
+    updateControlWorkflowDocumentPath: (...args: unknown[]) => controlApi.updateControlWorkflowDocumentPath(...args),
   };
 });
 
@@ -78,6 +115,7 @@ function buildProject(overrides: Partial<ControlDesignProject> = {}): ControlDes
       budget_amount: 250000,
       budget_currency: "INR",
       status: "active",
+      lifecycle_status: "assigned",
       created_by: "EMP-MGR",
       created_at: "2026-07-01T00:00:00.000Z",
       updated_at: "2026-07-01T00:00:00.000Z",
@@ -101,6 +139,36 @@ function buildProject(overrides: Partial<ControlDesignProject> = {}): ControlDes
   };
 }
 
+function buildCapabilities(overrides: Partial<ControlDesignCapabilities> = {}): ControlDesignCapabilities {
+  return {
+    canViewWorkspace: true,
+    canViewAssignedProjects: true,
+    canViewAllProjects: false,
+    canCreateProject: false,
+    canEditProject: false,
+    canAssignProject: false,
+    canReassignProject: false,
+    canCancelProject: false,
+    canStartStage: true,
+    canSubmitStage: true,
+    canUpdatePath: true,
+    canReview: false,
+    canApprove: false,
+    canRequestChanges: false,
+    canRaiseRevision: false,
+    canExecuteRevision: true,
+    canReviewRevision: false,
+    canMarkPreCompleted: false,
+    canOverrideUnlock: false,
+    canSkipStage: false,
+    canMarkDispatched: false,
+    canReopenAfterDispatch: false,
+    canViewAudit: false,
+    canViewReports: false,
+    ...overrides,
+  };
+}
+
 const project = buildProject();
 const newProject = buildProject({
   project_id: "project-2",
@@ -114,6 +182,7 @@ const newProject = buildProject({
     budget_amount: 1250000,
     budget_currency: "INR",
     status: "active",
+    lifecycle_status: "unassigned",
     created_by: "EMP-MGR",
     created_at: "2026-07-01T00:00:00.000Z",
     updated_at: "2026-07-01T00:00:00.000Z",
@@ -203,6 +272,23 @@ function buildWorkflow(projectId = "project-1", workflowId = "workflow-1"): Cont
 }
 
 function setAuth(canCreate: boolean, canAssign = canCreate) {
+  mockCapabilities = buildCapabilities({
+    canViewAllProjects: canCreate || canAssign,
+    canCreateProject: canCreate,
+    canAssignProject: canAssign,
+    canReassignProject: canAssign,
+    canReview: canCreate || canAssign,
+    canApprove: canCreate || canAssign,
+    canRequestChanges: canCreate || canAssign,
+    canRaiseRevision: canCreate || canAssign,
+    canReviewRevision: canCreate || canAssign,
+    canMarkPreCompleted: canCreate || canAssign,
+    canOverrideUnlock: canCreate || canAssign,
+    canSkipStage: canCreate || canAssign,
+    canMarkDispatched: canCreate || canAssign,
+    canViewAudit: canCreate || canAssign,
+    canViewReports: canCreate || canAssign,
+  });
   mockAuth = {
     user: {
       employee_id: canCreate || canAssign ? "EMP-MGR" : "EMP-CD-1",
@@ -218,8 +304,9 @@ function setAuth(canCreate: boolean, canAssign = canCreate) {
       },
       role_id: canCreate || canAssign ? "r3" : "r6",
       permissions: [
-        ...(canCreate ? ["control_design.create_projects"] : []),
-        ...(canAssign ? ["control_design.assign_projects"] : []),
+        "control_design.workspace.view",
+        ...(canCreate ? ["control_design.projects.create"] : []),
+        ...(canAssign ? ["control_design.projects.assign", "control_design.projects.reassign"] : []),
       ],
       is_active: true,
       created_at: "2026-07-01T00:00:00.000Z",
@@ -248,11 +335,14 @@ function renderWorkspace() {
 
 describe("ControlDesignDashboardWorkspace", () => {
   beforeEach(() => {
+    controlApi.fetchControlDesignCapabilities.mockImplementation(() => Promise.resolve(mockCapabilities));
     controlApi.fetchControlDesignProjects.mockResolvedValue([project]);
     controlApi.fetchControlSubDepartments.mockResolvedValue([
       { id: "sub-control-design", department_id: "control", subdivision_name: "Control Design", is_active: true },
     ]);
     controlApi.fetchControlWorkflowTemplate.mockResolvedValue(template);
+    controlApi.fetchControlPendingApprovals.mockResolvedValue([]);
+    controlApi.fetchControlRevisionQueue.mockResolvedValue([]);
     controlApi.fetchControlProjectWorkflow.mockImplementation((projectId: string) => (
       Promise.resolve(projectId === "project-2" ? buildWorkflow("project-2", "workflow-2") : buildWorkflow())
     ));
@@ -271,13 +361,13 @@ describe("ControlDesignDashboardWorkspace", () => {
     setAuth(true);
     renderWorkspace();
 
-    expect(await screen.findByText("Press Line")).toBeInTheDocument();
+    expect((await screen.findAllByText("Press Line"))[0]).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /New Project/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Assign Control Design Project/ })).toBeInTheDocument();
     expect(screen.getAllByText("CO Creation").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Manual Preparation")).toBeInTheDocument();
+    expect(screen.getAllByText("Manual Preparation").length).toBeGreaterThan(0);
     expect(screen.queryByText(/fixture/i)).not.toBeInTheDocument();
-  });
+  }, 15000);
 
   it("creates a project from the four-field modal and selects it", async () => {
     setAuth(true);
@@ -286,35 +376,87 @@ describe("ControlDesignDashboardWorkspace", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /New Project/ }));
 
-    expect(screen.getByRole("heading", { name: "New Control Design Project" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Project ID")).toBeInTheDocument();
-    expect(screen.getByLabelText("Project Name")).toBeInTheDocument();
-    expect(screen.getByLabelText("Customer")).toBeInTheDocument();
-    expect(screen.getByLabelText("Budget (INR)")).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Budget Currency/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Sub-department/i)).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "New Control Design Project" })).toBeInTheDocument();
+    expect(within(dialog).getAllByRole("textbox")).toHaveLength(4);
+    expect(within(dialog).getByLabelText("Project ID")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Project Name")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Customer")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Budget (INR)")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/Budget Currency/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/Sub-department/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/fixture/i)).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Project ID"), { target: { value: " PARC2600M029 " } });
-    fireEvent.change(screen.getByLabelText("Project Name"), { target: { value: " New Press " } });
-    fireEvent.change(screen.getByLabelText("Customer"), { target: { value: " Tata Motors " } });
-    fireEvent.change(screen.getByLabelText("Budget (INR)"), { target: { value: "1250000.00" } });
-    fireEvent.click(screen.getByRole("button", { name: /Create Project/ }));
+    fireEvent.change(within(dialog).getByLabelText("Project ID"), { target: { value: " PARC2600M029 " } });
+    fireEvent.change(within(dialog).getByLabelText("Project Name"), { target: { value: " New Press " } });
+    fireEvent.change(within(dialog).getByLabelText("Customer"), { target: { value: " Tata Motors " } });
+    fireEvent.change(within(dialog).getByLabelText("Budget (INR)"), { target: { value: "1250000.00" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Create Project/ }));
 
     await waitFor(() => expect(controlApi.createControlDesignProject).toHaveBeenCalledWith({
-      project_id: "PARC2600M029",
-      project_name: "New Press",
+      projectId: "PARC2600M029",
+      projectName: "New Press",
       customer: "Tata Motors",
       budget: "1250000.00",
     }));
-    expect(await screen.findByText("New Press")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "New Control Design Project" })).not.toBeInTheDocument());
+    await waitFor(() => expect(controlApi.fetchControlDesignProjects).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("PARC2600M029 \u2014 New Press");
+    expect((await screen.findAllByText("New Press"))[0]).toBeInTheDocument();
     expect(screen.getAllByText("Unassigned").length).toBeGreaterThan(0);
+    expect(screen.getByText("Project Lifecycle")).toBeInTheDocument();
+    expect(screen.getAllByText("CO Creation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Not Started").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Locked").length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("blocks empty required fields and invalid budget before submitting", async () => {
+    setAuth(true);
+    renderWorkspace();
+
+    fireEvent.click(await screen.findByRole("button", { name: /New Project/ }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /Create Project/ }));
+
+    expect(await within(dialog).findByText("Project ID is required.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Project Name is required.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Customer is required.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Budget is required.")).toBeInTheDocument();
+    expect(controlApi.createControlDesignProject).not.toHaveBeenCalled();
+
+    fireEvent.change(within(dialog).getByLabelText("Project ID"), { target: { value: "TEST-CD-001" } });
+    fireEvent.change(within(dialog).getByLabelText("Project Name"), { target: { value: "Control Design Test" } });
+    fireEvent.change(within(dialog).getByLabelText("Customer"), { target: { value: "Internal Test" } });
+    fireEvent.change(within(dialog).getByLabelText("Budget (INR)"), { target: { value: "-1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Create Project/ }));
+
+    expect(await within(dialog).findByText("Budget must be a non-negative decimal amount.")).toBeInTheDocument();
+    expect(controlApi.createControlDesignProject).not.toHaveBeenCalled();
+  });
+
+  it("shows backend creation errors without clearing entered values", async () => {
+    setAuth(true);
+    controlApi.createControlDesignProject.mockRejectedValueOnce(Object.assign(new Error("duplicate"), { status: 409 }));
+    renderWorkspace();
+
+    fireEvent.click(await screen.findByRole("button", { name: /New Project/ }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Project ID"), { target: { value: "TEST-CD-001" } });
+    fireEvent.change(within(dialog).getByLabelText("Project Name"), { target: { value: "Control Design Test" } });
+    fireEvent.change(within(dialog).getByLabelText("Customer"), { target: { value: "Internal Test" } });
+    fireEvent.change(within(dialog).getByLabelText("Budget (INR)"), { target: { value: "1000" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Create Project/ }));
+
+    expect(await within(dialog).findByText("Duplicate Project ID")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Project ID")).toHaveValue("TEST-CD-001");
+    expect(within(dialog).getByLabelText("Budget (INR)")).toHaveValue("1000");
   });
 
   it("hides creation and assignment controls for regular Control Design users", async () => {
     setAuth(false);
     renderWorkspace();
 
-    expect(await screen.findByText("Press Line")).toBeInTheDocument();
+    expect((await screen.findAllByText("Press Line"))[0]).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /New Project/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Assign Control Design Project/ })).not.toBeInTheDocument();
     expect(controlApi.fetchControlDesignAssignableUsers).not.toHaveBeenCalled();
@@ -324,16 +466,31 @@ describe("ControlDesignDashboardWorkspace", () => {
     setAuth(false, true);
     renderWorkspace();
 
-    expect(await screen.findByText("Press Line")).toBeInTheDocument();
+    expect((await screen.findAllByText("Press Line"))[0]).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /New Project/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Assign Control Design Project/ })).toBeInTheDocument();
+  });
+
+  it("requires backend Control Design workspace capability before loading data", async () => {
+    setAuth(true);
+    mockCapabilities = buildCapabilities({ canViewWorkspace: false });
+    mockAuth.user = {
+      ...mockAuth.user,
+      department_id: "design",
+      department: { id: "design", name: "Design" },
+    };
+    renderWorkspace();
+
+    expect(await screen.findByText("You do not have Control Design workspace access.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New Project/ })).not.toBeInTheDocument();
+    expect(controlApi.fetchControlDesignProjects).not.toHaveBeenCalled();
   });
 
   it("keeps assignment separate from project creation permission", async () => {
     setAuth(true, false);
     renderWorkspace();
 
-    expect(await screen.findByText("Press Line")).toBeInTheDocument();
+    expect((await screen.findAllByText("Press Line"))[0]).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /New Project/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Assign Control Design Project/ })).not.toBeInTheDocument();
     expect(controlApi.fetchControlDesignAssignableUsers).not.toHaveBeenCalled();

@@ -17,6 +17,10 @@ const executiveDashboard = vi.hoisted(() => ({
   render: vi.fn(),
 }));
 
+const fixtureOperations = vi.hoisted(() => ({
+  render: vi.fn(),
+}));
+
 let mockAuth: {
   user: Partial<User> | null;
   role: { id: string; name: string } | null;
@@ -62,7 +66,10 @@ vi.mock("@/components/ControlDesignDashboardWorkspace", () => ({
 }));
 
 vi.mock("@/components/ProjectFixtureOperations", () => ({
-  ProjectFixtureOperationsGrid: () => <div>Fixture Operations Grid</div>,
+  ProjectFixtureOperationsGrid: (props: { readOnly?: boolean }) => {
+    fixtureOperations.render(props);
+    return <div>Fixture Operations Grid</div>;
+  },
 }));
 
 vi.mock("@/components/OverdueAlertModal", () => ({
@@ -157,6 +164,7 @@ function setMockAuth({
 
 function setControlDesignAuth() {
   const user = buildControlUser({
+    permissions: ["control_design.workspace.view"],
     subdivision_id: "sub-control-design",
     subdivision: {
       id: "sub-control-design",
@@ -168,7 +176,7 @@ function setControlDesignAuth() {
   setMockAuth({
     user,
     role: { id: "team_leader", name: "Team Leader" },
-    access: { ...baseAccess, canAssignTasks: true, canCreateControlDesignProjects: true, canAssignControlDesignProjects: true },
+    access: { ...baseAccess, canViewControlDesignWorkspace: true, canAssignTasks: true, canCreateControlDesignProjects: true, canAssignControlDesignProjects: true },
   });
 }
 
@@ -365,6 +373,42 @@ describe("Dashboard workspace routing", () => {
     expect(screen.getByText("Select a project above to view fixture-level operational status.")).toBeInTheDocument();
     expect(executiveDashboard.render).not.toHaveBeenCalled();
     await waitFor(() => expect(designApi.fetchProjectDashboardSummary).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["completed", "released"] as const)("renders %s project fixtures in read-only mode", async (projectStatus) => {
+    const terminalProject = {
+      ...project,
+      department_id: "design",
+      department_name: "Design",
+      project_status: projectStatus,
+      total_fixtures: 1,
+    } as ProjectDashboardSummary;
+    const terminalFixture = {
+      fixture_id: "fixture-1",
+      project_id: terminalProject.project_id,
+      department_id: "design",
+      fixture_no: "PARC25016001",
+      part_name: "Completed fixture",
+      operational_state: "WORKFLOW_COMPLETE",
+    };
+    designApi.fetchProjectDashboardSummary.mockResolvedValueOnce([terminalProject]);
+    designApi.fetchDesignFixtures.mockResolvedValueOnce([terminalFixture]);
+    setDesignAuth({ canUploadNativeDesignData: false });
+
+    renderDashboard("/?project_id=project-1");
+
+    expect(await screen.findByText("Read-only project fixtures")).toBeInTheDocument();
+    expect(await screen.findByText("Fixture Operations Grid")).toBeInTheDocument();
+    await waitFor(() => expect(designApi.fetchDesignFixtures).toHaveBeenCalledWith(
+      "project-1",
+      "design",
+      { activeOnly: false },
+    ));
+    expect(fixtureOperations.render).toHaveBeenLastCalledWith(expect.objectContaining({
+      readOnly: true,
+      fixtures: [terminalFixture],
+    }));
+    expect(screen.queryByText("Fixtures are hidden from active workflows.")).not.toBeInTheDocument();
   });
 
   it("keeps Team Leaders with analytics permissions on the operational dashboard", async () => {

@@ -245,9 +245,58 @@ export interface ReactivateProjectResponse {
   message: string;
 }
 
-function stripUndefined<T extends Record<string, unknown>>(payload: T): T {
+export type Design2DCompletionTaskCode =
+  | "FIXTURE_DRAFTING_CHECKING"
+  | "FIXTURE_DRAWING_CORRECTION"
+  | "FIXTURE_AUTOCAD_PDF"
+  | "FIXTURE_IGES"
+  | "PROJECT_CMM_DATA"
+  | "PROJECT_LINE_LAYOUT"
+  | "PROJECT_MIMIC"
+  | "PROJECT_WEAR_OUT_DATA";
+
+export interface Design2DCompletionTaskDefinition {
+  code: Design2DCompletionTaskCode;
+  displayName: string;
+  scope: "fixture" | "project";
+  required: boolean;
+}
+
+export interface Design2DCompletionProjectState {
+  project: DesignProjectOption;
+  fixtures: Array<{
+    fixture_id: string;
+    fixture_no: string;
+    part_name: string;
+    workflow_complete: boolean;
+    two_d_complete: boolean;
+  }>;
+  tasks: Task[];
+  fixture_task_types: Design2DCompletionTaskDefinition[];
+  project_task_types: Design2DCompletionTaskDefinition[];
+  all_fixtures_2d_complete: boolean;
+  all_original_workflows_complete: boolean;
+  fixture_requirements_complete: boolean;
+  project_tasks_unlocked: boolean;
+  project_completion_ready: boolean;
+  missing_requirements: string[];
+}
+
+export interface AssignDesign2DCompletionTaskPayload {
+  department_id?: string;
+  project_id: string;
+  fixture_id?: string | null;
+  task_code: Design2DCompletionTaskCode;
+  assigned_to: string;
+  priority: Task["priority"];
+  deadline: string;
+  outsource?: boolean;
+  supplier_name?: string;
+}
+
+function stripUndefined<T extends object>(payload: T): T {
   return Object.fromEntries(
-    Object.entries(payload).filter(([, value]) => value !== undefined),
+    Object.entries(payload as Record<string, unknown>).filter(([, value]) => value !== undefined),
   ) as T;
 }
 
@@ -390,6 +439,44 @@ export function fetchProjectDashboardSummary(departmentId?: string) {
   }
 
   return apiRequest<ProjectDashboardSummary[]>(`/projects/summary${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+export function fetchDesign2DCompletionProjects(departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiRequest<DesignProjectOption[]>(`/design/2d-completion-tasks/projects${suffix}`);
+}
+
+export function fetchDesign2DCompletionProjectState(projectId: string, departmentId?: string) {
+  const params = new URLSearchParams();
+  if (departmentId) {
+    params.set("department_id", departmentId);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiRequest<Design2DCompletionProjectState>(
+    `/design/2d-completion-tasks/projects/${encodeURIComponent(projectId)}${suffix}`,
+  );
+}
+
+export function assignDesign2DCompletionTask(payload: AssignDesign2DCompletionTaskPayload) {
+  return apiRequest<Task>("/design/2d-completion-tasks", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function markDesign2DMimicNotRequired(payload: {
+  project_id: string;
+  department_id?: string;
+  reason: string;
+}) {
+  return apiRequest<Task>("/design/2d-completion-tasks/mimic-not-required", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
 }
 
 export function fetchDepartmentWorkflowPreview(projectId?: string) {

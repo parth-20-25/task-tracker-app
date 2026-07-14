@@ -1,5 +1,5 @@
 import { Task } from '@/types';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatusChip } from './StatusChip';
@@ -23,6 +23,8 @@ interface TaskCardProps {
   task: Task;
   showActions?: boolean;
   compact?: boolean;
+  extraActions?: ReactNode;
+  onActionComplete?: () => void | Promise<void>;
 }
 
 function isDapTask(task: Task) {
@@ -34,7 +36,7 @@ function isDapTask(task: Task) {
   return normalized === "dap" || normalized === "d_a_p";
 }
 
-export function TaskCard({ task, showActions = true, compact = false }: TaskCardProps) {
+export function TaskCard({ task, showActions = true, compact = false, extraActions, onActionComplete }: TaskCardProps) {
   const { user } = useAuth();
   const { cancelTask, executeTaskAction } = useTasks();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
@@ -53,6 +55,10 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
     && task.operational_state !== 'WORKFLOW_COMPLETE'
     && (isOperationalControllerUser(user) || isProjectAuthorityUser(user) || isOriginalAssigner);
   const proofUrls = task.proof_url ?? [];
+  const isCompletionTask = task.task_type === 'design_2d_completion';
+  const isCompletedRevision = isCompletionTask
+    && task.status === 'closed'
+    && task.verification_status === 'approved';
 
   const handleExecutionAction = async (action: "start" | "resume" | "hold" | "submit") => {
     if (action === 'submit' && proofUrls.length === 0 && !isDapTask(task)) {
@@ -66,6 +72,7 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
 
     try {
       await executeTaskAction(task.id, action);
+      await onActionComplete?.();
     } catch (error) {
       toast({
         title: 'Task update failed',
@@ -89,12 +96,15 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
     try {
       setIsCancelling(true);
       await cancelTask(task.id, reason);
+      await onActionComplete?.();
       setCancelDialogOpen(false);
       setCancelReason('');
       toast({
         title: 'Task cancelled',
         description: task.task_type === 'additional_design'
           ? 'The additional design task was cancelled.'
+          : isCompletionTask
+            ? 'The completion task revision was cancelled and remains in history.'
           : 'The fixture is back in Unassigned.',
       });
     } catch (error) {
@@ -110,7 +120,12 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
 
   return (
     <>
-    <Card className={cn('transition-all hover:shadow-md', isOverdue && 'border-destructive/40', compact && 'shadow-sm')}>
+    <Card className={cn(
+      'transition-all hover:shadow-md',
+      isOverdue && 'border-destructive/40',
+      compact && 'shadow-sm',
+      isCompletedRevision && 'border-success/40 bg-success/5',
+    )}>
       <CardHeader className="p-4 pb-2 flex flex-row items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <h4 className="font-medium text-sm leading-tight truncate">{taskDisplay.title}</h4>
@@ -123,7 +138,15 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
       </CardHeader>
       <CardContent className="p-4 pt-2 space-y-3">
         <div className="flex flex-wrap gap-2">
-          <StatusChip type="status" value={task.status} />
+          {isCompletionTask && task.status === 'under_review' ? (
+            <span className="status-chip bg-warning/10 text-warning">Pending Approval</span>
+          ) : isCompletionTask && task.status === 'rework' ? (
+            <span className="status-chip bg-destructive/10 text-destructive">Changes Required</span>
+          ) : isCompletedRevision ? (
+            <span className="status-chip bg-success/10 text-success">Completed</span>
+          ) : (
+            <StatusChip type="status" value={task.status} />
+          )}
           {(task.status === 'under_review' || task.status === 'rework' || task.status === 'closed') && (
             <StatusChip type="verification" value={task.verification_status} />
           )}
@@ -160,8 +183,11 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
             <span>
               {task.task_type === 'additional_design'
                 ? `Team: ${task.design_team || "—"}`
+                : isCompletionTask
+                  ? `Scope: ${task.scope_type === 'project' ? 'Project-level' : 'Fixture-level'}`
                 : `Stage: ${task.workflow_stage || "—"}`}
             </span>
+            {task.assigner && <span>Assigned by: {formatEmployeeDisplay(task.assigner)}</span>}
             {task.rework_date && <span>Rework: {new Date(task.rework_date).toLocaleDateString("en-GB")}</span>}
             <span className="flex items-center gap-1">
               <Timer className="h-3 w-3" />
@@ -174,12 +200,19 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
               </span>
             )}
             {task.requires_quality_approval && <span>Quality approval required</span>}
+            {task.completion_task_outsource_supplier && <span>Outsourced to: {task.completion_task_outsource_supplier}</span>}
           </div>
         )}
 
         {task.remarks && (
           <p className="text-xs bg-warning/5 text-warning border border-warning/20 rounded p-2">
             {task.remarks}
+          </p>
+        )}
+
+        {task.completion_task_not_required_at && (
+          <p className="text-xs rounded border border-success/20 bg-success/5 p-2 text-success">
+            Not Required — {task.completion_task_not_required_reason}
           </p>
         )}
 
@@ -233,6 +266,7 @@ export function TaskCard({ task, showActions = true, compact = false }: TaskCard
               <Ban className="h-3.5 w-3.5 mr-1" /> Cancel Task
             </Button>
           )}
+          {extraActions}
         </div>
       </CardContent>
     </Card>

@@ -22,14 +22,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
-import { isAdminUser, isProjectAuthorityUser } from "@/lib/permissions";
 import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
-import type { ProjectStatus, UploadBatch, User } from "@/types";
+import type { ProjectStatus, UploadBatch } from "@/types";
 
 const projectStatusFilters: Array<{ value: "all" | ProjectStatus; label: string }> = [
   { value: "all", label: "All statuses" },
@@ -93,90 +91,48 @@ function formatCompletionTruthIssue(errors: string[] | undefined) {
     .replace(/_/g, " ");
 }
 
-function normalizeIdentifier(value: unknown) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function currentUserMatchesIdentifier(user: User | null | undefined, identifier: unknown) {
-  const normalizedIdentifier = normalizeIdentifier(identifier);
-  if (!normalizedIdentifier) {
-    return false;
-  }
-
-  return [user?.employee_id, user?.id].some(
-    (candidate) => normalizeIdentifier(candidate) === normalizedIdentifier,
-  );
-}
-
-function isProjectUploaderOrCreator(user: User | null | undefined, batch: UploadBatch | null | undefined) {
-  return [
-    batch?.project_created_by_user_id,
-    batch?.project_uploaded_by,
-    batch?.uploaded_by,
-    batch?.uploaded_by_user_id,
-  ].some((identifier) => currentUserMatchesIdentifier(user, identifier));
-}
-
 function DeleteAction({
   batch,
-  isAdmin,
   canDelete,
   onDelete,
   isPending,
 }: {
   batch: UploadBatch;
-  isAdmin: boolean;
   canDelete: boolean;
-  onDelete: (batch: UploadBatch, force: boolean) => void;
+  onDelete: (batch: UploadBatch) => void;
   isPending: boolean;
 }) {
   const hasOperationalBatch = Boolean(batch.batch_id);
   const disabled = !hasOperationalBatch || !canDelete || batch.deletion_blocked;
   const reason = !hasOperationalBatch
-      ? "No upload batch is recorded for this project."
+    ? "No upload batch is recorded for this project."
     : !canDelete
-      ? "Only the canonical project owner or an admin can delete it."
-    : batch.delete_blocked_reason || "Cannot delete this project while active work exists.";
+      ? "Only the owning Team Leader and linked Team Co-Leader may delete it."
+      : batch.delete_blocked_reason || "Cannot delete this project while active work exists.";
 
   return (
-    <div className="flex items-center justify-end gap-2">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={disabled || isPending}
-              onClick={() => onDelete(batch, false)}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </Button>
-          </span>
-        </TooltipTrigger>
-        {disabled ? <TooltipContent>{reason}</TooltipContent> : null}
-      </Tooltip>
-
-      {isAdmin && disabled ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={isPending || !hasOperationalBatch}
-          onClick={() => onDelete(batch, true)}
-        >
-          Force
-        </Button>
-      ) : null}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={disabled || isPending}
+            onClick={() => onDelete(batch)}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </Button>
+        </span>
+      </TooltipTrigger>
+      {disabled ? <TooltipContent>{reason}</TooltipContent> : null}
+    </Tooltip>
   );
 }
 
 export default function Batches() {
   const queryClient = useQueryClient();
-  const { access, user } = useAuth();
-  const isAdmin = isAdminUser(user);
   const [searchParams, setSearchParams] = useSearchParams();
   const projectStatusFilter = normalizeProjectStatusFilter(searchParams.get("status"));
   const [selectedBatch, setSelectedBatch] = useState<UploadBatch | null>(null);
@@ -202,14 +158,8 @@ export default function Batches() {
     enabled: Boolean(routingBatch?.project_id),
   });
 
-  const canManageBatchLifecycle = (batch: UploadBatch) => {
-    const isOwner = Boolean(user?.employee_id && batch.project_created_by_user_id === user.employee_id);
-    return isProjectAuthorityUser(user) || access.canAssignTasks || (access.canDeleteWbsBatch && isOwner);
-  };
-
-  const canReactivateBatchProject = (batch: UploadBatch) => (
-    canManageBatchLifecycle(batch) || isProjectUploaderOrCreator(user, batch)
-  );
+  const canManageBatchLifecycle = (batch: UploadBatch) => batch.can_manage_project === true;
+  const canReactivateBatchProject = canManageBatchLifecycle;
 
   const assign2DMutation = useMutation({
     mutationFn: () => assignProjectTo2D(routingBatch?.project_id || "", selected2DLeader),
@@ -249,7 +199,7 @@ export default function Batches() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: ({ batchId, force }: { batchId: string; force: boolean }) => deleteBatch(batchId, force),
+    mutationFn: (batchId: string) => deleteBatch(batchId),
     onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
@@ -258,7 +208,7 @@ export default function Batches() {
         queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
       ]);
       toast({
-        title: result.force ? "Project force deleted" : "Project deleted",
+        title: "Project deleted",
         description: result.message,
       });
     },
@@ -375,13 +325,8 @@ export default function Batches() {
     },
   });
 
-  const handleDelete = (batch: UploadBatch, force: boolean) => {
-    const projectNumber = formatProjectNumber(batch);
-    const confirmed = window.confirm(
-      force
-        ? `Force delete project ${projectNumber}? This bypasses workflow safety validation.`
-        : `Delete project ${projectNumber}?`,
-    );
+  const handleDelete = (batch: UploadBatch) => {
+    const confirmed = window.confirm(`Delete project ${formatProjectNumber(batch)}?`);
 
     if (!confirmed) {
       return;
@@ -392,7 +337,7 @@ export default function Batches() {
       return;
     }
 
-    deleteMutation.mutate({ batchId: batch.batch_id, force });
+    deleteMutation.mutate(batch.batch_id);
   };
 
   const handleHold = (batch: UploadBatch) => {
@@ -523,11 +468,7 @@ export default function Batches() {
 
               {filteredBatches.map((batch) => {
                 const hasCompletionTruth = typeof batch.project_completion_percent === "number";
-                const isOwner = Boolean(
-                  user?.employee_id
-                  && batch.project_created_by_user_id === user.employee_id,
-                );
-                const canDelete = isAdmin || (access.canDeleteWbsBatch && isOwner);
+                const canDelete = batch.can_manage_project === true;
                 const hasOperationalBatch = Boolean(batch.batch_id);
                 const canManageLifecycle = canManageBatchLifecycle(batch);
                 const canReactivateLifecycle = canReactivateBatchProject(batch);
@@ -675,7 +616,6 @@ export default function Batches() {
                         <DeleteAction
                           batch={batch}
                           canDelete={canDelete}
-                          isAdmin={isAdmin}
                           isPending={deleteMutation.isPending}
                           onDelete={handleDelete}
                         />

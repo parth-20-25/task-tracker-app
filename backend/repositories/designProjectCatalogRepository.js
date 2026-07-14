@@ -10,7 +10,7 @@ const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
   getAccessibleProjectIds,
-  identifierInVisibleUsersSql,
+  owningLeaderPairSql,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("./projectVisibility");
@@ -30,20 +30,6 @@ const {
   normalizeSupplierName,
   resolveOutsourceStageCompletion,
 } = require("../lib/outsourceWorkflow");
-
-const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
-const MODIFICATION_AUTHORITY_ROLE_IDS = ["admin", "director", "director_ceo", "r1", "r2"];
-const MODIFICATION_UPLOADER_LEADER_ROLE_KEYS = [
-  "team_leader",
-  "line_manager",
-  "co_leader",
-  "team_co_leader",
-  "shift_incharge",
-  "uploader_leader",
-  "uploader_co_leader",
-  "project_uploader_leader",
-  "project_uploader_co_leader",
-];
 
 const FIXTURE_OUTSOURCE_JOIN = `
       LEFT JOIN LATERAL (
@@ -356,6 +342,7 @@ function mapProjectSummaryRow(row) {
     team_lead_id: row.team_lead_id || null,
     team_lead_name: row.team_lead_name || null,
     uploaded_by_name: row.uploaded_by_name || null,
+    can_manage_project: row.can_manage_project === true,
     can_toggle_modification: row.can_toggle_modification === true,
     can_edit_project: row.can_edit_project === true,
     created_at: row.created_at,
@@ -442,41 +429,6 @@ function requireRow(result, errorMessage) {
 
 function sqlRoleKey(expression) {
   return `LOWER(BTRIM(REGEXP_REPLACE(COALESCE(${expression}, ''), '[^[:alnum:]]+', '_', 'g'), '_'))`;
-}
-
-function sqlLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function sqlTextArray(values) {
-  return `ARRAY[${values.map(sqlLiteral).join(", ")}]::text[]`;
-}
-
-function projectModificationPermissionSql(projectAlias = "p", employeeExpression = "$1") {
-  return `
-    (
-      EXISTS (
-        SELECT 1
-        FROM root_user root
-        WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_KEYS)})
-           OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_IDS)})
-      )
-      OR ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`, "root_user")}
-      OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`, "root_user")}
-      OR (
-        EXISTS (
-          SELECT 1
-          FROM root_user root
-          WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
-             OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
-        )
-        AND (
-          ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`)}
-          OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`)}
-        )
-      )
-    )
-  `;
 }
 
 function fixtureOperationalStatsLateral(projectAlias = "p", { includeOptionalTables = true } = {}) {
@@ -757,8 +709,9 @@ async function getProjectModificationContextForUser(projectId, user, client = po
         p.created_by_user_id,
         COALESCE(p.status, $3) AS project_status,
         COALESCE(p.is_modified, FALSE) AS is_modified,
-        ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification,
-        TRUE AS can_edit_project
+        ${owningLeaderPairSql("p")} AS can_manage_project,
+        ${owningLeaderPairSql("p")} AS can_toggle_modification,
+        ${owningLeaderPairSql("p")} AS can_edit_project
       FROM design.projects p
       WHERE p.id = $2
         AND ${visibleProjectPredicate("p")}
@@ -817,8 +770,9 @@ async function listProjectSummariesForUser(user, { departmentId = null } = {}, c
         hierarchy_team_lead.employee_id AS team_lead_id,
         hierarchy_team_lead.name AS team_lead_name,
         uploader.name AS uploaded_by_name,
-        ${projectModificationPermissionSql("p", "$1")} AS can_toggle_modification,
-        TRUE AS can_edit_project,
+        ${owningLeaderPairSql("p")} AS can_manage_project,
+        ${owningLeaderPairSql("p")} AS can_toggle_modification,
+        ${owningLeaderPairSql("p")} AS can_edit_project,
         p.created_at,
         p.updated_at,
         COALESCE(fixture_stats.total_fixtures, 0)::integer AS total_fixtures,

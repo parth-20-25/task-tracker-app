@@ -28,6 +28,7 @@ export interface NewTaskInput {
   rework_date?: string | null;
   project_id?: string;
   fixture_id?: string | null;
+  scope_type?: Task["scope_type"];
   additional_task_kind?: Task["additional_task_kind"];
   design_team?: Task["design_team"];
 }

@@ -65,6 +65,10 @@ vi.mock("@/components/ProjectFixtureOperations", () => ({
   ProjectFixtureOperationsGrid: () => <div>Fixture Operations Grid</div>,
 }));
 
+vi.mock("@/components/Design2DCompletionTasks", () => ({
+  Design2DCompletionTasks: () => <h2>2D Completion Tasks</h2>,
+}));
+
 vi.mock("@/components/OverdueAlertModal", () => ({
   OverdueAlertModal: () => null,
 }));
@@ -335,6 +339,7 @@ describe("Dashboard workspace routing", () => {
     expect(await screen.findByText("Control Design Dedicated Workspace")).toBeInTheDocument();
     expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "2D Completion Tasks" })).not.toBeInTheDocument();
     expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
     expect(designApi.fetchDesignFixtures).not.toHaveBeenCalled();
   });
@@ -363,7 +368,10 @@ describe("Dashboard workspace routing", () => {
 
     expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "2D Completion Tasks" })).toBeInTheDocument();
     expect(screen.getByText("Select a project above to view fixture-level operational status.")).toBeInTheDocument();
+    const headings = screen.getAllByRole("heading").map((heading) => heading.textContent);
+    expect(headings.indexOf("2D Completion Tasks")).toBe(headings.indexOf("Project Fixtures") + 1);
     expect(executiveDashboard.render).not.toHaveBeenCalled();
     await waitFor(() => expect(designApi.fetchProjectDashboardSummary).toHaveBeenCalledTimes(1));
   });

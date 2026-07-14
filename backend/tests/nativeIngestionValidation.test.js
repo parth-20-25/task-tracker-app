@@ -127,15 +127,18 @@ test("native project edit opens visible project without request department conte
       return { rows: [projectRow] };
     }
     if (calls.length === 2) {
-      return { rows: [] };
+      return { rows: [{ allowed: true }] };
     }
     if (calls.length === 3) {
-      return { rows: [projectRow] };
+      return { rows: [] };
     }
     if (calls.length === 4) {
-      return { rows: [fixtureRow] };
+      return { rows: [projectRow] };
     }
     if (calls.length === 5) {
+      return { rows: [fixtureRow] };
+    }
+    if (calls.length === 6) {
       return {
         rows: [{
           id: "edit-session-1",
@@ -148,7 +151,11 @@ test("native project edit opens visible project without request department conte
   };
 
   try {
-    const session = await createNativeProjectEditSession(authorityUser("Admin"), "PARC001", {});
+    const session = await createNativeProjectEditSession({
+      ...authorityUser("Team Leader"),
+      employee_id: "LEAD-1",
+      department_id: "design",
+    }, "PARC001", {});
 
     assert.equal(session.session_id, "edit-session-1");
     assert.equal(session.context.project_id, "project-1");
@@ -156,7 +163,7 @@ test("native project edit opens visible project without request department conte
     assert.equal(session.context.project_code, "PARC001");
     assert.equal(session.rows.length, 1);
     assert.equal(session.rows[0].fixture_no, "F001");
-    assert.equal(calls[4].params[0], "design");
+    assert.equal(calls[5].params[0], "design");
   } finally {
     pool.query = originalQuery;
   }

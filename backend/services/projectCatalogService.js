@@ -40,6 +40,7 @@ const {
   normalizeOutsourceStages,
   normalizeSupplierName,
 } = require("../lib/outsourceWorkflow");
+const { requireOwningLeaderPair } = require("./accessControlService");
 const { createTaskForUser } = require("./taskService");
 const { getCurrentStage } = require("./fixtureWorkflowService");
 const {
@@ -568,12 +569,10 @@ async function updateProjectModificationForUser(user, projectId, payload = {}) {
     throw new AppError(404, "Project not found");
   }
 
+  await requireOwningLeaderPair(user, normalizedProjectId);
+
   if (isTerminalProjectStatus(context.project_status)) {
     throw new AppError(409, "Released or completed projects cannot be modified");
-  }
-
-  if (context.can_toggle_modification !== true) {
-    throw new AppError(403, "You do not have permission to toggle project modification status");
   }
 
   const project = await updateProjectModificationFlag(normalizedProjectId, payload.is_modified === true);

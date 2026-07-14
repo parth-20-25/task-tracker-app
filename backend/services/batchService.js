@@ -1,12 +1,10 @@
 const { pool } = require("../db");
-const { PROJECT_STATUSES, PERMISSIONS } = require("../config/constants");
+const { PROJECT_STATUSES } = require("../config/constants");
 const { AppError } = require("../lib/AppError");
 const { instrumentModuleExports } = require("../lib/observability");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
-  listBatchesWithSummary,
   listBatchesWithSummaryForUser,
-  getBatchById,
   getBatchByIdForUser,
   getProjectLifecycleContextByIdForUser,
   checkBatchDeletionBlocked,
@@ -16,7 +14,8 @@ const {
   restoreProjectWorkflowForReactivation,
   setProjectLifecycleStatus,
 } = require("../repositories/batchRepository");
-const { canAccessDepartment, hasPermission, isAdmin, isProjectAuthorityRole } = require("./accessControlService");
+const { isAdmin, isProjectAuthorityRole, requireOwningLeaderPair } = require("./accessControlService");
+const { assertDesign2DCompletionProjectReady } = require("./design2dCompletionTaskService");
 
 const PROJECT_REACTIVATION_REASONS = {
   customer_modification: "Customer modification",
@@ -70,40 +69,6 @@ function normalizeProjectReactivationPayload(payload = {}) {
   };
 }
 
-function isBatchOwner(user, batch) {
-  // Ownership checks must be based on the canonical project creator only.
-  // Do NOT treat the batch uploader as an owner for runtime visibility/permissions.
-  const ownerId = batch?.project_created_by_user_id || null;
-  return Boolean(user?.employee_id && ownerId && user.employee_id === ownerId);
-}
-
-function normalizeIdentifier(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function identifierMatchesCurrentUser(user, identifier) {
-  const normalizedIdentifier = normalizeIdentifier(identifier);
-  if (!normalizedIdentifier) {
-    return false;
-  }
-
-  return [
-    user?.employee_id,
-    user?.id,
-  ].some((candidate) => normalizeIdentifier(candidate) === normalizedIdentifier);
-}
-
-function isProjectUploaderOrCreator(user, project) {
-  return [
-    project?.project_created_by_user_id,
-    project?.project_uploaded_by,
-    project?.uploaded_by,
-    project?.uploaded_by_user_id,
-    project?.batch_uploaded_by,
-    project?.batch_uploaded_by_user_id,
-  ].some((identifier) => identifierMatchesCurrentUser(user, identifier));
-}
-
 async function getBatches(user) {
   const hasGlobalProjectView = isAdmin(user) || isProjectAuthorityRole(user);
 
@@ -114,35 +79,14 @@ async function getBatches(user) {
   return listBatchesWithSummaryForUser(user, null);
 }
 
-function canManageProjectLifecycle(user, batch) {
-  if (!user || !batch) {
-    return false;
-  }
-
-  if (isAdmin(user) || isProjectAuthorityRole(user)) {
-    return true;
-  }
-
-  if (hasPermission(user, PERMISSIONS.ASSIGN_TASK) && canAccessDepartment(user, batch.department_id)) {
-    return true;
-  }
-
-  return hasPermission(user, PERMISSIONS.DELETE_WBS_BATCH) && isBatchOwner(user, batch);
-}
-
-function canReactivateProject(user, project) {
-  return canManageProjectLifecycle(user, project) || isProjectUploaderOrCreator(user, project);
-}
-
 /**
  * Deletes an operational project upload record.
  *
- * - If force=true and user is admin: bypasses safety check, writes audit log.
- * - Otherwise: validates no active/completed fixtures exist before deleting.
+ * Validates ownership and that no active/completed fixtures exist before deleting.
  *
  * @param {object} user - authenticated user
  * @param {string} batchId - UUID of the active upload record for the project
- * @param {boolean} force - bypass safety check (admin only)
+ * @param {boolean} force - rejected; ownership actions do not support bypasses
  */
 async function deleteBatch(user, batchId, force = false) {
   const batch = await getBatchByIdForUser(batchId, user);
@@ -150,49 +94,10 @@ async function deleteBatch(user, batchId, force = false) {
     throw new AppError(404, "Project not found");
   }
 
-  const userIsAdmin = isAdmin(user);
-
-  if (!userIsAdmin && !isBatchOwner(user, batch)) {
-    throw new AppError(403, "Only the canonical project owner or an admin can delete it");
-  }
+  await requireOwningLeaderPair(user, batch.project_id);
 
   if (force) {
-    if (!userIsAdmin) {
-      throw new AppError(403, "Only admins can force-delete a project");
-    }
-
-    // Force delete: no validation, but write audit log
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await deleteBatchCascade(batchId, client);
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-
-    await createAuditLog({
-      userEmployeeId: user.employee_id,
-      actionType: "FORCE_DELETE_BATCH",
-      targetType: "upload_batch",
-      targetId: batchId,
-      metadata: {
-        project_no: batch.project_no,
-        uploaded_by_user_id: batch.uploaded_by_user_id,
-        total_fixtures: batch.total_fixtures,
-        force: true,
-      },
-    });
-
-    return {
-      deleted: true,
-      batch_id: batchId,
-      force: true,
-      message: `Project ${batch.project_no} force-deleted successfully.`,
-    };
+    throw new AppError(403, "Force delete is not available for project ownership actions");
   }
 
   // Standard delete: check for blocking conditions
@@ -239,9 +144,7 @@ async function holdProjectForBatch(user, batchId) {
     throw new AppError(404, "Project not found");
   }
 
-  if (!canManageProjectLifecycle(user, batch)) {
-    throw new AppError(403, "You do not have permission to place this project on hold");
-  }
+  await requireOwningLeaderPair(user, batch.project_id);
 
   if (isTerminalProjectStatus(batch.project_status)) {
     throw new AppError(409, "Released or completed projects cannot be placed on hold");
@@ -295,9 +198,7 @@ async function activateProjectForBatch(user, batchId) {
     throw new AppError(404, "Project not found");
   }
 
-  if (!canManageProjectLifecycle(user, batch)) {
-    throw new AppError(403, "You do not have permission to activate this project");
-  }
+  await requireOwningLeaderPair(user, batch.project_id);
 
   if (isTerminalProjectStatus(batch.project_status)) {
     throw new AppError(409, "Released or completed projects cannot be activated");
@@ -356,9 +257,7 @@ async function reactivateProjectForModificationById(user, projectId, payload = {
     throw new AppError(404, "Project not found");
   }
 
-  if (!canReactivateProject(user, project)) {
-    throw new AppError(403, "You do not have permission to reactivate this project");
-  }
+  await requireOwningLeaderPair(user, project.project_id);
 
   const reactivation = normalizeProjectReactivationPayload(payload);
   const reactivatedAt = new Date().toISOString();
@@ -436,9 +335,7 @@ async function releaseProjectForBatch(user, batchId) {
     throw new AppError(404, "Project not found");
   }
 
-  if (!canManageProjectLifecycle(user, batch)) {
-    throw new AppError(403, "You do not have permission to release this project");
-  }
+  await requireOwningLeaderPair(user, batch.project_id);
 
   if (isTerminalProjectStatus(batch.project_status)) {
     return {
@@ -452,6 +349,7 @@ async function releaseProjectForBatch(user, batchId) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await assertDesign2DCompletionProjectReady(batch.project_id, client);
     await releaseProject(batch.project_id, user.employee_id, client);
     await client.query("COMMIT");
   } catch (err) {

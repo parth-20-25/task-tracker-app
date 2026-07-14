@@ -4,6 +4,7 @@ const { instrumentModuleExports } = require("../lib/observability");
 const {
   buildVisibleUsersCte,
   identifierInVisibleUsersSql,
+  owningLeaderPairSql,
   visibleProjectPredicate,
   GetAccessibleUserIds,
 } = require("./projectVisibility");
@@ -27,20 +28,6 @@ const RESTORABLE_WORKFLOW_STATUSES = [
 ];
 const SCHEMA_METADATA_TTL_MS = 60 * 1000;
 const schemaMetadataCache = new Map();
-const MODIFICATION_AUTHORITY_ROLE_KEYS = ["admin", "director", "director_ceo", "ceo_director"];
-const MODIFICATION_AUTHORITY_ROLE_IDS = ["admin", "director", "director_ceo", "r1", "r2"];
-const MODIFICATION_UPLOADER_LEADER_ROLE_KEYS = [
-  "team_leader",
-  "line_manager",
-  "co_leader",
-  "team_co_leader",
-  "shift_incharge",
-  "uploader_leader",
-  "uploader_co_leader",
-  "project_uploader_leader",
-  "project_uploader_co_leader",
-];
-
 function getCachedSchemaMetadata(cacheKey) {
   const cachedEntry = schemaMetadataCache.get(cacheKey);
 
@@ -61,14 +48,6 @@ function setCachedSchemaMetadata(cacheKey, value) {
     value,
     expiresAt: Date.now() + SCHEMA_METADATA_TTL_MS,
   });
-}
-
-function sqlLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function sqlTextArray(values) {
-  return `ARRAY[${values.map(sqlLiteral).join(", ")}]::text[]`;
 }
 
 function collapseProjectLabel(value) {
@@ -92,33 +71,6 @@ function normalizeProjectNo(value) {
 
 function normalizeProjectName(value) {
   return stripLegacyWbsPrefix(value).replace(/^[-_]+\s*(?=\S)/, "");
-}
-
-function projectModificationPermissionSql(projectAlias = "dp", employeeExpression = "$1") {
-  return `
-    (
-      EXISTS (
-        SELECT 1
-        FROM root_user root
-        WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_KEYS)})
-           OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_AUTHORITY_ROLE_IDS)})
-      )
-      OR ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`, "root_user")}
-      OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`, "root_user")}
-      OR (
-        EXISTS (
-          SELECT 1
-          FROM root_user root
-          WHERE root.role_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
-             OR root.role_id_key = ANY(${sqlTextArray(MODIFICATION_UPLOADER_LEADER_ROLE_KEYS)})
-        )
-        AND (
-          ${identifierInVisibleUsersSql(`${projectAlias}.created_by_user_id`)}
-          OR ${identifierInVisibleUsersSql(`${projectAlias}.uploaded_by`)}
-        )
-      )
-    )
-  `;
 }
 
 function isMissingOptionalFixtureRelation(error) {
@@ -292,6 +244,7 @@ function mapBatchSummary(row) {
     deletion_blocked: activeCount > 0,
     delete_blocked_reason: activeCount > 0 ? BATCH_DELETE_BLOCK_REASON : null,
     can_manage_2d_routing: row.can_manage_2d_routing === true,
+    can_manage_project: row.can_manage_project === true,
     can_toggle_modification: row.can_toggle_modification === true,
     can_edit_project: row.can_edit_project === true,
   };
@@ -433,8 +386,9 @@ async function listBatchesWithSummaryForUser(user, departmentId, client = pool) 
           OR ${identifierInVisibleUsersSql("ub.uploaded_by_user_id")}
           OR ${identifierInVisibleUsersSql("ub.uploaded_by")}
         ) AS can_manage_2d_routing,
-        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification,
-        TRUE AS can_edit_project
+        ${owningLeaderPairSql("dp")} AS can_manage_project,
+        ${owningLeaderPairSql("dp")} AS can_toggle_modification,
+        ${owningLeaderPairSql("dp")} AS can_edit_project
       FROM design.projects dp
       LEFT JOIN LATERAL (
         SELECT
@@ -621,8 +575,9 @@ async function getBatchByIdForUser(batchId, user, client = pool) {
           OR ${identifierInVisibleUsersSql("ub.uploaded_by_user_id")}
           OR ${identifierInVisibleUsersSql("ub.uploaded_by")}
         ) AS can_manage_2d_routing,
-        ${projectModificationPermissionSql("dp", "$1")} AS can_toggle_modification,
-        TRUE AS can_edit_project
+        ${owningLeaderPairSql("dp")} AS can_manage_project,
+        ${owningLeaderPairSql("dp")} AS can_toggle_modification,
+        ${owningLeaderPairSql("dp")} AS can_edit_project
       FROM design.upload_batches ub
       JOIN design.projects dp ON dp.id = ub.project_id
       ${userResolutionLateralSql("uploader", [

@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
+import { resolveDesignTeamFromUser } from "@/lib/additionalDesignTasks";
 import { isTaskAssignedToEmployee } from "@/lib/taskFilters";
 import type { Task } from "@/types";
 
@@ -24,7 +25,11 @@ export default function AdditionalDesignTasks() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [reviewingTaskId, setReviewingTaskId] = useState<number | null>(null);
 
-  const additionalTasks = useMemo(() => tasks.filter((task) => task.task_type === "additional_design"), [tasks]);
+  const designTeam = resolveDesignTeamFromUser(user);
+  const additionalTasks = useMemo(() => tasks.filter((task) => (
+    task.task_type === "additional_design"
+    && (!designTeam || task.design_team === designTeam)
+  )), [designTeam, tasks]);
   const myTasks = additionalTasks.filter((task) => isTaskAssignedToEmployee(task, user?.employee_id));
   const teamTasks = additionalTasks.filter((task) => !isTaskAssignedToEmployee(task, user?.employee_id));
   const approvalTasks = additionalTasks.filter((task) => (

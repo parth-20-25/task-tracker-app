@@ -44,6 +44,12 @@ const {
   deleteProject2DAssignment,
   getProject2DRouting,
 } = require("../services/projectSubdivisionRoutingService");
+const {
+  assignDesign2DCompletionTaskForUser,
+  getDesign2DCompletionProjectForUser,
+  listEligibleDesign2DCompletionProjectsForUser,
+  markMimicNotRequiredForUser,
+} = require("../services/design2dCompletionTaskService");
 
 const router = express.Router();
 
@@ -278,6 +284,51 @@ router.get(
 );
 
 router.get(
+  "/design/2d-completion-tasks/projects",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const projects = await listEligibleDesign2DCompletionProjectsForUser(req.user, req.query.department_id);
+    return sendSuccess(res, projects);
+  }),
+);
+
+router.get(
+  "/design/2d-completion-tasks/projects/:projectId",
+  requireOperationalController,
+  asyncHandler(async (req, res) => {
+    const state = await getDesign2DCompletionProjectForUser(
+      req.user,
+      req.params.projectId,
+      req.query.department_id,
+    );
+    return sendSuccess(res, state);
+  }),
+);
+
+router.post(
+  "/design/2d-completion-tasks",
+  requireOperationalController,
+  authorize(PERMISSIONS.CREATE_TASK),
+  authorize(PERMISSIONS.ASSIGN_TASK),
+  asyncHandler(async (req, res) => {
+    const task = await assignDesign2DCompletionTaskForUser(req.user, req.body);
+    return sendSuccess(res, task, 201);
+  }),
+);
+
+router.post(
+  "/design/2d-completion-tasks/mimic-not-required",
+  requireOperationalController,
+  authorize(PERMISSIONS.CREATE_TASK),
+  authorize(PERMISSIONS.ASSIGN_TASK),
+  authorize(PERMISSIONS.APPROVE_COMPLETED_TASK),
+  asyncHandler(async (req, res) => {
+    const task = await markMimicNotRequiredForUser(req.user, req.body);
+    return sendSuccess(res, task, 201);
+  }),
+);
+
+router.get(
   "/dashboard/executive",
   requireExecutiveDashboardAccess,
   asyncHandler(async (req, res) => {
@@ -451,4 +502,3 @@ router.post(
 module.exports = {
   designRoutes: router,
 };
-

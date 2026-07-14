@@ -65,7 +65,7 @@ async function loadTaskForAccess(user, taskId) {
 }
 
 function ensureActiveProjectTaskWrite(task) {
-  if (!task?.project_id) {
+  if (!task?.project_id || task.task_type === TASK_TYPES.ADDITIONAL_DESIGN) {
     return;
   }
 
@@ -441,7 +441,7 @@ router.post(
 
 router.delete(
   "/tasks/:taskId/attachments/:attachmentId",
-  authorize("can_edit_task"),
+  authorize(PERMISSIONS.UPLOAD_PROOFS),
   asyncHandler(async (req, res) => {
     const task = await loadTaskForAccess(req.user, req.params.taskId);
     ensureTaskProofUpdateAllowed(req.user, task);

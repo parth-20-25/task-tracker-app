@@ -18,6 +18,13 @@ export function getTaskCardDisplay(task: Pick<Task, "title" | "task_type" | "add
     };
   }
 
+  if (task.task_type === "design_2d_completion") {
+    return {
+      title: task.title,
+      subtitle: projectFixture,
+    };
+  }
+
   if (projectNo && fixtureNo) {
     return {
       title: `${projectNo} - ${fixtureNo}`,

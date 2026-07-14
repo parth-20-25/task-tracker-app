@@ -64,6 +64,20 @@ function taskSelectQuery(whereClause = "") {
       proof_uploader.name AS latest_proof_uploaded_by_name,
       latest_attachment.uploaded_at AS latest_proof_uploaded_at,
       (
+        SELECT COALESCE(jsonb_agg(DISTINCT proof_assignee_user.id::text), '[]'::jsonb)
+        FROM (
+          SELECT t.assigned_user_id::text AS identifier
+          UNION
+          SELECT t.assigned_to::text
+          UNION
+          SELECT task_assignee.identifier
+          FROM jsonb_array_elements_text(COALESCE(t.assignee_ids, '[]'::jsonb)) AS task_assignee(identifier)
+        ) proof_assignee_identifier
+        JOIN users proof_assignee_user
+          ON ${userIdentifierMatchSql("proof_assignee_user", "proof_assignee_identifier.identifier")}
+        WHERE proof_assignee_identifier.identifier IS NOT NULL
+      ) AS proof_assignee_user_ids,
+      (
         SELECT STRING_AGG(
           COALESCE(task_assignee_user.name, task_assignee.employee_id),
           ', '
@@ -114,6 +128,7 @@ function taskSelectQuery(whereClause = "") {
       ON fixture.id = t.fixture_id
       OR (
         t.fixture_id IS NULL
+        AND COALESCE(t.scope_type, 'fixture') <> 'project'
         AND fixture.project_id = project.id
         AND fixture.fixture_no = COALESCE(NULLIF(t.fixture_no, ''), NULLIF(t.quantity_index, ''))
       )
@@ -249,6 +264,15 @@ async function findTaskById(taskId, client = pool) {
   return mapTaskRow(result.rows[0]);
 }
 
+async function listDesign2DCompletionTasks(projectId, client = pool) {
+  const result = await client.query(
+    `${taskSelectQuery("WHERE t.project_id = $1 AND t.task_type = 'design_2d_completion'")}
+     ORDER BY t.scope_type, t.fixture_id NULLS FIRST, t.completion_task_code, t.completion_task_revision, t.id`,
+    [projectId],
+  );
+  return result.rows.map((row) => mapTaskRow(row));
+}
+
 async function listTasksForWorkflowInstance({
   departmentId,
   projectNo,
@@ -319,6 +343,7 @@ async function insertTask(task, client = pool) {
         lifecycle_status,
         project_id,
         fixture_id,
+        scope_type,
         fixture_no,
         project_no,
         project_name,
@@ -335,13 +360,20 @@ async function insertTask(task, client = pool) {
         stage,
         additional_task_kind,
         design_team,
+        completion_task_code,
+        completion_task_revision,
+        completion_task_display_name,
+        completion_task_outsource_supplier,
+        completion_task_not_required_reason,
+        completion_task_not_required_by,
+        completion_task_not_required_at,
         updated_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), $14,
         $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24, $25::jsonb, $26, $27, $28,
         $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43,
-        $44, $45, $46, $47, $48, $49, NOW()
+        $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, NOW()
       )
       ON CONFLICT (fixture_id, stage)
       WHERE status NOT IN ('closed','cancelled')
@@ -382,6 +414,7 @@ async function insertTask(task, client = pool) {
     task.lifecycle_status || deriveLifecycleStatus(task.status),
     task.project_id || null,
     task.fixture_id || null,
+    task.scope_type || (task.fixture_id ? "fixture" : null),
     task.fixture_no || null,
     task.project_no || null,
     task.project_name || null,
@@ -397,7 +430,14 @@ async function insertTask(task, client = pool) {
     task.approved_by || null,
     task.stage || null,
     task.additional_task_kind || null,
-    task.design_team || null
+    task.design_team || null,
+    task.completion_task_code || null,
+    task.completion_task_revision ?? null,
+    task.completion_task_display_name || null,
+    task.completion_task_outsource_supplier || null,
+    task.completion_task_not_required_reason || null,
+    task.completion_task_not_required_by || null,
+    task.completion_task_not_required_at || null,
   ];
 
   const result = await executeRepositoryQuery("insertTask", client, insertQuery, insertParams);
@@ -1053,6 +1093,7 @@ module.exports = instrumentModuleExports("repository.tasksRepository", {
   deleteTaskAttachment,
   deleteTaskChecklist,
   findTaskById,
+  listDesign2DCompletionTasks,
   findLatestTaskAttachment,
   insertTask,
   addTaskChecklist,

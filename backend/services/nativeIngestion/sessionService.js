@@ -6,6 +6,7 @@ const { pool } = require("../../db");
 const { getUploadsRoot } = require("../../lib/runtimePaths");
 const { generateUUID } = require("../../lib/uuid");
 const { createAuditLog } = require("../../repositories/auditRepository");
+const { requireOwningLeaderPair } = require("../accessControlService");
 const {
   createUploadBatch,
   updateProjectIdentityById,
@@ -309,6 +310,7 @@ async function createNativeProjectEditSession(user, projectId, payload = {}) {
 
   const requestedDepartmentId = collapseWhitespace(payload.department_id || payload.departmentId);
   const resolvedProject = await resolveVisibleProjectForNativeEdit(user, normalizedProjectId, requestedDepartmentId, pool);
+  await requireOwningLeaderPair(user, resolvedProject.project_id);
   const seedContext = normalizeNativeContext({
     project_id: resolvedProject.project_id,
     project_code: resolvedProject.project_no,
@@ -659,6 +661,10 @@ async function commitNativeSession(user, sessionId, payload = {}) {
     }, "NATIVE_INGESTION_VALIDATION_FAILED");
   }
 
+  if (validation.context?.project_id) {
+    await requireOwningLeaderPair(user, validation.context.project_id);
+  }
+
   const rowsToPromote = buildRowsForCommit(validation.rows);
   if (rowsToPromote.length === 0) {
     throw new AppError(400, "No populated native ingestion rows are ready to commit.");
@@ -987,6 +993,8 @@ async function deleteNativeProjectFixture(user, fixtureId, payload = {}) {
     if (!fixture) {
       throw new AppError(404, "Fixture not found or not accessible");
     }
+
+    await requireOwningLeaderPair(user, fixture.project_id, client);
 
     resolveNativeDepartmentId(user, fixture.department_id, {
       requireDepartment: true,

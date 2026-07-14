@@ -4,13 +4,17 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AdditionalDesignTaskAssignment } from "@/components/AdditionalDesignTaskAssignment";
+import type { User } from "@/types";
 
+const createTask = vi.fn();
 const fetchTaskAssignmentUsers = vi.fn();
 const fetchProjectDashboardSummary = vi.fn();
 const fetchDesignFixtures = vi.fn();
 
+let authUser: Partial<User> = designUser("3D");
+
 vi.mock("@/api/taskApi", () => ({
-  createTask: vi.fn(),
+  createTask: (...args: unknown[]) => createTask(...args),
   fetchTaskAssignmentUsers: (...args: unknown[]) => fetchTaskAssignmentUsers(...args),
 }));
 
@@ -22,7 +26,7 @@ vi.mock("@/api/designApi", () => ({
 vi.mock("@/contexts/useAuth", () => ({
   useAuth: () => ({
     access: { canAssignTasks: true, canCreateTasks: true },
-    user: { employee_id: "LEAD-1", department_id: "design" },
+    user: authUser,
   }),
 }));
 
@@ -57,6 +61,25 @@ vi.mock("@/components/ui/select", () => ({
     <option value={value}>{children}</option>
   ),
 }));
+
+function designUser(team: "2D" | "3D") {
+  return {
+    employee_id: `LEAD-${team}`,
+    name: `${team} Lead`,
+    role_id: "leader",
+    department_id: "design",
+    department: { id: "design", name: "Design", is_active: true },
+    subdivision_id: `${team}-subdivision`,
+    subdivision: {
+      id: `${team}-subdivision`,
+      department_id: "design",
+      subdivision_name: team,
+      is_active: true,
+    },
+    is_active: true,
+    created_at: "2026-06-20T00:00:00.000Z",
+  } satisfies Partial<User>;
+}
 
 const projectOne = {
   project_id: "project-1",
@@ -101,7 +124,7 @@ const nonDesignProject = {
   department_name: "Manufacturing",
 };
 
-function employee(employeeId: string, name: string, team: "2D" | "3D") {
+function employee(employeeId: string, name: string, team: "2D" | "3D", incompleteTaskCount = 0) {
   return {
     employee_id: employeeId,
     name,
@@ -115,7 +138,7 @@ function employee(employeeId: string, name: string, team: "2D" | "3D") {
     },
     is_active: true,
     created_at: "2026-06-20T00:00:00.000Z",
-    incomplete_task_count: 0,
+    incomplete_task_count: incompleteTaskCount,
   };
 }
 
@@ -131,24 +154,13 @@ function renderAssignment() {
   );
 }
 
-describe("AdditionalDesignTaskAssignment assignee scope", () => {
+describe("AdditionalDesignTaskAssignment subdivision catalog", () => {
   beforeEach(() => {
+    authUser = designUser("3D");
     fetchProjectDashboardSummary.mockResolvedValue([projectOne, projectTwo, completedProject, releasedProject, nonDesignProject]);
-    fetchDesignFixtures.mockResolvedValue([]);
-    fetchTaskAssignmentUsers.mockImplementation(async ({ project_id, stage_name }) => {
-      if (project_id === "project-1") {
-        return [
-          employee("EMP-3D-1", "Alice", "3D"),
-          employee("EMP-2D-OTHER", "Other Team", "2D"),
-        ];
-      }
-
-      if (stage_name === "2D Finish") {
-        return [employee("EMP-2D-2", "Cara", "2D")];
-      }
-
-      return [employee("EMP-3D-2", "Bob", "3D")];
-    });
+    fetchDesignFixtures.mockResolvedValue([{ fixture_id: "fixture-1", fixture_no: "FX-1", part_name: "Fixture One" }]);
+    fetchTaskAssignmentUsers.mockResolvedValue([employee("EMP-3D-1", "Alice", "3D", 3)]);
+    createTask.mockResolvedValue({ id: 1 });
   });
 
   afterEach(() => {
@@ -156,6 +168,31 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     vi.clearAllMocks();
   });
 
+  it("shows exactly the Design 3D project task catalog and hides Team and Fixture fields", async () => {
+    renderAssignment();
+
+    for (const taskKind of ["Project Process", "Pin Matrix", "PPT", "CBO", "Line Layout", "CDRM", "Print & Drafting Checking"]) {
+      expect(await screen.findByRole("option", { name: taskKind })).toBeInTheDocument();
+    }
+
+    for (const old2DKind of ["Drafting", "BOM Checking", "Drawing Correction", "AutoCAD PDF", "IGES Data", "CMM Data", "Mimic Display", "Wear-Out Data"]) {
+      expect(screen.queryByRole("option", { name: old2DKind })).not.toBeInTheDocument();
+    }
+
+    expect(screen.queryByText("Team")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fixture")).not.toBeInTheDocument();
+  });
+
+  it("keeps Design 2D task types and the existing Team and Fixture fields", async () => {
+    authUser = designUser("2D");
+    renderAssignment();
+
+    expect(await screen.findByRole("option", { name: "Drafting" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "BOM Checking" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Project Process" })).not.toBeInTheDocument();
+    expect(screen.getByText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Fixture")).toBeInTheDocument();
+  });
 
   it("includes completed and released design projects without showing other departments", async () => {
     renderAssignment();
@@ -166,43 +203,73 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     expect(screen.queryByRole("option", { name: "M-001 — Manufacturing Project" })).not.toBeInTheDocument();
   });
 
-  it("uses the Project Fixtures scoped source directly and refreshes for project and team changes", async () => {
+  it("uses the scoped backend source for Design 3D assignees and saves a project-scope task", async () => {
     renderAssignment();
     await screen.findByRole("option", { name: "P-001 — First Project" });
     const selects = await screen.findAllByRole("combobox");
-    const projectSelect = selects[1];
-    const teamSelect = selects[3];
 
-    fireEvent.change(projectSelect, { target: { value: "project-1" } });
+    fireEvent.change(selects[1], { target: { value: "project-1" } });
 
-    expect(await screen.findByRole("option", { name: "EMP-3D-1 - Alice — Free" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "EMP-2D-OTHER - Other Team — Free" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "EMP-3D-1 - Alice — 3" })).toBeInTheDocument();
     expect(fetchTaskAssignmentUsers).toHaveBeenLastCalledWith({
-      task_type: "department_workflow",
+      task_type: "additional_design",
       department_id: "design",
       project_id: "project-1",
       stage_name: null,
     });
-    expect(fetchDesignFixtures).toHaveBeenCalledWith("project-1", "design");
+    expect(fetchDesignFixtures).not.toHaveBeenCalled();
 
-    fireEvent.change(projectSelect, { target: { value: "project-2" } });
+    fireEvent.change(selects[2], { target: { value: "EMP-3D-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Assign Task/ }));
 
-    expect(await screen.findByRole("option", { name: "EMP-3D-2 - Bob — Free" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Alice/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(createTask).toHaveBeenCalled());
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({
+      task_type: "additional_design",
+      project_id: "project-1",
+      assigned_to: "EMP-3D-1",
+      additional_task_kind: "Project Process",
+      design_team: "3D",
+      fixture_id: null,
+      scope_type: "project",
+    }));
+  });
 
-    fireEvent.change(teamSelect, { target: { value: "2D" } });
+  it("prevents repeated submit clicks while assignment is in progress", async () => {
+    createTask.mockImplementation(() => new Promise(() => undefined));
+    renderAssignment();
+    await screen.findByRole("option", { name: "P-001 — First Project" });
+    const selects = await screen.findAllByRole("combobox");
 
-    expect(await screen.findByRole("option", { name: "EMP-2D-2 - Cara — Free" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Bob/ })).not.toBeInTheDocument();
+    fireEvent.change(selects[1], { target: { value: "project-1" } });
+    expect(await screen.findByRole("option", { name: "EMP-3D-1 - Alice — 3" })).toBeInTheDocument();
+    fireEvent.change(selects[2], { target: { value: "EMP-3D-1" } });
+
+    const assignButton = screen.getByRole("button", { name: /Assign Task/ });
+    fireEvent.click(assignButton);
+    await waitFor(() => expect(assignButton).toBeDisabled());
+    fireEvent.click(assignButton);
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the 2D Project Fixtures scoped source", async () => {
+    authUser = designUser("2D");
+    fetchTaskAssignmentUsers.mockResolvedValue([employee("EMP-2D-1", "Cara", "2D")]);
+    renderAssignment();
+    await screen.findByRole("option", { name: "P-001 — First Project" });
+    const selects = await screen.findAllByRole("combobox");
+
+    fireEvent.change(selects[1], { target: { value: "project-1" } });
+
+    expect(await screen.findByRole("option", { name: "EMP-2D-1 - Cara — Free" })).toBeInTheDocument();
     expect(fetchTaskAssignmentUsers).toHaveBeenLastCalledWith({
       task_type: "department_workflow",
       department_id: "design",
-      project_id: "project-2",
+      project_id: "project-1",
       stage_name: "2D Finish",
     });
   });
 
-  it("shows the required empty state and disables assignment when the scoped source is empty", async () => {
+  it("shows the required empty assignee state and disables assignment when the scoped source is empty", async () => {
     fetchTaskAssignmentUsers.mockResolvedValue([]);
     renderAssignment();
     await screen.findByRole("option", { name: "P-001 — First Project" });
@@ -211,7 +278,7 @@ describe("AdditionalDesignTaskAssignment assignee scope", () => {
     fireEvent.change(selects[1], { target: { value: "project-1" } });
 
     expect(await screen.findByText("No eligible assignees in your scope")).toBeInTheDocument();
-    await waitFor(() => expect(selects[4]).toBeDisabled());
+    await waitFor(() => expect(selects[2]).toBeDisabled());
     expect(screen.getByRole("button", { name: "Assign Task" })).toBeDisabled();
   });
 });

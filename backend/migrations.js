@@ -307,7 +307,15 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS stage TEXT,
       ADD COLUMN IF NOT EXISTS completion_percent INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS additional_task_kind TEXT,
-      ADD COLUMN IF NOT EXISTS design_team TEXT
+      ADD COLUMN IF NOT EXISTS design_team TEXT,
+      ADD COLUMN IF NOT EXISTS scope_type TEXT,
+      ADD COLUMN IF NOT EXISTS completion_task_code TEXT,
+      ADD COLUMN IF NOT EXISTS completion_task_revision INTEGER,
+      ADD COLUMN IF NOT EXISTS completion_task_display_name TEXT,
+      ADD COLUMN IF NOT EXISTS completion_task_outsource_supplier TEXT,
+      ADD COLUMN IF NOT EXISTS completion_task_not_required_reason TEXT,
+      ADD COLUMN IF NOT EXISTS completion_task_not_required_by VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS completion_task_not_required_at TIMESTAMPTZ
     `);
 
     await client.query(`
@@ -316,6 +324,64 @@ async function runMigrations() {
       WHERE task_type = 'additional_design'
     `);
 
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_additional_design_project_scope
+      ON tasks (project_id, additional_task_kind, design_team, assigned_to, status)
+      WHERE task_type = 'additional_design' AND scope_type = 'project'
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_design_2d_completion_fixture_revision
+      ON tasks (project_id, fixture_id, completion_task_code, completion_task_revision)
+      WHERE task_type = 'design_2d_completion' AND scope_type = 'fixture'
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_design_2d_completion_project_revision
+      ON tasks (project_id, completion_task_code, completion_task_revision)
+      WHERE task_type = 'design_2d_completion' AND scope_type = 'project'
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_design_2d_completion_fixture_active
+      ON tasks (project_id, fixture_id, completion_task_code)
+      WHERE task_type = 'design_2d_completion'
+        AND scope_type = 'fixture'
+        AND status NOT IN ('closed', 'cancelled')
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_design_2d_completion_project_active
+      ON tasks (project_id, completion_task_code)
+      WHERE task_type = 'design_2d_completion'
+        AND scope_type = 'project'
+        AND status NOT IN ('closed', 'cancelled')
+    `);
+
+    await client.query(`
+      UPDATE tasks
+      SET scope_type = CASE
+        WHEN task_type = 'additional_design' AND fixture_id IS NULL AND project_id IS NOT NULL THEN 'project'
+        WHEN fixture_id IS NOT NULL THEN 'fixture'
+        ELSE scope_type
+      END
+      WHERE scope_type IS NULL
+        AND (task_type = 'additional_design' OR fixture_id IS NOT NULL)
+    `);
+
+    await client.query(`ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_additional_design_fields_check`);
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'tasks_scope_type_check'
+        ) THEN
+          ALTER TABLE tasks
+          ADD CONSTRAINT tasks_scope_type_check
+          CHECK (scope_type IS NULL OR scope_type IN ('project', 'fixture')) NOT VALID;
+        END IF;
+      END $$;
+    `);
     await client.query(`
       DO $$
       BEGIN
@@ -329,7 +395,8 @@ async function runMigrations() {
             OR (
               additional_task_kind IN (
                 'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
-                'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data'
+                'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data',
+                'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM'
               )
               AND design_team IN ('2D', '3D')
               AND project_id IS NOT NULL
@@ -339,10 +406,68 @@ async function runMigrations() {
               AND approval_required = TRUE
               AND proof_required = TRUE
               AND requires_quality_approval = FALSE
+              AND (
+                design_team <> '3D'
+                OR (
+                  additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print & Drafting Checking')
+                  AND scope_type = 'project'
+                  AND fixture_id IS NULL
+                )
+              )
             )
-          );
+          ) NOT VALID;
         END IF;
       END $$;
+    `);
+
+    await client.query(`ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_design_2d_completion_fields_check`);
+    await client.query(`
+      ALTER TABLE tasks
+      ADD CONSTRAINT tasks_design_2d_completion_fields_check
+      CHECK (
+        task_type <> 'design_2d_completion'
+        OR (
+          project_id IS NOT NULL
+          AND completion_task_revision BETWEEN 0 AND 99
+          AND BTRIM(COALESCE(completion_task_display_name, '')) <> ''
+          AND workflow_id IS NULL
+          AND current_stage_id IS NULL
+          AND stage IS NULL
+          AND approval_required = TRUE
+          AND requires_quality_approval = FALSE
+          AND (
+            (
+              scope_type = 'fixture'
+              AND fixture_id IS NOT NULL
+              AND completion_task_code IN (
+                'FIXTURE_DRAFTING_CHECKING',
+                'FIXTURE_DRAWING_CORRECTION',
+                'FIXTURE_AUTOCAD_PDF',
+                'FIXTURE_IGES'
+              )
+            )
+            OR (
+              scope_type = 'project'
+              AND fixture_id IS NULL
+              AND completion_task_code IN (
+                'PROJECT_CMM_DATA',
+                'PROJECT_LINE_LAYOUT',
+                'PROJECT_MIMIC',
+                'PROJECT_WEAR_OUT_DATA'
+              )
+            )
+          )
+          AND (
+            proof_required = TRUE
+            OR (
+              completion_task_code = 'PROJECT_MIMIC'
+              AND completion_task_not_required_at IS NOT NULL
+              AND BTRIM(COALESCE(completion_task_not_required_reason, '')) <> ''
+              AND completion_task_not_required_by IS NOT NULL
+            )
+          )
+        )
+      ) NOT VALID
     `);
 
     await client.query(`

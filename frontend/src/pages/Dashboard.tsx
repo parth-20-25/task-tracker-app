@@ -11,6 +11,7 @@ import { NativeFixtureIngestionLauncher, NativeProjectEditWorkspace } from '@/co
 import { ControlDesignDashboardWorkspace } from '@/components/ControlDesignDashboardWorkspace';
 import { ExecutiveDashboard } from '@/components/ExecutiveDashboard';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
+import { Design2DCompletionTasks } from '@/components/Design2DCompletionTasks';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
 import { AlertTriangle, ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User as UserIcon, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
 import { canViewExecutiveDashboard, isControlDesignDashboardUser, isProjectAuthorityUser } from '@/lib/permissions';
@@ -29,7 +30,7 @@ import { OverdueAlertModal } from '@/components/OverdueAlertModal';
 import { isMyActiveTask, isPendingVerificationTask, isTaskAssignedToEmployee } from '@/lib/taskFilters';
 import { toast } from '@/hooks/use-toast';
 import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
-import type { ProjectDashboardSummary, ProjectStatus, User } from '@/types';
+import type { ProjectDashboardSummary, ProjectStatus } from '@/types';
 
 function statusLabel(status: ProjectStatus) {
   if (status === "on_hold") return "On Hold";
@@ -54,30 +55,6 @@ function formatCompletionTruthIssue(errors: string[] | undefined) {
     .replace(/^fixture:/, "Fixture ")
     .replace(/:/g, ": ")
     .replace(/_/g, " ");
-}
-
-function normalizeIdentifier(value: unknown) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function currentUserMatchesIdentifier(user: User | null | undefined, identifier: unknown) {
-  const normalizedIdentifier = normalizeIdentifier(identifier);
-  if (!normalizedIdentifier) {
-    return false;
-  }
-
-  return [user?.employee_id, user?.id].some(
-    (candidate) => normalizeIdentifier(candidate) === normalizedIdentifier,
-  );
-}
-
-function isProjectUploaderOrCreator(user: User | null | undefined, project: ProjectDashboardSummary | null | undefined) {
-  return [
-    project?.project_created_by_user_id,
-    project?.project_uploaded_by,
-    project?.uploaded_by,
-    project?.uploaded_by_user_id,
-  ].some((identifier) => currentUserMatchesIdentifier(user, identifier));
 }
 
 function ProjectCard({
@@ -320,21 +297,8 @@ function OperationalDashboard() {
     });
   };
 
-  const canManageProjectLifecycle = (project: ProjectDashboardSummary | null | undefined) => {
-    if (!project) {
-      return false;
-    }
-
-    return isProjectAuthorityUser(user) || access.canAssignTasks;
-  };
-
-  const canReactivateProject = (project: ProjectDashboardSummary | null | undefined) => {
-    if (!project) {
-      return false;
-    }
-
-    return canManageProjectLifecycle(project) || isProjectUploaderOrCreator(user, project);
-  };
+  const canReactivateProject = (project: ProjectDashboardSummary | null | undefined) =>
+    project?.can_manage_project === true;
 
   const handleConfirmReactivation = (payload: ReactivateProjectPayload) => {
     if (!reactivatingProject) {
@@ -592,6 +556,8 @@ function OperationalDashboard() {
           </div>
         )}
       </div> : null}
+
+      {canAccessProjectFixtures ? <Design2DCompletionTasks departmentId={user?.department_id} /> : null}
 
       {/* ── Project Command Center — project-authority users only ───────── */}
       {isProjectFirstRole ? (

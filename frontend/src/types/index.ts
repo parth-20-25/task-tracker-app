@@ -4,7 +4,8 @@ export type ProjectStatus = 'active' | 'on_hold' | 'completed' | 'released';
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type RoleScope = 'global' | 'department' | 'team' | 'self';
 export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed' | 'cancelled';
-export type TaskType = 'department_workflow' | 'custom' | 'additional_design';
+export type TaskType = 'department_workflow' | 'custom' | 'additional_design' | 'design_2d_completion';
+export type TaskScopeType = 'project' | 'fixture';
 export type AdditionalDesignTaskKind =
   | 'Drafting'
   | 'Print & Drafting Checking'
@@ -15,7 +16,12 @@ export type AdditionalDesignTaskKind =
   | 'CMM Data'
   | 'Line Layout'
   | 'Mimic Display'
-  | 'Wear-Out Data';
+  | 'Wear-Out Data'
+  | 'Project Process'
+  | 'Pin Matrix'
+  | 'PPT'
+  | 'CBO'
+  | 'CDRM';
 export type DesignTeam = '2D' | '3D';
 export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import';
 export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
@@ -89,6 +95,7 @@ export interface Task {
   assigned_to: string;
   assigned_user_id?: string;
   assignee_ids: string[];
+  can_upload_proof?: boolean;
   assignee_names?: string | null;
   assigned_by: string;
   assigned_at?: string | null;
@@ -129,6 +136,14 @@ export interface Task {
   project_status?: ProjectStatus;
   project_is_modified?: boolean;
   fixture_id?: string | null;
+  scope_type?: TaskScopeType | null;
+  completion_task_code?: string | null;
+  completion_task_revision?: number | null;
+  completion_task_display_name?: string | null;
+  completion_task_outsource_supplier?: string | null;
+  completion_task_not_required_reason?: string | null;
+  completion_task_not_required_by?: string | null;
+  completion_task_not_required_at?: string | null;
   project_no?: string | null;
   fixture_no?: string | null;
   project_code?: string | null;
@@ -293,6 +308,7 @@ export interface UploadBatch {
   deletion_blocked: boolean;
   delete_blocked_reason?: string | null;
   can_manage_2d_routing?: boolean;
+  can_manage_project?: boolean;
   is_modified?: boolean;
   can_toggle_modification?: boolean;
   can_edit_project?: boolean;
@@ -336,6 +352,7 @@ export interface ProjectDashboardSummary {
   project_leader_id?: string | null;
   project_leader_name?: string | null;
   uploaded_by_name?: string | null;
+  can_manage_project?: boolean;
   can_toggle_modification?: boolean;
   can_edit_project?: boolean;
   created_at: string;

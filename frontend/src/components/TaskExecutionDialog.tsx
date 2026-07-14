@@ -143,6 +143,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const isAssignee = user
     ? user.employee_id === task.assigned_to || task.assignee_ids?.includes(user.employee_id)
     : false;
+  const canUploadProof = task.can_upload_proof === true;
   const actorLevel = Number(user?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
   const assigneeLevel = Number(task.assignee?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
   const canEditCompletion = task.status !== "closed" && (
@@ -319,7 +320,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   }, [stageProofSelection]);
 
   const handleProofPaste = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
-    if (!isAssignee || task.status === "closed") {
+    if (!canUploadProof) {
       return;
     }
 
@@ -330,7 +331,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
 
     event.preventDefault();
     stageProofSelection(imageFile);
-  }, [isAssignee, stageProofSelection, task.status]);
+  }, [canUploadProof, stageProofSelection]);
 
   const tryReadClipboardImage = useCallback(async () => {
     if (!navigator.clipboard?.read) {
@@ -365,10 +366,10 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
 
   const openProofDialog = useCallback(() => {
     setActiveTab("proof");
-    if (isAssignee && task.status !== "closed") {
+    if (canUploadProof) {
       window.setTimeout(() => setProofPickerOpen(true), 0);
     }
-  }, [isAssignee, task.status]);
+  }, [canUploadProof]);
 
   const handleDialogOpenChange = useCallback((nextOpen: boolean) => {
     setOpen(nextOpen);
@@ -795,7 +796,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                   This task is completed. Proof documents are locked and available for viewing only.
                 </div>
               )}
-              {!isAssignee && (
+              {!canUploadProof && (
                 <div className="bg-muted border rounded-lg p-3 text-sm text-muted-foreground">
                   Only the assignee can upload or remove proof for this task.
                 </div>
@@ -823,7 +824,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                       variant="outline"
                       size="icon"
                       className="h-8 w-8"
-                      disabled={!isAssignee || uploading || task.status === 'closed'}
+                      disabled={!canUploadProof || uploading}
                       aria-label="Add proof file"
                     >
                       {task.task_type === "additional_design" ? <FileText className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
@@ -943,7 +944,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                           {new Date(attachment.uploaded_at).toLocaleString()}
                         </p>
                       </div>
-                      {attachment.id !== "legacy-proof" && task.status !== 'closed' && isAssignee && (
+                      {attachment.id !== "legacy-proof" && canUploadProof && (
                         <Button
                           variant="ghost"
                           size="sm"

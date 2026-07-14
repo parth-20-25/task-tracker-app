@@ -38,6 +38,7 @@ function installFakeClient(handler) {
 test("native fixture delete blocks active task references", async () => {
   const fake = installFakeClient((sql) => {
     if (["BEGIN", "ROLLBACK"].includes(sql)) return { rowCount: 0, rows: [] };
+    if (sql.includes("AS allowed")) return { rowCount: 1, rows: [{ allowed: true }] };
     if (sql.includes("FROM design.fixtures f")) {
       return {
         rowCount: 1,
@@ -71,6 +72,7 @@ test("native fixture delete blocks active task references", async () => {
 test("native fixture delete hard deletes when no dependencies exist", async () => {
   const fake = installFakeClient((sql) => {
     if (["BEGIN", "COMMIT"].includes(sql)) return { rowCount: 0, rows: [] };
+    if (sql.includes("AS allowed")) return { rowCount: 1, rows: [{ allowed: true }] };
     if (sql.includes("FROM design.fixtures f")) {
       return {
         rowCount: 1,

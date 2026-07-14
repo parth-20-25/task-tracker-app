@@ -332,6 +332,7 @@ const TASK_TYPES = {
   DEPARTMENT_WORKFLOW: "department_workflow",
   CUSTOM: "custom",
   ADDITIONAL_DESIGN: "additional_design",
+  DESIGN_2D_COMPLETION: "design_2d_completion",
 };
 
 const TASK_SOURCES = {

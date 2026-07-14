@@ -203,6 +203,45 @@ function projectOwnershipInVisibleUsersSql(projectAlias = "p", cteName = "visibl
   `;
 }
 
+function owningLeaderPairSql(projectAlias = "p", rootAlias = "root") {
+  const rootIsLeader = `(
+    ${rootAlias}.role_key = ANY(${sqlTextArray(TEAM_LEADER_ROLE_KEYS)})
+    OR ${rootAlias}.role_id_key = ANY(${sqlTextArray(TEAM_LEADER_ROLE_KEYS)})
+  )`;
+  const rootIsCoLeader = `(
+    ${rootAlias}.role_key = ANY(${sqlTextArray(CO_LEADER_ROLE_KEYS)})
+    OR ${rootAlias}.role_id_key = ANY(${sqlTextArray(CO_LEADER_ROLE_KEYS)})
+  )`;
+  const creatorRoleKey = roleKeySql("COALESCE(creator_role.name, creator.role)");
+
+  return `
+    EXISTS (
+      SELECT 1
+      FROM root_user ${rootAlias}
+      JOIN users creator
+        ON ${userIdentifierMatchSql("creator", `${projectAlias}.created_by_user_id`)}
+      LEFT JOIN roles creator_role
+        ON creator_role.id = creator.role
+      WHERE COALESCE(creator.is_active, TRUE) = TRUE
+        AND (
+          (
+            (${rootAlias}.user_uuid = creator.id::text OR ${rootAlias}.employee_id = creator.employee_id)
+            AND (${rootIsLeader} OR ${rootIsCoLeader})
+          )
+          OR (
+            ${creatorRoleKey} = ANY(${sqlTextArray(TEAM_LEADER_ROLE_KEYS)})
+            AND ${rootIsCoLeader}
+            AND ${rootAlias}.parent_id IN (creator.id::text, creator.employee_id)
+          )
+          OR (
+            ${creatorRoleKey} = ANY(${sqlTextArray(CO_LEADER_ROLE_KEYS)})
+            AND ${rootIsLeader}
+            AND creator.parent_id::text IN (${rootAlias}.user_uuid, ${rootAlias}.employee_id)
+          )
+        )
+    )
+  `;
+}
 function projectAssignmentInVisibleUsersSql(projectAlias = "p", cteName = "visible_users") {
   return `
     EXISTS (
@@ -456,6 +495,7 @@ module.exports = {
   isProjectAuthorityRoleIdentity,
   isProjectAuthorityRoleLevel,
   normalizeRoleKey,
+  owningLeaderPairSql,
   projectAuthoritySqlPredicate,
   projectAssignmentInVisibleUsersSql,
   projectOwnershipInVisibleUsersSql,

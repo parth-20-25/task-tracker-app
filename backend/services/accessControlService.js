@@ -1,9 +1,12 @@
 const { PERMISSIONS, ROLE_LEVELS, USER_SCOPES } = require("../config/constants");
+const { AppError } = require("../lib/AppError");
+const { resolveAdditionalDesignTeamForUser } = require("../lib/additionalDesignTasks");
 const { pool } = require("../db");
 const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
   isProjectAuthorityRoleIdentity,
+  owningLeaderPairSql,
   visibleFixturePredicate,
   visibleProjectPredicate,
 } = require("../repositories/projectVisibility");
@@ -195,6 +198,28 @@ function isAdmin(user) {
     || String(roleId || "").trim().toLowerCase() === "admin";
 }
 
+async function requireOwningLeaderPair(user, projectId, client = pool) {
+  const normalizedProjectId = String(projectId || "").trim();
+  if (!user?.employee_id || !normalizedProjectId) {
+    throw new Error("Project ownership authorization requires a user and project");
+  }
+
+  const result = await client.query(
+    `
+      ${buildVisibleUsersCte("$1")}
+      SELECT ${owningLeaderPairSql("ownership_project")} AS allowed
+      FROM design.projects ownership_project
+      WHERE ownership_project.id = $2
+      LIMIT 1
+    `,
+    [user.employee_id, normalizedProjectId],
+  );
+
+  if (result.rows[0]?.allowed !== true) {
+    throw new AppError(403, "Only the owning Team Leader and linked Team Co-Leader may modify this project");
+  }
+}
+
 function isSupervisor(user) {
   return (getRoleLevel(user) ?? Number.MAX_SAFE_INTEGER) <= 4;
 }
@@ -291,6 +316,13 @@ function canAccessTask(user, task) {
 
   if (isAdmin(user) || isProjectAuthorityRole(user)) {
     return true;
+  }
+
+  if (task.task_type === "additional_design") {
+    const designTeam = resolveAdditionalDesignTeamForUser(user);
+    if (designTeam && task.design_team && task.design_team !== designTeam) {
+      return false;
+    }
   }
 
   if (
@@ -591,6 +623,7 @@ module.exports = {
   isExecutiveDashboardRole,
   isOperationalControllerRole,
   isProjectAuthorityRole,
+  requireOwningLeaderPair,
   isSupervisor,
   isTaskAssignee,
 };

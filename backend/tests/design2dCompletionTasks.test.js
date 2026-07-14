@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
+process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
+
 const {
   DESIGN_2D_COMPLETION_TASKS,
   FIXTURE_TASK_CODES,
@@ -10,11 +12,10 @@ const {
   buildDesign2DCompletionState,
   formatDesign2DCompletionTaskName,
 } = require("../lib/design2dCompletionTasks");
-const {
-  canMarkMimicNotRequired,
-  nextRevisionFor,
-} = require("../services/design2dCompletionTaskService");
+const { nextRevisionFor } = require("../services/design2dCompletionTaskService");
+const { activeTaskLateral } = require("../services/operationalStateResolver");
 
+const { shouldAdvanceFixtureWorkflow } = require("../services/taskStateRules");
 function fixture(id, twoDComplete = true, workflowComplete = true) {
   return {
     fixture_id: id,
@@ -25,13 +26,13 @@ function fixture(id, twoDComplete = true, workflowComplete = true) {
   };
 }
 
-function approvedTask(code, revision = 0, fixtureId = null, overrides = {}) {
-  const definition = DESIGN_2D_COMPLETION_TASKS[code];
+function completionTask(code, revision = 0, fixtureId = "fixture-1", overrides = {}) {
   return {
-    id: `${fixtureId || "project"}-${code}-${revision}`,
+    id: `${fixtureId}-${code}-${revision}`,
+    title: formatDesign2DCompletionTaskName(code, revision),
     task_type: "design_2d_completion",
-    scope_type: definition.scope,
-    fixture_id: definition.scope === "fixture" ? fixtureId : null,
+    scope_type: "fixture",
+    fixture_id: fixtureId,
     completion_task_code: code,
     completion_task_revision: revision,
     status: "closed",
@@ -40,66 +41,59 @@ function approvedTask(code, revision = 0, fixtureId = null, overrides = {}) {
   };
 }
 
-function completeTasks(fixtures) {
-  return [
-    ...fixtures.flatMap((item) => FIXTURE_TASK_CODES.map((code) => approvedTask(code, 0, item.fixture_id))),
-    ...PROJECT_TASK_CODES.map((code) => approvedTask(code)),
-  ];
-}
-
-test("2D completion task catalog uses centralized codes, scopes and two-digit revision names", () => {
+test("the completion catalog exposes every configured activity independently at fixture scope", () => {
   assert.deepEqual(FIXTURE_TASK_CODES, [
     "FIXTURE_DRAFTING_CHECKING",
     "FIXTURE_DRAWING_CORRECTION",
     "FIXTURE_AUTOCAD_PDF",
     "FIXTURE_IGES",
-  ]);
-  assert.deepEqual(PROJECT_TASK_CODES, [
     "PROJECT_CMM_DATA",
     "PROJECT_LINE_LAYOUT",
     "PROJECT_MIMIC",
     "PROJECT_WEAR_OUT_DATA",
   ]);
+  assert.deepEqual(PROJECT_TASK_CODES, []);
   assert.equal(formatDesign2DCompletionTaskName("FIXTURE_DRAFTING_CHECKING", 0), "Drafting Checking 00");
   assert.equal(formatDesign2DCompletionTaskName("PROJECT_CMM_DATA", 1), "CMM Data 01");
-  assert.equal(DESIGN_2D_COMPLETION_TASKS.PROJECT_CMM_DATA.scope, "project");
+  assert.equal(DESIGN_2D_COMPLETION_TASKS.PROJECT_CMM_DATA.scope, "fixture");
+  assert.equal(FIXTURE_TASK_CODES.every((code) => DESIGN_2D_COMPLETION_TASKS[code].required === false), true);
 });
 
-test("a project is eligible after one original 2D stage completes and only completed fixtures are exposed", () => {
-  const fixtures = [fixture("fixture-1", true), fixture("fixture-2", false)];
-  const state = buildDesign2DCompletionState({ fixtures, tasks: [] });
+test("only fixtures with a completed original 2D stage are exposed on the completion board", () => {
+  const state = buildDesign2DCompletionState({
+    fixtures: [fixture("fixture-1", true), fixture("fixture-2", false)],
+    tasks: [],
+  });
 
   assert.deepEqual(state.eligibleFixtures.map((item) => item.fixture_id), ["fixture-1"]);
   assert.equal(state.allFixtures2DComplete, false);
-  assert.equal(state.projectTasksUnlocked, false);
 });
 
-test("fixture tasks retain their fixture scope while project tasks remain fixture-free", () => {
-  const fixtures = [fixture("fixture-1")];
-  const tasks = completeTasks(fixtures);
-  const state = buildDesign2DCompletionState({ fixtures, tasks });
+test("uncreated activities remain optional and do not reopen or block a completed original workflow", () => {
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks: [] });
 
-  assert.equal(tasks.find((task) => task.completion_task_code === "FIXTURE_IGES").fixture_id, "fixture-1");
-  assert.equal(tasks.find((task) => task.completion_task_code === "PROJECT_LINE_LAYOUT").fixture_id, null);
-  assert.equal(state.projectTasksUnlocked, true);
+  assert.equal(state.allOriginalWorkflowsComplete, true);
+  assert.equal(state.fixtureRequirementsComplete, true);
   assert.equal(state.projectCompletionReady, true);
+  assert.deepEqual(state.missingRequirements, []);
 });
 
-test("project tasks remain locked until every fixture-level requirement is approved", () => {
-  const fixtures = [fixture("fixture-1"), fixture("fixture-2")];
-  const tasks = completeTasks(fixtures).filter(
-    (task) => !(task.fixture_id === "fixture-2" && task.completion_task_code === "FIXTURE_IGES"),
-  );
-  const state = buildDesign2DCompletionState({ fixtures, tasks });
+test("an independently created IGES revision is tracked without requiring Drafting Checking", () => {
+  const iges = completionTask("FIXTURE_IGES", 0, "fixture-1", {
+    status: "in_progress",
+    verification_status: "pending",
+  });
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks: [iges] });
 
-  assert.equal(state.fixtureRequirementsComplete, false);
-  assert.equal(state.projectTasksUnlocked, false);
-  assert.match(state.missingRequirements.join(" | "), /FIXTURE-2: IGES/);
+  assert.equal(state.latestTasks.get("fixture-1:FIXTURE_IGES"), iges);
+  assert.equal(state.latestTasks.has("fixture-1:FIXTURE_DRAFTING_CHECKING"), false);
+  assert.equal(state.projectCompletionReady, false);
+  assert.match(state.missingRequirements.join(" | "), /IGES 00 is incomplete/);
 });
 
-test("revision rules start at 00, retain history, advance after completion or cancellation, and block active duplicates", () => {
-  const completed00 = approvedTask("FIXTURE_DRAWING_CORRECTION", 0, "fixture-1");
-  const active01 = approvedTask("FIXTURE_DRAWING_CORRECTION", 1, "fixture-1", {
+test("revision rules preserve history, increment per fixture and activity, and block active duplicates", () => {
+  const completed00 = completionTask("FIXTURE_DRAWING_CORRECTION", 0);
+  const active01 = completionTask("FIXTURE_DRAWING_CORRECTION", 1, "fixture-1", {
     status: "in_progress",
     verification_status: "pending",
   });
@@ -114,70 +108,51 @@ test("revision rules start at 00, retain history, advance after completion or ca
   );
 });
 
-test("a new active revision is authoritative, remains alongside 00, and blocks project completion", () => {
-  const fixtures = [fixture("fixture-1")];
-  const tasks = completeTasks(fixtures);
-  tasks.push(approvedTask("FIXTURE_DRAFTING_CHECKING", 1, "fixture-1", {
+test("completed 00 remains in history while active 01 becomes the selected latest revision", () => {
+  const completed00 = completionTask("FIXTURE_DRAFTING_CHECKING", 0);
+  const active01 = completionTask("FIXTURE_DRAFTING_CHECKING", 1, "fixture-1", {
     status: "assigned",
     verification_status: "pending",
-  }));
-  const state = buildDesign2DCompletionState({ fixtures, tasks });
+  });
+  const tasks = [completed00, active01];
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks });
 
-  assert.equal(tasks.filter((task) => task.completion_task_code === "FIXTURE_DRAFTING_CHECKING").length, 2);
-  assert.equal(state.latestTasks.get("fixture-1:FIXTURE_DRAFTING_CHECKING").completion_task_revision, 1);
-  assert.equal(state.projectTasksUnlocked, false);
-  assert.equal(state.projectCompletionReady, false);
+  assert.equal(tasks.length, 2);
+  assert.equal(state.latestTasks.get("fixture-1:FIXTURE_DRAFTING_CHECKING"), active01);
+  assert.equal(completed00.status, "closed");
 });
 
-test("project completion also requires every original fixture workflow", () => {
-  const fixtures = [fixture("fixture-1", true, true), fixture("fixture-2", true, false)];
-  const state = buildDesign2DCompletionState({ fixtures, tasks: completeTasks(fixtures) });
-
-  assert.equal(state.projectTasksUnlocked, true);
-  assert.equal(state.allOriginalWorkflowsComplete, false);
-  assert.equal(state.projectCompletionReady, false);
+test("main fixture operational SQL ignores completion activities at the backend boundary", () => {
+  const sql = activeTaskLateral("fixture", "operational_task");
+  assert.match(sql, /t\.task_type = 'department_workflow'/);
+  assert.doesNotMatch(sql, /task_type = 'design_2d_completion'/);
 });
 
-test("Mimic Not Required satisfies completion only with an approved audited reason and authorized leader", () => {
-  const fixtures = [fixture("fixture-1")];
-  const tasks = completeTasks(fixtures).filter((task) => task.completion_task_code !== "PROJECT_MIMIC");
-  tasks.push(approvedTask("PROJECT_MIMIC", 0, null, {
-    proof_required: false,
-    completion_task_not_required_reason: "Customer layout excludes mimic output",
-    completion_task_not_required_by: "LEAD-1",
-    completion_task_not_required_at: "2026-07-14T00:00:00.000Z",
-  }));
+test("completion approval, rejection, transfer, and cancellation stay off fixture workflow mutations", () => {
+  const completion = completionTask("FIXTURE_DRAFTING_CHECKING", 0, "fixture-1", {
+    workflow_id: "workflow-1",
+    current_stage_id: "stage-1",
+  });
+  const taskService = fs.readFileSync(path.join(__dirname, "..", "services", "taskService.js"), "utf8");
 
-  assert.equal(buildDesign2DCompletionState({ fixtures, tasks }).projectCompletionReady, true);
-  assert.equal(canMarkMimicNotRequired({
-    role_id: "team_leader",
-    role: { id: "team_leader", name: "Team Leader", permissions: { all: true } },
-  }), true);
-  assert.equal(canMarkMimicNotRequired({
-    role_id: "engineer",
-    role: { id: "engineer", name: "Engineer", permissions: { all: true } },
-  }), false);
-});
-
-test("database migration prevents duplicate revisions and duplicate active scopes", () => {
-  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations.js"), "utf8");
-  const bootstrap = fs.readFileSync(
-    path.join(__dirname, "..", "repositories", "bootstrapRepository.js"),
-    "utf8",
+  assert.equal(shouldAdvanceFixtureWorkflow(completion, "closed"), false);
+  assert.match(taskService, /task\.task_type === TASK_TYPES\.DESIGN_2D_COMPLETION[\s\S]*transferDesign2DCompletionTaskForUser/);
+  assert.match(
+    taskService,
+    /lockedTask\.task_type !== TASK_TYPES\.DESIGN_2D_COMPLETION[\s\S]*releaseFixtureStageAssignment/,
   );
+  assert.match(taskService, /if \(!isWorkflowManagedTask\(task\)\) \{[\s\S]*return null;/);
+});
 
-  for (const schemaObject of [
-    "completion_task_code",
-    "completion_task_revision",
-    "completion_task_not_required_reason",
-    "uniq_design_2d_completion_fixture_revision",
-    "uniq_design_2d_completion_project_revision",
-    "uniq_design_2d_completion_fixture_active",
-    "uniq_design_2d_completion_project_active",
-    "tasks_design_2d_completion_fields_check",
-  ]) {
-    assert.match(migration, new RegExp(schemaObject));
-    assert.match(bootstrap, new RegExp(schemaObject));
+test("the idempotent schema keeps the category discriminator and allows legacy activity codes at fixture scope", () => {
+  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations.js"), "utf8");
+  const bootstrap = fs.readFileSync(path.join(__dirname, "..", "repositories", "bootstrapRepository.js"), "utf8");
+
+  for (const source of [migration, bootstrap]) {
+    assert.match(source, /task_type = 'design_2d_completion'/);
+    assert.match(source, /uniq_design_2d_completion_fixture_revision/);
+    assert.match(source, /scope_type = 'fixture'[\s\S]*'PROJECT_CMM_DATA'[\s\S]*'PROJECT_WEAR_OUT_DATA'/);
+    assert.match(source, /completion_task_revision IS NULL/);
+    assert.match(source, /ROW_NUMBER\(\) OVER/);
   }
-  assert.match(migration, /scope_type = 'project'[\s\S]*fixture_id IS NULL/);
 });

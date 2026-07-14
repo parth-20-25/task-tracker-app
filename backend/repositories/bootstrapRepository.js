@@ -351,6 +351,35 @@ async function ensureTasksTable(client) {
       AND status NOT IN ('closed', 'cancelled')
   `);
 
+  await client.query(`
+    WITH missing_revisions AS (
+      SELECT
+        task.id,
+        COALESCE((
+          SELECT MAX(existing.completion_task_revision) + 1
+          FROM tasks existing
+          WHERE existing.task_type = 'design_2d_completion'
+            AND existing.project_id = task.project_id
+            AND existing.scope_type = task.scope_type
+            AND existing.fixture_id IS NOT DISTINCT FROM task.fixture_id
+            AND existing.completion_task_code = task.completion_task_code
+            AND existing.completion_task_revision IS NOT NULL
+        ), 0)
+        + ROW_NUMBER() OVER (
+          PARTITION BY task.project_id, task.scope_type, task.fixture_id, task.completion_task_code
+          ORDER BY task.created_at NULLS LAST, task.id
+        ) - 1 AS derived_revision
+      FROM tasks task
+      WHERE task.task_type = 'design_2d_completion'
+        AND task.completion_task_revision IS NULL
+    )
+    UPDATE tasks task
+    SET completion_task_revision = missing_revisions.derived_revision
+    FROM missing_revisions
+    WHERE task.id = missing_revisions.id
+      AND missing_revisions.derived_revision BETWEEN 0 AND 99
+  `);
+
   await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_tasks_workflow_template
     ON tasks (workflow_template_id)
@@ -1267,7 +1296,11 @@ async function ensureReferenceTables(client) {
               'FIXTURE_DRAFTING_CHECKING',
               'FIXTURE_DRAWING_CORRECTION',
               'FIXTURE_AUTOCAD_PDF',
-              'FIXTURE_IGES'
+              'FIXTURE_IGES',
+              'PROJECT_CMM_DATA',
+              'PROJECT_LINE_LAYOUT',
+              'PROJECT_MIMIC',
+              'PROJECT_WEAR_OUT_DATA'
             )
           )
           OR (

@@ -291,12 +291,14 @@ test("authorized owner release preserves lifecycle transaction and audit behavio
   const batchRepository = require("../repositories/batchRepository");
   const auditRepository = require("../repositories/auditRepository");
   const accessControlService = require("../services/accessControlService");
+  const completionTaskService = require("../services/design2dCompletionTaskService");
   const originals = {
     connect: db.pool.connect,
     getBatchByIdForUser: batchRepository.getBatchByIdForUser,
     releaseProject: batchRepository.releaseProject,
     createAuditLog: auditRepository.createAuditLog,
     requireOwningLeaderPair: accessControlService.requireOwningLeaderPair,
+    assertCompletionReady: completionTaskService.assertDesign2DCompletionProjectReady,
   };
   const tx = [];
   const audits = [];
@@ -324,6 +326,11 @@ test("authorized owner release preserves lifecycle transaction and audit behavio
     assert.equal(projectId, "project-1");
   };
   auditRepository.createAuditLog = async (entry) => audits.push(entry);
+  completionTaskService.assertDesign2DCompletionProjectReady = async (projectId, txClient) => {
+    assert.equal(projectId, "project-1");
+    assert.equal(txClient, client);
+    return true;
+  };
   clearServiceCache();
 
   try {
@@ -339,6 +346,7 @@ test("authorized owner release preserves lifecycle transaction and audit behavio
     batchRepository.releaseProject = originals.releaseProject;
     auditRepository.createAuditLog = originals.createAuditLog;
     accessControlService.requireOwningLeaderPair = originals.requireOwningLeaderPair;
+    completionTaskService.assertDesign2DCompletionProjectReady = originals.assertCompletionReady;
     clearServiceCache();
   }
 });

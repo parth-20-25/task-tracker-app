@@ -38,3 +38,7 @@ export function resolveDesignTeamFromUser(user: User | null | undefined): Design
 
   return subdivision === "2D" || subdivision === "3D" ? subdivision : null;
 }
+
+export function shouldHideAdditionalDesignTasks(user: User | null | undefined) {
+  return resolveDesignTeamFromUser(user) === "2D";
+}

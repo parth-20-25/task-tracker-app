@@ -12,6 +12,7 @@ import { ControlDesignDashboardWorkspace } from '@/components/ControlDesignDashb
 import { ExecutiveDashboard } from '@/components/ExecutiveDashboard';
 import { ProjectFixtureOperationsGrid } from '@/components/ProjectFixtureOperations';
 import { Design2DCompletionTasks } from '@/components/Design2DCompletionTasks';
+import { ProjectFixtureSectionHeader } from '@/components/ProjectFixtureSectionHeader';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
 import { AlertTriangle, ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User as UserIcon, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
 import { canViewExecutiveDashboard, isControlDesignDashboardUser, isProjectAuthorityUser } from '@/lib/permissions';
@@ -20,8 +21,8 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { resolveDesignTeamFromUser } from '@/lib/additionalDesignTasks';
 import { batchQueryKeys, projectQueryKeys, taskQueryKeys } from '@/lib/queryKeys';
 import { formatProjectNumber } from '@/lib/projectDisplay';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
@@ -209,6 +210,9 @@ function OperationalDashboard() {
 
   const isProjectFirstRole = isProjectAuthorityUser(user);
   const canAccessProjectFixtures = access.canAccessProjectFixtures;
+  const canAccessDesign2DCompletion = canAccessProjectFixtures && (
+    resolveDesignTeamFromUser(user) === "2D" || access.canAssignTasks || isProjectFirstRole
+  );
   const canUploadDesignNative = access.canUploadNativeDesignData;
   const includeTeamOverdueAlerts = Boolean(user?.employee_id)
     && (
@@ -471,28 +475,15 @@ function OperationalDashboard() {
 
       {/* ── Project-Centric Operational View — controllers only ── */}
       {canAccessProjectFixtures ? <div className="space-y-3">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <FolderOpen className="h-5 w-5 text-primary" />
-            <h2 className="text-lg font-semibold">Project Fixtures</h2>
-          </div>
-          <Select
-            value={selectedProjectId || "__none__"}
-            onValueChange={(v) => setSelectedProjectId(v === "__none__" ? "" : v)}
-          >
-            <SelectTrigger className="w-[260px] h-9 text-sm">
-              <SelectValue placeholder="Select a project…" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">Select a project…</SelectItem>
-              {projectSummaries.map((p) => (
-                <SelectItem key={p.project_id} value={p.project_id}>
-                  {formatProjectNumber(p)} — {p.project_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <ProjectFixtureSectionHeader
+          title="Project Fixtures"
+          selectedProjectId={selectedProjectId}
+          onProjectChange={setSelectedProjectId}
+          projects={projectSummaries.map((project) => ({
+            projectId: project.project_id,
+            label: `${formatProjectNumber(project)} — ${project.project_name}`,
+          }))}
+        />
 
         {!selectedProjectId ? (
           <Card>
@@ -557,7 +548,7 @@ function OperationalDashboard() {
         )}
       </div> : null}
 
-      {canAccessProjectFixtures ? <Design2DCompletionTasks departmentId={user?.department_id} /> : null}
+      {canAccessDesign2DCompletion ? <Design2DCompletionTasks departmentId={user?.department_id} /> : null}
 
       {/* ── Project Command Center — project-authority users only ───────── */}
       {isProjectFirstRole ? (

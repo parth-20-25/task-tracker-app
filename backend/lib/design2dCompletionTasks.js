@@ -1,12 +1,12 @@
 const DESIGN_2D_COMPLETION_TASKS = Object.freeze({
-  FIXTURE_DRAFTING_CHECKING: Object.freeze({ displayName: "Drafting Checking", scope: "fixture", required: true }),
-  FIXTURE_DRAWING_CORRECTION: Object.freeze({ displayName: "Drawing Correction", scope: "fixture", required: true }),
-  FIXTURE_AUTOCAD_PDF: Object.freeze({ displayName: "AutoCAD PDF", scope: "fixture", required: true }),
-  FIXTURE_IGES: Object.freeze({ displayName: "IGES", scope: "fixture", required: true }),
-  PROJECT_CMM_DATA: Object.freeze({ displayName: "CMM Data", scope: "project", required: true }),
-  PROJECT_LINE_LAYOUT: Object.freeze({ displayName: "Line Layout", scope: "project", required: true }),
-  PROJECT_MIMIC: Object.freeze({ displayName: "Mimic", scope: "project", required: false }),
-  PROJECT_WEAR_OUT_DATA: Object.freeze({ displayName: "Wear-Out Data", scope: "project", required: true }),
+  FIXTURE_DRAFTING_CHECKING: Object.freeze({ displayName: "Drafting Checking", scope: "fixture", required: false }),
+  FIXTURE_DRAWING_CORRECTION: Object.freeze({ displayName: "Drawing Correction", scope: "fixture", required: false }),
+  FIXTURE_AUTOCAD_PDF: Object.freeze({ displayName: "AutoCAD PDF", scope: "fixture", required: false }),
+  FIXTURE_IGES: Object.freeze({ displayName: "IGES", scope: "fixture", required: false }),
+  PROJECT_CMM_DATA: Object.freeze({ displayName: "CMM Data", scope: "fixture", required: false }),
+  PROJECT_LINE_LAYOUT: Object.freeze({ displayName: "Line Layout", scope: "fixture", required: false }),
+  PROJECT_MIMIC: Object.freeze({ displayName: "Mimic", scope: "fixture", required: false }),
+  PROJECT_WEAR_OUT_DATA: Object.freeze({ displayName: "Wear-Out Data", scope: "fixture", required: false }),
 });
 
 const FIXTURE_TASK_CODES = Object.freeze(
@@ -57,40 +57,18 @@ function latestTasksByScope(tasks = []) {
 function buildDesign2DCompletionState({ fixtures = [], tasks = [] } = {}) {
   const eligibleFixtures = fixtures.filter((fixture) => fixture.two_d_complete === true);
   const latest = latestTasksByScope(tasks);
-  const missingRequirements = [];
+  const activeTasks = tasks.filter(isActiveCompletionTask);
   const allFixtures2DComplete = fixtures.length > 0 && eligibleFixtures.length === fixtures.length;
   const allOriginalWorkflowsComplete = fixtures.length > 0
     && fixtures.every((fixture) => fixture.workflow_complete === true);
-  let fixtureRequirementsComplete = allFixtures2DComplete;
+  const missingRequirements = [];
 
-  if (!allFixtures2DComplete) {
-    missingRequirements.push("Every fixture must complete its original 2D workflow stage");
-  }
   if (!allOriginalWorkflowsComplete) {
     missingRequirements.push("Every original fixture workflow must be completed");
   }
 
-  for (const fixture of eligibleFixtures) {
-    for (const code of FIXTURE_TASK_CODES) {
-      const task = latest.get(`${fixture.fixture_id}:${code}`);
-      if (!isApprovedCompletionTask(task)) {
-        fixtureRequirementsComplete = false;
-        missingRequirements.push(`${fixture.fixture_no}: ${DESIGN_2D_COMPLETION_TASKS[code].displayName}`);
-      }
-    }
-  }
-
-  const projectTasksUnlocked = fixtureRequirementsComplete;
-
-  for (const code of PROJECT_TASK_CODES) {
-    const task = latest.get(`project:${code}`);
-    const definition = DESIGN_2D_COMPLETION_TASKS[code];
-    const mimicNotRequired = code === "PROJECT_MIMIC"
-      && Boolean(task?.completion_task_not_required_at)
-      && isApprovedCompletionTask(task);
-    if (!isApprovedCompletionTask(task) && !(definition.required === false && mimicNotRequired)) {
-      missingRequirements.push(definition.displayName);
-    }
+  for (const task of activeTasks) {
+    missingRequirements.push(`${task.title || task.completion_task_code || "2D completion activity"} is incomplete`);
   }
 
   return {
@@ -98,9 +76,9 @@ function buildDesign2DCompletionState({ fixtures = [], tasks = [] } = {}) {
     latestTasks: latest,
     allFixtures2DComplete,
     allOriginalWorkflowsComplete,
-    fixtureRequirementsComplete,
-    projectTasksUnlocked,
-    projectCompletionReady: projectTasksUnlocked && allOriginalWorkflowsComplete && missingRequirements.length === 0,
+    fixtureRequirementsComplete: activeTasks.length === 0,
+    projectTasksUnlocked: true,
+    projectCompletionReady: allOriginalWorkflowsComplete && activeTasks.length === 0,
     missingRequirements,
   };
 }

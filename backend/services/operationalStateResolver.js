@@ -119,6 +119,7 @@ function activeTaskLateral(fixtureAlias = "f", alias = "operational_task") {
           t.updated_at
         FROM tasks t
         WHERE t.fixture_id = ${fixtureAlias}.id
+          AND t.task_type = 'department_workflow'
           AND t.status = ANY(${activeTaskStatusSqlArray()})
         ORDER BY
           CASE

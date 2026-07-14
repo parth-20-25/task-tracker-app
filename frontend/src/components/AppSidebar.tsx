@@ -15,6 +15,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { isDesignDepartment } from '@/lib/departments';
+import { shouldHideAdditionalDesignTasks } from '@/lib/additionalDesignTasks';
 import { isProjectAuthorityUser } from '@/lib/permissions';
 import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
 
@@ -40,7 +41,7 @@ export function AppSidebar() {
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
     { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
     { title: 'Projects', url: '/batches', icon: PackageCheck },
-    ...(isDesignDepartment(user) || isProjectAuthorityUser(user)
+    ...((isDesignDepartment(user) || isProjectAuthorityUser(user)) && !shouldHideAdditionalDesignTasks(user)
       ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
       : []),
   ];

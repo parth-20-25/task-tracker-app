@@ -5,14 +5,10 @@ import {
   ArrowRightLeft,
   CalendarIcon,
   CheckSquare,
-  ChevronDown,
   Factory,
   Image as ImageIcon,
   Loader2,
   Rocket,
-  User,
-  UserCheck,
-  UserX,
   XCircle,
 } from "lucide-react";
 import {
@@ -33,17 +29,16 @@ import {
   type FixtureRevisionType,
 } from "@/api/designApi";
 import { cancelTask as cancelTaskRequest, fetchTaskAssignmentUsers, fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
+import { FixtureBoardCard, FixtureStatusBoard } from "@/components/FixtureBoard";
 import { SafeImage } from "@/components/SafeImage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -750,7 +745,11 @@ export function ProjectFixtureOperationsGrid({
     const taskById = new Map<number, Task>();
 
     [...tasks, ...(verificationQuery.data ?? [])].forEach((task) => {
-      if (task.fixture_id && fixtureIds.has(task.fixture_id)) {
+      if (
+        task.task_type === "department_workflow"
+        && task.fixture_id
+        && fixtureIds.has(task.fixture_id)
+      ) {
         taskById.set(task.id, task);
       }
     });
@@ -850,6 +849,7 @@ export function ProjectFixtureOperationsGrid({
 
       return {
         ...section,
+        ...FIXTURE_SECTION_STYLES[section.key],
         fixtures: sortSectionFixtures(section.key, sectionFixtures, fixtureTaskById),
       };
     });
@@ -1078,101 +1078,46 @@ export function ProjectFixtureOperationsGrid({
         }}
       />
 
-      <div className="space-y-3">
-        {fixtureSections.map((section) => {
-          const sectionStyle = FIXTURE_SECTION_STYLES[section.key];
-
-          return (
-            <Collapsible
-              key={section.key}
-              open={openSections[section.key] ?? true}
-              onOpenChange={(open) => setOpenSections((current) => ({ ...current, [section.key]: open }))}
-              className="overflow-hidden rounded-lg border"
-              style={{
-                backgroundColor: sectionStyle.background,
-                borderColor: sectionStyle.accent,
-              }}
-            >
-              <CollapsibleTrigger
-                className="flex w-full items-center justify-between gap-3 border-l-4 px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                style={{
-                  backgroundColor: sectionStyle.background,
-                  borderLeftColor: sectionStyle.accent,
-                  color: sectionStyle.text,
-                }}
-              >
-                <span className="flex min-w-0 items-start gap-2">
-                  <span
-                    aria-hidden="true"
-                    className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: sectionStyle.accent }}
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold leading-tight" style={{ color: sectionStyle.text }}>{section.label}</span>
-                    <span className="block text-xs leading-snug opacity-90">{sectionStyle.description}</span>
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2 text-xs">
-                  <Badge
-                    variant="outline"
-                    className="font-semibold"
-                    style={{
-                      backgroundColor: sectionStyle.background,
-                      borderColor: sectionStyle.accent,
-                      color: sectionStyle.text,
-                    }}
-                  >
-                    {section.fixtures.length} fixture{section.fixtures.length === 1 ? "" : "s"}
-                  </Badge>
-                  <ChevronDown className={cn("h-4 w-4 transition-transform", openSections[section.key] ? "rotate-180" : "")} />
-                </span>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="border-t bg-background p-3" style={{ borderTopColor: sectionStyle.accent }}>
-                {section.fixtures.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No fixtures in this section.</p>
-                ) : section.key === "OUTSOURCED" ? (
-                  <OutsourcedFixturesTable
-                    fixtures={section.fixtures}
-                    fixtureTaskById={fixtureTaskById}
-                    projectId={projectId}
-                    departmentId={departmentId || undefined}
-                    assignableUsers={assignableUsers}
-                    isLoadingUsers={isLoadingAssignableUsers}
-                    invalidateOperationalState={invalidateOperationalState}
-                    operationalResolutionByFixtureId={operationalResolutionByFixtureId}
-                  />
-                ) : (
-                  <div className="space-y-2">
-                    {section.fixtures.map((fixture) => (
-                      <ProjectFixtureCard
-                        key={fixture.fixture_id}
-                        fixture={fixture}
-                        task={fixtureTaskById.get(fixture.fixture_id) || null}
-                        projectId={projectId}
-                        departmentId={departmentId || undefined}
-                        assignableUsers={assignableUsers}
-                        twoDAssignableUsers={twoDAssignableUsers}
-                        isLoadingUsers={isLoadingAssignableUsers}
-                        isLoadingTwoDUsers={isLoadingTwoDAssignableUsers}
-                        invalidateOperationalState={invalidateOperationalState}
-                        operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
-                        onOutsource={openSingleOutsourceDialog}
-                        onFixtureReleased={rememberReleasedFixtureState}
-                        outsourceSelectable={outsourceEligibleFixtureIds.has(fixture.fixture_id)}
-                        outsourceSelected={selectedOutsourceFixtureIds.includes(fixture.fixture_id)}
-                        onOutsourceSelectedChange={toggleOutsourceSelectedFixture}
-                        selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
-                        selected={selectedFixtureIds.includes(fixture.fixture_id)}
-                        onSelectedChange={toggleSelectedFixture}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CollapsibleContent>
-            </Collapsible>
-          );
-        })}
-      </div>
+      <FixtureStatusBoard
+        sections={fixtureSections}
+        openSections={openSections}
+        onOpenChange={(key, open) => setOpenSections((current) => ({ ...current, [key]: open }))}
+        renderSection={(section) => section.key === "OUTSOURCED" ? (
+          <OutsourcedFixturesTable
+            fixtures={section.fixtures}
+            fixtureTaskById={fixtureTaskById}
+            projectId={projectId}
+            departmentId={departmentId || undefined}
+            assignableUsers={assignableUsers}
+            isLoadingUsers={isLoadingAssignableUsers}
+            invalidateOperationalState={invalidateOperationalState}
+            operationalResolutionByFixtureId={operationalResolutionByFixtureId}
+          />
+        ) : undefined}
+        renderFixture={(fixture) => (
+          <ProjectFixtureCard
+            key={fixture.fixture_id}
+            fixture={fixture}
+            task={fixtureTaskById.get(fixture.fixture_id) || null}
+            projectId={projectId}
+            departmentId={departmentId || undefined}
+            assignableUsers={assignableUsers}
+            twoDAssignableUsers={twoDAssignableUsers}
+            isLoadingUsers={isLoadingAssignableUsers}
+            isLoadingTwoDUsers={isLoadingTwoDAssignableUsers}
+            invalidateOperationalState={invalidateOperationalState}
+            operationalResolution={operationalResolutionByFixtureId.get(fixture.fixture_id) || resolveFixtureOperationalState(fixture, fixtureTaskById.get(fixture.fixture_id) || null)}
+            onOutsource={openSingleOutsourceDialog}
+            onFixtureReleased={rememberReleasedFixtureState}
+            outsourceSelectable={outsourceEligibleFixtureIds.has(fixture.fixture_id)}
+            outsourceSelected={selectedOutsourceFixtureIds.includes(fixture.fixture_id)}
+            onOutsourceSelectedChange={toggleOutsourceSelectedFixture}
+            selectable={bulkPanelOpen && assignableFixtureIds.has(fixture.fixture_id)}
+            selected={selectedFixtureIds.includes(fixture.fixture_id)}
+            onSelectedChange={toggleSelectedFixture}
+          />
+        )}
+      />
     </div>
   );
 }
@@ -2719,232 +2664,171 @@ function ProjectFixtureCard({
     || transferMutation.isPending;
 
   return (
-    <div
-      className={cn(
-        "rounded-md border border-slate-200 bg-background px-3 py-2 transition-colors hover:bg-slate-50/70",
-        selected && "border-primary bg-primary/5 hover:bg-primary/5",
-      )}
-    >
-      <div className="space-y-2">
-        <div className="grid gap-2 lg:grid-cols-[minmax(220px,1.5fr)_auto_minmax(140px,auto)_minmax(150px,auto)_auto] lg:items-center">
-          <div className="flex min-w-0 items-start gap-2">
-            {selectable ? (
-              <Checkbox
-                className="mt-0.5"
-                checked={selected}
-                onCheckedChange={(checked) => onSelectedChange?.(fixture.fixture_id, checked === true)}
-                aria-label={`Select ${fixture.fixture_no}`}
-              />
-            ) : null}
-            <div className="min-w-0 space-y-0.5">
-              <p className="font-semibold text-sm leading-tight">{fixture.fixture_no}</p>
-              <p className="break-words text-xs leading-snug text-muted-foreground">{fixture.part_name}</p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 lg:justify-center">
-            {workflowCode ? (
-              <Badge variant="outline" className="border-indigo-300 bg-indigo-50 text-xs font-semibold text-indigo-800">
-                {workflowCode}
-              </Badge>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge
-              variant="outline"
-              className={cn(
-                "max-w-full gap-0.5 text-xs font-medium",
-                isAssigned
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                  : "border-slate-300 bg-slate-50 text-slate-500",
-              )}
-            >
-              {isAssigned ? <UserCheck className="h-3 w-3 shrink-0" /> : <UserX className="h-3 w-3 shrink-0" />}
-              <span className="break-words">{isAssigned ? operationalResolution.activeAssigneeName || getAssigneeName(fixture, task) : "Unassigned"}</span>
-            </Badge>
-          </div>
-
-          <div className="min-w-0 text-xs text-muted-foreground">
-            {isAssigned && !isSubmittedForVerification ? (
-              <div className="space-y-1">
-                {task ? (
-                  <div className="flex items-center gap-2">
-                    <User className="h-3 w-3 shrink-0" />
-                    <Progress value={completedPercent} className="h-1.5 w-16 shrink-0" />
-                    <span className="font-semibold text-foreground">{completedPercent}%</span>
-                  </div>
-                ) : null}
-                <p>Submitted: {formatSubmittedDate(getSubmittedValue(task))}</p>
-              </div>
-            ) : isAssigned ? (
-              <span>Submitted: {formatSubmittedDate(getSubmittedValue(task))}</span>
-            ) : null}
-          </div>
-
-          <div className="flex flex-col items-start gap-1.5 lg:items-end">
-            <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
-              {isSubmittedForVerification && canReviewTask ? (
-                <>
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-7 bg-emerald-600 px-2 text-[11px] hover:bg-emerald-700"
-                    disabled={reviewMutation.isPending}
-                    onClick={() => {
-                      if (task) {
-                        reviewMutation.mutate({ reviewTask: task, action: "approve" });
-                      }
-                    }}
-                  >
-                    APPROVE
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    className="h-7 px-2 text-[11px]"
-                    disabled={reviewMutation.isPending}
-                    onClick={() => {
-                      setRejectingTask(task);
-                      setRejectionReason("");
-                    }}
-                  >
-                    REJECT
-                  </Button>
-                </>
-              ) : isAssigned && (canTransferTask || canCancelTask) ? (
-                <>
-                  {canTransferTask ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-[11px]"
-                      onClick={() => {
-                        setExpanded(expanded === "transfer" ? null : "transfer");
-                        resetAssignForm();
-                        setInlineOperationalReason(null);
-                      }}
-                    >
-                      <ArrowRightLeft className="mr-1 h-3 w-3" />
-                      Transfer
-                    </Button>
-                  ) : null}
-                  {canCancelTask ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
-                      disabled={cancelMutation.isPending}
-                      onClick={() => {
-                        if (task) {
-                          setCancellingTask(task);
-                        }
-                      }}
-                    >
-                      <XCircle className="mr-1 h-3 w-3" />
-                      Cancel Task
-                    </Button>
-                  ) : null}
-                </>
-              ) : (operationalResolution.assignable || isWorkflowCompleteReassign) && canOpenWorkflowAction ? (
+    <FixtureBoardCard
+      fixtureId={fixture.fixture_id}
+      fixtureNo={fixture.fixture_no}
+      partName={fixture.part_name}
+      activity={workflowCode ? (
+        <Badge variant="outline" className="border-indigo-300 bg-indigo-50 text-xs font-semibold text-indigo-800">
+          {workflowCode}
+        </Badge>
+      ) : null}
+      assigned={isAssigned}
+      assigneeName={operationalResolution.activeAssigneeName || getAssigneeName(fixture, task)}
+      progressPercent={isAssigned && !isSubmittedForVerification && task ? completedPercent : null}
+      submittedLabel={isAssigned ? formatSubmittedDate(getSubmittedValue(task)) : null}
+      selectable={selectable}
+      selected={selected}
+      onSelectedChange={onSelectedChange}
+      actions={(
+        <>
+          <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
+            {isSubmittedForVerification && canReviewTask ? (
+              <>
                 <Button
                   type="button"
                   size="sm"
-                  variant="outline"
-                  className="h-7 px-2 text-[11px]"
-                  disabled={openingAssign}
-                  onClick={() => void openAssignExpansion()}
+                  className="h-7 bg-emerald-600 px-2 text-[11px] hover:bg-emerald-700"
+                  disabled={reviewMutation.isPending}
+                  onClick={() => task && reviewMutation.mutate({ reviewTask: task, action: "approve" })}
                 >
-                  {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                  {isWorkflowCompleteReassign ? "Re-Assign" : "Assign Now"}
+                  APPROVE
                 </Button>
-              ) : null}
-            </div>
-            {canToggleOutsourcing ? (
-              <div className="flex items-center gap-1.5">
-                {outsourceSelectable ? (
-                  <Checkbox
-                    checked={outsourceSelected}
-                    onCheckedChange={(checked) => onOutsourceSelectedChange?.(fixture.fixture_id, checked === true)}
-                    aria-label={`Select ${fixture.fixture_no} for outsourcing`}
-                    title="Select for bulk outsourcing"
-                  />
-                ) : null}
                 <Button
                   type="button"
                   size="sm"
-                  variant="outline"
+                  variant="destructive"
                   className="h-7 px-2 text-[11px]"
-                  disabled={bringInHouseMutation.isPending}
+                  disabled={reviewMutation.isPending}
                   onClick={() => {
-                    if (hasActiveOutsourcePlan) {
-                      setInHouseDialogOpen(true);
-                    } else {
-                      onOutsource(fixture);
-                    }
+                    setRejectingTask(task);
+                    setRejectionReason("");
                   }}
                 >
-                  {bringInHouseMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Factory className="mr-1 h-3 w-3" />}
-                  {hasActiveOutsourcePlan ? "Bring In-House" : "Outsource"}
+                  REJECT
                 </Button>
-              </div>
+              </>
+            ) : isAssigned && (canTransferTask || canCancelTask) ? (
+              <>
+                {canTransferTask ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => {
+                      setExpanded(expanded === "transfer" ? null : "transfer");
+                      resetAssignForm();
+                      setInlineOperationalReason(null);
+                    }}
+                  >
+                    <ArrowRightLeft className="mr-1 h-3 w-3" />
+                    Transfer
+                  </Button>
+                ) : null}
+                {canCancelTask ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800"
+                    disabled={cancelMutation.isPending}
+                    onClick={() => task && setCancellingTask(task)}
+                  >
+                    <XCircle className="mr-1 h-3 w-3" />
+                    Cancel Task
+                  </Button>
+                ) : null}
+              </>
+            ) : (operationalResolution.assignable || isWorkflowCompleteReassign) && canOpenWorkflowAction ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                disabled={openingAssign}
+                onClick={() => void openAssignExpansion()}
+              >
+                {openingAssign ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                {isWorkflowCompleteReassign ? "Re-Assign" : "Assign Now"}
+              </Button>
             ) : null}
           </div>
+          {canToggleOutsourcing ? (
+            <div className="flex items-center gap-1.5">
+              {outsourceSelectable ? (
+                <Checkbox
+                  checked={outsourceSelected}
+                  onCheckedChange={(checked) => onOutsourceSelectedChange?.(fixture.fixture_id, checked === true)}
+                  aria-label={`Select ${fixture.fixture_no} for outsourcing`}
+                  title="Select for bulk outsourcing"
+                />
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                disabled={bringInHouseMutation.isPending}
+                onClick={() => hasActiveOutsourcePlan ? setInHouseDialogOpen(true) : onOutsource(fixture)}
+              >
+                {bringInHouseMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Factory className="mr-1 h-3 w-3" />}
+                {hasActiveOutsourcePlan ? "Bring In-House" : "Outsource"}
+              </Button>
+            </div>
+          ) : null}
+        </>
+      )}
+    >
+      {isSubmittedForVerification ? (
+        <div className="space-y-2 rounded-md bg-slate-50/70 p-2">
+          {proofImage ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="block h-20 w-28 overflow-hidden rounded-md border bg-slate-50"
+                onClick={() => setPreviewImage(resolveImageUrl(proofImage))}
+              >
+                <SafeImage src={proofImage} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
+              </button>
+              <div className="min-w-0 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">Work proof</p>
+                <p>{formatSubmittedDate(getProofUploadedAt(task))}</p>
+                <p className="break-words">{getProofUploadedBy(task) || "Unknown uploader"}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-16 w-24 items-center justify-center rounded-md border border-dashed bg-slate-50 text-slate-400">
+              <ImageIcon className="h-5 w-5" />
+            </div>
+          )}
         </div>
+      ) : null}
 
-        {isSubmittedForVerification ? (
-          <div className="space-y-2 rounded-md bg-slate-50/70 p-2">
-            {proofImage ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  className="block h-20 w-28 overflow-hidden rounded-md border bg-slate-50"
-                  onClick={() => setPreviewImage(resolveImageUrl(proofImage))}
-                >
-                  <SafeImage src={proofImage} alt={`${fixture.fixture_no} proof`} className="h-full w-full object-cover" />
-                </button>
-                <div className="min-w-0 text-xs text-muted-foreground">
-                  <p className="font-medium text-foreground">Work proof</p>
-                  <p>{formatSubmittedDate(getProofUploadedAt(task))}</p>
-                  <p className="break-words">{getProofUploadedBy(task) || "Unknown uploader"}</p>
-                </div>
-              </div>
-            ) : (
-              <div className="flex h-16 w-24 items-center justify-center rounded-md border border-dashed bg-slate-50 text-slate-400">
-                <ImageIcon className="h-5 w-5" />
-              </div>
-            )}
+      {inlineOperationalReason ? (
+        <p className="text-xs font-medium text-amber-700">{inlineOperationalReason}</p>
+      ) : null}
+
+      {isWorkflowCompleteReassign ? (
+        <div className="grid gap-2 rounded-md border border-emerald-100 bg-emerald-50/60 p-2 text-[11px] sm:grid-cols-4">
+          <div>
+            <p className="font-semibold uppercase tracking-wide text-emerald-800">Current Revision</p>
+            <p className="mt-0.5 text-slate-700">{workflowCode || "Not recorded"}</p>
           </div>
-        ) : null}
-
-        {inlineOperationalReason ? (
-          <p className="text-xs font-medium text-amber-700">{inlineOperationalReason}</p>
-        ) : null}
-
-        {isWorkflowCompleteReassign ? (
-          <div className="grid gap-2 rounded-md border border-emerald-100 bg-emerald-50/60 p-2 text-[11px] sm:grid-cols-4">
-            <div>
-              <p className="font-semibold uppercase tracking-wide text-emerald-800">Current Revision</p>
-              <p className="mt-0.5 text-slate-700">{workflowCode || "Not recorded"}</p>
-            </div>
-            <div>
-              <p className="font-semibold uppercase tracking-wide text-emerald-800">Release Date</p>
-              <p className="mt-0.5 text-slate-700">{releaseDateLabel}</p>
-            </div>
-            <div>
-              <p className="font-semibold uppercase tracking-wide text-emerald-800">Released By</p>
-              <p className="mt-0.5 break-words text-slate-700">{releasedByLabel}</p>
-            </div>
-            <div>
-              <p className="font-semibold uppercase tracking-wide text-emerald-800">Current Status</p>
-              <p className="mt-0.5 text-slate-700">Released</p>
-            </div>
+          <div>
+            <p className="font-semibold uppercase tracking-wide text-emerald-800">Release Date</p>
+            <p className="mt-0.5 text-slate-700">{releaseDateLabel}</p>
           </div>
-        ) : null}
-      </div>
+          <div>
+            <p className="font-semibold uppercase tracking-wide text-emerald-800">Released By</p>
+            <p className="mt-0.5 break-words text-slate-700">{releasedByLabel}</p>
+          </div>
+          <div>
+            <p className="font-semibold uppercase tracking-wide text-emerald-800">Current Status</p>
+            <p className="mt-0.5 text-slate-700">Released</p>
+          </div>
+        </div>
+      ) : null}
 
       {expanded === "assign" ? (
         <div className="mt-2 space-y-2 border-t pt-2">
@@ -3268,6 +3152,6 @@ function ProjectFixtureCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </FixtureBoardCard>
   );
 }

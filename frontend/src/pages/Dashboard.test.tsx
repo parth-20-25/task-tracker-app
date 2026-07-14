@@ -362,8 +362,8 @@ describe("Dashboard workspace routing", () => {
     expect(screen.queryByText("Control Design Dedicated Workspace")).not.toBeInTheDocument();
   });
 
-  it("keeps the existing Project Fixtures workspace for Design users", async () => {
-    setDesignAuth();
+  it("shows the 2D completion board beside Project Fixtures for Design assignment leaders", async () => {
+    setDesignAuth({ canAssignTasks: true });
     renderDashboard();
 
     expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
@@ -374,6 +374,15 @@ describe("Dashboard workspace routing", () => {
     expect(headings.indexOf("2D Completion Tasks")).toBe(headings.indexOf("Project Fixtures") + 1);
     expect(executiveDashboard.render).not.toHaveBeenCalled();
     await waitFor(() => expect(designApi.fetchProjectDashboardSummary).toHaveBeenCalledTimes(1));
+  });
+
+  it("hides the 2D completion board without 2D subdivision visibility or assignment authority", async () => {
+    setDesignAuth();
+    renderDashboard();
+
+    expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "2D Completion Tasks" })).not.toBeInTheDocument();
   });
 
   it("keeps Team Leaders with analytics permissions on the operational dashboard", async () => {

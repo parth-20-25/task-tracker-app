@@ -145,6 +145,11 @@ router.patch(
 );
 
 router.post(
+  "/control/workflow-stages/:stageId/comments",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.addStageComment(req.user, req.params.stageId, req.body), 201)),
+);
+
+router.post(
   "/control/workflow-stages/:stageId/pre-completed",
   asyncHandler(async (req, res) => sendSuccess(
     res,

@@ -8,6 +8,7 @@ import type { ControlDesignCapabilities, ControlProjectWorkflow, ControlWorkflow
 import type { ProjectDashboardSummary } from "@/types";
 
 const controlApi = vi.hoisted(() => ({
+  addControlWorkflowStageComment: vi.fn(),
   approveControlWorkflowRevision: vi.fn(),
   approveControlWorkflowStage: vi.fn(),
   fetchControlDesignAssignableUsers: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/controlWorkflowApi")>();
   return {
     ...actual,
+    addControlWorkflowStageComment: (...args: unknown[]) => controlApi.addControlWorkflowStageComment(...args),
     approveControlWorkflowRevision: (...args: unknown[]) => controlApi.approveControlWorkflowRevision(...args),
     approveControlWorkflowStage: (...args: unknown[]) => controlApi.approveControlWorkflowStage(...args),
     fetchControlDesignAssignableUsers: (...args: unknown[]) => controlApi.fetchControlDesignAssignableUsers(...args),
@@ -82,6 +84,15 @@ vi.mock("@/components/ui/dialog", () => ({
   DialogHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 }));
+
+vi.mock("@/components/ui/sheet", () => ({
+  Sheet: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? <div>{children}</div> : null),
+  SheetContent: ({ children }: { children: ReactNode }) => <div role="dialog">{children}</div>,
+  SheetDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
+  SheetHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SheetTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+}));
+
 
 vi.mock("@/components/ui/select", () => ({
   Select: ({
@@ -222,6 +233,7 @@ function stage(overrides: Partial<ControlWorkflowStage>): ControlWorkflowStage {
     revisions: overrides.revisions || [],
     document_history: [],
     override_history: [],
+    events: overrides.events || [],
     ...overrides,
   };
 }
@@ -379,6 +391,7 @@ describe("ControlWorkflowSection", () => {
       stages: [],
     });
     controlApi.fetchControlProjectWorkflow.mockResolvedValue(workflow());
+    controlApi.addControlWorkflowStageComment.mockResolvedValue(workflow());
     controlApi.fetchControlPendingApprovals.mockResolvedValue([
       {
         id: "submission-queue-1",
@@ -425,14 +438,13 @@ describe("ControlWorkflowSection", () => {
   it("renders the Control Design workflow tree and owner actions without reviewer controls", async () => {
     renderSection();
 
-    expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Project Lifecycle" })).toBeInTheDocument();
     expect((await screen.findAllByText("CO Creation")).length).toBeGreaterThan(0);
     expect(screen.getByText("Manual Preparation")).toBeInTheDocument();
-    expect(screen.getAllByText("Locked until previous stage is approved").length).toBeGreaterThan(0);
-    expect(screen.getByText("1 stage skipped by override.")).toBeInTheDocument();
+    expect(screen.getByText("CO Creation must be approved before this stage can start.")).toBeInTheDocument();
     const submitButtons = screen.getAllByRole("button", { name: /Submit for Approval/i });
     expect(submitButtons.length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /Update Document Path/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /Update Path/i }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /^Override Unlock$/i })).not.toBeInTheDocument();
 
     fireEvent.click(submitButtons[0]);
@@ -440,16 +452,35 @@ describe("ControlWorkflowSection", () => {
     expect(screen.getByLabelText("Submitted document path")).toHaveValue("\\\\server\\control\\co.xlsx");
   }, 15000);
 
+  it("opens the stage drawer and saves a stage comment", async () => {
+    renderSection();
+
+    await screen.findByRole("heading", { name: "Project Lifecycle" });
+    const detailButtons = await screen.findAllByRole("button", { name: "View Details" });
+    fireEvent.click(detailButtons[0]);
+
+    expect(screen.getByRole("heading", { name: "CO Creation" })).toBeInTheDocument();
+    expect(screen.getByText("Document Paths")).toBeInTheDocument();
+    expect(screen.getByText("Stage Information")).toBeInTheDocument();
+    expect(screen.getByText("History")).toBeInTheDocument();
+    expect(screen.getByText("Comments")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Add stage comment"), { target: { value: "Ready for internal review" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Comment" }));
+
+    await waitFor(() => expect(controlApi.addControlWorkflowStageComment).toHaveBeenCalledWith("stage-1", "Ready for internal review"));
+  });
+
+
   it("renders reviewer approval, revision, override, and pre-completed controls", async () => {
     setLeaderAuth();
     renderSection();
 
-    expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Project Lifecycle" })).toBeInTheDocument();
     await waitFor(() => expect(controlApi.fetchControlDesignAssignableUsers).toHaveBeenCalled());
 
-    expect(screen.getByText("Pending Approvals")).toBeInTheDocument();
-    expect(screen.getAllByText("Revision Required").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("EMP-OWNER - Owner User").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Update Required").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/EMP-OWNER - Owner User/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^Approve$/i })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^Raise Revision$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: /^Override Unlock$/i }).length).toBeGreaterThan(0);
@@ -473,7 +504,7 @@ describe("ControlWorkflowSection", () => {
     sectionCapabilities = buildCapabilities({ canViewAllProjects: true });
     renderSection();
 
-    expect(await screen.findByRole("heading", { name: "Control Design" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Project Lifecycle" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Approve$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Raise Revision$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Override Unlock$/i })).not.toBeInTheDocument();

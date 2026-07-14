@@ -128,6 +128,18 @@ export interface ControlOverrideHistory {
   remarks: string;
   created_at: string;
 }
+export interface ControlWorkflowEvent {
+  id: string;
+  workflow_id: string;
+  workflow_stage_id: string | null;
+  event_type: string;
+  actor_id?: string | null;
+  actor_name?: string | null;
+  details?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 
 export interface ControlWorkflowStage {
   id: string;
@@ -152,6 +164,7 @@ export interface ControlWorkflowStage {
   revisions: ControlWorkflowRevision[];
   document_history: ControlDocumentHistory[];
   override_history: ControlOverrideHistory[];
+  events?: ControlWorkflowEvent[];
 }
 
 export interface ControlWorkflowProgress {
@@ -233,6 +246,14 @@ export interface ControlDesignProject extends ProjectDashboardSummary {
     | "created_at"
     | "updated_at"
   > | null;
+  lifecycle_summary?: {
+    total_stage_count: number;
+    approved_stage_count: number;
+    lifecycle_started: boolean;
+    pending_approval_count: number;
+    updates_required_count: number;
+    completed: boolean;
+  };
 }
 
 export interface ControlDesignCapabilities {
@@ -298,6 +319,7 @@ export function createControlDesignProject(payload: {
   projectName: string;
   customer: string;
   budget: string;
+  assignedUserId: string;
 }) {
   return apiRequest<ControlDesignProject>("/control/design/projects", {
     method: "POST",
@@ -413,6 +435,13 @@ export function updateControlWorkflowDocumentPath(stageId: string, payload: { do
   return apiRequest<ControlProjectWorkflow>(`/control/workflow-stages/${encodeURIComponent(stageId)}/document-path`, {
     method: "PATCH",
     body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function addControlWorkflowStageComment(stageId: string, comment: string) {
+  return apiRequest<ControlProjectWorkflow>(`/control/workflow-stages/${encodeURIComponent(stageId)}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ comment }),
   });
 }
 

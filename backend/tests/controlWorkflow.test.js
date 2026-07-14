@@ -23,6 +23,7 @@ const {
   isControlDepartmentUser,
   isControlDesignSubdivisionUser,
   isControlDesignWorkspaceUser,
+  isControlDesignLifecycleComplete,
   isReadyForDispatch,
   isTerminalStageStatus,
   nextUnlockedStage,
@@ -36,7 +37,7 @@ const {
   normalizeControlDesignProjectPayload,
   requireControlDesignCreatePermission,
 } = require("../services/controlWorkflowService");
-const { insertProjectWorkflow } = require("../repositories/controlWorkflowRepository");
+const { findWorkflowStage, insertProjectWorkflow, insertWorkflowEvent } = require("../repositories/controlWorkflowRepository");
 
 function templateStages() {
   return CONTROL_DESIGN_STAGES.map((stageName, index) => ({
@@ -346,11 +347,13 @@ test("Control Design project creation validation trims required fields and norma
     projectName: " U546 Frame Auto Revising SPM ",
     customer: " Tata Motors ",
     budget: "001250000.5",
+    assignedUserId: " E0042 ",
   }), {
     project_no: "PARC2600M029",
     project_name: "U546 Frame Auto Revising SPM",
     customer_name: "Tata Motors",
     budget_amount: "1250000.50",
+    assigned_user_id: "E0042",
   });
 
   assert.equal(normalizeBudgetAmount("0"), "0.00");
@@ -360,8 +363,88 @@ test("Control Design project creation validation trims required fields and norma
   assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: " ", customer: "Customer", budget: "1" }), /Project Name is required/);
   assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: "Name", customer: " ", budget: "1" }), /Customer is required/);
   assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: "Name", customer: "Customer", budget: "" }), /Budget is required/);
+  assert.throws(() => normalizeControlDesignProjectPayload({ projectId: "P1", projectName: "Name", customer: "Customer", budget: "1" }), /Assigned Control Design member is required/);
   assert.throws(() => normalizeBudgetAmount("-1"), /Budget must be a non-negative decimal amount/);
   assert.throws(() => normalizeBudgetAmount("Infinity"), /Budget must be a non-negative decimal amount/);
   assert.throws(() => normalizeBudgetAmount("12,500"), /Budget must be a non-negative decimal amount/);
   assert.throws(() => normalizeBudgetAmount("12.345"), /Budget must be a non-negative decimal amount/);
+});
+
+test("Control Design completion requires all nine approved stages with no open work", () => {
+  const approvedStages = CONTROL_DESIGN_STAGES.map((stageName, index) => ({
+    id: "stage-" + (index + 1),
+    stage_name: stageName,
+    is_required: true,
+    status: STAGE_STATUSES.APPROVED,
+    submissions: [],
+    revisions: [],
+  }));
+
+  assert.equal(isControlDesignLifecycleComplete(approvedStages), true);
+  assert.equal(isControlDesignLifecycleComplete(approvedStages.slice(0, 8)), false);
+  assert.equal(isControlDesignLifecycleComplete(approvedStages.map((stage, index) => (
+    index === 8 ? { ...stage, status: STAGE_STATUSES.PRE_COMPLETED } : stage
+  ))), false);
+  assert.equal(isControlDesignLifecycleComplete(approvedStages.map((stage, index) => (
+    index === 0 ? { ...stage, submissions: [{ status: SUBMISSION_STATUSES.PENDING }] } : stage
+  ))), false);
+  assert.equal(isControlDesignLifecycleComplete(approvedStages.map((stage, index) => (
+    index === 0 ? { ...stage, revisions: [{ status: REVISION_STATUSES.IN_PROGRESS }] } : stage
+  ))), false);
+});
+
+test("stage mutation reads acquire a row lock before evaluating workflow state", async () => {
+  let capturedSql = "";
+  const stage = await findWorkflowStage("stage-1", {
+    async query(sql) {
+      capturedSql = sql;
+      return {
+        rows: [{
+          id: "stage-1",
+          workflow_id: "workflow-1",
+          stage_name: "CO Creation",
+          sequence_order: 1,
+          is_required: true,
+          status: STAGE_STATUSES.NOT_STARTED,
+        }],
+      };
+    },
+  });
+
+  assert.equal(stage.id, "stage-1");
+  assert.match(capturedSql, /FOR UPDATE OF pws/);
+});
+
+test("workflow events persist stage audit details and structured metadata", async () => {
+  let capturedSql = "";
+  let capturedParams = [];
+  const event = await insertWorkflowEvent({
+    workflow_id: "workflow-1",
+    workflow_stage_id: "stage-1",
+    event_type: "comment_added",
+    actor_id: "E0042",
+    details: "Ready for review",
+    metadata: { source: "stage_drawer" },
+  }, {
+    async query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params;
+      return {
+        rows: [{
+          id: "event-1",
+          workflow_id: params[0],
+          workflow_stage_id: params[1],
+          event_type: params[2],
+          actor_id: params[3],
+          details: params[4],
+          metadata: JSON.parse(params[5]),
+          created_at: "2026-07-14T00:00:00.000Z",
+        }],
+      };
+    },
+  });
+
+  assert.match(capturedSql, /INSERT INTO control_workflow_events/);
+  assert.equal(capturedParams[5], JSON.stringify({ source: "stage_drawer" }));
+  assert.deepEqual(event.metadata, { source: "stage_drawer" });
 });

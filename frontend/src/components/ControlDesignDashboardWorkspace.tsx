@@ -1,25 +1,19 @@
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
   CheckCircle2,
-  Circle,
   Clock3,
-  FilePenLine,
   FolderOpen,
   GitBranch,
   Loader2,
   LockKeyhole,
-  PauseCircle,
   Plus,
-  ShieldCheck,
-  UserCheck,
   UserRound,
 } from "lucide-react";
 import {
-  assignControlDesignProjectOwner,
   createControlDesignProject,
   fetchControlDesignAssignableUsers,
   fetchControlDesignCapabilities,
@@ -29,11 +23,10 @@ import {
   fetchControlWorkflowTemplate,
   type ControlDesignCapabilities,
   type ControlDesignProject,
-  type ControlWorkflowStageStatus,
 } from "@/api/controlWorkflowApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,15 +34,16 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
-import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
+import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import {
   buildControlDesignWorkflowDisplay,
-  type ControlDesignDisplayStage,
   type ControlDesignWorkflowDisplay,
 } from "@/lib/controlDesignWorkflowDisplay";
+import { CONTROL_DEPARTMENT_THEME } from "@/lib/controlDepartmentTheme";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { cn } from "@/lib/utils";
 import { ControlWorkflowSection } from "@/components/ControlWorkflowSection";
+import type { User } from "@/types";
 
 const CONTROL_DESIGN_NAME = "Control Design";
 
@@ -86,54 +80,7 @@ const emptyCreateForm = {
   project_name: "",
   customer: "",
   budget: "",
-};
-
-const stageStatusLabels: Record<ControlWorkflowStageStatus, string> = {
-  approved: "Approved",
-  in_progress: "In Progress",
-  submitted_for_approval: "Submitted for Approval",
-  revision_required: "Revision Required",
-  locked: "Locked",
-  blocked: "Blocked",
-  pre_completed: "Pre-Completed",
-  skipped_by_override: "Skipped by Override",
-  not_started: "Not Started",
-};
-
-const stageStatusClasses: Record<ControlWorkflowStageStatus, string> = {
-  approved: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  in_progress: "border-blue-200 bg-blue-50 text-blue-800",
-  submitted_for_approval: "border-amber-200 bg-amber-50 text-amber-900",
-  revision_required: "border-orange-200 bg-orange-50 text-orange-900",
-  locked: "border-slate-200 bg-slate-50 text-slate-500",
-  blocked: "border-red-200 bg-red-50 text-red-800",
-  pre_completed: "border-violet-200 bg-violet-50 text-violet-800",
-  skipped_by_override: "border-zinc-200 bg-zinc-50 text-zinc-700",
-  not_started: "border-slate-200 bg-white text-slate-700",
-};
-
-const stageNodeClasses: Record<ControlWorkflowStageStatus, string> = {
-  approved: "border-emerald-200 bg-emerald-100 text-emerald-700",
-  in_progress: "border-blue-200 bg-blue-100 text-blue-700 ring-4 ring-blue-50",
-  submitted_for_approval: "border-amber-200 bg-amber-100 text-amber-800",
-  revision_required: "border-orange-200 bg-orange-100 text-orange-800",
-  locked: "border-slate-200 bg-slate-100 text-slate-500",
-  blocked: "border-red-200 bg-red-100 text-red-700",
-  pre_completed: "border-violet-200 bg-violet-100 text-violet-700",
-  skipped_by_override: "border-zinc-200 bg-zinc-100 text-zinc-700",
-  not_started: "border-slate-200 bg-white text-slate-500",
-};
-
-const stageIcons: Record<ControlWorkflowStageStatus, LucideIcon> = {
-  approved: CheckCircle2,
-  in_progress: FilePenLine,
-  submitted_for_approval: Clock3,
-  revision_required: AlertTriangle,
-  locked: LockKeyhole,
-  blocked: PauseCircle,
-  pre_completed: ShieldCheck,
-  skipped_by_override: ShieldCheck,
-  not_started: Circle,
+  assigned_user_id: "",
 };
 
 const projectStatusClasses: Record<string, string> = {
@@ -171,14 +118,76 @@ function projectOptionLabel(project: ControlDesignProject) {
   const code = formatProjectNumber(project) || project.project_id;
   return `${code} \u2014 ${project.project_name || "Unnamed project"}`;
 }
+type LifecycleFilter = "total" | "active" | "pending" | "updates" | "completed";
 
-function WorkflowStatusBadge({ status }: { status: ControlWorkflowStageStatus }) {
+const lifecycleMetrics: Array<{ key: LifecycleFilter; label: string; icon: LucideIcon; tone: string }> = [
+  { key: "total", label: "Total Projects", icon: FolderOpen, tone: "text-blue-700" },
+  { key: "active", label: "Active Projects", icon: GitBranch, tone: "text-blue-700" },
+  { key: "pending", label: "Pending Approval", icon: Clock3, tone: "text-amber-700" },
+  { key: "updates", label: "Updates Required", icon: AlertTriangle, tone: "text-orange-700" },
+  { key: "completed", label: "Completed Projects", icon: CheckCircle2, tone: "text-emerald-700" },
+];
+
+function matchesLifecycleFilter(project: ControlDesignProject, filter: LifecycleFilter | null) {
+  const summary = project.lifecycle_summary;
+  if (!filter || filter === "total") return true;
+  if (filter === "active") return summary?.lifecycle_started === true && summary.completed !== true;
+  if (filter === "pending") return Number(summary?.pending_approval_count || 0) > 0;
+  if (filter === "updates") return Number(summary?.updates_required_count || 0) > 0;
+  return summary?.completed === true;
+}
+
+function LifecycleSummaryCards({
+  projects,
+  activeFilter,
+  onFilter,
+}: {
+  projects: ControlDesignProject[];
+  activeFilter: LifecycleFilter | null;
+  onFilter: (filter: LifecycleFilter | null) => void;
+}) {
+  const values: Record<LifecycleFilter, number> = {
+    total: projects.length,
+    active: projects.filter((project) => matchesLifecycleFilter(project, "active")).length,
+    pending: projects.reduce((total, project) => total + Number(project.lifecycle_summary?.pending_approval_count || 0), 0),
+    updates: projects.reduce((total, project) => total + Number(project.lifecycle_summary?.updates_required_count || 0), 0),
+    completed: projects.filter((project) => matchesLifecycleFilter(project, "completed")).length,
+  };
+
   return (
-    <Badge variant="outline" className={cn("whitespace-nowrap px-2.5 py-1 text-[11px]", stageStatusClasses[status])}>
-      {stageStatusLabels[status]}
-    </Badge>
+    <section aria-label="Control Design lifecycle summary" className="space-y-2">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {lifecycleMetrics.map(({ key, label, icon: Icon, tone }) => {
+          const selected = activeFilter === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={selected}
+              className={cn(
+                "rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+                selected && CONTROL_DEPARTMENT_THEME.selectedCard,
+              )}
+              onClick={() => onFilter(selected ? null : key)}
+            >
+              <span className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-slate-600">{label}</span>
+                <Icon className={cn("h-5 w-5", tone)} />
+              </span>
+              <span className={cn("mt-3 block text-3xl font-semibold", tone)}>{values[key]}</span>
+            </button>
+          );
+        })}
+      </div>
+      {activeFilter ? (
+        <Button type="button" variant="ghost" size="sm" className="text-blue-800" onClick={() => onFilter(null)}>
+          Clear lifecycle filter
+        </Button>
+      ) : null}
+    </section>
   );
 }
+
 
 function ProjectStatusBadge({ status }: { status: string }) {
   return (
@@ -264,72 +273,6 @@ function ControlDesignProjectSummaryCard({
   );
 }
 
-function ControlDesignLifecycleStageCard({ stage, isLast }: { stage: ControlDesignDisplayStage; isLast: boolean }) {
-  const Icon = stageIcons[stage.status];
-
-  return (
-    <li className="grid grid-cols-[40px_minmax(0,1fr)] gap-4">
-      <div className="relative flex justify-center">
-        {!isLast ? <span className="absolute top-11 h-[calc(100%+12px)] w-px bg-slate-200" aria-hidden="true" /> : null}
-        <span className={cn(
-          "relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border",
-          stageNodeClasses[stage.status],
-        )}>
-          <Icon className="h-5 w-5" />
-        </span>
-      </div>
-
-      <div className={cn(
-        "min-w-0 rounded-lg border bg-white p-4 transition-colors",
-        stage.isCurrent ? "border-blue-200 bg-blue-50/40" : "border-slate-200",
-        stage.locked && "bg-slate-50/70",
-      )}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500">{String(stage.order).padStart(2, "0")}</span>
-              <h4 className={cn("text-base font-semibold text-slate-950", stage.locked && "text-slate-600")}>{stage.name}</h4>
-              {stage.isCurrent ? (
-                <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-800">Current</Badge>
-              ) : null}
-            </div>
-            {stage.locked ? (
-              <p className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
-                <LockKeyhole className="h-3.5 w-3.5" /> Locked until the previous stage is approved
-              </p>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-            {stage.revisionCount > 0 ? (
-              <Badge variant="outline" className="border-orange-200 bg-orange-50 text-orange-800">
-                Rev: {stage.revisionCount}
-              </Badge>
-            ) : null}
-            <WorkflowStatusBadge status={stage.status} />
-          </div>
-        </div>
-      </div>
-    </li>
-  );
-}
-
-function ControlDesignLifecycleTree({ stages }: { stages: ControlDesignDisplayStage[] }) {
-  return (
-    <Card className="border-slate-200 bg-white shadow-sm">
-      <CardHeader className="p-4 pb-2 md:p-6 md:pb-3">
-        <CardTitle className="text-lg font-semibold tracking-normal text-slate-950">Project Lifecycle</CardTitle>
-      </CardHeader>
-      <CardContent className="p-4 pt-2 md:p-6 md:pt-2">
-        <ol className="space-y-3">
-          {stages.map((stage, index) => (
-            <ControlDesignLifecycleStageCard key={stage.id} stage={stage} isLast={index === stages.length - 1} />
-          ))}
-        </ol>
-      </CardContent>
-    </Card>
-  );
-}
 
 function ProjectSelector({
   projects,
@@ -374,6 +317,7 @@ function NewProjectDialog({
   open,
   form,
   errors,
+  assignees,
   pending,
   onOpenChange,
   onChange,
@@ -382,6 +326,7 @@ function NewProjectDialog({
   open: boolean;
   form: typeof emptyCreateForm;
   errors: Partial<Record<keyof typeof emptyCreateForm | "submit", string>>;
+  assignees: User[];
   pending: boolean;
   onOpenChange: (open: boolean) => void;
   onChange: (field: keyof typeof emptyCreateForm, value: string) => void;
@@ -415,6 +360,21 @@ function NewProjectDialog({
             <Input id="control-project-budget" inputMode="decimal" value={form.budget} onChange={(event) => onChange("budget", event.target.value)} disabled={pending} />
             <FieldError message={errors.budget} />
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="control-project-assignee">Assigned Control Design member</Label>
+            <Select value={form.assigned_user_id || "__none__"} onValueChange={(value) => onChange("assigned_user_id", value === "__none__" ? "" : value)} disabled={pending}>
+              <SelectTrigger id="control-project-assignee">
+                <SelectValue placeholder="Select a member" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select a member</SelectItem>
+                {assignees.map((assignee) => (
+                  <SelectItem key={assignee.employee_id} value={assignee.employee_id}>{formatAssigneeOption(assignee)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError message={errors.assigned_user_id} />
+          </div>
           <FieldError message={errors.submit} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
@@ -438,6 +398,7 @@ function validateCreateForm(form: typeof emptyCreateForm) {
   if (!form.project_id.trim()) errors.project_id = "Project ID is required.";
   if (!form.project_name.trim()) errors.project_name = "Project Name is required.";
   if (!form.customer.trim()) errors.customer = "Customer is required.";
+  if (!form.assigned_user_id.trim()) errors.assigned_user_id = "Assigned Control Design member is required.";
   if (!budget) {
     errors.budget = "Budget is required.";
   } else if (!/^\d+(?:\.\d{1,2})?$/.test(budget)) {
@@ -464,9 +425,9 @@ function createProjectErrorMessage(error: unknown) {
 export function ControlDesignDashboardWorkspace() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const didAutoSelectProject = useRef(false);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [assignedUserId, setAssignedUserId] = useState("");
-  const [assignmentReason, setAssignmentReason] = useState("");
+  const [activeFilter, setActiveFilter] = useState<LifecycleFilter | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [createErrors, setCreateErrors] = useState<Partial<Record<keyof typeof emptyCreateForm | "submit", string>>>({});
@@ -481,9 +442,6 @@ export function ControlDesignDashboardWorkspace() {
   const capabilities = capabilitiesQuery.data ?? EMPTY_CONTROL_DESIGN_CAPABILITIES;
   const canViewWorkspace = capabilities.canViewWorkspace;
   const canCreateProjects = capabilities.canCreateProject;
-  const canAssignProjects = capabilities.canAssignProject;
-  const canReassignProjects = capabilities.canReassignProject;
-  const canManageAssignment = canAssignProjects || canReassignProjects;
 
   const projectsQuery = useQuery({
     queryKey: ["control-design", "projects"],
@@ -493,23 +451,19 @@ export function ControlDesignDashboardWorkspace() {
   });
 
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
+  const filteredProjects = useMemo(() => projects.filter((project) => matchesLifecycleFilter(project, activeFilter)), [activeFilter, projects]);
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId) || null;
 
   useEffect(() => {
-    if (projects.length === 0) {
-      if (selectedProjectId) setSelectedProjectId("");
+    if (!didAutoSelectProject.current && filteredProjects.length > 0) {
+      didAutoSelectProject.current = true;
+      setSelectedProjectId(filteredProjects[0].project_id);
       return;
     }
-
-    if (!selectedProjectId || !projects.some((project) => project.project_id === selectedProjectId)) {
-      setSelectedProjectId(projects[0].project_id);
+    if (selectedProjectId && !filteredProjects.some((project) => project.project_id === selectedProjectId)) {
+      setSelectedProjectId("");
     }
-  }, [projects, selectedProjectId]);
-
-  useEffect(() => {
-    setAssignedUserId(selectedProject?.workflow?.assigned_user_id || "");
-    setAssignmentReason("");
-  }, [selectedProject?.project_id, selectedProject?.workflow?.assigned_user_id]);
+  }, [filteredProjects, selectedProjectId]);
 
   const controlSubDepartmentsQuery = useQuery({
     queryKey: ["control-workflow", "sub-departments"],
@@ -541,7 +495,7 @@ export function ControlDesignDashboardWorkspace() {
   const assigneesQuery = useQuery({
     queryKey: ["control-design", "assignees"],
     queryFn: fetchControlDesignAssignableUsers,
-    enabled: Boolean(user?.employee_id && canManageAssignment),
+    enabled: Boolean(user?.employee_id && canCreateProjects),
     staleTime: 60_000,
   });
 
@@ -551,6 +505,7 @@ export function ControlDesignDashboardWorkspace() {
       projectName: createForm.project_name.trim(),
       customer: createForm.customer.trim(),
       budget: createForm.budget.trim(),
+      assignedUserId: createForm.assigned_user_id.trim(),
     }),
     onSuccess: async (project) => {
       queryClient.setQueryData<ControlDesignProject[]>(["control-design", "projects"], (current = []) => {
@@ -558,10 +513,10 @@ export function ControlDesignDashboardWorkspace() {
         return [project, ...withoutDuplicate];
       });
       setSelectedProjectId(project.project_id);
+      setActiveFilter(null);
       setCreateForm(emptyCreateForm);
       setCreateErrors({});
       setCreateOpen(false);
-      setAssignmentReason("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["control-design", "projects"] }),
         queryClient.invalidateQueries({ queryKey: ["control-workflow", "project"] }),
@@ -573,24 +528,6 @@ export function ControlDesignDashboardWorkspace() {
         ...current,
         submit: createProjectErrorMessage(error),
       }));
-    },
-  });
-
-  const assignmentMutation = useMutation({
-    mutationFn: () => assignControlDesignProjectOwner(selectedProject?.project_id || "", assignedUserId, assignmentReason.trim() || undefined),
-    onSuccess: async () => {
-      toast({ title: "Control Design project assigned" });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["control-design", "projects"] }),
-        queryClient.invalidateQueries({ queryKey: ["control-workflow", "project"] }),
-      ]);
-    },
-    onError: (error) => {
-      toast({
-        title: "Assignment failed",
-        description: error instanceof Error ? error.message : "Unable to assign project.",
-        variant: "destructive",
-      });
     },
   });
 
@@ -621,17 +558,7 @@ export function ControlDesignDashboardWorkspace() {
     || (canViewWorkspace && projectsQuery.isLoading)
     || (canViewWorkspace && controlSubDepartmentsQuery.isLoading)
     || (canViewWorkspace && Boolean(controlDesignSubDepartment?.id) && templateQuery.isLoading);
-  const selectedOwner = workflowQuery.data?.assigned_user_id || selectedProject?.workflow?.assigned_user_id || "";
-  const assignmentReasonRequired = Boolean(selectedOwner && assignedUserId && assignedUserId !== selectedOwner);
-  const assignmentDisabled = !selectedProject
-    || !assignedUserId
-    || assignmentMutation.isPending
-    || (!selectedOwner && !canAssignProjects)
-    || (Boolean(selectedOwner) && !canReassignProjects)
-    || (assignmentReasonRequired && !assignmentReason.trim());
-  const emptyMessage = canCreateProjects
-    ? "No Control Design projects have been created yet."
-    : "No Control Design projects are currently assigned to you.";
+  const emptyMessage = "No Control Design projects are available in your current scope.";
 
   if (!capabilitiesQuery.isLoading && !canViewWorkspace) {
     return (
@@ -654,28 +581,35 @@ export function ControlDesignDashboardWorkspace() {
   }
 
   return (
-    <main className="space-y-4 p-4 md:p-6">
+    <main className={cn("min-h-full space-y-4 p-4 md:p-6", CONTROL_DEPARTMENT_THEME.workspace)}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-normal text-slate-950">Control Design</h1>
+          <h1 className={cn("text-2xl font-semibold tracking-normal", CONTROL_DEPARTMENT_THEME.heading)}>Welcome to Control Design</h1>
           <p className="text-sm text-slate-600">{user?.name || user?.employee_id || "Signed-in user"}</p>
         </div>
         <div className="flex items-center gap-2">
           {loading ? <Loader2 className="h-5 w-5 animate-spin text-slate-500" /> : null}
-          {canCreateProjects ? (
-            <Button type="button" onClick={() => setCreateOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              New Project
-            </Button>
-          ) : null}
         </div>
       </div>
 
-      <ProjectSelector
-        projects={projects}
-        selectedProjectId={selectedProjectId}
-        onSelectProject={setSelectedProjectId}
-      />
+      <LifecycleSummaryCards projects={projects} activeFilter={activeFilter} onFilter={setActiveFilter} />
+
+      <section className="space-y-3" aria-labelledby="control-design-projects-heading">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <h2 id="control-design-projects-heading" className={cn("text-xl font-semibold", CONTROL_DEPARTMENT_THEME.heading)}>Control Design Projects</h2>
+          {canCreateProjects ? (
+            <Button type="button" variant="outline" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add New Project
+            </Button>
+          ) : null}
+        </div>
+        <ProjectSelector
+          projects={filteredProjects}
+          selectedProjectId={selectedProjectId}
+          onSelectProject={setSelectedProjectId}
+        />
+      </section>
 
       {projectsQuery.isError ? (
         <Card className="border-red-200 bg-red-50 shadow-sm">
@@ -687,7 +621,7 @@ export function ControlDesignDashboardWorkspace() {
             </Button>
           </CardContent>
         </Card>
-      ) : projects.length === 0 && !projectsQuery.isLoading ? (
+      ) : projects.length === 0 && !loading ? (
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-500">
             <FolderOpen className="h-10 w-10 opacity-30" />
@@ -695,15 +629,23 @@ export function ControlDesignDashboardWorkspace() {
             {canCreateProjects ? (
               <Button type="button" onClick={() => setCreateOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
-                New Project
+                Add New Project
               </Button>
             ) : null}
+          </CardContent>
+        </Card>
+      ) : filteredProjects.length === 0 && activeFilter ? (
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardContent className="flex min-h-[160px] flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-500">
+            <FolderOpen className="h-8 w-8 opacity-30" />
+            <p>No projects match the selected lifecycle filter.</p>
+            <Button type="button" variant="outline" onClick={() => setActiveFilter(null)}>Clear filter</Button>
           </CardContent>
         </Card>
       ) : !selectedProject || !display ? (
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardContent className="flex min-h-[220px] items-center justify-center p-6 text-sm text-slate-500">
-            {projectsQuery.isLoading ? "Loading Control Design projects" : "Select a project to view its Control Design lifecycle."}
+            {projectsQuery.isLoading ? "Loading Control Design projects" : "Select a Control Design project to view its lifecycle."}
           </CardContent>
         </Card>
       ) : workflowQuery.isError ? (
@@ -720,58 +662,7 @@ export function ControlDesignDashboardWorkspace() {
         <div className="space-y-4">
           <ControlDesignProjectSummaryCard project={selectedProject} display={display} />
 
-          <div className={cn("grid gap-4", canManageAssignment && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
-            <ControlDesignLifecycleTree stages={display.stages} />
-
-            {canManageAssignment ? (
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader className="p-4 pb-2">
-                  <CardTitle className="text-lg font-semibold tracking-normal text-slate-950">Ownership</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 p-4 pt-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="control-design-owner">Assigned To</Label>
-                    <Select value={assignedUserId || "__none__"} onValueChange={(value) => setAssignedUserId(value === "__none__" ? "" : value)}>
-                      <SelectTrigger id="control-design-owner">
-                        <SelectValue placeholder="Select owner" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Select owner</SelectItem>
-                        {(assigneesQuery.data ?? []).map((assignee) => (
-                          <SelectItem key={assignee.employee_id} value={assignee.employee_id}>
-                            {formatEmployeeDisplay(assignee)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {assignmentReasonRequired ? (
-                    <div className="space-y-2">
-                      <Label htmlFor="control-design-reassignment-reason">Reassignment Reason</Label>
-                      <Input
-                        id="control-design-reassignment-reason"
-                        value={assignmentReason}
-                        onChange={(event) => setAssignmentReason(event.target.value)}
-                      />
-                    </div>
-                  ) : null}
-
-                  <Button
-                    type="button"
-                    className="w-full"
-                    onClick={() => assignmentMutation.mutate()}
-                    disabled={assignmentDisabled}
-                  >
-                    {assignmentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserCheck className="mr-2 h-4 w-4" />}
-                    Assign Control Design Project
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : null}
-          </div>
-
-          <ControlWorkflowSection project={selectedProject} capabilities={capabilities} />
+          <ControlWorkflowSection key={selectedProject.project_id} project={selectedProject} capabilities={capabilities} />
         </div>
       )}
 
@@ -779,6 +670,7 @@ export function ControlDesignDashboardWorkspace() {
         open={createOpen}
         form={createForm}
         errors={createErrors}
+        assignees={assigneesQuery.data ?? []}
         pending={createProjectMutation.isPending}
         onOpenChange={(open) => {
           if (!open && !createProjectMutation.isPending) {

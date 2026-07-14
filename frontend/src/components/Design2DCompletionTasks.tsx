@@ -13,6 +13,7 @@ import {
   type Design2DCompletionTaskDefinition,
 } from "@/api/designApi";
 import { cancelTask, fetchTaskAssignmentUsers, transferTask, updateTask } from "@/api/taskApi";
+import { Design2DCompletionDueDatePicker, normalizeDesign2DCompletionDeadline } from "@/components/Design2DCompletionDueDate";
 import { FixtureBoardCard, FixtureStatusBoard, type FixtureBoardSection } from "@/components/FixtureBoard";
 import { ProjectFixtureSectionHeader } from "@/components/ProjectFixtureSectionHeader";
 import { SafeImage } from "@/components/SafeImage";
@@ -64,10 +65,6 @@ const SECTION_STYLES: Array<Omit<FixtureBoardSection<CompletionFixtureRow>, "fix
 ];
 
 const PRIORITIES: Priority[] = ["low", "medium", "high", "critical"];
-
-function defaultDeadline() {
-  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
-}
 
 function activityKey(code: string, revision: number) {
   return `${code}:${revision}`;
@@ -185,7 +182,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
   const [bulkPanelOpen, setBulkPanelOpen] = useState(false);
   const [outsourceTargets, setOutsourceTargets] = useState<CompletionFixtureRow[]>([]);
   const [assignedTo, setAssignedTo] = useState("");
-  const [deadline, setDeadline] = useState(defaultDeadline);
+  const [deadline, setDeadline] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
   const [supplierName, setSupplierName] = useState("");
   const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
@@ -289,7 +286,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
       task_code: row.selected.definition.code as Design2DCompletionTaskCode,
       assigned_to: assignedTo,
       priority,
-      deadline: new Date(deadline).toISOString(),
+      deadline: normalizeDesign2DCompletionDeadline(deadline),
       outsource: Boolean(supplier),
       supplier_name: supplier || undefined,
     };
@@ -590,7 +587,7 @@ function AssignmentFields({ assignees, assignedTo, setAssignedTo, deadline, setD
   return (
     <div className="grid gap-3 md:grid-cols-3">
       <div className="space-y-1.5"><Label>Assignee</Label><Select value={assignedTo || "__none__"} onValueChange={(value) => setAssignedTo(value === "__none__" ? "" : value)}><SelectTrigger disabled={disabled}><SelectValue placeholder="Select assignee" /></SelectTrigger><SelectContent><SelectItem value="__none__">Select assignee</SelectItem>{assignees.map((employee) => <SelectItem key={employee.employee_id} value={employee.employee_id}>{employee.employee_id} — {employee.name}</SelectItem>)}</SelectContent></Select></div>
-      <div className="space-y-1.5"><Label>Deadline</Label><Input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} disabled={disabled} /></div>
+      <div className="space-y-1.5"><Label>Deadline</Label><Design2DCompletionDueDatePicker value={deadline} onChange={setDeadline} disabled={disabled} /></div>
       <div className="space-y-1.5"><Label>Priority</Label><Select value={priority} onValueChange={(value) => setPriority(value as Priority)}><SelectTrigger disabled={disabled}><SelectValue /></SelectTrigger><SelectContent>{PRIORITIES.map((value) => <SelectItem key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</SelectItem>)}</SelectContent></Select></div>
     </div>
   );

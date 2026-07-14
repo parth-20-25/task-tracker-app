@@ -34,6 +34,7 @@ const CONTROL_PROJECT_STATUSES = {
   ASSIGNED: "assigned",
   ACTIVE: "active",
   BLOCKED: "blocked",
+  COMPLETED: "completed",
   READY_FOR_DISPATCH: "ready_for_dispatch",
   DISPATCHED: "dispatched",
   CANCELLED: "cancelled",
@@ -156,6 +157,14 @@ function isReadyForDispatch(stages = []) {
     && !hasPendingSubmission(requiredStages)
     && !hasOpenRevision(requiredStages);
 }
+function isControlDesignLifecycleComplete(stages = []) {
+  const requiredStages = stages.filter((stage) => stage?.is_required !== false);
+  return requiredStages.length === CONTROL_DESIGN_STAGES.length
+    && requiredStages.every((stage) => stage.status === STAGE_STATUSES.APPROVED)
+    && !hasPendingSubmission(requiredStages)
+    && !hasOpenRevision(requiredStages);
+}
+
 
 function calculateWorkflowProgress(stages = []) {
   const requiredStages = stages.filter((stage) => stage?.is_required !== false);
@@ -227,6 +236,7 @@ module.exports = {
   isControlDepartmentUser,
   isControlDesignSubdivisionUser,
   isControlDesignWorkspaceUser,
+  isControlDesignLifecycleComplete,
   isOpenRevisionStatus,
   isReadyForDispatch,
   isTerminalStageStatus,

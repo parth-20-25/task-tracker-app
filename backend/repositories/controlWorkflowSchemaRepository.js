@@ -177,6 +177,7 @@ async function ensureControlWorkflowSchema(client) {
       '${CONTROL_PROJECT_STATUSES.ASSIGNED}',
       '${CONTROL_PROJECT_STATUSES.ACTIVE}',
       '${CONTROL_PROJECT_STATUSES.BLOCKED}',
+      '${CONTROL_PROJECT_STATUSES.COMPLETED}',
       '${CONTROL_PROJECT_STATUSES.READY_FOR_DISPATCH}',
       '${CONTROL_PROJECT_STATUSES.DISPATCHED}',
       '${CONTROL_PROJECT_STATUSES.CANCELLED}'
@@ -362,6 +363,23 @@ async function ensureControlWorkflowSchema(client) {
     )
   `);
 
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS control_workflow_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,
+      workflow_stage_id UUID REFERENCES project_workflow_stages(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      actor_id VARCHAR(50) REFERENCES users(employee_id),
+      details TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_control_workflow_events_stage_created
+    ON control_workflow_events (workflow_stage_id, created_at ASC)
+  `);
   await client.query(`
     CREATE TABLE IF NOT EXISTS control_workflow_notifications (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

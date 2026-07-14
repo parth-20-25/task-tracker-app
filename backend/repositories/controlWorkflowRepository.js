@@ -1,5 +1,5 @@
 const { pool } = require("../db");
-const { CONTROL_DEPARTMENT_ID } = require("../lib/controlWorkflow");
+const { CONTROL_DEPARTMENT_ID, CONTROL_DESIGN_STAGES } = require("../lib/controlWorkflow");
 const { userIdentifierMatchSql } = require("./sqlFragments");
 
 function mapTemplate(row, stages = []) {
@@ -50,6 +50,7 @@ function mapStage(row) {
     revisions: [],
     document_history: [],
     override_history: [],
+    events: [],
   };
 }
 
@@ -352,7 +353,7 @@ async function updateWorkflowStatus(workflowId, status, client = pool) {
     `
       UPDATE project_workflows
       SET status = $2,
-          completed_at = CASE WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+          completed_at = CASE WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW()) ELSE NULL END,
           updated_at = NOW()
       WHERE id = $1
     `,
@@ -499,6 +500,7 @@ async function findWorkflowStage(stageId, client = pool) {
       LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "pws.approved_by")}
       WHERE pws.id = $1
       LIMIT 1
+      FOR UPDATE OF pws
     `,
     [stageId],
   );
@@ -581,6 +583,7 @@ async function findPendingSubmissionForStage(stageId, client = pool) {
         AND sub.status = 'pending'
       ORDER BY sub.created_at DESC
       LIMIT 1
+      FOR UPDATE OF sub
     `,
     [stageId],
   );
@@ -657,6 +660,7 @@ async function findRevisionById(revisionId, client = pool) {
       LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "revision.approved_by")}
       WHERE revision.id = $1
       LIMIT 1
+      FOR UPDATE OF revision
     `,
     [revisionId],
   );
@@ -748,12 +752,13 @@ async function hydrateWorkflowDetails(workflow, client = pool) {
     return null;
   }
 
-  const [stages, submissions, revisions, history, overrides] = await Promise.all([
+  const [stages, submissions, revisions, history, overrides, events] = await Promise.all([
     listWorkflowStages(workflow.id, client),
     listSubmissionsForWorkflow(workflow.id, client),
     listRevisionsForWorkflow(workflow.id, client),
     listDocumentHistoryForWorkflow(workflow.id, client),
     listOverridesForWorkflow(workflow.id, client),
+    listWorkflowEvents(workflow.id, client),
   ]);
 
   const stageMap = new Map(stages.map((stage) => [stage.id, stage]));
@@ -761,6 +766,7 @@ async function hydrateWorkflowDetails(workflow, client = pool) {
   revisions.forEach((revision) => stageMap.get(revision.workflow_stage_id)?.revisions.push(revision));
   history.forEach((item) => stageMap.get(item.workflow_stage_id)?.document_history.push(item));
   overrides.forEach((item) => stageMap.get(item.workflow_stage_id)?.override_history.push(item));
+  events.forEach((item) => stageMap.get(item.workflow_stage_id)?.events.push(item));
 
   return mapWorkflow(workflow, stages);
 }
@@ -937,6 +943,11 @@ function mapControlDesignProject(row) {
   if (!row) {
     return null;
   }
+  const totalStageCount = Number(row.total_stage_count || 0);
+  const approvedStageCount = Number(row.approved_stage_count || 0);
+  const pendingApprovalCount = Number(row.pending_approval_count || 0);
+  const updatesRequiredCount = Number(row.updates_required_count || 0);
+
 
   return {
     project_id: row.project_id,
@@ -971,6 +982,14 @@ function mapControlDesignProject(row) {
       created_at: row.workflow_created_at || null,
       updated_at: row.workflow_updated_at || null,
     } : null,
+    lifecycle_summary: {
+      total_stage_count: totalStageCount,
+      approved_stage_count: approvedStageCount,
+      lifecycle_started: row.lifecycle_started === true,
+      pending_approval_count: pendingApprovalCount,
+      updates_required_count: updatesRequiredCount,
+      completed: totalStageCount === CONTROL_DESIGN_STAGES.length && totalStageCount === approvedStageCount && pendingApprovalCount === 0 && updatesRequiredCount === 0,
+    },
   };
 }
 
@@ -1132,6 +1151,50 @@ async function insertControlNotification(values, client = pool) {
 
   return result.rows[0] || null;
 }
+
+async function insertWorkflowEvent(values, client = pool) {
+  const result = await client.query(
+    `
+      INSERT INTO control_workflow_events (
+        workflow_id,
+        workflow_stage_id,
+        event_type,
+        actor_id,
+        details,
+        metadata,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
+      RETURNING *
+    `,
+    [
+      values.workflow_id,
+      values.workflow_stage_id || null,
+      values.event_type,
+      values.actor_id || null,
+      values.details || null,
+      JSON.stringify(values.metadata || {}),
+    ],
+  );
+
+  return mapWorkflowEvent(result.rows[0]);
+}
+
+async function listWorkflowEvents(workflowId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT event.*, actor.name AS actor_name
+      FROM control_workflow_events event
+      LEFT JOIN users actor ON ${userIdentifierMatchSql("actor", "event.actor_id")}
+      WHERE event.workflow_id = $1
+      ORDER BY event.created_at ASC
+    `,
+    [workflowId],
+  );
+
+  return result.rows.map(mapWorkflowEvent);
+}
+
 function controlDesignProjectSelect(whereClause) {
   return `
     WITH active_workflow AS (
@@ -1141,6 +1204,27 @@ function controlDesignProjectSelect(whereClause) {
       WHERE pw.sub_department_id = $1
         AND pw.status <> 'cancelled'
       ORDER BY pw.project_id, pw.updated_at DESC, pw.created_at DESC
+    ),
+    stage_rollup AS (
+      SELECT
+        pws.workflow_id,
+        COUNT(*) FILTER (WHERE pws.is_required)::int AS total_stage_count,
+        COUNT(*) FILTER (WHERE pws.is_required AND pws.status = 'approved')::int AS approved_stage_count,
+        BOOL_OR(pws.status NOT IN ('locked', 'not_started')) AS lifecycle_started
+      FROM project_workflow_stages pws
+      GROUP BY pws.workflow_id
+    ),
+    submission_rollup AS (
+      SELECT workflow_id, COUNT(*)::int AS pending_approval_count
+      FROM workflow_stage_submissions
+      WHERE status = 'pending'
+      GROUP BY workflow_id
+    ),
+    revision_rollup AS (
+      SELECT workflow_id, COUNT(DISTINCT workflow_stage_id)::int AS updates_required_count
+      FROM workflow_stage_revisions
+      WHERE status IN ('not_started', 'changes_required', 'in_progress')
+      GROUP BY workflow_id
     )
     SELECT
       p.id AS project_id,
@@ -1176,7 +1260,12 @@ function controlDesignProjectSelect(whereClause) {
       aw.template_id,
       wt.template_name,
       aw.created_at AS workflow_created_at,
-      aw.updated_at AS workflow_updated_at
+      aw.updated_at AS workflow_updated_at,
+      COALESCE(sr.total_stage_count, 0) AS total_stage_count,
+      COALESCE(sr.approved_stage_count, 0) AS approved_stage_count,
+      COALESCE(sr.lifecycle_started, FALSE) AS lifecycle_started,
+      COALESCE(psr.pending_approval_count, 0) AS pending_approval_count,
+      COALESCE(rr.updates_required_count, 0) AS updates_required_count
     FROM design.projects p
     JOIN departments d ON d.id = p.department_id
     LEFT JOIN project_control_records pcr
@@ -1184,6 +1273,9 @@ function controlDesignProjectSelect(whereClause) {
      AND pcr.sub_department_id = $1
      AND pcr.status = 'active'
     LEFT JOIN active_workflow aw ON aw.project_id = p.id
+    LEFT JOIN stage_rollup sr ON sr.workflow_id = aw.id
+    LEFT JOIN submission_rollup psr ON psr.workflow_id = aw.id
+    LEFT JOIN revision_rollup rr ON rr.workflow_id = aw.id
     LEFT JOIN workflow_templates wt ON wt.id = aw.template_id
     LEFT JOIN users owner ON ${userIdentifierMatchSql("owner", "aw.assigned_user_id")}
     LEFT JOIN users assigner ON ${userIdentifierMatchSql("assigner", "aw.assigned_by")}
@@ -1245,11 +1337,13 @@ module.exports = {
   insertProjectWorkflow,
   insertProjectWorkflowStage,
   insertRevision,
+  insertWorkflowEvent,
   insertSubmission,
   listControlSubDepartments,
   listPendingApprovalQueue,
   listRevisionQueue,
   listTemplateStages,
+  listWorkflowEvents,
   listWorkflowStages,
   updateProjectControlLifecycle,
   updateRevision,
@@ -1260,3 +1354,17 @@ module.exports = {
   updateWorkflowOwner,
   updateWorkflowStatus,
 };
+
+function mapWorkflowEvent(row) {
+  return {
+    id: row.id,
+    workflow_id: row.workflow_id,
+    workflow_stage_id: row.workflow_stage_id || null,
+    event_type: row.event_type,
+    actor_id: row.actor_id || null,
+    actor_name: row.actor_name || null,
+    details: row.details || null,
+    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
+    created_at: row.created_at,
+  };
+}

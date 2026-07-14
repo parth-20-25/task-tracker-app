@@ -16,6 +16,7 @@ const {
   canSubmitStage,
   createInitialStageRows,
   hasOpenRevision,
+  isControlDesignLifecycleComplete,
   isControlDesignWorkspaceUser,
   isReadyForDispatch,
   nextUnlockedStage,
@@ -211,7 +212,10 @@ function requireWorkflowReadable(actor, workflow) {
   }
 }
 function requireWorkflowEditable(workflow) {
-  if (workflow?.status === WORKFLOW_STATUSES.COMPLETED || workflow?.project_status === CONTROL_PROJECT_STATUSES.DISPATCHED) {
+  if (
+    workflow?.status === WORKFLOW_STATUSES.CANCELLED
+    || workflow?.project_status === CONTROL_PROJECT_STATUSES.DISPATCHED
+  ) {
     throw new AppError(409, "Dispatched Control Design workflows cannot be edited");
   }
 }
@@ -233,11 +237,15 @@ function deriveLifecycleStatus(workflow) {
     return CONTROL_PROJECT_STATUSES.UNASSIGNED;
   }
 
-  if (workflow.project_status === CONTROL_PROJECT_STATUSES.DISPATCHED || workflow.status === WORKFLOW_STATUSES.COMPLETED) {
+  if (workflow.project_status === CONTROL_PROJECT_STATUSES.DISPATCHED) {
     return CONTROL_PROJECT_STATUSES.DISPATCHED;
   }
 
   const stages = workflow.stages || [];
+  if (isControlDesignLifecycleComplete(stages)) {
+    return CONTROL_PROJECT_STATUSES.COMPLETED;
+  }
+
   if (isReadyForDispatch(stages)) {
     return CONTROL_PROJECT_STATUSES.READY_FOR_DISPATCH;
   }
@@ -268,6 +276,11 @@ async function syncWorkflowLifecycle(workflowId, client) {
   }
 
   const lifecycleStatus = deriveLifecycleStatus(workflow);
+  const workflowStatus = lifecycleStatus === CONTROL_PROJECT_STATUSES.COMPLETED
+    || lifecycleStatus === CONTROL_PROJECT_STATUSES.DISPATCHED
+    ? WORKFLOW_STATUSES.COMPLETED
+    : WORKFLOW_STATUSES.ACTIVE;
+  if (workflow.status !== WORKFLOW_STATUSES.CANCELLED && workflow.status !== workflowStatus) await controlWorkflowRepository.updateWorkflowStatus(workflow.id, workflowStatus, client);
   await controlWorkflowRepository.updateProjectControlLifecycle({
     project_id: workflow.project_id,
     sub_department_id: workflow.sub_department_id,
@@ -302,6 +315,17 @@ async function notifyWorkflow(workflow, values, client) {
     title: values.title,
     message: values.message,
     idempotency_key: `${workflow.id}:${values.notification_type}:${values.idempotency_key}`,
+  }, client);
+}
+
+async function recordStageEvent(workflowId, stageId, eventType, actor, details, client, metadata = {}) {
+  return controlWorkflowRepository.insertWorkflowEvent({
+    workflow_id: workflowId,
+    workflow_stage_id: stageId,
+    event_type: eventType,
+    actor_id: getActorId(actor),
+    details,
+    metadata,
   }, client);
 }
 async function requireAssignableOwner(actor, assignedUserId, subDepartmentId, client) {
@@ -431,11 +455,42 @@ async function insertWorkflowWithStages({ projectId, template, assignedUserId, a
       ...stage,
       workflow_id: workflowId,
     }, client);
+    await controlWorkflowRepository.insertWorkflowEvent({
+      workflow_id: workflowId,
+      workflow_stage_id: stageId,
+      event_type: "stage_initialized",
+      actor_id: assignedBy || null,
+      details: `${stage.stage_name} initialized`,
+    }, client);
     if (!firstStageId) {
       firstStageId = stageId;
+      await controlWorkflowRepository.insertWorkflowEvent({
+        workflow_id: workflowId,
+        workflow_stage_id: stageId,
+        event_type: "stage_unlocked",
+        actor_id: assignedBy || null,
+        details: `${stage.stage_name} is available`,
+      }, client);
     }
   }
 
+  if (firstStageId && assignedUserId) {
+    await controlWorkflowRepository.insertWorkflowEvent({
+      workflow_id: workflowId,
+      workflow_stage_id: firstStageId,
+      event_type: "assignment_changed",
+      actor_id: assignedBy || null,
+      details: "Assigned to " + assignedUserId,
+      metadata: { assigned_user_id: assignedUserId },
+    }, client);
+  }
+  await controlWorkflowRepository.insertWorkflowEvent({
+    workflow_id: workflowId,
+    event_type: "workflow_initialized",
+    actor_id: assignedBy || null,
+    details: "Control Design lifecycle initialized",
+    metadata: { project_id: projectId },
+  }, client);
   await controlWorkflowRepository.updateWorkflowCurrentStage(workflowId, firstStageId, client);
   await syncWorkflowLifecycle(workflowId, client);
   return loadWorkflowDetails(workflowId, client);
@@ -564,6 +619,7 @@ function normalizeControlDesignProjectPayload(payload = {}) {
     project_name: requireNonEmpty(payload.project_name ?? payload.projectName, "Project Name"),
     customer_name: requireNonEmpty(payload.customer ?? payload.customer_name ?? payload.customerName, "Customer"),
     budget_amount: normalizeBudgetAmount(payload.budget ?? payload.budget_amount ?? payload.budgetAmount),
+    assigned_user_id: requireNonEmpty(payload.assigned_user_id ?? payload.assignedUserId, "Assigned Control Design member"),
   };
 }
 
@@ -583,6 +639,7 @@ async function createControlDesignProject(actor, payload = {}) {
   const normalized = normalizeControlDesignProjectPayload(payload);
 
   return withTransaction(async (client) => {
+    await requireAssignableOwner(actor, normalized.assigned_user_id, controlDesign.id, client);
     const template = await ensureControlDesignTemplate(controlDesign.id, client);
     let project;
 
@@ -623,8 +680,8 @@ async function createControlDesignProject(actor, payload = {}) {
     await insertWorkflowWithStages({
       projectId: project.project_id,
       template,
-      assignedUserId: null,
-      assignedBy: null,
+      assignedUserId: normalized.assigned_user_id,
+      assignedBy: getActorId(actor),
     }, client);
 
     return controlWorkflowRepository.findControlDesignProject(project.project_id, controlDesign.id, client);
@@ -658,7 +715,7 @@ async function createControlDesignCo(actor, payload = {}) {
 async function listControlDesignAssignableUsers(actor) {
   const controlDesign = await resolveControlDesignSubDepartment();
   requireControlDesignWorkspaceAccess(actor, controlDesign.id);
-  if (!hasControlDesignAssignPermission(actor) && !hasControlDesignReassignPermission(actor)) {
+  if (!hasControlDesignAssignPermission(actor) && !hasControlDesignReassignPermission(actor) && !hasControlDesignCreatePermission(actor)) {
     throw new AppError(403, "Control Design assignment permission is required");
   }
 
@@ -701,6 +758,15 @@ async function assignControlDesignProjectOwner(actor, projectId, assignedUserId,
       await requireAssignableOwner(actor, normalizedAssignedUserId, controlDesign.id, client);
       await controlWorkflowRepository.updateWorkflowOwner(existing.id, normalizedAssignedUserId, getActorId(actor), reason, client);
       await syncWorkflowLifecycle(existing.id, client);
+      await recordStageEvent(
+        existing.id,
+        existing.current_stage_id,
+        "assignment_changed",
+        actor,
+        "Assigned to " + normalizedAssignedUserId,
+        client,
+        { previous_user_id: existing.assigned_user_id || null, assigned_user_id: normalizedAssignedUserId, reason: reason || null },
+      );
       const updated = await loadWorkflowDetails(existing.id, client);
       await notifyWorkflow(updated, {
         recipient_user_id: normalizedAssignedUserId,
@@ -739,6 +805,17 @@ async function assignControlDesignProjectOwner(actor, projectId, assignedUserId,
     return workflow;
   });
 }
+async function addStageComment(actor, stageId, payload = {}) {
+  requireActor(actor);
+  const comment = requireNonEmpty(payload.comment, "comment");
+  return withTransaction(async (client) => {
+    const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
+    requireWorkflowReadable(actor, workflow);
+    await recordStageEvent(workflow.id, stage.id, "comment_added", actor, comment, client);
+    return loadWorkflowDetails(workflow.id, client);
+  });
+}
+
 async function startStage(actor, stageId) {
   requireActor(actor);
   return withTransaction(async (client) => {
@@ -755,6 +832,7 @@ async function startStage(actor, stageId) {
       touch_started_at: true,
     }, client);
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
+    await recordStageEvent(workflow.id, stage.id, "stage_started", actor, `${stage.stage_name} started`, client);
     await syncWorkflowLifecycle(workflow.id, client);
     return loadWorkflowDetails(workflow.id, client);
   });
@@ -784,6 +862,7 @@ async function updateDocumentPath(actor, stageId, payload = {}) {
       remarks: payload.remarks || stage.remarks || null,
     }, client);
     await syncWorkflowLifecycle(workflow.id, client);
+    await recordStageEvent(workflow.id, stage.id, "path_updated", actor, payload.remarks || "Document path updated", client, { document_path: newPath });
     return loadWorkflowDetails(workflow.id, client);
   });
 }
@@ -826,6 +905,7 @@ async function submitStageForApproval(actor, stageId, payload = {}) {
       submitted_document_path: submittedDocumentPath,
       remarks: payload.remarks || null,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "stage_submitted", actor, payload.remarks || `${stage.stage_name} submitted for approval`, client, { submission_id: submissionId });
     await syncWorkflowLifecycle(workflow.id, client);
     await notifyWorkflow(workflow, {
       recipient_user_id: workflow.assigned_by,
@@ -861,7 +941,9 @@ async function approveStageSubmission(actor, stageId, payload = {}) {
       approved_by: getActorId(actor),
       remarks: payload.review_remarks || stage.remarks || null,
     }, client);
-    await refreshCurrentStage(workflow.id, client);
+    const unlockedStage = await refreshCurrentStage(workflow.id, client);
+    await recordStageEvent(workflow.id, stage.id, "stage_approved", actor, payload.review_remarks || `${stage.stage_name} approved`, client, { submission_id: submission.id });
+    if (unlockedStage && unlockedStage.id !== stage.id) await recordStageEvent(workflow.id, unlockedStage.id, "stage_unlocked", actor, `${unlockedStage.stage_name} unlocked`, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
       recipient_user_id: updated.assigned_user_id,
@@ -929,6 +1011,7 @@ async function markStageRevisionRequired(actor, stageId, payload = {}) {
       remarks,
     }, client);
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
+    await recordStageEvent(workflow.id, stage.id, "changes_required", actor, remarks, client, { revision: stage.revision_count + 1, submission_id: submission.id });
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -978,6 +1061,7 @@ async function raiseRevision(actor, stageId, payload = {}) {
       assigned_to: workflow.assigned_user_id,
       remarks: payload.remarks || null,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "update_requested", actor, description, client, { revision_id: revisionId, reason, due_date: dueDate, affected_stage_ids: affectedStageIds });
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1011,6 +1095,7 @@ async function startRevision(actor, revisionId) {
       status: REVISION_STATUSES.IN_PROGRESS,
       touch_started_at: true,
     }, client);
+    await recordStageEvent(workflow.id, revision.workflow_stage_id, "update_started", actor, "Revision work started", client, { revision_id: revision.id });
     await syncWorkflowLifecycle(revision.workflow_id, client);
     return loadWorkflowDetails(revision.workflow_id, client);
   });
@@ -1067,6 +1152,7 @@ async function submitRevisionForApproval(actor, revisionId, payload = {}) {
       submitted_document_path: submittedDocumentPath,
       remarks: payload.remarks || null,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "revision_submitted", actor, payload.remarks || "Updated work submitted for approval", client, { revision_id: revision.id, submission_id: submissionId });
     await syncWorkflowLifecycle(revision.workflow_id, client);
     await notifyWorkflow(workflow, {
       recipient_user_id: workflow.assigned_by,
@@ -1118,6 +1204,7 @@ async function approveRevision(actor, revisionId, payload = {}) {
       remarks: payload.review_remarks || stage.remarks || null,
     }, client);
     await refreshCurrentStage(workflow.id, client);
+    await recordStageEvent(workflow.id, stage.id, "revision_approved", actor, payload.review_remarks || "Updated work approved", client, { revision_id: revision.id, submission_id: submission.id });
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
       recipient_user_id: updated.assigned_user_id,
@@ -1163,6 +1250,7 @@ async function markRevisionChangesRequired(actor, revisionId, payload = {}) {
       status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.REVISION_REQUIRED,
       remarks,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "revision_changes_required", actor, remarks, client, { revision_id: revision.id, submission_id: submission.id });
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1204,6 +1292,7 @@ async function markStagePreCompleted(actor, stageId, payload = {}) {
       approved_by: approvedBy,
       remarks: payload.remarks || null,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "stage_pre_completed", actor, payload.remarks || (stage.stage_name + " marked pre-completed"), client, { approved_by: approvedBy, completion_date: completionDate });
     await refreshCurrentStage(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1245,6 +1334,7 @@ async function overrideUnlockStage(actor, stageId, payload = {}) {
       reason,
       remarks,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "override_performed", actor, remarks, client, { action: "override_unlock", reason });
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
@@ -1299,6 +1389,7 @@ async function skipStageByOverride(actor, stageId, payload = {}) {
       approved_by: approvedBy,
       remarks,
     }, client);
+    await recordStageEvent(workflow.id, stage.id, "override_performed", actor, remarks, client, { action: "skip_by_override", reason, approved_by: approvedBy, supporting_document_path: supportingDocumentPath });
     await refreshCurrentStage(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1371,6 +1462,7 @@ async function listRevisionQueue(actor) {
 }
 
 module.exports = {
+  addStageComment,
   approveRevision,
   approveStageSubmission,
   assignControlDesignProjectOwner,

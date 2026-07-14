@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Design2DCompletionTasks } from "@/components/Design2DCompletionTasks";
+import { normalizeDesign2DCompletionDeadline } from "@/components/Design2DCompletionDueDate";
 import type { Design2DCompletionProjectState, Design2DCompletionTaskCode } from "@/api/designApi";
 import type { Task } from "@/types";
 
@@ -46,6 +47,14 @@ vi.mock("@/contexts/useAuth", () => ({
 }));
 
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
+
+vi.mock("@/components/ui/calendar", () => ({
+  Calendar: ({ onSelect }: { onSelect?: (date: Date) => void }) => (
+    <div role="grid" aria-label="Date-only calendar">
+      <button type="button" aria-label="15 July 2026" onClick={() => onSelect?.(new Date(2026, 6, 15))}>15</button>
+    </div>
+  ),
+}));
 
 const SelectContext = createContext<{ value: string; onValueChange?: (value: string) => void }>({ value: "" });
 
@@ -143,12 +152,15 @@ function renderBoard() {
   return render(<QueryClientProvider client={queryClient}><Design2DCompletionTasks departmentId="design" /></QueryClientProvider>);
 }
 
-async function selectProject() {
+async function selectProject(fixtureCount = 1) {
   fireEvent.click(await screen.findByRole("option", { name: "P-001 — Press Line" }));
-  await screen.findByText("Showing 1 fixture(s) · Customer");
+  await screen.findByText(`Showing ${fixtureCount} fixture(s) · Customer`);
 }
 
 describe("Design2DCompletionTasks", () => {
+  it("rejects invalid 2D completion due dates", () => {
+    expect(() => normalizeDesign2DCompletionDeadline("2026-02-30")).toThrow("Deadline date is invalid");
+  });
   beforeEach(() => {
     api.fetchProjects.mockResolvedValue([project]);
     api.fetchState.mockResolvedValue(state());
@@ -216,6 +228,13 @@ describe("Design2DCompletionTasks", () => {
     fireEvent.click(screen.getByRole("option", { name: "IGES 00" }));
     fireEvent.click(screen.getByRole("button", { name: "Assign Now" }));
     fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
+    expect(screen.getByRole("button", { name: "Assign" })).toBeDisabled();
+    expect(document.querySelector('input[type="datetime-local"], input[type="time"]')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "15 July 2026" }));
+    expect(screen.getByRole("button", { name: "Deadline" })).toHaveTextContent("15-07-2026");
+    fireEvent.click(screen.getByRole("option", { name: "High" }));
+    expect(screen.getByRole("button", { name: "Deadline" })).toHaveTextContent("15-07-2026");
     fireEvent.click(screen.getByRole("button", { name: "Assign" }));
 
     await waitFor(() => expect(api.assignTask).toHaveBeenCalledWith(expect.objectContaining({
@@ -223,7 +242,53 @@ describe("Design2DCompletionTasks", () => {
       fixture_id: "fixture-1",
       task_code: "FIXTURE_IGES",
       assigned_to: "EMP-1",
+      priority: "high",
+      deadline: "2026-07-15T18:30:00.000Z",
     })));
     expect(api.fetchAssignees).toHaveBeenCalledWith(expect.objectContaining({ stage_name: "2D Finish" }));
+  });
+
+  it("uses the same selected business due date for bulk assignment", async () => {
+    api.fetchState.mockResolvedValue({
+      ...state([]),
+      fixtures: [
+        { fixture_id: "fixture-1", fixture_no: "FX-1", part_name: "Fixture One", workflow_complete: true, two_d_complete: true },
+        { fixture_id: "fixture-2", fixture_no: "FX-2", part_name: "Fixture Two", workflow_complete: true, two_d_complete: true },
+      ],
+    });
+    renderBoard();
+    await selectProject(2);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all eligible fixtures" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assign All" }));
+    expect(document.querySelector('input[type="datetime-local"], input[type="time"]')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "15 July 2026" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Assign All" }).at(-1)!);
+
+    await waitFor(() => expect(api.assignTask).toHaveBeenCalledTimes(2));
+    expect(api.assignTask.mock.calls.every(([payload]) => payload.deadline === "2026-07-15T18:30:00.000Z")).toBe(true);
+  });
+
+  it("prevents duplicate individual assignment submissions", async () => {
+    let resolveAssignment: ((task: Task) => void) | undefined;
+    api.fetchState.mockResolvedValue(state([]));
+    api.assignTask.mockReturnValueOnce(new Promise((resolve) => { resolveAssignment = resolve; }));
+    renderBoard();
+    await selectProject();
+
+    fireEvent.click(screen.getByRole("button", { name: "Assign Now" }));
+    fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "15 July 2026" }));
+    const assignButton = screen.getByRole("button", { name: "Assign" });
+    fireEvent.click(assignButton);
+    await waitFor(() => expect(assignButton).toBeDisabled());
+    fireEvent.click(assignButton);
+    expect(api.assignTask).toHaveBeenCalledTimes(1);
+
+    resolveAssignment?.(completionTask());
+    await waitFor(() => expect(api.fetchState).toHaveBeenCalledTimes(2));
   });
 });

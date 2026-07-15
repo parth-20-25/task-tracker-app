@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Dashboard from "@/pages/Dashboard";
-import type { ProjectDashboardSummary, User } from "@/types";
+import type { ProjectDashboardSummary, Task, User } from "@/types";
 
 const designApi = vi.hoisted(() => ({
   fetchProjectDashboardSummary: vi.fn(),
@@ -15,6 +15,10 @@ const designApi = vi.hoisted(() => ({
 
 const executiveDashboard = vi.hoisted(() => ({
   render: vi.fn(),
+}));
+
+const taskState = vi.hoisted(() => ({
+  tasks: [] as Task[],
 }));
 
 let mockAuth: {
@@ -37,7 +41,7 @@ vi.mock("@/contexts/useAuth", () => ({
 }));
 
 vi.mock("@/contexts/useTasks", () => ({
-  useTasks: () => ({ tasks: [], isLoading: false }),
+  useTasks: () => ({ tasks: taskState.tasks, isLoading: false }),
 }));
 
 vi.mock("@/hooks/queries/useOverdueNotificationsQuery", () => ({
@@ -77,9 +81,6 @@ vi.mock("@/components/ProjectReactivationDialog", () => ({
   ProjectReactivationDialog: () => null,
 }));
 
-vi.mock("@/components/TaskCard", () => ({
-  TaskCard: () => <div>Task Card</div>,
-}));
 
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? <div>{children}</div> : null),
@@ -296,6 +297,7 @@ describe("Dashboard workspace routing", () => {
     designApi.fetchDesignFixtures.mockResolvedValue([]);
     designApi.reactivateProject.mockResolvedValue({ message: "reactivated" });
     designApi.updateProjectModification.mockResolvedValue(project);
+    taskState.tasks = [];
   });
 
   afterEach(() => {
@@ -405,6 +407,41 @@ describe("Dashboard workspace routing", () => {
     expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
     expect(executiveDashboard.render).not.toHaveBeenCalled();
     expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
+  });
+
+  it("does not render additional design tasks on the dashboard", async () => {
+    setDesignEmployeeAuth();
+    taskState.tasks = [{
+      id: 101,
+      title: "PPT",
+      task_type: "additional_design",
+      additional_task_kind: "PPT",
+      design_team: "3D",
+      description: "Prepare slides",
+      assigned_to: "EMP-DESIGN-1",
+      assignee_ids: ["EMP-DESIGN-1"],
+      assigned_by: "LEAD-3D",
+      department_id: "design",
+      status: "assigned",
+      completion_percent: 0,
+      verification_status: "pending",
+      priority: "medium",
+      deadline: "2026-07-16T04:30:00.000Z",
+      created_at: "2026-07-15T00:00:00.000Z",
+      planned_minutes: 0,
+      actual_minutes: 0,
+      dependency_ids: [],
+      escalation_level: 0,
+      requires_quality_approval: false,
+      approval_required: true,
+      proof_required: true,
+    } as Task];
+
+    renderDashboard();
+
+    expect(await screen.findByRole("heading", { name: "Welcome, Design" })).toBeInTheDocument();
+    expect(screen.queryByText("My Additional Design Tasks")).not.toBeInTheDocument();
+    expect(screen.queryByText("PPT")).not.toBeInTheDocument();
   });
 
   it("keeps Control users with analytics permissions off the executive dashboard", async () => {

@@ -158,6 +158,15 @@ function assigneeName(task: Task | null) {
   return task.assigned_to;
 }
 
+function assignmentFailureDescription(failures: PromiseRejectedResult[]) {
+  if (!failures.length) return undefined;
+  const firstMessage = failures
+    .map((failure) => failure.reason)
+    .find((reason): reason is Error => reason instanceof Error)?.message;
+  const count = `${failures.length} assignment${failures.length === 1 ? "" : "s"} failed.`;
+  return firstMessage ? `${count} ${firstMessage}` : count;
+}
+
 interface Design2DCompletionTasksProps {
   departmentId?: string | null;
 }
@@ -303,14 +312,18 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
     },
     onSuccess: async ({ succeeded, failures }) => {
       await refreshCompletionState();
-      setAssignmentTarget(null);
-      setBulkPanelOpen(false);
-      setOutsourceTargets([]);
-      setSelectedFixtureIds([]);
-      setSupplierName("");
+      if (succeeded > 0) {
+        setAssignmentTarget(null);
+        setBulkPanelOpen(false);
+        setOutsourceTargets([]);
+        setSelectedFixtureIds([]);
+        setSupplierName("");
+      }
       toast({
-        title: `${succeeded} activit${succeeded === 1 ? "y" : "ies"} assigned`,
-        description: failures.length ? `${failures.length} assignment${failures.length === 1 ? "" : "s"} failed.` : undefined,
+        title: failures.length && succeeded === 0
+          ? "Assignment failed"
+          : `${succeeded} activit${succeeded === 1 ? "y" : "ies"} assigned`,
+        description: assignmentFailureDescription(failures),
         variant: failures.length ? "destructive" : "default",
       });
     },

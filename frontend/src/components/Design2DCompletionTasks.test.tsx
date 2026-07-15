@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Design2DCompletionTasks } from "@/components/Design2DCompletionTasks";
+import { toast } from "@/hooks/use-toast";
 import { normalizeDesign2DCompletionDeadline } from "@/components/Design2DCompletionDueDate";
 import type { Design2DCompletionProjectState, Design2DCompletionTaskCode } from "@/api/designApi";
 import type { Task } from "@/types";
@@ -248,6 +249,26 @@ describe("Design2DCompletionTasks", () => {
     expect(api.fetchAssignees).toHaveBeenCalledWith(expect.objectContaining({ stage_name: "2D Finish" }));
   });
 
+  it("surfaces the backend message when an assignment request fails", async () => {
+    api.fetchState.mockResolvedValue(state([]));
+    api.assignTask.mockRejectedValueOnce(new Error("Active project not found or not accessible"));
+    renderBoard();
+    await selectProject();
+
+    fireEvent.click(screen.getByRole("option", { name: "IGES 00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assign Now" }));
+    fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "15 July 2026" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assign" }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Assignment failed",
+      description: expect.stringContaining("Active project not found or not accessible"),
+      variant: "destructive",
+    })));
+    expect(screen.getByRole("button", { name: "Assign" })).toBeInTheDocument();
+  });
   it("uses the same selected business due date for bulk assignment", async () => {
     api.fetchState.mockResolvedValue({
       ...state([]),

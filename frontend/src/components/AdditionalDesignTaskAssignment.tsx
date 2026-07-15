@@ -15,7 +15,7 @@ import { formatAssigneeOption } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { adminQueryKeys, analyticsQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { ADDITIONAL_DESIGN_TASK_CATALOG, resolveDesignTeamFromUser } from "@/lib/additionalDesignTasks";
-import type { AdditionalDesignTaskKind, Priority } from "@/types";
+import type { AdditionalDesignTaskKind, Priority, Task } from "@/types";
 
 function defaultDueDate() {
   const date = new Date();
@@ -101,9 +101,20 @@ export function AdditionalDesignTaskAssignment() {
       additional_task_kind: taskKind,
       design_team: designTeam || undefined,
     }),
-    onSuccess: async () => {
+    onSuccess: async (createdTask) => {
+      if (!createdTask?.id) {
+        toast({ title: "Could not confirm task creation", description: "The backend did not return the created task.", variant: "destructive" });
+        return;
+      }
+
+      queryClient.setQueryData<Task[]>(taskQueryKeys.all, (current = []) => [
+        createdTask,
+        ...current.filter((task) => task.id !== createdTask.id),
+      ]);
+
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: taskQueryKeys.verificationQueue }),
         queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: adminQueryKeys.users("assignable") }),
         queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),

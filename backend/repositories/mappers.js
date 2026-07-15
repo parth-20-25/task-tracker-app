@@ -150,6 +150,8 @@ function mapTaskRow(row) {
     title: row.title || row.internal_identifier || row.description || `Task #${row.id}`,
     internal_identifier: row.internal_identifier,
     task_type: row.task_type || "department_workflow",
+    additional_task_kind: row.additional_task_kind || null,
+    design_team: row.design_team || null,
     description: row.description,
     assigned_to: row.assigned_to,
     assigned_user_id: row.assigned_user_id || row.assigned_to,

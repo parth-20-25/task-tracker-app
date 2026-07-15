@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ClipboardCheck, Layers3 } from "lucide-react";
+import { fetchVerificationTasks } from "@/api/taskApi";
 import { AdditionalDesignTaskAssignment } from "@/components/AdditionalDesignTaskAssignment";
 import { TaskCard } from "@/components/TaskCard";
 import { Button } from "@/components/ui/button";
@@ -11,11 +13,25 @@ import { useAuth } from "@/contexts/useAuth";
 import { useTasks } from "@/contexts/useTasks";
 import { toast } from "@/hooks/use-toast";
 import { resolveDesignTeamFromUser } from "@/lib/additionalDesignTasks";
+import { taskQueryKeys } from "@/lib/queryKeys";
 import { isTaskAssignedToEmployee } from "@/lib/taskFilters";
 import type { Task } from "@/types";
 
 function EmptyQueue({ children }: { children: string }) {
   return <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">{children}</div>;
+}
+
+const ACTIVE_STATUSES = new Set(["created", "assigned", "in_progress", "under_review", "rework", "on_hold"]);
+
+function sortActiveFirst(tasks: Task[]) {
+  return [...tasks].sort((a, b) => {
+    const activeDelta = Number(ACTIVE_STATUSES.has(b.status)) - Number(ACTIVE_STATUSES.has(a.status));
+    return activeDelta || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+}
+
+function uniqueTasks(tasks: Task[]) {
+  return [...new Map(tasks.map((task) => [task.id, task])).values()];
 }
 
 export default function AdditionalDesignTasks() {
@@ -26,17 +42,27 @@ export default function AdditionalDesignTasks() {
   const [reviewingTaskId, setReviewingTaskId] = useState<number | null>(null);
 
   const designTeam = resolveDesignTeamFromUser(user);
-  const additionalTasks = useMemo(() => tasks.filter((task) => (
+  const verificationTasksQuery = useQuery({
+    queryKey: taskQueryKeys.verificationQueue,
+    queryFn: fetchVerificationTasks,
+    enabled: access.canApproveCompletedTasks,
+  });
+  const additionalTasks = useMemo(() => sortActiveFirst(tasks.filter((task) => (
     task.task_type === "additional_design"
     && (!designTeam || task.design_team === designTeam)
-  )), [designTeam, tasks]);
+  ))), [designTeam, tasks]);
   const myTasks = additionalTasks.filter((task) => isTaskAssignedToEmployee(task, user?.employee_id));
   const teamTasks = additionalTasks.filter((task) => !isTaskAssignedToEmployee(task, user?.employee_id));
-  const approvalTasks = additionalTasks.filter((task) => (
-    task.status === "under_review"
+  const approvalTasks = sortActiveFirst(uniqueTasks([
+    ...additionalTasks,
+    ...(verificationTasksQuery.data ?? []),
+  ]).filter((task) => (
+    task.task_type === "additional_design"
+    && (!designTeam || task.design_team === designTeam)
+    && task.status === "under_review"
     && task.verification_status === "pending"
     && (access.canSelfApprove || !isTaskAssignedToEmployee(task, user?.employee_id))
-  ));
+  )));
 
   const review = async (task: Task, action: "approve" | "reject", remarks?: string) => {
     try {

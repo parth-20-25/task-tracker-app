@@ -12,6 +12,7 @@ const {
   userBelongsToAdditionalDesignTeam,
 } = require("../lib/additionalDesignTasks");
 const { resolveTaskProofExtension } = require("../lib/taskProofUpload");
+const { mapTaskRow } = require("../repositories/mappers");
 
 test("additional design task catalog is subdivision specific", () => {
   assert.deepEqual(ADDITIONAL_DESIGN_2D_TASK_KINDS, [
@@ -81,4 +82,36 @@ test("proof upload allowlist accepts required deliverables and rejects executabl
   assert.equal(resolveTaskProofExtension({ originalname: "surface.iges", mimetype: "application/octet-stream" }), ".iges");
   assert.equal(resolveTaskProofExtension({ originalname: "payload.exe", mimetype: "application/pdf" }), null);
   assert.equal(resolveTaskProofExtension({ originalname: "drawing.pdf.exe", mimetype: "application/octet-stream" }), null);
+});
+
+test("task mapper preserves additional design category fields", () => {
+  const task = mapTaskRow({
+    id: 42,
+    title: "Project Process",
+    task_type: "additional_design",
+    additional_task_kind: "Project Process",
+    design_team: "3D",
+    description: "Project-level process work",
+    assigned_to: "EMP-3D-1",
+    assignee_ids: '["EMP-3D-1"]',
+    assigned_by: "LEAD-3D",
+    department_id: "design",
+    status: "assigned",
+    verification_status: "pending",
+    priority: "medium",
+    deadline: "2026-07-16T00:00:00.000Z",
+    created_at: "2026-07-15T00:00:00.000Z",
+    proof_required: true,
+    approval_required: true,
+    scope_type: "project",
+    project_id: "project-1",
+    resolved_project_id: "project-1",
+    resolved_project_no: "P-001",
+    resolved_project_name: "Design Project",
+  });
+
+  assert.equal(task.additional_task_kind, "Project Process");
+  assert.equal(task.design_team, "3D");
+  assert.equal(task.fixture_id, null);
+  assert.equal(task.scope_type, "project");
 });

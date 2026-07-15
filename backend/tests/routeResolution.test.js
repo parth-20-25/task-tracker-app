@@ -105,6 +105,30 @@ test("project reactivation API route resolves before auth instead of returning E
     await new Promise((resolve) => server.close(resolve));
   }
 });
+test("2D completion assignment API route resolves before auth", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/design/2d-completion-tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: "project-1",
+        fixture_id: "fixture-1",
+        task_code: "FIXTURE_IGES",
+        assigned_to: "940",
+        priority: "medium",
+        deadline: "2099-01-01T00:00:00.000Z",
+      }),
+    });
+
+    assert.equal(response.status, 401);
+    assert.match(await response.text(), /No token provided/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
 test("bulk fixture outsource API route resolves before auth", async () => {
   const server = await listen(createApp());
 

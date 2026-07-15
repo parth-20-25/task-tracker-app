@@ -55,8 +55,10 @@ test("2D task access predicate uses current 2D Finish stage routing", () => {
     fixtureAlias: "fixture",
   });
 
-  assert.deepEqual(params, ["EMP2D1", "design"]);
+  assert.deepEqual(params, ["EMP2D1", "design", "EMP2D1"]);
   assert.match(sql, /project_subdivision_assignments/);
+  assert.match(sql, /visible_users/);
+  assert.match(sql, /task\.assigned_to/);
   assert.match(sql, /'2d_finish'/);
   assert.match(sql, /task\.task_type = 'additional_design'/);
   assert.match(sql, /task\.department_id = \$2/);

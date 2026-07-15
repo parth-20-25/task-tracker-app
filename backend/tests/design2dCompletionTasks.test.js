@@ -144,6 +144,17 @@ test("completion approval, rejection, transfer, and cancellation stay off fixtur
   assert.match(taskService, /if \(!isWorkflowManagedTask\(task\)\) \{[\s\S]*return null;/);
 });
 
+test("completion assignment validates fixture membership without active-stage visibility", () => {
+  const taskService = fs.readFileSync(path.join(__dirname, "..", "services", "taskService.js"), "utf8");
+  const projectLookupIndex = taskService.indexOf("completionProject = await findProjectByIdForUser");
+  const branchStart = taskService.lastIndexOf("if (taskType === TASK_TYPES.DESIGN_2D_COMPLETION)", projectLookupIndex);
+  const branchEnd = taskService.indexOf("if (!Object.values(TASK_STATUSES).includes(resolvedTaskStatus))", branchStart);
+  const completionBranch = taskService.slice(branchStart, branchEnd);
+
+  assert.match(completionBranch, /FROM design\.fixtures di/);
+  assert.match(completionBranch, /AND di\.project_id = \$3/);
+  assert.doesNotMatch(completionBranch, /findFixtureAssignmentContextByIdForUser/);
+});
 test("the idempotent schema keeps the category discriminator and allows legacy activity codes at fixture scope", () => {
   const migration = fs.readFileSync(path.join(__dirname, "..", "migrations.js"), "utf8");
   const bootstrap = fs.readFileSync(path.join(__dirname, "..", "repositories", "bootstrapRepository.js"), "utf8");

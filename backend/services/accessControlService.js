@@ -5,6 +5,7 @@ const { pool } = require("../db");
 const {
   GetAccessibleUserIds,
   buildVisibleUsersCte,
+  identifierInVisibleUsersSql,
   isProjectAuthorityRoleIdentity,
   owningLeaderPairSql,
   visibleFixturePredicate,
@@ -309,6 +310,15 @@ function isTaskVisibleThroughProjectHierarchy(user, task) {
   return getVisibleUserIds(user).includes(owner);
 }
 
+function isTaskVisibleThroughUserHierarchy(user, task) {
+  const visibleUserIds = getVisibleUserIds(user);
+  return [
+    ...getTaskAssigneeIds(task),
+    task?.assigned_by,
+    task?.created_by,
+  ].filter(Boolean).some((employeeId) => visibleUserIds.includes(employeeId));
+}
+
 function canAccessTask(user, task) {
   if (!task) {
     return false;
@@ -325,18 +335,16 @@ function canAccessTask(user, task) {
     }
   }
 
-  if (
-    task.task_type === "additional_design"
-    && isOperationalControllerRole(user)
-    && hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)
-    && canAccessDepartment(user, task.department_id)
-  ) {
-    return true;
-  }
-
   const selfScoped = isTaskDirectAssignee(user, task) || isTaskOwnedByUser(user, task);
 
   if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)) {
+    if (task.task_type === "additional_design") {
+      return selfScoped || (
+        canAccessDepartment(user, task.department_id)
+        && isTaskVisibleThroughUserHierarchy(user, task)
+      );
+    }
+
     return selfScoped || (
       canAccessDepartment(user, task.department_id)
       && isTaskVisibleThroughProjectHierarchy(user, task)
@@ -494,6 +502,31 @@ function buildTaskProjectVisibilityPredicate(params, user, {
   `;
 }
 
+function buildTaskVisibleUserScopePredicate(params, user, {
+  taskAlias = "t",
+} = {}) {
+  params.push(user?.employee_id || "");
+  const rootParam = `$${params.length}`;
+
+  return `
+    EXISTS (
+      ${buildVisibleUsersCte(rootParam)}
+      SELECT 1
+      WHERE (
+        ${identifierInVisibleUsersSql(`${taskAlias}.assigned_user_id`)}
+        OR ${identifierInVisibleUsersSql(`${taskAlias}.assigned_to`)}
+        OR ${identifierInVisibleUsersSql(`${taskAlias}.assigned_by`)}
+        OR ${identifierInVisibleUsersSql(`${taskAlias}.created_by`)}
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(COALESCE(${taskAlias}.assignee_ids, '[]'::jsonb)) AS task_assignee(employee_id)
+          WHERE ${identifierInVisibleUsersSql("task_assignee.employee_id")}
+        )
+      )
+    )
+  `;
+}
+
 function buildTaskAccessPredicate(user, params, options = {}) {
   const {
     taskAlias = "t",
@@ -522,12 +555,15 @@ function buildTaskAccessPredicate(user, params, options = {}) {
     if (is2DLeader) {
       params.push(user.department_id || "");
       const departmentParam = `$${params.length}`;
+      const additionalDesignVisibleUserPredicate = buildTaskVisibleUserScopePredicate(params, user, { taskAlias });
       return `
         (
           ${current2DStagePredicate}
           OR (
             ${taskAlias}.task_type = 'additional_design'
             AND ${taskAlias}.department_id = ${departmentParam}
+            AND ${taskAlias}.design_team = '2D'
+            AND ${additionalDesignVisibleUserPredicate}
           )
         )
       `;
@@ -566,18 +602,21 @@ function buildTaskAccessPredicate(user, params, options = {}) {
         params.push(additionalDesignTeam);
         teamPredicate = ` AND (${taskAlias}.design_team IS NULL OR ${taskAlias}.design_team = $${params.length})`;
       }
+      const additionalDesignVisibleUserPredicate = buildTaskVisibleUserScopePredicate(params, user, { taskAlias });
       additionalDesignScopePredicate = `
         OR (
           ${taskAlias}.task_type = 'additional_design'
           AND ${taskAlias}.department_id = ${departmentParam}
           ${teamPredicate}
+          AND ${additionalDesignVisibleUserPredicate}
         )`;
     }
 
     return `
       (
         (
-          ${taskAlias}.department_id = ${departmentParam}
+          ${taskAlias}.task_type <> 'additional_design'
+          AND ${taskAlias}.department_id = ${departmentParam}
           AND ${projectVisibilityPredicate}
         )
         ${additionalDesignScopePredicate}

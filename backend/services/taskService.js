@@ -1220,17 +1220,32 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     }
 
     if (payloadFixtureId) {
-      completionFixture = await findFixtureAssignmentContextByIdForUser(
-        String(payloadFixtureId).trim(),
-        user,
-        resolvedDepartmentId,
-        db,
+      const fixtureResult = await db.query(
+        `
+          SELECT
+            di.id AS fixture_id,
+            di.project_id,
+            dp.department_id,
+            di.fixture_no,
+            di.part_name,
+            di.qty,
+            di.revision_no,
+            di.is_legacy_workflow,
+            di.is_workflow_complete
+          FROM design.fixtures di
+          JOIN design.projects dp
+            ON dp.id = di.project_id
+          WHERE di.id = $1
+            AND ($2::text IS NULL OR dp.department_id = $2)
+            AND di.project_id = $3
+            AND COALESCE(di.removed_from_latest_ingestion, FALSE) = FALSE
+          LIMIT 1
+        `,
+        [String(payloadFixtureId).trim(), resolvedDepartmentId, completionProject.project_id],
       );
+      completionFixture = fixtureResult.rows[0] || null;
       if (!completionFixture) {
         throw new AppError(404, "Fixture not found or not accessible");
-      }
-      if (completionFixture.project_id !== completionProject.project_id) {
-        throw new AppError(400, "fixture_id does not belong to the selected project");
       }
     }
   }

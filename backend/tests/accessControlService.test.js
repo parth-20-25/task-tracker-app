@@ -207,21 +207,31 @@ test("lower hierarchy roles do not receive org-wide project authority", () => {
   })), false);
 });
 
-test("department leaders can review additional design tasks without fixture workflow visibility", () => {
+test("department leaders can review only additional design tasks in their visible team", () => {
   const leader = makeUser({
     department_id: "design",
     permissions: [PERMISSIONS.VIEW_ALL_TASKS, PERMISSIONS.APPROVE_COMPLETED_TASK],
     role: { id: "team_leader", name: "Team Leader", hierarchy_level: 4, permissions: {} },
+    visible_user_ids: ["EMP100", "EMP101"],
   });
   const unrelatedProjectTask = makeTask({
     department_id: "design",
     project_uploaded_by: "EMP999",
   });
+  const visibleTeamTask = makeTask({
+    department_id: "design",
+    task_type: "additional_design",
+    assigned_to: "EMP101",
+    assigned_user_id: "EMP101",
+    assignee_ids: ["EMP101"],
+    project_uploaded_by: "EMP999",
+  });
 
-  assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "additional_design" }), true);
+  assert.equal(canAccessTask(leader, visibleTeamTask), true);
+  assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "additional_design" }), false);
   assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "department_workflow" }), false);
 });
-test("department leader SQL access includes same-subdivision additional design tasks without project hierarchy visibility", () => {
+test("department leader SQL access includes only same-subdivision visible-team additional design tasks", () => {
   const leader = makeUser({
     employee_id: "LEAD-3D",
     department_id: "design",
@@ -233,10 +243,14 @@ test("department leader SQL access includes same-subdivision additional design t
   const params = [];
   const sql = buildTaskAccessPredicate(leader, params);
 
+  assert.match(sql, /t\.task_type <> 'additional_design'/);
   assert.match(sql, /t\.task_type = 'additional_design'/);
   assert.match(sql, /t\.department_id = \$2/);
   assert.match(sql, /t\.design_team IS NULL OR t\.design_team = \$4/);
-  assert.deepEqual(params, ["LEAD-3D", "design", "LEAD-3D", "3D"]);
+  assert.match(sql, /visible_users/);
+  assert.match(sql, /t\.assigned_to/);
+  assert.match(sql, /task_assignee\.employee_id/);
+  assert.deepEqual(params, ["LEAD-3D", "design", "LEAD-3D", "3D", "LEAD-3D"]);
 });
 
 test("operational controller roles include General Manager, Team Leader, and Co-Leader but exclude lower workers", () => {

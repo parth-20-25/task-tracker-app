@@ -208,7 +208,7 @@ async function listTasksByAccess({ clause = "", params = [] }, client = pool) {
 }
 
 function appendActiveProjectFilter(clause = "") {
-  const activeProjectPredicate = "COALESCE(project.status, 'active') = 'active'";
+  const activeProjectPredicate = "(t.task_type = 'additional_design' OR COALESCE(project.status, 'active') = 'active')";
 
   if (clause && /\bWHERE\b/i.test(clause)) {
     return `${clause} AND ${activeProjectPredicate}`;
@@ -226,7 +226,7 @@ async function listActiveProjectTasksByAccess(access, client = pool) {
 
 async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool, options = {}) {
   const nextParams = [...params];
-  const activeProjectPredicate = "COALESCE(project.status, 'active') = 'active'";
+  const activeProjectPredicate = "(t.task_type = 'additional_design' OR COALESCE(project.status, 'active') = 'active')";
   const excludeCurrentUser = options.excludeCurrentUser !== false && Boolean(currentUserEmployeeId);
   let currentUserExclusion = "";
 
@@ -375,9 +375,6 @@ async function insertTask(task, client = pool) {
         $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43,
         $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, NOW()
       )
-      ON CONFLICT (fixture_id, stage)
-      WHERE status NOT IN ('closed','cancelled')
-      DO NOTHING
       RETURNING id
     `;
   const insertParams = [

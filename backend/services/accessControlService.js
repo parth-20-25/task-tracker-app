@@ -557,6 +557,22 @@ function buildTaskAccessPredicate(user, params, options = {}) {
       projectAlias,
       fixtureAlias,
     });
+    const additionalDesignTeam = resolveAdditionalDesignTeamForUser(user);
+    let additionalDesignScopePredicate = "";
+
+    if (isOperationalControllerRole(user)) {
+      let teamPredicate = "";
+      if (additionalDesignTeam) {
+        params.push(additionalDesignTeam);
+        teamPredicate = ` AND (${taskAlias}.design_team IS NULL OR ${taskAlias}.design_team = $${params.length})`;
+      }
+      additionalDesignScopePredicate = `
+        OR (
+          ${taskAlias}.task_type = 'additional_design'
+          AND ${taskAlias}.department_id = ${departmentParam}
+          ${teamPredicate}
+        )`;
+    }
 
     return `
       (
@@ -564,6 +580,7 @@ function buildTaskAccessPredicate(user, params, options = {}) {
           ${taskAlias}.department_id = ${departmentParam}
           AND ${projectVisibilityPredicate}
         )
+        ${additionalDesignScopePredicate}
         OR ${selfScopePredicate}
       )
     `;

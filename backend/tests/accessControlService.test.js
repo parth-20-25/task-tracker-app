@@ -221,6 +221,23 @@ test("department leaders can review additional design tasks without fixture work
   assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "additional_design" }), true);
   assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "department_workflow" }), false);
 });
+test("department leader SQL access includes same-subdivision additional design tasks without project hierarchy visibility", () => {
+  const leader = makeUser({
+    employee_id: "LEAD-3D",
+    department_id: "design",
+    permissions: [PERMISSIONS.VIEW_ALL_TASKS, PERMISSIONS.APPROVE_COMPLETED_TASK],
+    role: { id: "team_leader", name: "Team Leader", hierarchy_level: 4, permissions: {} },
+    department: { id: "design", name: "Design" },
+    subdivision: { id: "subdivision-3d", subdivision_name: "3D" },
+  });
+  const params = [];
+  const sql = buildTaskAccessPredicate(leader, params);
+
+  assert.match(sql, /t\.task_type = 'additional_design'/);
+  assert.match(sql, /t\.department_id = \$2/);
+  assert.match(sql, /t\.design_team IS NULL OR t\.design_team = \$4/);
+  assert.deepEqual(params, ["LEAD-3D", "design", "LEAD-3D", "3D"]);
+});
 
 test("operational controller roles include General Manager, Team Leader, and Co-Leader but exclude lower workers", () => {
   assert.equal(isOperationalControllerRole(makeUser({

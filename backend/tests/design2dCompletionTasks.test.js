@@ -156,3 +156,9 @@ test("the idempotent schema keeps the category discriminator and allows legacy a
     assert.match(source, /ROW_NUMBER\(\) OVER/);
   }
 });
+test("shared task insert and list queries do not force completion or additional tasks through fixture workflow rules", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "..", "repositories", "tasksRepository.js"), "utf8");
+
+  assert.doesNotMatch(repository, /ON CONFLICT \(fixture_id, stage\)/);
+  assert.match(repository, /t\.task_type = 'additional_design' OR COALESCE\(project\.status, 'active'\) = 'active'/);
+});

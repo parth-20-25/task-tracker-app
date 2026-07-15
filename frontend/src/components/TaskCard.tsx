@@ -52,7 +52,7 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
     && taskCompletion === 0
     && task.verification_status !== 'approved'
     && !task.approved_at
-    && task.operational_state !== 'WORKFLOW_COMPLETE'
+    && (task.task_type === 'design_2d_completion' || task.operational_state !== 'WORKFLOW_COMPLETE')
     && (isOperationalControllerUser(user) || isProjectAuthorityUser(user) || isOriginalAssigner);
   const proofUrls = task.proof_url ?? [];
   const isCompletionTask = task.task_type === 'design_2d_completion';

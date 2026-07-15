@@ -507,7 +507,7 @@ function isTaskApprovedOrWorkflowComplete(task) {
   return task?.status === TASK_STATUSES.CLOSED
     || task?.verification_status === VERIFICATION_STATUSES.APPROVED
     || Boolean(task?.approved_at)
-    || task?.operational_state === "WORKFLOW_COMPLETE";
+    || (task?.task_type !== TASK_TYPES.DESIGN_2D_COMPLETION && task?.operational_state === "WORKFLOW_COMPLETE");
 }
 
 function resolveProgressRowForTask(task, progressRows) {
@@ -1000,7 +1000,9 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     requestedSource,
     taskType === TASK_TYPES.DEPARTMENT_WORKFLOW && (projectId || payloadFixtureId || currentStageId)
       ? TASK_SOURCES.WORKFLOW_AUTO
-      : TASK_SOURCES.ADMIN_MANUAL,
+      : taskType === TASK_TYPES.DESIGN_2D_COMPLETION
+        ? TASK_SOURCES.DESIGN_2D_COMPLETION
+        : TASK_SOURCES.ADMIN_MANUAL,
   );
 
   if (assigneeIds.length === 0) {
@@ -2247,6 +2249,10 @@ async function cancelTaskForUser(user, taskId, reason) {
     throw new AppError(403, "You do not have permission to cancel this task");
   }
 
+  if (task.task_type === TASK_TYPES.DESIGN_2D_COMPLETION && task.status === TASK_STATUSES.CANCELLED) {
+    return task;
+  }
+
   const cancellationReason = typeof reason === "string" ? reason.trim() : "";
   if (!cancellationReason) {
     throw new AppError(400, "Cancellation reason is required");
@@ -2270,16 +2276,27 @@ async function cancelTaskForUser(user, taskId, reason) {
       throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
     }
 
-    if (lockedTask.workflow_status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION || lockedTask.operational_state === "VERIFICATION") {
-      throw new AppError(409, "Tasks in verification cannot be cancelled");
-    }
+    if (lockedTask.task_type === TASK_TYPES.DESIGN_2D_COMPLETION) {
+      if (lockedTask.status === TASK_STATUSES.CANCELLED) {
+        await client.query("COMMIT");
+        return lockedTask;
+      }
+      if (![TASK_STATUSES.ASSIGNED, TASK_STATUSES.IN_PROGRESS, TASK_STATUSES.ON_HOLD, TASK_STATUSES.REWORK].includes(lockedTask.status)) {
+        throw new AppError(409, "Task cannot be cancelled in its current operational state");
+      }
+    } else {
+      if (lockedTask.workflow_status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION || lockedTask.operational_state === "VERIFICATION") {
+        throw new AppError(409, "Tasks in verification cannot be cancelled");
+      }
 
-    if (!canCancelOperationalTask(lockedTask)) {
-      throw new AppError(409, "Task cannot be cancelled in its current operational state");
+      if (!canCancelOperationalTask(lockedTask)) {
+        throw new AppError(409, "Task cannot be cancelled in its current operational state");
+      }
     }
 
     const cancelledTaskId = await cancelTask(lockedTask.id, {
       cancelledBy: user.employee_id,
+      preserveAssignment: lockedTask.task_type === TASK_TYPES.DESIGN_2D_COMPLETION,
       reason: cancellationReason,
     }, client);
 

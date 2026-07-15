@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, CheckSquare, Factory, Image as ImageIcon, Loader2, XCircle } from "lucide-react";
 
@@ -29,7 +29,7 @@ import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
-import { taskQueryKeys } from "@/lib/queryKeys";
+import { analyticsQueryKeys, executiveDashboardQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { resolveImageUrl } from "@/lib/imageUrl";
 import { cn } from "@/lib/utils";
 import type { Priority, Task } from "@/types";
@@ -78,7 +78,7 @@ function isCompletionLocked(task: Task | null) {
   return task?.status === "closed"
     || task?.verification_status === "approved"
     || Boolean(task?.approved_at)
-    || task?.operational_state === "WORKFLOW_COMPLETE";
+    || (task?.task_type !== "design_2d_completion" && task?.operational_state === "WORKFLOW_COMPLETE");
 }
 
 function completionState(task: Task | null): CompletionSectionKey {
@@ -144,7 +144,7 @@ function buildActivityOptions(
 function latestExistingOption(options: ActivityOption[]) {
   return [...options]
     .filter((option) => option.task)
-    .sort((left, right) => new Date(right.task?.created_at || 0).getTime() - new Date(left.task?.created_at || 0).getTime())[0]
+    .sort((left, right) => right.revision - left.revision)[0]
     || options[0];
 }
 
@@ -205,6 +205,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
   const [cancellingTask, setCancellingTask] = useState<Task | null>(null);
   const [cancellationReason, setCancellationReason] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const cancelInFlightRef = useRef(false);
 
   const projectsQuery = useQuery({
     queryKey: ["design", "2d-completion", "projects", departmentId || "all"],
@@ -286,6 +287,8 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
       queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
       queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
       queryClient.invalidateQueries({ queryKey: ["dashboard", "fixtures"] }),
+      queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: executiveDashboardQueryKeys.all }),
     ]);
   }
 
@@ -380,7 +383,14 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
       toast({ title: "Activity cancelled" });
     },
     onError: (error) => toast({ title: "Cancellation failed", description: error instanceof Error ? error.message : "Could not cancel the activity.", variant: "destructive" }),
+    onSettled: () => { cancelInFlightRef.current = false; },
   });
+
+  function submitCancellation() {
+    if (cancelMutation.isPending || cancelInFlightRef.current) return;
+    cancelInFlightRef.current = true;
+    cancelMutation.mutate();
+  }
 
   function activitySelect(row: CompletionFixtureRow) {
     return (
@@ -581,7 +591,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
       <Dialog open={Boolean(transferringTask)} onOpenChange={(open) => !open && setTransferringTask(null)}><DialogContent><DialogHeader><DialogTitle>Transfer Completion Activity</DialogTitle></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label>Employee</Label><Select value={transferTo || "__none__"} onValueChange={(value) => setTransferTo(value === "__none__" ? "" : value)}><SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger><SelectContent><SelectItem value="__none__">Select employee</SelectItem>{assignees.filter((employee) => employee.employee_id !== transferringTask?.assigned_to).map((employee) => <SelectItem key={employee.employee_id} value={employee.employee_id}>{employee.employee_id} — {employee.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Reason</Label><Textarea value={transferReason} onChange={(event) => setTransferReason(event.target.value)} rows={3} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setTransferringTask(null)}>Cancel</Button><Button type="button" disabled={!transferTo || !transferReason.trim() || transferMutation.isPending} onClick={() => transferMutation.mutate()}>Transfer</Button></DialogFooter></DialogContent></Dialog>
 
-      <Dialog open={Boolean(cancellingTask)} onOpenChange={(open) => !open && setCancellingTask(null)}><DialogContent><DialogHeader><DialogTitle>Cancel Completion Activity</DialogTitle><DialogDescription>The cancelled revision remains in history and does not change the original fixture workflow.</DialogDescription></DialogHeader><Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="Cancellation reason" rows={3} /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancellingTask(null)}>Keep Activity</Button><Button type="button" variant="destructive" disabled={!cancellingTask || !cancellationReason.trim() || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>Cancel Activity</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={Boolean(cancellingTask)} onOpenChange={(open) => !open && setCancellingTask(null)}><DialogContent><DialogHeader><DialogTitle>Cancel Completion Activity</DialogTitle><DialogDescription>The cancelled revision remains in history and does not change the original fixture workflow.</DialogDescription></DialogHeader><Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="Cancellation reason" rows={3} /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancellingTask(null)} disabled={cancelMutation.isPending}>Keep Activity</Button><Button type="button" variant="destructive" disabled={!cancellingTask || !cancellationReason.trim() || cancelMutation.isPending} onClick={submitCancellation}>Cancel Activity</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}><DialogContent className="max-w-3xl">{previewImage ? <SafeImage src={previewImage} alt="Completion activity proof" className="max-h-[70vh] w-full rounded-md object-contain" /> : null}</DialogContent></Dialog>
     </section>

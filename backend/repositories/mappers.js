@@ -140,6 +140,7 @@ function mapUserRow(row, prefix = "") {
 }
 
 function mapTaskRow(row) {
+  const taskType = row.task_type || "department_workflow";
   const projectNo = row.resolved_project_no || row.project_no || null;
   const fixtureNo = row.resolved_fixture_no || row.fixture_no || row.quantity_index || null;
   const projectName = row.resolved_project_name || row.project_name || row.project_description || null;
@@ -149,7 +150,7 @@ function mapTaskRow(row) {
     id: row.id,
     title: row.title || row.internal_identifier || row.description || `Task #${row.id}`,
     internal_identifier: row.internal_identifier,
-    task_type: row.task_type || "department_workflow",
+    task_type: taskType,
     additional_task_kind: row.additional_task_kind || null,
     design_team: row.design_team || null,
     description: row.description,
@@ -205,6 +206,9 @@ function mapTaskRow(row) {
     completion_task_not_required_reason: row.completion_task_not_required_reason || null,
     completion_task_not_required_by: row.completion_task_not_required_by || null,
     completion_task_not_required_at: row.completion_task_not_required_at || null,
+    cancelled_by: row.cancelled_by || null,
+    cancelled_at: row.cancelled_at || null,
+    cancellation_reason: row.cancellation_reason || null,
     project_uploaded_by: row.project_uploaded_by || null,
     project_created_by_user_id: row.project_created_by_user_id || null,
     project_status: row.project_status || "active",
@@ -237,7 +241,7 @@ function mapTaskRow(row) {
     workflow_stage: row.workflow_stage || null,
     workflow_status: row.workflow_status || null,
     operational_state: resolveTaskOperationalState(row, {
-      workflowComplete: row.resolved_fixture_workflow_complete === true,
+      workflowComplete: taskType !== "design_2d_completion" && row.resolved_fixture_workflow_complete === true,
     }),
     workflow_stage_version: Number(row.workflow_stage_version || 0),
     fixture_revision_no: Number(row.fixture_revision_no || 0),

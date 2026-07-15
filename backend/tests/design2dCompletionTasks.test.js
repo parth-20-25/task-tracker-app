@@ -14,6 +14,7 @@ const {
 } = require("../lib/design2dCompletionTasks");
 const { nextRevisionFor } = require("../services/design2dCompletionTaskService");
 const { activeTaskLateral } = require("../services/operationalStateResolver");
+const { mapTaskRow } = require("../repositories/mappers");
 
 const { shouldAdvanceFixtureWorkflow } = require("../services/taskStateRules");
 function fixture(id, twoDComplete = true, workflowComplete = true) {
@@ -122,6 +123,25 @@ test("completed 00 remains in history while active 01 becomes the selected lates
   assert.equal(completed00.status, "closed");
 });
 
+test("completion task rows do not inherit Workflow Complete from the parent fixture", () => {
+  const mapped = mapTaskRow({
+    id: 99,
+    title: "AutoCAD PDF 01",
+    task_type: "design_2d_completion",
+    status: "assigned",
+    verification_status: "pending",
+    completion_percent: 0,
+    assignee_ids: '["EMP-1"]',
+    proof_assignee_user_ids: '[]',
+    dependency_ids: '[]',
+    tags: '[]',
+    resolved_fixture_workflow_complete: true,
+  });
+
+  assert.equal(mapped.operational_state, "ASSIGNED");
+  assert.equal(mapped.completion_percent, 0);
+});
+
 test("main fixture operational SQL ignores completion activities at the backend boundary", () => {
   const sql = activeTaskLateral("fixture", "operational_task");
   assert.match(sql, /t\.task_type = 'department_workflow'/);
@@ -171,5 +191,5 @@ test("shared task insert and list queries do not force completion or additional 
   const repository = fs.readFileSync(path.join(__dirname, "..", "repositories", "tasksRepository.js"), "utf8");
 
   assert.doesNotMatch(repository, /ON CONFLICT \(fixture_id, stage\)/);
-  assert.match(repository, /t\.task_type = 'additional_design' OR COALESCE\(project\.status, 'active'\) = 'active'/);
+  assert.match(repository, /t\.task_type IN \('additional_design', 'design_2d_completion'\) OR COALESCE\(project\.status, 'active'\) = 'active'/);
 });

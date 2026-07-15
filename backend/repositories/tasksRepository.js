@@ -208,7 +208,7 @@ async function listTasksByAccess({ clause = "", params = [] }, client = pool) {
 }
 
 function appendActiveProjectFilter(clause = "") {
-  const activeProjectPredicate = "(t.task_type = 'additional_design' OR COALESCE(project.status, 'active') = 'active')";
+  const activeProjectPredicate = "(t.task_type IN ('additional_design', 'design_2d_completion') OR COALESCE(project.status, 'active') = 'active')";
 
   if (clause && /\bWHERE\b/i.test(clause)) {
     return `${clause} AND ${activeProjectPredicate}`;
@@ -226,7 +226,7 @@ async function listActiveProjectTasksByAccess(access, client = pool) {
 
 async function listVerificationTasksByAccess({ clause = "", params = [] }, currentUserEmployeeId, client = pool, options = {}) {
   const nextParams = [...params];
-  const activeProjectPredicate = "(t.task_type = 'additional_design' OR COALESCE(project.status, 'active') = 'active')";
+  const activeProjectPredicate = "(t.task_type IN ('additional_design', 'design_2d_completion') OR COALESCE(project.status, 'active') = 'active')";
   const excludeCurrentUser = options.excludeCurrentUser !== false && Boolean(currentUserEmployeeId);
   let currentUserExclusion = "";
 
@@ -759,18 +759,21 @@ async function updateTaskAssignmentForTransfer(taskId, { assignedTo, completionP
   );
 }
 
-async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
+async function cancelTask(taskId, { cancelledBy, reason, preserveAssignment = false }, client = pool) {
   const cancelledAt = new Date();
   const result = await client.query(
     `
       UPDATE tasks
       SET status = 'cancelled',
-          assigned_to = NULL,
-          assignee_ids = '[]'::jsonb,
-          assigned_user_id = NULL,
+          assigned_to = CASE WHEN $3::boolean THEN assigned_to ELSE NULL END,
+          assignee_ids = CASE WHEN $3::boolean THEN assignee_ids ELSE '[]'::jsonb END,
+          assigned_user_id = CASE WHEN $3::boolean THEN assigned_user_id ELSE NULL END,
           verification_status = 'rejected',
           approval_stage = 'cancelled',
           remarks = COALESCE($2, remarks),
+          cancelled_by = $4,
+          cancelled_at = $5,
+          cancellation_reason = COALESCE($2, cancellation_reason),
           next_escalation_at = NULL,
           current_stage_id = NULL,
           lifecycle_status = 'cancelled',
@@ -782,7 +785,7 @@ async function cancelTask(taskId, { cancelledBy, reason }, client = pool) {
         AND COALESCE(verification_status, 'pending') <> 'approved'
       RETURNING id
     `,
-    [taskId, reason || null],
+    [taskId, reason || null, preserveAssignment === true, cancelledBy || null, cancelledAt],
   );
 
   if (result.rowCount === 0) {

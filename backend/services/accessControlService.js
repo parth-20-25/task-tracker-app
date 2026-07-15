@@ -338,7 +338,7 @@ function canAccessTask(user, task) {
   const selfScoped = isTaskDirectAssignee(user, task) || isTaskOwnedByUser(user, task);
 
   if (hasPermission(user, PERMISSIONS.VIEW_ALL_TASKS)) {
-    if (task.task_type === "additional_design") {
+    if (task.task_type === "additional_design" || task.task_type === "design_2d_completion") {
       return selfScoped || (
         canAccessDepartment(user, task.department_id)
         && isTaskVisibleThroughUserHierarchy(user, task)
@@ -565,6 +565,11 @@ function buildTaskAccessPredicate(user, params, options = {}) {
             AND ${taskAlias}.design_team = '2D'
             AND ${additionalDesignVisibleUserPredicate}
           )
+          OR (
+            ${taskAlias}.task_type = 'design_2d_completion'
+            AND ${taskAlias}.department_id = ${departmentParam}
+            AND ${additionalDesignVisibleUserPredicate}
+          )
         )
       `;
     }
@@ -578,6 +583,10 @@ function buildTaskAccessPredicate(user, params, options = {}) {
         OR (
           ${taskAlias}.task_type = 'additional_design'
           AND ${taskAlias}.design_team = '2D'
+          AND ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
+        )
+        OR (
+          ${taskAlias}.task_type = 'design_2d_completion'
           AND ${buildTaskAssigneePredicate(employeeIdParam, taskAlias)}
         )
       )
@@ -609,13 +618,18 @@ function buildTaskAccessPredicate(user, params, options = {}) {
           AND ${taskAlias}.department_id = ${departmentParam}
           ${teamPredicate}
           AND ${additionalDesignVisibleUserPredicate}
+        )
+        OR (
+          ${taskAlias}.task_type = 'design_2d_completion'
+          AND ${taskAlias}.department_id = ${departmentParam}
+          AND ${additionalDesignVisibleUserPredicate}
         )`;
     }
 
     return `
       (
         (
-          ${taskAlias}.task_type <> 'additional_design'
+          ${taskAlias}.task_type NOT IN ('additional_design', 'design_2d_completion')
           AND ${taskAlias}.department_id = ${departmentParam}
           AND ${projectVisibilityPredicate}
         )

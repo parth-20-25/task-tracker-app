@@ -238,6 +238,51 @@ describe("Design2DCompletionTasks", () => {
     expect(screen.queryByRole("button", { name: /Cancel Task/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "FX-1 activity" })).toHaveAttribute("data-completed", "true");
   });
+
+  it("cancels the latest active revision once even when approved history is newer", async () => {
+    let resolveCancellation: ((task: Task) => void) | undefined;
+    api.fetchState.mockResolvedValue(state([
+      completionTask({
+        id: 1,
+        title: "Drafting Checking 00",
+        completion_task_revision: 0,
+        status: "closed",
+        verification_status: "approved",
+        completion_percent: 100,
+        created_at: "2026-07-16T00:00:00.000Z",
+        operational_state: "WORKFLOW_COMPLETE",
+      }),
+      completionTask({
+        id: 2,
+        title: "Drafting Checking 01",
+        completion_task_revision: 1,
+        status: "assigned",
+        verification_status: "pending",
+        completion_percent: 0,
+        approved_at: null,
+        proof_url: [],
+        created_at: "2026-07-15T00:00:00.000Z",
+        operational_state: "WORKFLOW_COMPLETE",
+      }),
+    ]));
+    api.cancelTask.mockReturnValueOnce(new Promise((resolve) => { resolveCancellation = resolve; }));
+    renderBoard();
+    await selectProject();
+
+    expect(screen.getByRole("button", { name: "FX-1 activity" })).toHaveAttribute("data-completed", "false");
+    fireEvent.click(screen.getByRole("button", { name: /Cancel Task/ }));
+    fireEvent.change(screen.getByPlaceholderText("Cancellation reason"), { target: { value: "Assigned by mistake" } });
+    const cancelButton = screen.getByRole("button", { name: "Cancel Activity" });
+    await waitFor(() => expect(cancelButton).not.toBeDisabled());
+    fireEvent.click(cancelButton);
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => expect(api.cancelTask).toHaveBeenCalledTimes(1));
+    expect(api.cancelTask).toHaveBeenCalledWith(2, "Assigned by mistake");
+
+    resolveCancellation?.(completionTask({ id: 2, status: "cancelled", completion_task_revision: 1 }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Activity cancelled" })));
+  });
   it("assigns IGES 00 directly with no Drafting Checking sequence dependency", async () => {
     api.fetchState.mockResolvedValue(state([]));
     renderBoard();

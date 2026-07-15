@@ -340,6 +340,7 @@ const TASK_SOURCES = {
   WORKFLOW_AUTO: "workflow_auto",
   SYSTEM_GENERATED: "system_generated",
   EXCEL_IMPORT: "excel_import",
+  DESIGN_2D_COMPLETION: "design_2d_completion",
 };
 
 const PROJECT_STATUSES = {

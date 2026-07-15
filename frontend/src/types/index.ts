@@ -23,7 +23,7 @@ export type AdditionalDesignTaskKind =
   | 'CBO'
   | 'CDRM';
 export type DesignTeam = '2D' | '3D';
-export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import';
+export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import' | 'design_2d_completion';
 export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
 export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 export type OutsourceStage = 'Concept' | '3D' | '2D';
@@ -144,6 +144,9 @@ export interface Task {
   completion_task_not_required_reason?: string | null;
   completion_task_not_required_by?: string | null;
   completion_task_not_required_at?: string | null;
+  cancelled_by?: string | null;
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
   project_no?: string | null;
   fixture_no?: string | null;
   project_code?: string | null;

@@ -207,7 +207,7 @@ test("lower hierarchy roles do not receive org-wide project authority", () => {
   })), false);
 });
 
-test("department leaders can review only additional design tasks in their visible team", () => {
+test("department leaders can review independent design tasks in their visible team", () => {
   const leader = makeUser({
     department_id: "design",
     permissions: [PERMISSIONS.VIEW_ALL_TASKS, PERMISSIONS.APPROVE_COMPLETED_TASK],
@@ -227,11 +227,22 @@ test("department leaders can review only additional design tasks in their visibl
     project_uploaded_by: "EMP999",
   });
 
+  const visibleCompletionTask = makeTask({
+    department_id: "design",
+    task_type: "design_2d_completion",
+    assigned_to: "EMP101",
+    assigned_user_id: "EMP101",
+    assignee_ids: ["EMP101"],
+    project_uploaded_by: "EMP999",
+  });
+
   assert.equal(canAccessTask(leader, visibleTeamTask), true);
+  assert.equal(canAccessTask(leader, visibleCompletionTask), true);
   assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "additional_design" }), false);
+  assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "design_2d_completion" }), false);
   assert.equal(canAccessTask(leader, { ...unrelatedProjectTask, task_type: "department_workflow" }), false);
 });
-test("department leader SQL access includes only same-subdivision visible-team additional design tasks", () => {
+test("department leader SQL access includes visible-team independent design tasks", () => {
   const leader = makeUser({
     employee_id: "LEAD-3D",
     department_id: "design",
@@ -243,8 +254,9 @@ test("department leader SQL access includes only same-subdivision visible-team a
   const params = [];
   const sql = buildTaskAccessPredicate(leader, params);
 
-  assert.match(sql, /t\.task_type <> 'additional_design'/);
+  assert.match(sql, /t\.task_type NOT IN \('additional_design', 'design_2d_completion'\)/);
   assert.match(sql, /t\.task_type = 'additional_design'/);
+  assert.match(sql, /t\.task_type = 'design_2d_completion'/);
   assert.match(sql, /t\.department_id = \$2/);
   assert.match(sql, /t\.design_team IS NULL OR t\.design_team = \$4/);
   assert.match(sql, /visible_users/);

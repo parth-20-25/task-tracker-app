@@ -315,7 +315,10 @@ async function runMigrations() {
       ADD COLUMN IF NOT EXISTS completion_task_outsource_supplier TEXT,
       ADD COLUMN IF NOT EXISTS completion_task_not_required_reason TEXT,
       ADD COLUMN IF NOT EXISTS completion_task_not_required_by VARCHAR(50),
-      ADD COLUMN IF NOT EXISTS completion_task_not_required_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS completion_task_not_required_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancellation_reason TEXT
     `);
 
     await client.query(`

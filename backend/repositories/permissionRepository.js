@@ -202,6 +202,32 @@ async function syncNativeUploadPermissionFromLegacy(client) {
   );
 }
 
+async function syncControlDesignWorkspacePermissionForConfiguredRoles(client) {
+  await client.query(
+    `
+      INSERT INTO role_permissions (role_id, permission_id)
+      SELECT DISTINCT control_roles.role_id, $1
+      FROM (
+        SELECT role_id
+        FROM role_permissions
+        WHERE permission_id LIKE 'control_design.%'
+          AND permission_id <> $1
+
+        UNION
+
+        SELECT roles.id AS role_id
+        FROM roles
+        CROSS JOIN LATERAL jsonb_each(COALESCE(roles.permissions, '{}'::jsonb)) AS permission(permission_id, enabled)
+        WHERE permission.permission_id LIKE 'control_design.%'
+          AND permission.permission_id <> $1
+          AND permission.enabled = 'true'::jsonb
+      ) control_roles
+      ON CONFLICT (role_id, permission_id) DO NOTHING
+    `,
+    [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW],
+  );
+}
+
 async function syncControlDesignProjectPermissions(client) {
   for (const [roleId, permissionIds] of Object.entries(CONTROL_DESIGN_ROLE_PERMISSION_BUNDLES)) {
     await assignPermissionsToRole(roleId, permissionIds, client, {
@@ -209,6 +235,8 @@ async function syncControlDesignProjectPermissions(client) {
       source: "permissionRepository.syncControlDesignProjectPermissions",
     });
   }
+
+  await syncControlDesignWorkspacePermissionForConfiguredRoles(client);
 }
 
 async function syncRolePermissionJson(client) {
@@ -376,5 +404,6 @@ module.exports = {
   normalizeGrantablePermissionIds,
   normalizePermissionIds,
   seedPermissions,
+  syncControlDesignWorkspacePermissionForConfiguredRoles,
   syncNativeUploadPermissionFromLegacy,
 };

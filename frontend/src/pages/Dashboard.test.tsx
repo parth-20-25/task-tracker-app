@@ -346,22 +346,53 @@ describe("Dashboard workspace routing", () => {
     expect(designApi.fetchDesignFixtures).not.toHaveBeenCalled();
   });
 
+  it("routes Control Design identity before workspace permission is checked", async () => {
+    const user = buildControlUser({
+      permissions: ["control_design.projects.create"],
+      subdivision_id: "sub-control-design",
+      subdivision: {
+        id: "sub-control-design",
+        department_id: "control",
+        subdivision_name: "Control Design",
+        is_active: true,
+      },
+    });
+    setMockAuth({
+      user,
+      role: { id: "team_leader", name: "Team Leader" },
+      access: { ...baseAccess, canCreateControlDesignProjects: true },
+    });
+    renderDashboard();
+
+    expect(await screen.findByText("Control Design Dedicated Workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "2D Completion Tasks" })).not.toBeInTheDocument();
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
+  });
+
   it("does not infer Control Design workspace access from role or fixture permissions", async () => {
     setControlWithoutDesignSubdivisionAuth();
     renderDashboard();
 
-    expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(await screen.findByText("Your Control sub-department is not configured. Contact an administrator.")).toBeInTheDocument();
+    expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "2D Completion Tasks" })).not.toBeInTheDocument();
     expect(screen.queryByText("Control Design Dedicated Workspace")).not.toBeInTheDocument();
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
   });
 
-  it("keeps Control users outside Control Design on the operational workspace", async () => {
+  it("keeps unsupported Control sub-departments off the Design operational workspace", async () => {
     setControlOtherSubdivisionAuth();
     renderDashboard();
 
-    expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(await screen.findByText("Your Control sub-department is not configured. Contact an administrator.")).toBeInTheDocument();
+    expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "2D Completion Tasks" })).not.toBeInTheDocument();
     expect(screen.queryByText("Control Design Dedicated Workspace")).not.toBeInTheDocument();
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
   });
 
   it("shows the 2D completion board beside Project Fixtures for Design assignment leaders", async () => {
@@ -448,10 +479,12 @@ describe("Dashboard workspace routing", () => {
     setControlWithoutDesignSubdivisionAuth({ canViewDepartmentAnalytics: true, canViewAllDepartmentsAnalytics: true });
     renderDashboard();
 
-    expect(await screen.findByText("Native Fixture Upload")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Project Fixtures" })).toBeInTheDocument();
+    expect(await screen.findByText("Your Control sub-department is not configured. Contact an administrator.")).toBeInTheDocument();
+    expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Project Fixtures" })).not.toBeInTheDocument();
     expect(screen.queryByText("Executive Dashboard Surface")).not.toBeInTheDocument();
     expect(executiveDashboard.render).not.toHaveBeenCalled();
+    expect(designApi.fetchProjectDashboardSummary).not.toHaveBeenCalled();
   });
 
   it("does not flash either dashboard while authentication is loading", () => {

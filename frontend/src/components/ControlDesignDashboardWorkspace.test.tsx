@@ -372,9 +372,12 @@ describe("ControlDesignDashboardWorkspace", () => {
     renderWorkspace();
 
     expect((await screen.findAllByText("Press Line"))[0]).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /New Project/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add New Project/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Total Projects/ })).toHaveTextContent("1");
     expect(screen.getByRole("button", { name: /Active Projects/ })).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: /Pending Approval/ })).toHaveTextContent("0");
+    expect(screen.getByRole("button", { name: /Updates Required/ })).toHaveTextContent("0");
+    expect(screen.getByRole("button", { name: /Completed Projects/ })).toHaveTextContent("0");
     expect(screen.getByRole("heading", { name: "Control Design Projects" })).toBeInTheDocument();
     expect(screen.getAllByText("CO Creation").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Manual Preparation").length).toBeGreaterThan(0);
@@ -535,6 +538,18 @@ describe("ControlDesignDashboardWorkspace", () => {
     expect((await screen.findAllByText("Press Line"))[0]).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /New Project/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Reassign$/ })).toBeInTheDocument();
+  });
+
+  it("shows a retryable Control error instead of Design content when project loading fails", async () => {
+    setAuth(true);
+    controlApi.fetchControlDesignProjects.mockRejectedValueOnce(new Error("boom"));
+    renderWorkspace();
+
+    expect(await screen.findByText("Unable to load Control Design projects.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.queryByText("Native Fixture Upload")).not.toBeInTheDocument();
+    expect(screen.queryByText("Project Fixtures")).not.toBeInTheDocument();
+    expect(screen.queryByText("2D Completion Tasks")).not.toBeInTheDocument();
   });
 
   it("requires backend Control Design workspace capability before loading data", async () => {

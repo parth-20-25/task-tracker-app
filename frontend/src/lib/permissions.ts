@@ -191,6 +191,9 @@ const LEGACY_PERMISSION_MIGRATIONS: Record<string, string> = {
   "control_design.reassign_projects": PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN,
 };
 
+const CONTROL_DEPARTMENT_ID = "control";
+const CONTROL_DESIGN_SUBDEPARTMENT_ID = "control_design";
+
 export function normalizePermissionId(permission: string) {
   const trimmed = String(permission || "").trim();
   return LEGACY_PERMISSION_MIGRATIONS[trimmed] || trimmed;
@@ -307,23 +310,50 @@ export function isOperationalControllerUser(user: User | null | undefined) {
 }
 
 export function isControlDepartmentUser(user: User | null | undefined) {
-  const departmentId = normalizeRoleKey(user?.department_id);
-  const departmentName = normalizeRoleKey(user?.department?.name);
+  return resolveControlDesignIdentity(user).isControlDepartment;
+}
 
-  return departmentId === "control" || departmentName === "control";
+export function resolveControlDesignIdentity(user: User | null | undefined) {
+  const rawUser = user as (User & Record<string, unknown>) | null | undefined;
+  const rawSubdivision = rawUser?.subdivision as Record<string, unknown> | null | undefined;
+  const departmentId = normalizeRoleKey(rawUser?.department_id);
+  const departmentName = normalizeRoleKey(rawUser?.department?.name);
+  const subDepartmentId = normalizeRoleKey(
+    rawUser?.subdivision_id
+      ?? rawUser?.sub_department_id
+      ?? rawUser?.subDepartmentId
+      ?? rawSubdivision?.id,
+  );
+  const subDepartmentName = normalizeRoleKey(
+    rawSubdivision?.subdivision_name
+      ?? rawSubdivision?.name
+      ?? rawUser?.sub_department
+      ?? rawUser?.subDepartment
+      ?? rawUser?.sub_department_name
+      ?? rawUser?.subDepartmentName,
+  );
+  const canonicalDepartmentId = departmentId === CONTROL_DEPARTMENT_ID || departmentName === CONTROL_DEPARTMENT_ID
+    ? CONTROL_DEPARTMENT_ID
+    : departmentId || departmentName;
+  const canonicalSubDepartmentId = subDepartmentId === CONTROL_DESIGN_SUBDEPARTMENT_ID || subDepartmentName === CONTROL_DESIGN_SUBDEPARTMENT_ID
+    ? CONTROL_DESIGN_SUBDEPARTMENT_ID
+    : subDepartmentId || subDepartmentName;
+  const isControlDepartment = canonicalDepartmentId === CONTROL_DEPARTMENT_ID;
+
+  return {
+    canonicalDepartmentId,
+    canonicalSubDepartmentId,
+    isControlDepartment,
+    isControlDesign: isControlDepartment && canonicalSubDepartmentId === CONTROL_DESIGN_SUBDEPARTMENT_ID,
+  };
 }
 
 export function isControlDesignSubdivisionUser(user: User | null | undefined) {
-  const subdivisionId = normalizeRoleKey(user?.subdivision_id);
-  const subdivisionName = normalizeRoleKey(user?.subdivision?.subdivision_name);
-
-  return subdivisionId === "control_design" || subdivisionName === "control_design";
+  return resolveControlDesignIdentity(user).canonicalSubDepartmentId === CONTROL_DESIGN_SUBDEPARTMENT_ID;
 }
 
 export function isControlDesignDashboardUser(user: User | null | undefined, _access?: unknown) {
-  return isControlDepartmentUser(user)
-    && isControlDesignSubdivisionUser(user)
-    && hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW);
+  return resolveControlDesignIdentity(user).isControlDesign;
 }
 function normalizeRoleKey(value: unknown) {
   return String(value || "")

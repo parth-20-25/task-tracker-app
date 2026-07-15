@@ -31,6 +31,7 @@ const {
   normalizeRevisionReason,
 } = require("../lib/controlWorkflow");
 const { PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
+const { syncControlDesignWorkspacePermissionForConfiguredRoles } = require("../repositories/permissionRepository");
 const {
   canCreateControlDesignProject,
   normalizeBudgetAmount,
@@ -285,6 +286,26 @@ test("Control Design permissions are seeded through role-id bundles", () => {
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE), false);
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE), false);
   }
+});
+
+test("Control Design permission sync grants workspace view to custom roles with project permissions", async () => {
+  let capturedSql = "";
+  let capturedParams = [];
+  const client = {
+    async query(sql, params) {
+      capturedSql = String(sql);
+      capturedParams = params;
+      return { rows: [], rowCount: 0 };
+    },
+  };
+
+  await syncControlDesignWorkspacePermissionForConfiguredRoles(client);
+
+  assert.deepEqual(capturedParams, [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW]);
+  assert.match(capturedSql, /INSERT INTO role_permissions/);
+  assert.match(capturedSql, /permission_id LIKE 'control_design\.%'/);
+  assert.match(capturedSql, /jsonb_each/);
+  assert.match(capturedSql, /ON CONFLICT \(role_id, permission_id\) DO NOTHING/);
 });
 
 test("frontend and backend declare the same canonical Control Design permissions", () => {

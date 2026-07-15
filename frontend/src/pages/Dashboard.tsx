@@ -15,7 +15,7 @@ import { Design2DCompletionTasks } from '@/components/Design2DCompletionTasks';
 import { ProjectFixtureSectionHeader } from '@/components/ProjectFixtureSectionHeader';
 import { ProjectReactivationDialog } from '@/components/ProjectReactivationDialog';
 import { AlertTriangle, ClipboardList, PlayCircle, Clock, Layers3, PauseCircle, PackageCheck, FolderOpen, Pencil, User as UserIcon, UserCheck, UserX, Wrench, RotateCcw } from 'lucide-react';
-import { canViewExecutiveDashboard, isControlDesignDashboardUser, isProjectAuthorityUser } from '@/lib/permissions';
+import { canViewExecutiveDashboard, isControlDepartmentUser, isControlDesignDashboardUser, isProjectAuthorityUser } from '@/lib/permissions';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -195,7 +195,31 @@ export default function Dashboard() {
     return <ControlDesignDashboardWorkspace />;
   }
 
+  if (isControlDepartmentUser(user)) {
+    return <ControlDepartmentUnsupportedState />;
+  }
+
   return <OperationalDashboard />;
+}
+
+function ControlDepartmentUnsupportedState() {
+  const { user, role } = useAuth();
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <div>
+        <h1 className="text-2xl font-bold">Welcome, {user?.name?.split(' ')[0]}</h1>
+        <p className="text-sm text-muted-foreground">{role?.name} · {user?.department?.name || 'Control'}</p>
+      </div>
+      <Alert className="border-blue-200 bg-blue-50 text-blue-950">
+        <AlertTriangle className="h-4 w-4 text-blue-700" />
+        <AlertTitle>Control configuration required</AlertTitle>
+        <AlertDescription>
+          Your Control sub-department is not configured. Contact an administrator.
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
 }
 
 function OperationalDashboard() {

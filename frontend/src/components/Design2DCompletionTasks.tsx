@@ -74,14 +74,17 @@ function activityLabel(definition: Design2DCompletionTaskDefinition, revision: n
   return `${definition.displayName} ${String(revision).padStart(2, "0")}`;
 }
 
-function isApproved(task: Task | null) {
-  return task?.status === "closed" && task.verification_status === "approved";
+function isCompletionLocked(task: Task | null) {
+  return task?.status === "closed"
+    || task?.verification_status === "approved"
+    || Boolean(task?.approved_at)
+    || task?.operational_state === "WORKFLOW_COMPLETE";
 }
 
 function completionState(task: Task | null): CompletionSectionKey {
   if (!task) return "UNASSIGNED";
   if (task.status === "cancelled") return "CANCELLED";
-  if (isApproved(task)) return "WORKFLOW_COMPLETE";
+  if (isCompletionLocked(task)) return "WORKFLOW_COMPLETE";
   if (task.status === "under_review") return "VERIFICATION";
   if (task.status === "rework" || task.verification_status === "rejected") return "REJECTED";
   if (task.completion_task_outsource_supplier) return "OUTSOURCED";
@@ -106,7 +109,7 @@ function buildActivityOptions(
         revision,
         label: task.title || activityLabel(definition, revision),
         task,
-        completed: isApproved(task),
+        completed: isCompletionLocked(task),
       };
     });
 
@@ -422,7 +425,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
       && (!ownTask || access.canSelfApprove);
     const canTransfer = Boolean(task && !["closed", "cancelled", "under_review"].includes(task.status)
       && (access.canTransferTasks || access.canAssignTasks));
-    const canCancel = Boolean(task && !["closed", "cancelled", "under_review"].includes(task.status)
+    const canCancel = Boolean(task && !["cancelled", "under_review"].includes(task.status) && !isCompletionLocked(task)
       && (access.canAssignTasks || ownTask));
 
     return (

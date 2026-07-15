@@ -222,6 +222,22 @@ describe("Design2DCompletionTasks", () => {
     });
   });
 
+  it("does not offer cancellation for backend-completed activities", async () => {
+    api.fetchState.mockResolvedValue(state([
+      completionTask({
+        status: "assigned",
+        verification_status: "pending",
+        completion_percent: 0,
+        approved_at: "2026-07-15T00:00:00.000Z",
+        operational_state: "WORKFLOW_COMPLETE",
+      }),
+    ]));
+    renderBoard();
+    await selectProject();
+
+    expect(screen.queryByRole("button", { name: /Cancel Task/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "FX-1 activity" })).toHaveAttribute("data-completed", "true");
+  });
   it("assigns IGES 00 directly with no Drafting Checking sequence dependency", async () => {
     api.fetchState.mockResolvedValue(state([]));
     renderBoard();

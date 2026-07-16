@@ -263,6 +263,29 @@ export interface Design2DCompletionTaskDefinition {
   isMandatory?: boolean;
 }
 
+export interface Design2DCompletionCurrentActivity {
+  activityKey: Design2DCompletionTaskCode;
+  code: Design2DCompletionTaskCode;
+  label: string;
+  latestLabel: string;
+  latestTask: Task | null;
+  currentStatus: "UNASSIGNED" | "ASSIGNED" | "IN_PROGRESS" | "OUTSOURCED" | "VERIFICATION" | "REJECTED" | "COMPLETED" | string;
+  assignable: boolean;
+}
+
+export interface Design2DCompletionActiveAssignment {
+  taskId: number;
+  activityKey: Design2DCompletionTaskCode;
+  label: string;
+  sequence: number | null;
+  displaySequence: string | null;
+  status: Task["status"];
+  currentStatus: string;
+  assignedTo: string | null;
+  assigneeNames: string | null;
+  supplierName: string | null;
+}
+
 export interface Design2DCompletionProjectState {
   project: DesignProjectOption;
   fixtures: Array<{
@@ -271,6 +294,23 @@ export interface Design2DCompletionProjectState {
     part_name: string;
     workflow_complete: boolean;
     two_d_complete: boolean;
+    aggregateSection?: string;
+    completedMandatoryCount?: number;
+    totalMandatoryCount?: number;
+    progressPercentage?: number;
+    currentAssignee?: string | null;
+    currentActivities?: Design2DCompletionCurrentActivity[];
+    activeAssignments?: Design2DCompletionActiveAssignment[];
+  }>;
+  fixture_aggregates?: Array<{
+    fixtureId: string;
+    aggregateSection: string;
+    completedMandatoryCount: number;
+    totalMandatoryCount: number;
+    progressPercentage: number;
+    currentAssignee: string | null;
+    currentActivities: Design2DCompletionCurrentActivity[];
+    activeAssignments: Design2DCompletionActiveAssignment[];
   }>;
   tasks: Task[];
   fixture_task_types: Design2DCompletionTaskDefinition[];

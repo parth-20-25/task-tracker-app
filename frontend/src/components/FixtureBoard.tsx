@@ -170,18 +170,16 @@ export function FixtureBoardCard({
           </div>
 
           <div className="min-w-0 text-xs text-muted-foreground">
-            {assigned ? (
-              <div className="space-y-1">
-                {progress !== null ? (
-                  <div className="flex items-center gap-2">
-                    <User className="h-3 w-3 shrink-0" />
-                    <Progress value={progress} className="h-1.5 w-16 shrink-0" />
-                    <span className="font-semibold text-foreground">{progress}%</span>
-                  </div>
-                ) : null}
-                {submittedLabel ? <p>Submitted: {submittedLabel}</p> : null}
-              </div>
-            ) : null}
+            <div className="space-y-1">
+              {progress !== null ? (
+                <div className="flex items-center gap-2">
+                  <User className="h-3 w-3 shrink-0" />
+                  <Progress value={progress} className="h-1.5 w-16 shrink-0" />
+                  <span className="font-semibold text-foreground">{progress}%</span>
+                </div>
+              ) : null}
+              {assigned && submittedLabel ? <p>Submitted: {submittedLabel}</p> : null}
+            </div>
           </div>
 
           <div className="flex flex-col items-start gap-1.5 lg:items-end">{actions}</div>

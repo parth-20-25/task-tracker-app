@@ -11,6 +11,7 @@ const {
   PROJECT_TASK_CODES,
   aggregateCompletionState,
   buildDesign2DCompletionState,
+  buildFixtureCompletionAggregate,
   formatDesign2DCompletionTaskName,
 } = require("../lib/design2dCompletionTasks");
 const { nextRevisionFor } = require("../services/design2dCompletionTaskService");
@@ -97,6 +98,18 @@ test("uncreated mandatory completion activities block final project completion",
   assert.match(state.missingRequirements.join(" | "), /CMM Data 00 is incomplete/);
 });
 
+test("one approved fixture activity gives 25 percent and stays unassigned", () => {
+  const completed = completionTask("FIXTURE_AUTOCAD_PDF", 0, "fixture-1");
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks: [completed] });
+  const aggregate = buildFixtureCompletionAggregate(state.latestTasks, fixture("fixture-1"));
+
+  assert.equal(aggregate.completedMandatoryCount, 1);
+  assert.equal(aggregate.totalMandatoryCount, 4);
+  assert.equal(aggregate.progressPercentage, 25);
+  assert.equal(aggregate.aggregateSection, "UNASSIGNED");
+  assert.equal(state.fixtureRequirementsComplete, false);
+  assert.equal(state.projectCompletionReady, false);
+});
 test("all mandatory latest revisions complete the aggregate while optional Mimic is ignored", () => {
   const tasks = [
     ...approvedMandatoryTasks(),
@@ -116,6 +129,16 @@ test("all mandatory latest revisions complete the aggregate while optional Mimic
   assert.equal(aggregateCompletionState(state.latestTasks, { scope: "project" }), "WORKFLOW_COMPLETE");
 });
 
+test("all four approved fixture activities give 100 percent and workflow complete", () => {
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks: approvedMandatoryTasks() });
+  const aggregate = buildFixtureCompletionAggregate(state.latestTasks, fixture("fixture-1"));
+
+  assert.equal(aggregate.completedMandatoryCount, 4);
+  assert.equal(aggregate.totalMandatoryCount, 4);
+  assert.equal(aggregate.progressPercentage, 100);
+  assert.equal(aggregate.aggregateSection, "WORKFLOW_COMPLETE");
+  assert.equal(state.fixtureRequirementsComplete, true);
+});
 test("latest mandatory revision controls aggregate status even when an older revision is approved", () => {
   const tasks = [
     ...approvedMandatoryTasks().filter((task) => task.completion_task_code !== "FIXTURE_DRAFTING_CHECKING"),
@@ -132,6 +155,41 @@ test("latest mandatory revision controls aggregate status even when an older rev
   assert.equal(aggregateCompletionState(state.latestTasks, { scope: "fixture", fixtureId: "fixture-1" }), "ASSIGNED");
 });
 
+test("newer assigned activity revision replaces the completed revision until it is approved", () => {
+  const tasks = [
+    ...approvedMandatoryTasks().filter((task) => task.completion_task_code !== "FIXTURE_AUTOCAD_PDF"),
+    completionTask("FIXTURE_AUTOCAD_PDF", 0),
+    completionTask("FIXTURE_AUTOCAD_PDF", 1, "fixture-1", {
+      status: "assigned",
+      verification_status: "pending",
+    }),
+  ];
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks });
+  const aggregate = buildFixtureCompletionAggregate(state.latestTasks, fixture("fixture-1"));
+
+  assert.equal(state.latestTasks.get("fixture-1:FIXTURE_AUTOCAD_PDF").completion_task_revision, 1);
+  assert.equal(aggregate.progressPercentage, 75);
+  assert.equal(aggregate.aggregateSection, "ASSIGNED");
+  assert.equal(state.fixtureRequirementsComplete, false);
+});
+
+test("cancelled latest activity revision falls back to the latest non-cancelled approved revision", () => {
+  const tasks = [
+    ...approvedMandatoryTasks().filter((task) => task.completion_task_code !== "FIXTURE_AUTOCAD_PDF"),
+    completionTask("FIXTURE_AUTOCAD_PDF", 0),
+    completionTask("FIXTURE_AUTOCAD_PDF", 1, "fixture-1", {
+      status: "cancelled",
+      verification_status: "rejected",
+    }),
+  ];
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks });
+  const aggregate = buildFixtureCompletionAggregate(state.latestTasks, fixture("fixture-1"));
+
+  assert.equal(state.latestTasks.get("fixture-1:FIXTURE_AUTOCAD_PDF").completion_task_revision, 0);
+  assert.equal(aggregate.progressPercentage, 100);
+  assert.equal(aggregate.aggregateSection, "WORKFLOW_COMPLETE");
+  assert.equal(state.fixtureRequirementsComplete, true);
+});
 test("cancelled mandatory latest revisions do not satisfy completion", () => {
   const tasks = [
     ...approvedMandatoryTasks().filter((task) => task.completion_task_code !== "FIXTURE_IGES"),
@@ -216,6 +274,7 @@ test("completion approval, rejection, transfer, and cancellation stay off fixtur
     /lockedTask\.task_type !== TASK_TYPES\.DESIGN_2D_COMPLETION[\s\S]*releaseFixtureStageAssignment/,
   );
   assert.match(taskService, /if \(!isWorkflowManagedTask\(task\)\) \{[\s\S]*return null;/);
+  assert.match(taskService, /design2DCompletionCancellationResponse[\s\S]*fixtureAggregate/);
 });
 
 test("completion assignment validates fixture membership without active-stage visibility", () => {

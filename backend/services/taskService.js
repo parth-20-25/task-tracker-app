@@ -31,8 +31,10 @@ const {
 } = require("../lib/taskProofPolicy");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const {
+  buildFixtureCompletionAggregate,
   formatDesign2DCompletionTaskName,
   getDesign2DCompletionTaskDefinition,
+  latestTasksByScope,
 } = require("../lib/design2dCompletionTasks");
 const {
   formatStageRevisionCode,
@@ -47,6 +49,7 @@ const {
   insertTask,
   listTaskActivity,
   listActiveProjectTasksByAccess,
+  listDesign2DCompletionTasks,
   listVerificationTasksByAccess,
   updateTaskAssignmentForTransfer,
   updateTaskCompletionPercent,
@@ -2265,6 +2268,22 @@ async function listTaskActivityForUser(user, taskId) {
   return listTaskActivity(task.id);
 }
 
+async function design2DCompletionCancellationResponse(cancelledTask) {
+  if (!cancelledTask || cancelledTask.task_type !== TASK_TYPES.DESIGN_2D_COMPLETION) {
+    return cancelledTask;
+  }
+
+  const tasks = await listDesign2DCompletionTasks(cancelledTask.project_id);
+  const latest = latestTasksByScope(tasks);
+  const fixtureAggregate = cancelledTask.scope_type === "fixture" && cancelledTask.fixture_id
+    ? buildFixtureCompletionAggregate(latest, { fixture_id: cancelledTask.fixture_id })
+    : null;
+
+  return {
+    task: cancelledTask,
+    fixtureAggregate,
+  };
+}
 async function cancelTaskForUser(user, taskId, reason) {
   const normalizedTaskId = Number(taskId);
 
@@ -2371,7 +2390,7 @@ async function cancelTaskForUser(user, taskId, reason) {
 
   const cancelledTask = await findTaskById(task.id);
   await refreshTaskPerformanceAnalytics(cancelledTask || task);
-  return cancelledTask;
+  return design2DCompletionCancellationResponse(cancelledTask || task);
 }
 
 async function applyTaskStatusUpdate(user, task, nextStatus, remarks) {

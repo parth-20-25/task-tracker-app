@@ -7,6 +7,7 @@ const {
   FIXTURE_TASK_CODES,
   PROJECT_TASK_CODES,
   buildDesign2DCompletionState,
+  buildFixtureCompletionAggregate,
   getDesign2DCompletionTaskDefinition,
   isActiveCompletionTask,
   isApprovedCompletionTask,
@@ -57,9 +58,24 @@ async function loadProjectCompletionState(projectId, client = pool) {
 }
 
 function publicCompletionState(project, state) {
+  const fixtures = state.eligibleFixtures.map((fixture) => ({
+    ...fixture,
+    ...buildFixtureCompletionAggregate(state.latestTasks, fixture),
+  }));
+
   return {
     project,
-    fixtures: state.eligibleFixtures,
+    fixtures,
+    fixture_aggregates: fixtures.map((fixture) => ({
+      fixtureId: fixture.fixtureId,
+      aggregateSection: fixture.aggregateSection,
+      completedMandatoryCount: fixture.completedMandatoryCount,
+      totalMandatoryCount: fixture.totalMandatoryCount,
+      progressPercentage: fixture.progressPercentage,
+      currentAssignee: fixture.currentAssignee,
+      currentActivities: fixture.currentActivities,
+      activeAssignments: fixture.activeAssignments,
+    })),
     tasks: state.tasks,
     fixture_task_types: taskCatalog(FIXTURE_TASK_CODES),
     project_task_types: taskCatalog(PROJECT_TASK_CODES),

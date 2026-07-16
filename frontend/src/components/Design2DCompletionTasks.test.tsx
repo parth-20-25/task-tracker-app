@@ -216,7 +216,7 @@ describe("Design2DCompletionTasks", () => {
     await selectProject();
 
     for (const label of ["Unassigned", "Assigned", "In Progress", "Outsourced", "Verification", "Rejected", "Workflow Complete", "Cancelled"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
     expect(screen.getByText("FX-1")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Assignment" })).not.toBeInTheDocument();
@@ -225,7 +225,7 @@ describe("Design2DCompletionTasks", () => {
     expect(api.fetchState).toHaveBeenCalledWith("project-1", "design");
   });
 
-  it("renders an approved 00 option as a fully green disabled row with a separate revision option", async () => {
+  it("renders an approved 00 option as a green selectable current activity without a fake next revision", async () => {
     api.fetchState.mockResolvedValue(state([completionTask()]));
     renderBoard();
     await selectProject();
@@ -235,9 +235,40 @@ describe("Design2DCompletionTasks", () => {
     const completedRow = completedActivityRow("Drafting Checking 00");
     expect(completedRow).toHaveAttribute("data-completed", "true");
     expect(completedRow).toHaveClass("bg-emerald-600", "text-white");
-    expect(screen.getByRole("checkbox", { name: /Drafting Checking 00/ })).toBeDisabled();
-    expect(screen.getByText("Create Drafting Checking 01")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Drafting Checking 00/ })).not.toBeDisabled();
+    expect(screen.queryByText("Create Drafting Checking 01")).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Select FX-1" })).toBeInTheDocument();
+  });
+
+  it("shows one completed fixture activity as 25 percent with no active owner", async () => {
+    api.fetchState.mockResolvedValue(state([completionTask({
+      title: "AutoCAD PDF 00",
+      completion_task_code: "FIXTURE_AUTOCAD_PDF",
+      completion_task_display_name: "AutoCAD PDF",
+    })]));
+    renderBoard();
+    await selectProject();
+
+    expect(screen.getByText("25%")).toBeInTheDocument();
+    expect(screen.getByText("0 assigned")).toBeInTheDocument();
+    expect(screen.getByText("1 unassigned")).toBeInTheDocument();
+    expect(screen.queryByText("EMP-1")).not.toBeInTheDocument();
+  });
+
+  it("shows active assigned activities as read-only chips instead of the selector", async () => {
+    api.fetchState.mockResolvedValue(state([completionTask({
+      status: "assigned",
+      verification_status: "pending",
+      completion_percent: 0,
+      approved_at: null,
+      proof_url: [],
+    })]));
+    renderBoard();
+    await selectProject();
+
+    expect(screen.queryByRole("button", { name: "FX-1 activity" })).not.toBeInTheDocument();
+    expect(screen.getByText("Drafting Checking 00")).toBeInTheDocument();
+    expect(screen.getByText("1 assigned")).toBeInTheDocument();
   });
 
   it("does not offer cancellation for backend-completed activities", async () => {
@@ -298,13 +329,13 @@ describe("Design2DCompletionTasks", () => {
     await selectProject();
 
     openFixtureActivities();
-    checkActivity("Drafting Checking 00");
-    checkActivity("Drawing Correction 00");
-    checkActivity("IGES 00");
+    checkActivity("Drafting Checking");
+    checkActivity("Drawing Correction");
+    checkActivity("IGES");
 
-    expect(screen.getByRole("checkbox", { name: /Drafting Checking 00/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /Drawing Correction 00/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /IGES 00/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Drafting Checking/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Drawing Correction/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /IGES/ })).toBeChecked();
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
@@ -317,27 +348,27 @@ describe("Design2DCompletionTasks", () => {
     await selectProject();
 
     openFixtureActivities();
-    expect(screen.queryByText("CMM Data 00")).not.toBeInTheDocument();
+    expect(screen.queryByText("CMM Data")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Project-level activity" }));
-    expect(screen.getByText("CMM Data 00")).toBeInTheDocument();
-    expect(screen.getByText("Line Layout 00")).toBeInTheDocument();
-    expect(screen.getByText("Mimic 00")).toBeInTheDocument();
-    expect(screen.getByText("Wear-Out Data 00")).toBeInTheDocument();
+    expect(screen.getByText("CMM Data")).toBeInTheDocument();
+    expect(screen.getByText("Line Layout")).toBeInTheDocument();
+    expect(screen.getByText("Mimic")).toBeInTheDocument();
+    expect(screen.getByText("Wear-Out Data")).toBeInTheDocument();
   });
-  it("assigns IGES 00 directly with no Drafting Checking sequence dependency", async () => {
+  it("assigns IGES directly with no Drafting Checking sequence dependency", async () => {
     api.fetchState.mockResolvedValue(state([]));
     renderBoard();
     await selectProject();
 
     openFixtureActivities();
-    checkActivity("IGES 00");
+    checkActivity("IGES");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     fireEvent.click(screen.getByRole("button", { name: "Assign Now" }));
 
     expect(screen.getByText("Selected activities")).toBeInTheDocument();
-    expect(screen.getAllByText("IGES 00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("IGES").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
     expect(screen.getByRole("button", { name: "Assign 1 Activity" })).toBeDisabled();
     expect(document.querySelector('input[type="datetime-local"], input[type="time"]')).not.toBeInTheDocument();
@@ -363,7 +394,7 @@ describe("Design2DCompletionTasks", () => {
     await selectProject();
 
     openFixtureActivities();
-    checkActivity("IGES 00");
+    checkActivity("IGES");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     fireEvent.click(screen.getByRole("button", { name: "Assign Now" }));
     fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
@@ -389,16 +420,16 @@ describe("Design2DCompletionTasks", () => {
     await selectProject(2);
 
     openFixtureActivities("FX-1");
-    checkActivity("Drafting Checking 00");
+    checkActivity("Drafting Checking");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     openFixtureActivities("FX-2");
-    checkActivity("Drawing Correction 00");
+    checkActivity("Drawing Correction");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all eligible fixtures" }));
     fireEvent.click(screen.getByRole("button", { name: "Assign All" }));
 
-    expect(screen.getAllByText("Drafting Checking 00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Drawing Correction 00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Drafting Checking").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Drawing Correction").length).toBeGreaterThan(0);
     expect(document.querySelector('input[type="datetime-local"], input[type="time"]')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));
     await chooseDeadline();
@@ -420,7 +451,7 @@ describe("Design2DCompletionTasks", () => {
     await selectProject();
 
     openFixtureActivities();
-    checkActivity("Drafting Checking 00");
+    checkActivity("Drafting Checking");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     fireEvent.click(screen.getByRole("button", { name: "Assign Now" }));
     fireEvent.click(screen.getByRole("option", { name: "EMP-1 — Designer One" }));

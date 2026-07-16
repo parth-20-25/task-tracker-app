@@ -41,10 +41,12 @@ type CompletionFixture = Design2DCompletionProjectState["fixtures"][number];
 interface ActivityOption {
   key: string;
   definition: Design2DCompletionTaskDefinition;
-  revision: number;
+  revision: number | null;
   label: string;
   task: Task | null;
   completed: boolean;
+  status: string;
+  assignable: boolean;
 }
 
 interface CompletionFixtureRow {
@@ -74,12 +76,18 @@ const SECTION_STYLES: Array<Omit<FixtureBoardSection<CompletionFixtureRow>, "fix
 
 const PRIORITIES: Priority[] = ["low", "medium", "high", "critical"];
 
-function activityKey(code: string, revision: number) {
-  return `${code}:${revision}`;
+function activityKey(code: string) {
+  return code;
 }
 
-function activityLabel(definition: Design2DCompletionTaskDefinition, revision: number) {
-  return `${definition.displayName} ${String(revision).padStart(2, "0")}`;
+function activityLabel(definition: Design2DCompletionTaskDefinition, revision: number | null) {
+  return revision === null || revision === undefined
+    ? definition.displayName
+    : `${definition.displayName} ${String(revision).padStart(2, "0")}`;
+}
+
+function isActiveCompletionTask(task: Task | null) {
+  return Boolean(task && !["closed", "cancelled"].includes(task.status));
 }
 
 function isCompletionLocked(task: Task | null) {
@@ -98,64 +106,48 @@ function completionState(task: Task | null): CompletionSectionKey {
   return "ASSIGNED";
 }
 
+function latestTaskForDefinition(definition: Design2DCompletionTaskDefinition, tasks: Task[], fixtureId: string | null) {
+  return tasks
+    .filter((task) => (
+      task.status !== "cancelled"
+      && task.completion_task_code === definition.code
+      && (definition.scope === "fixture"
+        ? task.fixture_id === fixtureId
+        : task.scope_type === "project" && !task.fixture_id)
+    ))
+    .sort((left, right) => Number(right.completion_task_revision || 0) - Number(left.completion_task_revision || 0))[0]
+    || null;
+}
+
 function buildActivityOptions(
   definitions: Design2DCompletionTaskDefinition[],
   tasks: Task[],
   fixtureId: string | null,
+  currentActivities: CompletionFixture["currentActivities"] = [],
 ) {
-  return definitions.flatMap((definition) => {
-    const revisions = tasks
-      .filter((task) => (
-        task.completion_task_code === definition.code
-        && (definition.scope === "fixture"
-          ? task.fixture_id === fixtureId
-          : task.scope_type === "project" && !task.fixture_id)
-      ))
-      .sort((left, right) => Number(left.completion_task_revision) - Number(right.completion_task_revision));
-    const options: ActivityOption[] = revisions.map((task) => {
-      const revision = Number(task.completion_task_revision || 0);
-      return {
-        key: activityKey(definition.code, revision),
-        definition,
-        revision,
-        label: task.title || activityLabel(definition, revision),
-        task,
-        completed: isCompletionLocked(task),
-      };
-    });
+  return definitions.map((definition) => {
+    const backendActivity = currentActivities?.find((activity) => activity.activityKey === definition.code || activity.code === definition.code);
+    const task = backendActivity?.latestTask ?? latestTaskForDefinition(definition, tasks, fixtureId);
+    const revision = task?.completion_task_revision ?? null;
+    const completed = backendActivity?.currentStatus === "COMPLETED" || isCompletionLocked(task);
+    const label = backendActivity?.latestLabel || task?.title || activityLabel(definition, revision);
 
-    if (!revisions.length) {
-      options.push({
-        key: activityKey(definition.code, 0),
-        definition,
-        revision: 0,
-        label: activityLabel(definition, 0),
-        task: null,
-        completed: false,
-      });
-    } else {
-      const latest = revisions[revisions.length - 1];
-      const nextRevision = Number(latest.completion_task_revision || 0) + 1;
-      if ((latest.status === "cancelled" || isCompletionLocked(latest)) && nextRevision <= 99) {
-        options.push({
-          key: activityKey(definition.code, nextRevision),
-          definition,
-          revision: nextRevision,
-          label: activityLabel(definition, nextRevision),
-          task: null,
-          completed: false,
-        });
-      }
-    }
-
-    return options;
+    return {
+      key: activityKey(definition.code),
+      definition,
+      revision,
+      label,
+      task,
+      completed,
+      status: backendActivity?.currentStatus || completionState(task),
+      assignable: backendActivity?.assignable ?? (!task || completed),
+    };
   });
 }
 
 function isAssignableOption(option: ActivityOption) {
-  return !option.task;
+  return option.assignable;
 }
-
 function keepSelectableKeys(current: string[] = [], options: ActivityOption[]) {
   const allowed = new Set(options.filter(isAssignableOption).map((option) => option.key));
   const next = current.filter((key) => allowed.has(key));
@@ -170,7 +162,8 @@ function selectedOptionsForKeys(options: ActivityOption[], keys: string[] = []) 
 function latestTasksForScope(definitions: Design2DCompletionTaskDefinition[], tasks: Task[], fixtureId: string | null) {
   return definitions.map((definition) => tasks
     .filter((task) => (
-      task.completion_task_code === definition.code
+      task.status !== "cancelled"
+      && task.completion_task_code === definition.code
       && (definition.scope === "fixture"
         ? task.fixture_id === fixtureId
         : task.scope_type === "project" && !task.fixture_id)
@@ -186,12 +179,12 @@ function aggregateStateForScope(definitions: Design2DCompletionTaskDefinition[],
     fixtureId,
   );
 
+  if (mandatoryTasks.length > 0 && mandatoryTasks.every((task) => isCompletionLocked(task))) return "WORKFLOW_COMPLETE";
   if (mandatoryTasks.some((task) => task?.status === "rework" || task?.verification_status === "rejected")) return "REJECTED";
   if (mandatoryTasks.some((task) => task?.status === "under_review")) return "VERIFICATION";
+  if (mandatoryTasks.some((task) => task && !task.completion_task_outsource_supplier && ["in_progress", "on_hold"].includes(task.status))) return "IN_PROGRESS";
+  if (mandatoryTasks.some((task) => task && !task.completion_task_outsource_supplier && ["assigned", "created"].includes(task.status))) return "ASSIGNED";
   if (mandatoryTasks.some((task) => task?.completion_task_outsource_supplier && !isCompletionLocked(task))) return "OUTSOURCED";
-  if (mandatoryTasks.some((task) => task && ["in_progress", "on_hold"].includes(task.status))) return "IN_PROGRESS";
-  if (mandatoryTasks.some((task) => task && ["assigned", "created"].includes(task.status))) return "ASSIGNED";
-  if (mandatoryTasks.length > 0 && mandatoryTasks.every((task) => isCompletionLocked(task))) return "WORKFLOW_COMPLETE";
   return "UNASSIGNED";
 }
 
@@ -201,10 +194,20 @@ function representativeTaskForState(definitions: Design2DCompletionTaskDefinitio
 }
 
 function activityStatusLabel(option: ActivityOption) {
+  switch (option.status) {
+    case "COMPLETED": return "Completed";
+    case "VERIFICATION": return "Verification";
+    case "REJECTED": return "Rejected";
+    case "OUTSOURCED": return "Outsourced";
+    case "IN_PROGRESS": return "In Progress";
+    case "ASSIGNED": return "Assigned";
+    case "UNASSIGNED": return "Unassigned";
+    default: break;
+  }
+
   const task = option.task;
   if (!task) return "Unassigned";
   if (option.completed) return "Completed";
-  if (task.status === "cancelled") return "Cancelled";
   if (task.status === "under_review") return "Verification";
   if (task.status === "rework" || task.verification_status === "rejected") return "Rejected";
   if (task.completion_task_outsource_supplier) return "Outsourced";
@@ -213,9 +216,7 @@ function activityStatusLabel(option: ActivityOption) {
 }
 
 function disabledReason(option: ActivityOption) {
-  if (!option.task) return undefined;
-  if (option.completed) return "Completed revision cannot be reassigned. Use the next revision option.";
-  if (option.task.status === "cancelled") return "Cancelled revision is retained as history. Use the next revision option.";
+  if (option.assignable) return undefined;
   return `Already ${activityStatusLabel(option).toLowerCase()}. Finish, cancel, or reject it before creating another revision.`;
 }
 
@@ -249,7 +250,14 @@ function assignmentFailureDescription(failures: PromiseRejectedResult[]) {
     .find((reason): reason is Error => reason instanceof Error)?.message;
   const count = `${failures.length} assignment${failures.length === 1 ? "" : "s"} failed.`;
   return firstMessage ? `${count} ${firstMessage}` : count;
+}function activeTasksForRow(row: CompletionFixtureRow) {
+  return row.options.map((option) => option.task).filter((task): task is Task => isActiveCompletionTask(task));
 }
+
+function canSelectActivities(row: CompletionFixtureRow) {
+  return ["UNASSIGNED", "WORKFLOW_COMPLETE"].includes(row.state) && row.options.some(isAssignableOption);
+}
+
 
 interface Design2DCompletionTasksProps {
   departmentId?: string | null;
@@ -285,7 +293,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
   const [transferringTask, setTransferringTask] = useState<Task | null>(null);
   const [transferTo, setTransferTo] = useState("");
   const [transferReason, setTransferReason] = useState("");
-  const [cancellingTask, setCancellingTask] = useState<Task | null>(null);
+  const [cancellingTasks, setCancellingTasks] = useState<Task[]>([]);
   const [cancellationReason, setCancellationReason] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const cancelInFlightRef = useRef(false);
@@ -344,7 +352,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
   useEffect(() => {
     if (!state) return;
     setSelectedActivityByFixture((current) => Object.fromEntries(state.fixtures.map((fixture) => {
-      const options = buildActivityOptions(definitions, state.tasks, fixture.fixture_id);
+      const options = buildActivityOptions(definitions, state.tasks, fixture.fixture_id, fixture.currentActivities);
       return [fixture.fixture_id, keepSelectableKeys(current[fixture.fixture_id], options)];
     })));
   }, [definitions, state]);
@@ -354,10 +362,11 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
   }, [projectOptions]);
 
   const rows = useMemo<CompletionFixtureRow[]>(() => (state?.fixtures ?? []).map((fixture) => {
-    const options = buildActivityOptions(definitions, state?.tasks ?? [], fixture.fixture_id);
+    const options = buildActivityOptions(definitions, state?.tasks ?? [], fixture.fixture_id, fixture.currentActivities);
     const selectedOptions = selectedOptionsForKeys(options, selectedActivityByFixture[fixture.fixture_id]);
-    const fixtureState = aggregateStateForScope(definitions, state?.tasks ?? [], fixture.fixture_id);
-    const task = representativeTaskForState(definitions, state?.tasks ?? [], fixture.fixture_id, fixtureState);
+    const fixtureState = (fixture.aggregateSection as CompletionSectionKey | undefined) || aggregateStateForScope(definitions, state?.tasks ?? [], fixture.fixture_id);
+    const task = options.map((option) => option.task).find((item): item is Task => isActiveCompletionTask(item))
+      || representativeTaskForState(definitions, state?.tasks ?? [], fixture.fixture_id, fixtureState);
     return { fixture, options, selectedOptions, state: fixtureState, task };
   }), [definitions, selectedActivityByFixture, state]);
 
@@ -367,14 +376,14 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
       .filter((row) => row.state === section.key)
       .sort((left, right) => left.fixture.fixture_no.localeCompare(right.fixture.fixture_no, undefined, { numeric: true })),
   })), [rows]);
-  const eligibleRows = rows.filter((row) => row.options.some(isAssignableOption));
+  const eligibleRows = rows.filter(canSelectActivities);
   const eligibleIds = new Set(eligibleRows.map((row) => row.fixture.fixture_id));
   const selectedEligibleRows = rows.filter((row) => selectedFixtureIds.includes(row.fixture.fixture_id) && eligibleIds.has(row.fixture.fixture_id));
   const selectedRows = selectedEligibleRows.filter((row) => row.selectedOptions.length > 0);
   const allEligibleSelected = eligibleRows.length > 0 && selectedEligibleRows.length === eligibleRows.length;
   const someEligibleSelected = selectedEligibleRows.length > 0 && !allEligibleSelected;
   const assignmentSummary = {
-    assigned: rows.filter((row) => row.state !== "UNASSIGNED").length,
+    assigned: rows.filter((row) => activeTasksForRow(row).length > 0).length,
     unassigned: rows.filter((row) => row.state === "UNASSIGNED").length,
   };
 
@@ -482,14 +491,14 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
   const cancelMutation = useMutation({
     mutationFn: () => {
-      if (!cancellingTask || !cancellationReason.trim()) throw new Error("Cancellation reason is required");
-      return cancelTask(cancellingTask.id, cancellationReason.trim());
+      if (!cancellingTasks.length || !cancellationReason.trim()) throw new Error("Cancellation reason is required");
+      return Promise.all(cancellingTasks.map((task) => cancelTask(task.id, cancellationReason.trim())));
     },
     onSuccess: async () => {
       await refreshCompletionState();
-      setCancellingTask(null);
+      setCancellingTasks([]);
       setCancellationReason("");
-      toast({ title: "Activity cancelled" });
+      toast({ title: cancellingTasks.length === 1 ? "Activity cancelled" : "Activities cancelled" });
     },
     onError: (error) => toast({ title: "Cancellation failed", description: error instanceof Error ? error.message : "Could not cancel the activity.", variant: "destructive" }),
     onSettled: () => { cancelInFlightRef.current = false; },
@@ -514,20 +523,21 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
   function cardActions(row: CompletionFixtureRow) {
     const task = row.task;
-    const ownTask = task?.assigned_to === user?.employee_id || task?.assignee_ids?.includes(user?.employee_id || "");
+    const activeTasks = activeTasksForRow(row);
+    const cancellableTasks = activeTasks.filter((item) => !["cancelled", "under_review"].includes(item.status) && !isCompletionLocked(item));
+    const ownTask = activeTasks.some((item) => item.assigned_to === user?.employee_id || item.assignee_ids?.includes(user?.employee_id || ""));
     const canReview = task?.status === "under_review"
       && task.verification_status === "pending"
       && access.canApproveCompletedTasks
       && (!ownTask || access.canSelfApprove);
     const canTransfer = Boolean(task && !["closed", "cancelled", "under_review"].includes(task.status)
       && (access.canTransferTasks || access.canAssignTasks));
-    const canCancel = Boolean(task && !["cancelled", "under_review"].includes(task.status) && !isCompletionLocked(task)
-      && (access.canAssignTasks || ownTask));
+    const canCancel = Boolean(cancellableTasks.length && (access.canAssignTasks || ownTask));
 
     return (
       <>
         <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
-          {canAssign && row.selectedOptions.length ? (
+          {canAssign && canSelectActivities(row) && row.selectedOptions.length ? (
             <>
               <Button
                 type="button"
@@ -550,7 +560,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
           ) : (
             <>
               {canTransfer ? <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => setTransferringTask(task)}><ArrowRightLeft className="mr-1 h-3 w-3" />Transfer</Button> : null}
-              {canCancel ? <Button type="button" size="sm" variant="outline" className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50" onClick={() => setCancellingTask(task)}><XCircle className="mr-1 h-3 w-3" />Cancel Task</Button> : null}
+              {canCancel ? <Button type="button" size="sm" variant="outline" className="h-7 border-red-200 px-2 text-[11px] text-red-700 hover:bg-red-50" onClick={() => setCancellingTasks(cancellableTasks)}><XCircle className="mr-1 h-3 w-3" />Cancel Task</Button> : null}
             </>
           )}
         </div>
@@ -560,7 +570,16 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
   function renderCard(row: CompletionFixtureRow) {
     const task = row.task;
+    const activeTasks = activeTasksForRow(row);
+    const assigneeNames = [...new Set(activeTasks.map(assigneeName).filter(Boolean))].join(", ");
     const proofImage = task?.latest_proof?.file_url || task?.proof_url?.at(-1) || null;
+    const mandatoryOptions = row.options.filter((option) => option.definition.required || option.definition.isMandatory);
+    const fallbackProgress = mandatoryOptions.length
+      ? Math.round((mandatoryOptions.filter((option) => option.completed).length / mandatoryOptions.length) * 100)
+      : null;
+    const progressPercent = typeof row.fixture.progressPercentage === "number"
+      ? row.fixture.progressPercentage
+      : fallbackProgress;
 
     return (
       <FixtureBoardCard
@@ -568,13 +587,13 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
         fixtureId={row.fixture.fixture_id}
         fixtureNo={row.fixture.fixture_no}
         partName={row.fixture.part_name}
-        activity={activitySelect(row)}
-        assigned={Boolean(task)}
-        assigneeName={assigneeName(task)}
-        progressPercent={task?.completion_percent ?? null}
-        submittedLabel={formatDate(task?.submitted_at || task?.completed_at)}
+        activity={canSelectActivities(row) ? activitySelect(row) : <ActiveActivitiesChips options={row.options} />}
+        assigned={activeTasks.length > 0}
+        assigneeName={assigneeNames || null}
+        progressPercent={progressPercent}
+        submittedLabel={activeTasks.length ? formatDate(task?.submitted_at || task?.completed_at) : null}
         actions={cardActions(row)}
-        selectable={canAssign && row.options.some(isAssignableOption)}
+        selectable={canAssign && canSelectActivities(row)}
         selected={selectedFixtureIds.includes(row.fixture.fixture_id)}
         onSelectedChange={(fixtureId, checked) => setSelectedFixtureIds((current) => checked
           ? [...new Set([...current, fixtureId])]
@@ -716,13 +735,30 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
       <Dialog open={Boolean(transferringTask)} onOpenChange={(open) => !open && setTransferringTask(null)}><DialogContent><DialogHeader><DialogTitle>Transfer Completion Activity</DialogTitle></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label>Employee</Label><Select value={transferTo || "__none__"} onValueChange={(value) => setTransferTo(value === "__none__" ? "" : value)}><SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger><SelectContent><SelectItem value="__none__">Select employee</SelectItem>{assignees.filter((employee) => employee.employee_id !== transferringTask?.assigned_to).map((employee) => <SelectItem key={employee.employee_id} value={employee.employee_id}>{employee.employee_id} — {employee.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Reason</Label><Textarea value={transferReason} onChange={(event) => setTransferReason(event.target.value)} rows={3} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setTransferringTask(null)}>Cancel</Button><Button type="button" disabled={!transferTo || !transferReason.trim() || transferMutation.isPending} onClick={() => transferMutation.mutate()}>Transfer</Button></DialogFooter></DialogContent></Dialog>
 
-      <Dialog open={Boolean(cancellingTask)} onOpenChange={(open) => !open && setCancellingTask(null)}><DialogContent><DialogHeader><DialogTitle>Cancel Completion Activity</DialogTitle><DialogDescription>The cancelled revision remains in history and does not change the original fixture workflow.</DialogDescription></DialogHeader><Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="Cancellation reason" rows={3} /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancellingTask(null)} disabled={cancelMutation.isPending}>Keep Activity</Button><Button type="button" variant="destructive" disabled={!cancellingTask || !cancellationReason.trim() || cancelMutation.isPending} onClick={submitCancellation}>Cancel Activity</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={cancellingTasks.length > 0} onOpenChange={(open) => !open && setCancellingTasks([])}><DialogContent><DialogHeader><DialogTitle>{cancellingTasks.length === 1 ? "Cancel Completion Activity" : "Cancel Completion Activities"}</DialogTitle><DialogDescription>The cancelled revision remains in history and does not change the original fixture workflow.</DialogDescription></DialogHeader>{cancellingTasks.length ? <ul className="rounded-md border bg-slate-50 p-2 text-sm">{cancellingTasks.map((task) => <li key={task.id}>{task.title}</li>)}</ul> : null}<Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="Cancellation reason" rows={3} /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancellingTasks([])} disabled={cancelMutation.isPending}>Keep Activity</Button><Button type="button" variant="destructive" disabled={!cancellingTasks.length || !cancellationReason.trim() || cancelMutation.isPending} onClick={submitCancellation}>Cancel {cancellingTasks.length === 1 ? "Activity" : "Activities"}</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}><DialogContent className="max-w-3xl">{previewImage ? <SafeImage src={previewImage} alt="Completion activity proof" className="max-h-[70vh] w-full rounded-md object-contain" /> : null}</DialogContent></Dialog>
     </section>
   );
 }
 
+function ActiveActivitiesChips({ options }: { options: ActivityOption[] }) {
+  const activeOptions = options.filter((option) => isActiveCompletionTask(option.task));
+
+  if (!activeOptions.length) {
+    return <span className="text-xs text-muted-foreground">No active activities</span>;
+  }
+
+  return (
+    <div className="flex max-w-[280px] flex-wrap items-center gap-1.5">
+      {activeOptions.map((option) => (
+        <span key={option.key} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700">
+          {option.label}
+        </span>
+      ))}
+    </div>
+  );
+}
 interface ActivityMultiSelectProps {
   options: ActivityOption[];
   selectedKeys: string[];
@@ -753,7 +789,7 @@ function ActivityMultiSelect({ options, selectedKeys, onSelectedKeysChange, aria
           variant="outline"
           className="h-8 min-w-[210px] justify-between gap-2 px-2 text-xs"
           aria-label={ariaLabel}
-          disabled={disabled && options.every((option) => !isAssignableOption(option))}
+          disabled={disabled || options.every((option) => !isAssignableOption(option))}
           data-selected-count={selectedOptions.length}
         >
           <span className="truncate">{selectedActivitySummary(selectedOptions)}</span>
@@ -766,7 +802,6 @@ function ActivityMultiSelect({ options, selectedKeys, onSelectedKeysChange, aria
             const checkboxId = `${id}-${option.key}`.replace(/[^a-zA-Z0-9_-]/g, "-");
             const optionDisabled = disabled || !isAssignableOption(option);
             const reason = disabledReason(option);
-            const display = !option.task && option.revision > 0 ? `Create ${option.label}` : option.label;
 
             return (
               <div
@@ -797,7 +832,7 @@ function ActivityMultiSelect({ options, selectedKeys, onSelectedKeysChange, aria
                     className={cn(option.completed && "border-white data-[state=checked]:bg-white data-[state=checked]:text-emerald-700")}
                   />
                   <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
-                    <span className="block truncate font-medium">{option.completed ? "✓ " : ""}{display}</span>
+                    <span className="block truncate font-medium">{option.completed ? "✓ " : ""}{option.label}</span>
                     <span
                       id={`${checkboxId}-status`}
                       className={cn(

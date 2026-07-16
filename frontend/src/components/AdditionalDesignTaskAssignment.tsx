@@ -15,6 +15,7 @@ import { formatAssigneeOption } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { adminQueryKeys, analyticsQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { ADDITIONAL_DESIGN_TASK_CATALOG, resolveDesignTeamFromUser } from "@/lib/additionalDesignTasks";
+import { requiresTaskWorkProof } from "@/lib/taskProofPolicy";
 import type { AdditionalDesignTaskKind, Priority, Task } from "@/types";
 
 function defaultDueDate() {
@@ -94,7 +95,14 @@ export function AdditionalDesignTaskAssignment() {
       priority,
       deadline: new Date(dueDate).toISOString(),
       approval_required: true,
-      proof_required: true,
+      proof_required: requiresTaskWorkProof({
+        task_type: "additional_design",
+        proof_required: true,
+        additional_task_kind: taskKind,
+        design_team: designTeam || undefined,
+        scope_type: isProjectLevel3D || fixtureId === "__project__" ? "project" : "fixture",
+        fixture_id: isProjectLevel3D || fixtureId === "__project__" ? null : fixtureId,
+      }),
       project_id: projectId,
       fixture_id: isProjectLevel3D || fixtureId === "__project__" ? null : fixtureId,
       scope_type: isProjectLevel3D || fixtureId === "__project__" ? "project" : "fixture",

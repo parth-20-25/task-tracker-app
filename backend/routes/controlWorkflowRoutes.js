@@ -2,6 +2,7 @@ const express = require("express");
 const { asyncHandler } = require("../lib/asyncHandler");
 const { sendSuccess } = require("../lib/response");
 const { authenticate } = require("../middleware/authenticate");
+const { handleControlWorkflowProofUpload } = require("../lib/controlWorkflowProofUpload");
 const controlWorkflowService = require("../services/controlWorkflowService");
 
 const router = express.Router();
@@ -26,6 +27,10 @@ router.get(
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.getControlDesignCapabilities(req.user))),
 );
 
+router.get(
+  "/control/design/summary",
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.getControlDesignSummary(req.user))),
+);
 router.get(
   "/control/design/projects",
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.listControlDesignProjects(req.user))),
@@ -100,7 +105,7 @@ router.patch(
 
 router.post(
   "/control/workflow-stages/:stageId/start",
-  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.startStage(req.user, req.params.stageId))),
+  asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.startStage(req.user, req.params.stageId, req.body))),
 );
 
 router.post(
@@ -119,6 +124,13 @@ router.post(
   )),
 );
 
+router.post(
+  "/control/workflow-stages/:stageId/changes-required",
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.markStageRevisionRequired(req.user, req.params.stageId, req.body),
+  )),
+);
 router.post(
   "/control/workflow-stages/:stageId/revision-required",
   asyncHandler(async (req, res) => sendSuccess(
@@ -144,6 +156,36 @@ router.patch(
   )),
 );
 
+router.post(
+  "/control/workflow-stages/:stageId/proofs",
+  handleControlWorkflowProofUpload,
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.uploadWorkflowProof(req.user, req.params.stageId, req.file, req.body),
+    201,
+  )),
+);
+
+router.delete(
+  "/control/workflow-proofs/:proofId",
+  asyncHandler(async (req, res) => sendSuccess(
+    res,
+    await controlWorkflowService.removeWorkflowProof(req.user, req.params.proofId),
+  )),
+);
+
+router.get(
+  "/control/workflow-proofs/:proofId",
+  asyncHandler(async (req, res) => {
+    const proof = await controlWorkflowService.getWorkflowProofFile(req.user, req.params.proofId);
+    const disposition = req.query.download === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Type", proof.mime_type || "application/octet-stream");
+    res.setHeader("Content-Disposition", `${disposition}; filename*=UTF-8''${encodeURIComponent(proof.original_filename)}`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.sendFile(proof.file_path);
+  }),
+);
 router.post(
   "/control/workflow-stages/:stageId/comments",
   asyncHandler(async (req, res) => sendSuccess(res, await controlWorkflowService.addStageComment(req.user, req.params.stageId, req.body), 201)),

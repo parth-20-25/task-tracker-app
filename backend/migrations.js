@@ -475,11 +475,7 @@ async function runMigrations() {
                 'FIXTURE_DRAFTING_CHECKING',
                 'FIXTURE_DRAWING_CORRECTION',
                 'FIXTURE_AUTOCAD_PDF',
-                'FIXTURE_IGES',
-                'PROJECT_CMM_DATA',
-                'PROJECT_LINE_LAYOUT',
-                'PROJECT_MIMIC',
-                'PROJECT_WEAR_OUT_DATA'
+                'FIXTURE_IGES'
               )
             )
             OR (
@@ -493,15 +489,7 @@ async function runMigrations() {
               )
             )
           )
-          AND (
-            proof_required = TRUE
-            OR (
-              completion_task_code = 'PROJECT_MIMIC'
-              AND completion_task_not_required_at IS NOT NULL
-              AND BTRIM(COALESCE(completion_task_not_required_reason, '')) <> ''
-              AND completion_task_not_required_by IS NOT NULL
-            )
-          )
+          AND proof_required = FALSE
         )
       ) NOT VALID
     `);

@@ -15,6 +15,7 @@ const {
   canStartStage,
   canSubmitStage,
   createInitialStageRows,
+  isApprovedForProgress,
   hasOpenRevision,
   isControlDesignLifecycleComplete,
   isControlDesignWorkspaceUser,
@@ -28,6 +29,11 @@ const {
   canAccessUser,
   hasPermission,
 } = require("./accessControlService");
+const {
+  persistControlWorkflowProofFile,
+  removeControlWorkflowProofFile,
+  resolveControlWorkflowProofPath,
+} = require("../lib/controlWorkflowProofUpload");
 const { findProjectByIdForDepartment, insertProjectByNumber } = require("../repositories/designProjectCatalogRepository");
 const { findUserByEmployeeId, listUsers } = require("../repositories/usersRepository");
 const controlWorkflowRepository = require("../repositories/controlWorkflowRepository");
@@ -114,6 +120,8 @@ function buildControlDesignCapabilities(actor, subDepartmentId = null) {
     canStartStage: can(PERMISSIONS.CONTROL_DESIGN_STAGES_START),
     canSubmitStage: can(PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT),
     canUpdatePath: can(PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE),
+    canViewProof: can(PERMISSIONS.CONTROL_DESIGN_PROOFS_VIEW),
+    canUploadProof: can(PERMISSIONS.CONTROL_DESIGN_PROOFS_UPLOAD),
     canReview: can(PERMISSIONS.CONTROL_DESIGN_APPROVALS_REVIEW),
     canApprove: can(PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE),
     canRequestChanges: can(PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES),
@@ -232,6 +240,45 @@ function requireNotSelfReview(actor, submittedBy) {
   }
 }
 
+function requireSubmissionVersion(stage, submission) {
+  if (Number(submission?.stage_version || 0) !== Number(stage?.version || 0)) {
+    throw new AppError(409, "The stage changed after submission; refresh before reviewing");
+  }
+}
+
+function requireProofEditableState(stage) {
+  if (![STAGE_STATUSES.IN_PROGRESS, STAGE_STATUSES.CHANGES_REQUIRED, STAGE_STATUSES.UPDATE_REQUIRED].includes(stage?.status)) {
+    throw new AppError(409, `Work proof cannot be changed from status ${stage?.status}`);
+  }
+}
+
+async function findStageRevisionContext(stage, client) {
+  const revision = await controlWorkflowRepository.findLatestOpenRevisionForStage(stage.id, client);
+  return {
+    revision,
+    revisionNumber: Number(revision?.revision_number || 0),
+  };
+}
+
+async function requireSubmissionEvidence(stage, revisionNumber, documentPath, client) {
+  const proofCount = await controlWorkflowRepository.countWorkflowProofs(stage.id, revisionNumber, client);
+  if (!normalizeControlText(documentPath) && proofCount === 0) {
+    throw new AppError(400, "Add a work-proof file or stage document path before submitting.");
+  }
+}
+
+function normalizeOptionalDate(value, fieldName) {
+  const normalized = normalizeControlText(value);
+  if (!normalized) return null;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) throw new AppError(400, `${fieldName} is invalid`);
+  return date.toISOString();
+}
+
+function normalizeOptionalText(value) {
+  return normalizeControlText(value) || null;
+}
+
 function deriveLifecycleStatus(workflow) {
   if (!workflow) {
     return CONTROL_PROJECT_STATUSES.UNASSIGNED;
@@ -261,6 +308,7 @@ function deriveLifecycleStatus(workflow) {
   if (hasOpenRevision(stages) || stages.some((stage) => [
     STAGE_STATUSES.IN_PROGRESS,
     STAGE_STATUSES.SUBMITTED_FOR_APPROVAL,
+    STAGE_STATUSES.UPDATE_REQUIRED,
     STAGE_STATUSES.REVISION_REQUIRED,
   ].includes(stage.status))) {
     return CONTROL_PROJECT_STATUSES.ACTIVE;
@@ -553,6 +601,15 @@ async function reassignProjectWorkflowOwner(actor, workflowId, assignedUserId, r
       message: `${updated.project_no || updated.project_id} has been assigned to you.`,
       idempotency_key: `reassigned:${normalizedAssignedUserId}:${updated.assigned_at || Date.now()}`,
     }, client);
+    await recordStageEvent(
+      workflow.id,
+      workflow.current_stage_id,
+      "assignment_changed",
+      actor,
+      `Assigned to ${normalizedAssignedUserId}`,
+      client,
+      { previous_user_id: workflow.assigned_user_id || null, assigned_user_id: normalizedAssignedUserId, reason: reason || null },
+    );
     if (workflow.assigned_user_id && workflow.assigned_user_id !== normalizedAssignedUserId) {
       await notifyWorkflow(updated, {
         recipient_user_id: workflow.assigned_user_id,
@@ -598,6 +655,19 @@ async function listControlDesignProjects(actor) {
   });
 }
 
+async function getControlDesignSummary(actor) {
+  const projects = await listControlDesignProjects(actor);
+  const isCompleted = (project) => project.lifecycle_summary?.completed === true;
+  const isActive = (project) => !isCompleted(project) && !["cancelled", "completed", "dispatched"].includes(project.project_status);
+  return {
+    total: projects.length,
+    active: projects.filter(isActive).length,
+    pending: projects.filter((project) => Number(project.lifecycle_summary?.pending_approval_count || 0) > 0).length,
+    updates: projects.filter((project) => Number(project.lifecycle_summary?.updates_required_count || 0) > 0).length,
+    completed: projects.filter(isCompleted).length,
+  };
+}
+
 function normalizeBudgetAmount(value) {
   const raw = String(value ?? "").trim();
   if (!raw) {
@@ -614,12 +684,27 @@ function normalizeBudgetAmount(value) {
 }
 
 function normalizeControlDesignProjectPayload(payload = {}) {
+  const priority = normalizeOptionalText(payload.priority);
+  if (priority && !["low", "medium", "high", "urgent"].includes(priority.toLowerCase())) {
+    throw new AppError(400, "Priority is invalid");
+  }
+  const plannedStartDate = normalizeOptionalDate(payload.planned_start_date ?? payload.plannedStartDate, "Planned start date");
+  const targetCompletionDate = normalizeOptionalDate(payload.target_completion_date ?? payload.targetCompletionDate, "Target completion date");
+  if (plannedStartDate && targetCompletionDate && new Date(targetCompletionDate) < new Date(plannedStartDate)) {
+    throw new AppError(400, "Target completion date cannot be before planned start date");
+  }
+
   return {
     project_no: requireNonEmpty(payload.project_id ?? payload.projectId, "Project ID"),
     project_name: requireNonEmpty(payload.project_name ?? payload.projectName, "Project Name"),
     customer_name: requireNonEmpty(payload.customer ?? payload.customer_name ?? payload.customerName, "Customer"),
     budget_amount: normalizeBudgetAmount(payload.budget ?? payload.budget_amount ?? payload.budgetAmount),
     assigned_user_id: requireNonEmpty(payload.assigned_user_id ?? payload.assignedUserId, "Assigned Control Design member"),
+    priority: priority?.toLowerCase() || null,
+    planned_start_date: plannedStartDate,
+    target_completion_date: targetCompletionDate,
+    project_root_path: normalizeOptionalText(payload.project_root_path ?? payload.projectRootPath),
+    notes: normalizeOptionalText(payload.notes),
   };
 }
 
@@ -666,6 +751,11 @@ async function createControlDesignProject(actor, payload = {}) {
       budget_currency: "INR",
       created_by: getActorId(actor),
       lifecycle_status: CONTROL_PROJECT_STATUSES.UNASSIGNED,
+      priority: normalized.priority,
+      planned_start_date: normalized.planned_start_date,
+      target_completion_date: normalized.target_completion_date,
+      project_root_path: normalized.project_root_path,
+      notes: normalized.notes,
     }, client);
 
     const existing = await controlWorkflowRepository.findActiveProjectWorkflow({
@@ -677,12 +767,22 @@ async function createControlDesignProject(actor, payload = {}) {
       throw new AppError(409, "An active Control Design workflow already exists for this project");
     }
 
-    await insertWorkflowWithStages({
+    const workflow = await insertWorkflowWithStages({
       projectId: project.project_id,
       template,
       assignedUserId: normalized.assigned_user_id,
       assignedBy: getActorId(actor),
     }, client);
+
+    await recordStageEvent(
+      workflow.id,
+      null,
+      "project_created",
+      actor,
+      `${normalized.project_no} created`,
+      client,
+      { project_id: project.project_id, project_no: normalized.project_no },
+    );
 
     return controlWorkflowRepository.findControlDesignProject(project.project_id, controlDesign.id, client);
   });
@@ -816,7 +916,7 @@ async function addStageComment(actor, stageId, payload = {}) {
   });
 }
 
-async function startStage(actor, stageId) {
+async function startStage(actor, stageId, payload = {}) {
   requireActor(actor);
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
@@ -827,10 +927,20 @@ async function startStage(actor, stageId) {
       throw new AppError(409, `Stage cannot be started from status ${stage.status}`);
     }
 
-    await controlWorkflowRepository.updateStage(stage.id, {
+    const stages = await controlWorkflowRepository.listWorkflowStages(workflow.id, client);
+    const stageIndex = stages.findIndex((item) => item.id === stage.id);
+    const previousStage = stageIndex > 0 ? stages[stageIndex - 1] : null;
+    if (previousStage && !isApprovedForProgress(previousStage.status)) {
+      throw new AppError(409, "The previous stage must be approved before this stage can start");
+    }
+
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
       status: STAGE_STATUSES.IN_PROGRESS,
       touch_started_at: true,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before starting it");
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
     await recordStageEvent(workflow.id, stage.id, "stage_started", actor, `${stage.stage_name} started`, client);
     await syncWorkflowLifecycle(workflow.id, client);
@@ -846,10 +956,13 @@ async function updateDocumentPath(actor, stageId, payload = {}) {
     requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE, "Control Design path update permission is required");
     requireWorkflowOwner(actor, workflow);
     requireWorkflowEditable(workflow);
+    requireProofEditableState(stage);
+    const { revisionNumber } = await findStageRevisionContext(stage, client);
 
     if (stage.current_document_path !== newPath) {
       await controlWorkflowRepository.insertDocumentHistory({
         workflow_stage_id: stage.id,
+        revision_number: revisionNumber,
         old_path: stage.current_document_path || null,
         new_path: newPath,
         changed_by: getActorId(actor),
@@ -857,19 +970,21 @@ async function updateDocumentPath(actor, stageId, payload = {}) {
       }, client);
     }
 
-    await controlWorkflowRepository.updateStage(stage.id, {
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
       current_document_path: newPath,
       remarks: payload.remarks || stage.remarks || null,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before updating its path");
     await syncWorkflowLifecycle(workflow.id, client);
-    await recordStageEvent(workflow.id, stage.id, "path_updated", actor, payload.remarks || "Document path updated", client, { document_path: newPath });
+    await recordStageEvent(workflow.id, stage.id, "path_updated", actor, payload.remarks || "Stage path updated", client, { document_path: newPath, revision_number: revisionNumber });
     return loadWorkflowDetails(workflow.id, client);
   });
 }
 
 async function submitStageForApproval(actor, stageId, payload = {}) {
   requireActor(actor);
-  const submittedDocumentPath = requireNonEmpty(payload.submitted_document_path, "submitted_document_path");
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
     requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT, "Control Design stage submit permission is required");
@@ -881,10 +996,17 @@ async function submitStageForApproval(actor, stageId, payload = {}) {
     if (await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client)) {
       throw new AppError(409, "A pending submission already exists for this stage");
     }
+    if (await controlWorkflowRepository.findLatestOpenRevisionForStage(stage.id, client)) {
+      throw new AppError(409, "Submit post-approval updates through the active revision");
+    }
 
-    if (stage.current_document_path !== submittedDocumentPath) {
+    const submittedDocumentPath = normalizeOptionalText(payload.submitted_document_path) || stage.current_document_path || null;
+    await requireSubmissionEvidence(stage, 0, submittedDocumentPath, client);
+
+    if (submittedDocumentPath && stage.current_document_path !== submittedDocumentPath) {
       await controlWorkflowRepository.insertDocumentHistory({
         workflow_stage_id: stage.id,
+        revision_number: 0,
         old_path: stage.current_document_path || null,
         new_path: submittedDocumentPath,
         changed_by: getActorId(actor),
@@ -892,20 +1014,24 @@ async function submitStageForApproval(actor, stageId, payload = {}) {
       }, client);
     }
 
-    await controlWorkflowRepository.updateStage(stage.id, {
-      status: STAGE_STATUSES.SUBMITTED_FOR_APPROVAL,
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.PENDING_APPROVAL,
       current_document_path: submittedDocumentPath,
       touch_submitted_at: true,
       remarks: payload.remarks || null,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before submitting");
     const submissionId = await controlWorkflowRepository.insertSubmission({
       workflow_stage_id: stage.id,
       workflow_id: workflow.id,
       submitted_by: getActorId(actor),
       submitted_document_path: submittedDocumentPath,
+      stage_version: updatedStage.version,
       remarks: payload.remarks || null,
     }, client);
-    await recordStageEvent(workflow.id, stage.id, "stage_submitted", actor, payload.remarks || `${stage.stage_name} submitted for approval`, client, { submission_id: submissionId });
+    await recordStageEvent(workflow.id, stage.id, "stage_submitted", actor, payload.remarks || `${stage.stage_name} submitted for approval`, client, { submission_id: submissionId, revision_number: 0 });
     await syncWorkflowLifecycle(workflow.id, client);
     await notifyWorkflow(workflow, {
       recipient_user_id: workflow.assigned_by,
@@ -928,6 +1054,10 @@ async function approveStageSubmission(actor, stageId, payload = {}) {
     if (!submission) {
       throw new AppError(409, "No pending submission exists for this stage");
     }
+    if (stage.status !== STAGE_STATUSES.PENDING_APPROVAL) {
+      throw new AppError(409, `Stage cannot be approved from status ${stage.status}`);
+    }
+    requireSubmissionVersion(stage, submission);
     requireNotSelfReview(actor, submission.submitted_by);
 
     await controlWorkflowRepository.updateSubmissionReview(submission.id, {
@@ -935,12 +1065,15 @@ async function approveStageSubmission(actor, stageId, payload = {}) {
       reviewed_by: getActorId(actor),
       review_remarks: payload.review_remarks || null,
     }, client);
-    await controlWorkflowRepository.updateStage(stage.id, {
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
       status: STAGE_STATUSES.APPROVED,
       touch_approved_at: true,
       approved_by: getActorId(actor),
       remarks: payload.review_remarks || stage.remarks || null,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before approving");
     const unlockedStage = await refreshCurrentStage(workflow.id, client);
     await recordStageEvent(workflow.id, stage.id, "stage_approved", actor, payload.review_remarks || `${stage.stage_name} approved`, client, { submission_id: submission.id });
     if (unlockedStage && unlockedStage.id !== stage.id) await recordStageEvent(workflow.id, unlockedStage.id, "stage_unlocked", actor, `${unlockedStage.stage_name} unlocked`, client);
@@ -958,22 +1091,9 @@ async function approveStageSubmission(actor, stageId, payload = {}) {
 
 async function markStageRevisionRequired(actor, stageId, payload = {}) {
   requireActor(actor);
-  const requiredChanges = requireNonEmpty(payload.description || payload.required_changes, "required_changes");
-  const dueDate = requireNonEmpty(payload.due_date, "due_date");
-  const remarks = requireNonEmpty(payload.review_remarks || payload.remarks, "review_remarks");
-  const reason = normalizeRevisionReason(payload.revision_reason || "Internal Correction");
-  if (!reason) {
-    throw new AppError(400, "revision_reason is invalid");
-  }
-  assertOtherReasonHasManualRemarks(reason, payload.manual_reason);
-  const revisionPayload = {
-    revision_reason: reason,
-    manual_reason: payload.manual_reason || null,
-    description: requiredChanges,
-    due_date: dueDate,
-    priority: payload.priority || null,
-    remarks,
-  };
+  const reason = requireNonEmpty(payload.reason || payload.rejection_reason, "reason");
+  const instruction = requireNonEmpty(payload.detailed_instruction || payload.required_changes || payload.review_remarks, "detailed_instruction");
+  const dueDate = normalizeOptionalDate(payload.correction_deadline || payload.due_date, "correction_deadline");
 
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
@@ -983,35 +1103,32 @@ async function markStageRevisionRequired(actor, stageId, payload = {}) {
     if (!submission) {
       throw new AppError(409, "No pending submission exists for this stage");
     }
+    if (stage.status !== STAGE_STATUSES.PENDING_APPROVAL) {
+      throw new AppError(409, `Stage cannot be marked changes required from status ${stage.status}`);
+    }
+    requireSubmissionVersion(stage, submission);
     requireNotSelfReview(actor, submission.submitted_by);
 
     await controlWorkflowRepository.updateSubmissionReview(submission.id, {
       status: SUBMISSION_STATUSES.REVISION_REQUIRED,
       reviewed_by: getActorId(actor),
-      review_remarks: remarks,
+      review_remarks: instruction,
+      rejection_reason: reason,
+      correction_deadline: dueDate,
     }, client);
 
-    if (revisionPayload) {
-      await controlWorkflowRepository.insertRevision({
-        workflow_stage_id: stage.id,
-        workflow_id: workflow.id,
-        revision_reason: revisionPayload.revision_reason,
-        manual_reason: revisionPayload.manual_reason,
-        description: revisionPayload.description,
-        due_date: revisionPayload.due_date,
-        priority: revisionPayload.priority,
-        raised_by: getActorId(actor),
-        assigned_to: workflow.assigned_user_id,
-        remarks: revisionPayload.remarks,
-      }, client);
-    }
-
-    await controlWorkflowRepository.updateStage(stage.id, {
-      status: STAGE_STATUSES.REVISION_REQUIRED,
-      remarks,
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.CHANGES_REQUIRED,
+      touch_rejected_at: true,
+      rejection_reason: reason,
+      due_date: dueDate,
+      remarks: instruction,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before requesting changes");
     await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
-    await recordStageEvent(workflow.id, stage.id, "changes_required", actor, remarks, client, { revision: stage.revision_count + 1, submission_id: submission.id });
+    await recordStageEvent(workflow.id, stage.id, "changes_required", actor, instruction, client, { revision_number: 0, submission_id: submission.id, reason, correction_deadline: dueDate });
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1024,16 +1141,13 @@ async function markStageRevisionRequired(actor, stageId, payload = {}) {
     return updated;
   });
 }
-
 async function raiseRevision(actor, stageId, payload = {}) {
   requireActor(actor);
   const reason = normalizeRevisionReason(payload.revision_reason);
-  if (!reason) {
-    throw new AppError(400, "revision_reason is invalid");
-  }
+  if (!reason) throw new AppError(400, "revision_reason is invalid");
   assertOtherReasonHasManualRemarks(reason, payload.manual_reason);
   const description = requireNonEmpty(payload.description, "description");
-  const dueDate = requireNonEmpty(payload.due_date, "due_date");
+  const dueDate = normalizeOptionalDate(requireNonEmpty(payload.due_date, "due_date"), "due_date");
 
   return withTransaction(async (client) => {
     const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
@@ -1042,16 +1156,15 @@ async function raiseRevision(actor, stageId, payload = {}) {
     if (![STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status)) {
       throw new AppError(409, "Only approved or pre-completed stages can have post-approval revisions raised");
     }
-    if (!workflow.assigned_user_id) {
-      throw new AppError(409, "A project owner is required before raising a revision");
-    }
+    if (!workflow.assigned_user_id) throw new AppError(409, "A project owner is required before raising a revision");
 
     const hydrated = await loadWorkflowDetails(workflow.id, client);
     const affectedStageIds = normalizeAffectedStageIds(payload, hydrated, stage.id);
-    const revisionId = await controlWorkflowRepository.insertRevision({
+    const revisionRow = await controlWorkflowRepository.insertRevision({
       workflow_stage_id: stage.id,
       workflow_id: workflow.id,
       revision_reason: reason,
+      reference_path: payload.reference_path || stage.current_document_path || null,
       manual_reason: payload.manual_reason || null,
       description,
       due_date: dueDate,
@@ -1061,7 +1174,20 @@ async function raiseRevision(actor, stageId, payload = {}) {
       assigned_to: workflow.assigned_user_id,
       remarks: payload.remarks || null,
     }, client);
-    await recordStageEvent(workflow.id, stage.id, "update_requested", actor, description, client, { revision_id: revisionId, reason, due_date: dueDate, affected_stage_ids: affectedStageIds });
+    await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.UPDATE_REQUIRED,
+      due_date: dueDate,
+      remarks: description,
+      actor_id: getActorId(actor),
+    }, client);
+    await controlWorkflowRepository.updateWorkflowCurrentStage(workflow.id, stage.id, client);
+    await recordStageEvent(workflow.id, stage.id, "update_requested", actor, description, client, {
+      revision_id: revisionRow.id,
+      revision_number: revisionRow.revision_number,
+      reason,
+      due_date: dueDate,
+      affected_stage_ids: affectedStageIds,
+    });
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1069,18 +1195,17 @@ async function raiseRevision(actor, stageId, payload = {}) {
       notification_type: "CONTROL_REVISION_RAISED",
       title: "Control Design revision raised",
       message: stage.stage_name + " has a revision for " + (updated.project_no || updated.project_id) + ".",
-      idempotency_key: "revision-raised:" + revisionId,
+      idempotency_key: "revision-raised:" + revisionRow.id,
     }, client);
     return updated;
   });
 }
+
 async function startRevision(actor, revisionId) {
   requireActor(actor);
   return withTransaction(async (client) => {
     const revision = await controlWorkflowRepository.findRevisionById(requireNonEmpty(revisionId, "revision_id"), client);
-    if (!revision) {
-      throw new AppError(404, "Revision not found");
-    }
+    if (!revision) throw new AppError(404, "Revision not found");
     const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
     requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE, "Control Design revision execution permission is required");
     requireWorkflowEditable(workflow);
@@ -1091,24 +1216,28 @@ async function startRevision(actor, revisionId) {
       throw new AppError(409, `Revision cannot be started from status ${revision.status}`);
     }
 
+    const stage = await controlWorkflowRepository.findWorkflowStage(revision.workflow_stage_id, client);
     await controlWorkflowRepository.updateRevision(revision.id, {
       status: REVISION_STATUSES.IN_PROGRESS,
       touch_started_at: true,
     }, client);
-    await recordStageEvent(workflow.id, revision.workflow_stage_id, "update_started", actor, "Revision work started", client, { revision_id: revision.id });
+    await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.UPDATE_REQUIRED,
+      actor_id: getActorId(actor),
+    }, client);
+    await recordStageEvent(workflow.id, stage.id, "update_started", actor, "Revision work started", client, {
+      revision_id: revision.id,
+      revision_number: revision.revision_number,
+    });
     await syncWorkflowLifecycle(revision.workflow_id, client);
     return loadWorkflowDetails(revision.workflow_id, client);
   });
 }
-
 async function submitRevisionForApproval(actor, revisionId, payload = {}) {
   requireActor(actor);
-  const submittedDocumentPath = requireNonEmpty(payload.submitted_document_path, "submitted_document_path");
   return withTransaction(async (client) => {
     const revision = await controlWorkflowRepository.findRevisionById(requireNonEmpty(revisionId, "revision_id"), client);
-    if (!revision) {
-      throw new AppError(404, "Revision not found");
-    }
+    if (!revision) throw new AppError(404, "Revision not found");
     const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
     requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE, "Control Design revision execution permission is required");
     requireWorkflowEditable(workflow);
@@ -1123,9 +1252,12 @@ async function submitRevisionForApproval(actor, revisionId, payload = {}) {
     if (await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client)) {
       throw new AppError(409, "A pending submission already exists for this stage");
     }
-    if (stage.current_document_path !== submittedDocumentPath) {
+    const submittedDocumentPath = normalizeOptionalText(payload.submitted_document_path) || stage.current_document_path || null;
+    await requireSubmissionEvidence(stage, revision.revision_number, submittedDocumentPath, client);
+    if (submittedDocumentPath && stage.current_document_path !== submittedDocumentPath) {
       await controlWorkflowRepository.insertDocumentHistory({
         workflow_stage_id: stage.id,
+        revision_number: revision.revision_number,
         old_path: stage.current_document_path || null,
         new_path: submittedDocumentPath,
         changed_by: getActorId(actor),
@@ -1138,21 +1270,29 @@ async function submitRevisionForApproval(actor, revisionId, payload = {}) {
       touch_submitted_at: true,
       remarks: payload.remarks || revision.remarks || null,
     }, client);
-    await controlWorkflowRepository.updateStage(stage.id, {
-      status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.SUBMITTED_FOR_APPROVAL,
-      current_document_path: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? stage.current_document_path : submittedDocumentPath,
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.PENDING_APPROVAL,
+      current_document_path: submittedDocumentPath,
       touch_submitted_at: true,
       remarks: payload.remarks || stage.remarks || null,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before submitting the revision");
     const submissionId = await controlWorkflowRepository.insertSubmission({
       workflow_stage_id: stage.id,
       workflow_id: revision.workflow_id,
       revision_id: revision.id,
       submitted_by: getActorId(actor),
       submitted_document_path: submittedDocumentPath,
+      stage_version: updatedStage.version,
       remarks: payload.remarks || null,
     }, client);
-    await recordStageEvent(workflow.id, stage.id, "revision_submitted", actor, payload.remarks || "Updated work submitted for approval", client, { revision_id: revision.id, submission_id: submissionId });
+    await recordStageEvent(workflow.id, stage.id, "revision_submitted", actor, payload.remarks || "Updated work submitted for approval", client, {
+      revision_id: revision.id,
+      revision_number: revision.revision_number,
+      submission_id: submissionId,
+    });
     await syncWorkflowLifecycle(revision.workflow_id, client);
     await notifyWorkflow(workflow, {
       recipient_user_id: workflow.assigned_by,
@@ -1164,14 +1304,11 @@ async function submitRevisionForApproval(actor, revisionId, payload = {}) {
     return loadWorkflowDetails(revision.workflow_id, client);
   });
 }
-
 async function approveRevision(actor, revisionId, payload = {}) {
   requireActor(actor);
   return withTransaction(async (client) => {
     const revision = await controlWorkflowRepository.findRevisionById(requireNonEmpty(revisionId, "revision_id"), client);
-    if (!revision) {
-      throw new AppError(404, "Revision not found");
-    }
+    if (!revision) throw new AppError(404, "Revision not found");
     const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
     requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW, "Control Design revision review permission is required");
     requireWorkflowEditable(workflow);
@@ -1181,9 +1318,11 @@ async function approveRevision(actor, revisionId, payload = {}) {
 
     const stage = await controlWorkflowRepository.findWorkflowStage(revision.workflow_stage_id, client);
     const submission = await controlWorkflowRepository.findPendingSubmissionForStage(revision.workflow_stage_id, client);
-    if (!submission) {
-      throw new AppError(409, "No pending revision submission exists");
+    if (!submission) throw new AppError(409, "No pending revision submission exists");
+    if (stage.status !== STAGE_STATUSES.PENDING_APPROVAL) {
+      throw new AppError(409, `Stage cannot be approved from status ${stage.status}`);
     }
+    requireSubmissionVersion(stage, submission);
     requireNotSelfReview(actor, submission.submitted_by);
     await controlWorkflowRepository.updateSubmissionReview(submission.id, {
       status: SUBMISSION_STATUSES.APPROVED,
@@ -1196,15 +1335,22 @@ async function approveRevision(actor, revisionId, payload = {}) {
       touch_approved_at: true,
       remarks: payload.review_remarks || revision.remarks || null,
     }, client);
-    await controlWorkflowRepository.updateStage(revision.workflow_stage_id, {
-      status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.APPROVED,
-      current_document_path: submission.submitted_document_path,
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.APPROVED,
+      current_document_path: submission.submitted_document_path || stage.current_document_path || null,
       touch_approved_at: true,
       approved_by: getActorId(actor),
       remarks: payload.review_remarks || stage.remarks || null,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before approving the revision");
     await refreshCurrentStage(workflow.id, client);
-    await recordStageEvent(workflow.id, stage.id, "revision_approved", actor, payload.review_remarks || "Updated work approved", client, { revision_id: revision.id, submission_id: submission.id });
+    await recordStageEvent(workflow.id, stage.id, "revision_approved", actor, payload.review_remarks || "Updated work approved", client, {
+      revision_id: revision.id,
+      revision_number: revision.revision_number,
+      submission_id: submission.id,
+    });
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
       recipient_user_id: updated.assigned_user_id,
@@ -1219,12 +1365,12 @@ async function approveRevision(actor, revisionId, payload = {}) {
 
 async function markRevisionChangesRequired(actor, revisionId, payload = {}) {
   requireActor(actor);
-  const remarks = requireNonEmpty(payload.review_remarks || payload.required_changes || payload.remarks, "review_remarks");
+  const reason = requireNonEmpty(payload.reason || payload.rejection_reason, "reason");
+  const instruction = requireNonEmpty(payload.detailed_instruction || payload.required_changes || payload.review_remarks, "detailed_instruction");
+  const dueDate = normalizeOptionalDate(payload.correction_deadline || payload.due_date, "correction_deadline");
   return withTransaction(async (client) => {
     const revision = await controlWorkflowRepository.findRevisionById(requireNonEmpty(revisionId, "revision_id"), client);
-    if (!revision) {
-      throw new AppError(404, "Revision not found");
-    }
+    if (!revision) throw new AppError(404, "Revision not found");
     const workflow = await controlWorkflowRepository.findWorkflowById(revision.workflow_id, client);
     requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW, "Control Design revision review permission is required");
     requireWorkflowEditable(workflow);
@@ -1232,25 +1378,41 @@ async function markRevisionChangesRequired(actor, revisionId, payload = {}) {
       throw new AppError(409, `Revision cannot be marked changes required from status ${revision.status}`);
     }
     const stage = await controlWorkflowRepository.findWorkflowStage(revision.workflow_stage_id, client);
-    const submission = await controlWorkflowRepository.findPendingSubmissionForStage(revision.workflow_stage_id, client);
-    if (!submission) {
-      throw new AppError(409, "No pending revision submission exists");
+    const submission = await controlWorkflowRepository.findPendingSubmissionForStage(stage.id, client);
+    if (!submission) throw new AppError(409, "No pending revision submission exists");
+    if (stage.status !== STAGE_STATUSES.PENDING_APPROVAL) {
+      throw new AppError(409, `Stage cannot be marked changes required from status ${stage.status}`);
     }
+    requireSubmissionVersion(stage, submission);
     requireNotSelfReview(actor, submission.submitted_by);
     await controlWorkflowRepository.updateSubmissionReview(submission.id, {
       status: SUBMISSION_STATUSES.REVISION_REQUIRED,
       reviewed_by: getActorId(actor),
-      review_remarks: remarks,
+      review_remarks: instruction,
+      rejection_reason: reason,
+      correction_deadline: dueDate,
     }, client);
     await controlWorkflowRepository.updateRevision(revision.id, {
       status: REVISION_STATUSES.CHANGES_REQUIRED,
-      remarks,
+      remarks: instruction,
     }, client);
-    await controlWorkflowRepository.updateStage(stage.id, {
-      status: [STAGE_STATUSES.APPROVED, STAGE_STATUSES.PRE_COMPLETED].includes(stage.status) ? null : STAGE_STATUSES.REVISION_REQUIRED,
-      remarks,
+    const updatedStage = await controlWorkflowRepository.updateStage(stage.id, {
+      status: STAGE_STATUSES.CHANGES_REQUIRED,
+      touch_rejected_at: true,
+      rejection_reason: reason,
+      due_date: dueDate,
+      remarks: instruction,
+      actor_id: getActorId(actor),
+      expected_version: Number.isInteger(payload.version) ? payload.version : null,
     }, client);
-    await recordStageEvent(workflow.id, stage.id, "revision_changes_required", actor, remarks, client, { revision_id: revision.id, submission_id: submission.id });
+    if (!updatedStage) throw new AppError(409, "Stage changed; refresh before requesting revision changes");
+    await recordStageEvent(workflow.id, stage.id, "revision_changes_required", actor, instruction, client, {
+      revision_id: revision.id,
+      revision_number: revision.revision_number,
+      submission_id: submission.id,
+      reason,
+      correction_deadline: dueDate,
+    });
     await syncWorkflowLifecycle(workflow.id, client);
     const updated = await loadWorkflowDetails(workflow.id, client);
     await notifyWorkflow(updated, {
@@ -1262,6 +1424,88 @@ async function markRevisionChangesRequired(actor, revisionId, payload = {}) {
     }, client);
     return updated;
   });
+}
+async function uploadWorkflowProof(actor, stageId, file, payload = {}) {
+  requireActor(actor);
+  if (!file) throw new AppError(400, "Work-proof file is required");
+  let storedFile = null;
+  try {
+    return await withTransaction(async (client) => {
+      const { workflow, stage } = await loadWorkflowForStage(requireNonEmpty(stageId, "stage_id"), client);
+      requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_PROOFS_UPLOAD, "Control Design proof upload permission is required");
+      requireWorkflowOwner(actor, workflow);
+      requireWorkflowEditable(workflow);
+      requireProofEditableState(stage);
+      const { revisionNumber } = await findStageRevisionContext(stage, client);
+      storedFile = await persistControlWorkflowProofFile(file);
+      const proof = await controlWorkflowRepository.insertWorkflowProof({
+        workflow_id: workflow.id,
+        project_id: workflow.project_id,
+        workflow_stage_id: stage.id,
+        revision_number: revisionNumber,
+        original_filename: storedFile.originalName,
+        storage_key: storedFile.storageKey,
+        file_path: storedFile.filePath,
+        mime_type: storedFile.mimeType,
+        file_size: file.size || file.buffer.length,
+        uploaded_by: getActorId(actor),
+        comment: normalizeOptionalText(payload.comment),
+      }, client);
+      await recordStageEvent(workflow.id, stage.id, "proof_uploaded", actor, `${storedFile.originalName} uploaded`, client, {
+        proof_id: proof.id,
+        revision_number: revisionNumber,
+        filename: storedFile.originalName,
+        file_size: Number(file.size || file.buffer.length),
+      });
+      return proof;
+    });
+  } catch (error) {
+    if (storedFile?.storageKey) await removeControlWorkflowProofFile(storedFile.storageKey);
+    throw error;
+  }
+}
+
+async function removeWorkflowProof(actor, proofId) {
+  requireActor(actor);
+  const removed = await withTransaction(async (client) => {
+    const proof = await controlWorkflowRepository.findWorkflowProofById(requireNonEmpty(proofId, "proof_id"), client);
+    if (!proof) throw new AppError(404, "Work proof not found");
+    const workflow = await controlWorkflowRepository.findWorkflowById(proof.workflow_id, client);
+    requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_PROOFS_UPLOAD, "Control Design proof upload permission is required");
+    requireWorkflowOwner(actor, workflow);
+    requireWorkflowEditable(workflow);
+    const stage = await controlWorkflowRepository.findWorkflowStage(proof.workflow_stage_id, client);
+    requireProofEditableState(stage);
+    const { revisionNumber } = await findStageRevisionContext(stage, client);
+    if (Number(proof.revision_number) !== revisionNumber) {
+      throw new AppError(409, "Proofs from an earlier submission or revision cannot be removed");
+    }
+    await controlWorkflowRepository.deleteWorkflowProof(proof.id, client);
+    await recordStageEvent(workflow.id, stage.id, "proof_removed", actor, `${proof.original_filename} removed`, client, {
+      proof_id: proof.id,
+      revision_number: proof.revision_number,
+      filename: proof.original_filename,
+    });
+    return proof;
+  });
+  try {
+    await removeControlWorkflowProofFile(removed.storage_key);
+  } catch (error) {
+    console.warn("Failed to remove Control Design proof file", { proof_id: removed.id, error: error.message });
+  }
+  return { id: removed.id };
+}
+
+async function getWorkflowProofFile(actor, proofId) {
+  requireActor(actor);
+  const proof = await controlWorkflowRepository.findWorkflowProofById(requireNonEmpty(proofId, "proof_id"));
+  if (!proof) throw new AppError(404, "Work proof not found");
+  const workflow = await controlWorkflowRepository.findWorkflowById(proof.workflow_id);
+  requireWorkflowScopedPermission(actor, workflow, PERMISSIONS.CONTROL_DESIGN_PROOFS_VIEW, "Control Design proof view permission is required");
+  return {
+    ...proof,
+    file_path: resolveControlWorkflowProofPath(proof.storage_key),
+  };
 }
 async function markStagePreCompleted(actor, stageId, payload = {}) {
   requireActor(actor);
@@ -1471,7 +1715,9 @@ module.exports = {
   createControlDesignProject,
   createProjectWorkflow,
   getControlDesignCapabilities,
+  getControlDesignSummary,
   getProjectWorkflow,
+  getWorkflowProofFile,
   getWorkflowTemplateBySubDepartment,
   listControlDesignAssignableUsers,
   listControlDesignProjects,
@@ -1484,6 +1730,7 @@ module.exports = {
   normalizeBudgetAmount,
   normalizeControlDesignProjectPayload,
   markWorkflowDispatched,
+  removeWorkflowProof,
   overrideUnlockStage,
   raiseRevision,
   reassignProjectWorkflowOwner,
@@ -1494,4 +1741,5 @@ module.exports = {
   submitRevisionForApproval,
   submitStageForApproval,
   updateDocumentPath,
+  uploadWorkflowProof,
 };

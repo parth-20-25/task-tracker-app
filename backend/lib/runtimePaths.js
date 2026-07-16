@@ -23,6 +23,10 @@ function getTaskProofUploadDir() {
   return path.join(getUploadsRoot(), "task-proofs");
 }
 
+function getControlWorkflowProofUploadDir() {
+  return path.join(path.dirname(getUploadsRoot()), "control-workflow-proofs");
+}
+
 function getReportTempRoot() {
   const configured = String(env.reportTempDir || "").trim();
   return configured ? resolveBackendPath(configured, os.tmpdir()) : os.tmpdir();
@@ -42,15 +46,18 @@ async function assertWritableDirectory(directoryPath) {
 async function ensureRuntimeDirectoriesWritable() {
   const uploadsRoot = getUploadsRoot();
   const taskProofUploadDir = getTaskProofUploadDir();
+  const controlWorkflowProofUploadDir = getControlWorkflowProofUploadDir();
   const reportTempRoot = getReportTempRoot();
 
   await assertWritableDirectory(uploadsRoot);
   await assertWritableDirectory(taskProofUploadDir);
+  await assertWritableDirectory(controlWorkflowProofUploadDir);
   await assertWritableDirectory(reportTempRoot);
 
   return {
     uploadsRoot,
     taskProofUploadDir,
+    controlWorkflowProofUploadDir,
     reportTempRoot,
   };
 }
@@ -58,6 +65,7 @@ async function ensureRuntimeDirectoriesWritable() {
 module.exports = {
   ensureDirectorySync,
   ensureRuntimeDirectoriesWritable,
+  getControlWorkflowProofUploadDir,
   getReportTempRoot,
   getTaskProofUploadDir,
   getUploadsRoot,

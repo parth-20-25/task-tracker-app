@@ -14,6 +14,7 @@ import { isOperationalControllerUser, isProjectAuthorityUser } from '@/lib/permi
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { resolveImageUrl } from '@/lib/imageUrl';
+import { hasTaskWorkProof, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from '@/lib/taskProofPolicy';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
@@ -27,21 +28,14 @@ interface TaskCardProps {
   onActionComplete?: () => void | Promise<void>;
 }
 
-function isDapTask(task: Task) {
-  const normalized = String(task.workflow_stage || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return normalized === "dap" || normalized === "d_a_p";
-}
-
 export function TaskCard({ task, showActions = true, compact = false, extraActions, onActionComplete }: TaskCardProps) {
   const { user } = useAuth();
   const { cancelTask, executeTaskAction } = useTasks();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
+  const [completionNoteDialogOpen, setCompletionNoteDialogOpen] = useState(false);
+  const [completionNote, setCompletionNote] = useState('');
   const taskDisplay = getTaskCardDisplay(task);
   const isOverdue = new Date(task.deadline) < new Date() && !['closed', 'cancelled'].includes(task.status);
   const isOwnTask = user ? task.assigned_to === user.employee_id || task.assignee_ids?.includes(user.employee_id) : false;
@@ -55,23 +49,17 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
     && (task.task_type === 'design_2d_completion' || task.operational_state !== 'WORKFLOW_COMPLETE')
     && (isOperationalControllerUser(user) || isProjectAuthorityUser(user) || isOriginalAssigner);
   const proofUrls = task.proof_url ?? [];
+  const requiresWorkProof = requiresTaskWorkProof(task);
+  const hasWorkProof = hasTaskWorkProof(task);
+  const proofOptionalAdditionalTask = isProofOptionalThreeDProjectAdditionalTask(task);
   const isCompletionTask = task.task_type === 'design_2d_completion';
   const isCompletedRevision = isCompletionTask
     && task.status === 'closed'
     && task.verification_status === 'approved';
 
-  const handleExecutionAction = async (action: "start" | "resume" | "hold" | "submit") => {
-    if (action === 'submit' && proofUrls.length === 0 && !isDapTask(task)) {
-      toast({
-        title: 'Work proof required',
-        description: 'Upload proof or a work file before verification submission',
-        variant: 'destructive',
-      });
-      return;
-    }
-
+  const submitExecutionAction = async (action: "start" | "resume" | "hold" | "submit", remarks?: string) => {
     try {
-      await executeTaskAction(task.id, action);
+      await executeTaskAction(task.id, action, remarks);
       await onActionComplete?.();
     } catch (error) {
       toast({
@@ -80,6 +68,32 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
         variant: 'destructive',
       });
     }
+  };
+
+  const handleExecutionAction = async (action: "start" | "resume" | "hold" | "submit") => {
+    if (action === 'submit') {
+      if (requiresWorkProof && !hasWorkProof) {
+        toast({
+          title: 'Work proof required',
+          description: 'Upload proof or a work file before verification submission',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      if (proofOptionalAdditionalTask) {
+        setCompletionNoteDialogOpen(true);
+        return;
+      }
+    }
+
+    await submitExecutionAction(action);
+  };
+
+  const handleCompletionNoteSubmit = async () => {
+    await submitExecutionAction('submit', completionNote.trim());
+    setCompletionNoteDialogOpen(false);
+    setCompletionNote('');
   };
 
   const handleCancel = async () => {
@@ -235,7 +249,7 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
         )}
 
         <div className="flex gap-2 pt-1 flex-wrap">
-          <TaskExecutionDialog task={task} />
+          {(requiresWorkProof || hasWorkProof) ? <TaskExecutionDialog task={task} /> : null}
           {showActions && isOwnTask && (
             <>
             {(task.status === 'assigned' || task.status === 'rework') && (
@@ -296,6 +310,31 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
             disabled={isCancelling || !cancelReason.trim()}
           >
             {isCancelling ? 'Cancelling...' : 'Cancel Task'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={completionNoteDialogOpen} onOpenChange={setCompletionNoteDialogOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Completion Note (optional)</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor={`completion-note-${task.id}`}>Note</Label>
+          <Textarea
+            id={`completion-note-${task.id}`}
+            value={completionNote}
+            onChange={(event) => setCompletionNote(event.target.value)}
+            placeholder="Add a completion note"
+            className="min-h-24"
+          />
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setCompletionNoteDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={() => { handleCompletionNoteSubmit().catch(() => undefined); }}>
+            Submit Task
           </Button>
         </DialogFooter>
       </DialogContent>

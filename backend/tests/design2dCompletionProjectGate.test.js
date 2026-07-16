@@ -3,6 +3,8 @@ const test = require("node:test");
 
 process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
 
+const { FIXTURE_TASK_CODES, PROJECT_TASK_CODES, DESIGN_2D_COMPLETION_TASKS } = require("../lib/design2dCompletionTasks");
+
 function installGateMocks({ department, fixtures = [], tasks = [] }) {
   const repository = require("../repositories/design2dCompletionTaskRepository");
   const originals = {
@@ -42,6 +44,32 @@ const completedFixture = {
   workflow_complete: true,
 };
 
+function completionTask(code, overrides = {}) {
+  const definition = DESIGN_2D_COMPLETION_TASKS[code];
+  const scope = overrides.scope_type || definition.scope;
+  return {
+    id: code,
+    title: `${definition.displayName} 00`,
+    task_type: "design_2d_completion",
+    scope_type: scope,
+    fixture_id: scope === "fixture" ? "fixture-1" : null,
+    completion_task_code: code,
+    completion_task_revision: 0,
+    status: "closed",
+    verification_status: "approved",
+    ...overrides,
+  };
+}
+
+function approvedMandatoryTasks() {
+  return [
+    ...FIXTURE_TASK_CODES.map((code) => completionTask(code)),
+    ...PROJECT_TASK_CODES
+      .filter((code) => DESIGN_2D_COMPLETION_TASKS[code].isMandatory)
+      .map((code) => completionTask(code, { scope_type: "project", fixture_id: null })),
+  ];
+}
+
 test("the 2D completion gate does not alter Control or other departments", async () => {
   const mocks = installGateMocks({ department: { department_id: "control", department_name: "Control" } });
   try {
@@ -52,34 +80,33 @@ test("the 2D completion gate does not alter Control or other departments", async
   }
 });
 
-test("a completed original Design workflow is not blocked by activities that were never requested", async () => {
+test("a completed original Design workflow is blocked until mandatory completion activities are approved", async () => {
   const mocks = installGateMocks({
     department: { department_id: "design", department_name: "Design" },
     fixtures: [completedFixture],
     tasks: [],
   });
   try {
-    assert.equal(await mocks.service.assertDesign2DCompletionProjectReady("design-project"), true);
+    await assert.rejects(
+      () => mocks.service.assertDesign2DCompletionProjectReady("design-project"),
+      (error) => error.statusCode === 409 && /Drafting Checking 00 is incomplete/.test(error.message),
+    );
   } finally {
     mocks.restore();
   }
 });
 
-test("a created active completion activity must finish before the project itself closes", async () => {
+test("a created active mandatory completion activity must finish before the project itself closes", async () => {
   const mocks = installGateMocks({
     department: { department_id: "design", department_name: "Design" },
     fixtures: [completedFixture],
-    tasks: [{
-      id: 1,
-      title: "IGES 00",
-      task_type: "design_2d_completion",
-      scope_type: "fixture",
-      fixture_id: "fixture-1",
-      completion_task_code: "FIXTURE_IGES",
-      completion_task_revision: 0,
-      status: "in_progress",
-      verification_status: "pending",
-    }],
+    tasks: [
+      ...approvedMandatoryTasks().filter((task) => task.completion_task_code !== "FIXTURE_IGES"),
+      completionTask("FIXTURE_IGES", {
+        status: "in_progress",
+        verification_status: "pending",
+      }),
+    ],
   });
   try {
     await assert.rejects(
@@ -91,21 +118,11 @@ test("a created active completion activity must finish before the project itself
   }
 });
 
-test("an approved completion activity does not mutate or block the completed original fixture", async () => {
+test("approved mandatory completion activities close the Design project without requiring optional Mimic", async () => {
   const mocks = installGateMocks({
     department: { department_id: "design", department_name: "Design" },
     fixtures: [completedFixture],
-    tasks: [{
-      id: 1,
-      title: "Drafting Checking 00",
-      task_type: "design_2d_completion",
-      scope_type: "fixture",
-      fixture_id: "fixture-1",
-      completion_task_code: "FIXTURE_DRAFTING_CHECKING",
-      completion_task_revision: 0,
-      status: "closed",
-      verification_status: "approved",
-    }],
+    tasks: approvedMandatoryTasks(),
   });
   try {
     assert.equal(await mocks.service.assertDesign2DCompletionProjectReady("design-project"), true);

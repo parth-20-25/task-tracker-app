@@ -8,8 +8,12 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const { cancelTaskMutation, createTaskMutation, updateTaskMutation } = useTaskMutations();
   const tasks = tasksQuery.data ?? [];
 
-  const executeTaskAction = useCallback(async (taskId: number, action: "start" | "resume" | "hold" | "submit") => {
-    await updateTaskMutation.mutateAsync({ taskId, action });
+  const executeTaskAction = useCallback(async (taskId: number, action: "start" | "resume" | "hold" | "submit", remarks?: string) => {
+    await updateTaskMutation.mutateAsync({
+      taskId,
+      action,
+      ...(remarks !== undefined ? { remarks } : {}),
+    });
   }, [updateTaskMutation]);
 
   const verifyTask = useCallback(async (taskId: number, verificationAction: "approve" | "reject", remarks?: string) => {

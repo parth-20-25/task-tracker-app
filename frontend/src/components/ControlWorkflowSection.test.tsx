@@ -13,6 +13,8 @@ const controlApi = vi.hoisted(() => ({
   approveControlWorkflowStage: vi.fn(),
   fetchControlDesignAssignableUsers: vi.fn(),
   createControlProjectWorkflow: vi.fn(),
+  downloadControlWorkflowProof: vi.fn(),
+  fetchControlWorkflowProofBlob: vi.fn(),
   fetchControlPendingApprovals: vi.fn(),
   fetchControlProjectWorkflow: vi.fn(),
   fetchControlRevisionQueue: vi.fn(),
@@ -22,7 +24,9 @@ const controlApi = vi.hoisted(() => ({
   markControlWorkflowRevisionChangesRequired: vi.fn(),
   markControlWorkflowStagePreCompleted: vi.fn(),
   markControlWorkflowStageRevisionRequired: vi.fn(),
+  openControlWorkflowProof: vi.fn(),
   overrideUnlockControlWorkflowStage: vi.fn(),
+  removeControlWorkflowProof: vi.fn(),
   skipControlWorkflowStageByOverride: vi.fn(),
   raiseControlWorkflowRevision: vi.fn(),
   reassignControlProjectWorkflowOwner: vi.fn(),
@@ -31,6 +35,7 @@ const controlApi = vi.hoisted(() => ({
   submitControlWorkflowRevision: vi.fn(),
   submitControlWorkflowStage: vi.fn(),
   updateControlWorkflowDocumentPath: vi.fn(),
+  uploadControlWorkflowProof: vi.fn(),
 }));
 
 let mockAuth: {
@@ -48,6 +53,8 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
     approveControlWorkflowStage: (...args: unknown[]) => controlApi.approveControlWorkflowStage(...args),
     fetchControlDesignAssignableUsers: (...args: unknown[]) => controlApi.fetchControlDesignAssignableUsers(...args),
     createControlProjectWorkflow: (...args: unknown[]) => controlApi.createControlProjectWorkflow(...args),
+    downloadControlWorkflowProof: (...args: unknown[]) => controlApi.downloadControlWorkflowProof(...args),
+    fetchControlWorkflowProofBlob: (...args: unknown[]) => controlApi.fetchControlWorkflowProofBlob(...args),
     fetchControlPendingApprovals: (...args: unknown[]) => controlApi.fetchControlPendingApprovals(...args),
     fetchControlProjectWorkflow: (...args: unknown[]) => controlApi.fetchControlProjectWorkflow(...args),
     fetchControlRevisionQueue: (...args: unknown[]) => controlApi.fetchControlRevisionQueue(...args),
@@ -57,7 +64,9 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
     markControlWorkflowRevisionChangesRequired: (...args: unknown[]) => controlApi.markControlWorkflowRevisionChangesRequired(...args),
     markControlWorkflowStagePreCompleted: (...args: unknown[]) => controlApi.markControlWorkflowStagePreCompleted(...args),
     markControlWorkflowStageRevisionRequired: (...args: unknown[]) => controlApi.markControlWorkflowStageRevisionRequired(...args),
+    openControlWorkflowProof: (...args: unknown[]) => controlApi.openControlWorkflowProof(...args),
     overrideUnlockControlWorkflowStage: (...args: unknown[]) => controlApi.overrideUnlockControlWorkflowStage(...args),
+    removeControlWorkflowProof: (...args: unknown[]) => controlApi.removeControlWorkflowProof(...args),
     skipControlWorkflowStageByOverride: (...args: unknown[]) => controlApi.skipControlWorkflowStageByOverride(...args),
     raiseControlWorkflowRevision: (...args: unknown[]) => controlApi.raiseControlWorkflowRevision(...args),
     reassignControlProjectWorkflowOwner: (...args: unknown[]) => controlApi.reassignControlProjectWorkflowOwner(...args),
@@ -66,6 +75,7 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
     submitControlWorkflowRevision: (...args: unknown[]) => controlApi.submitControlWorkflowRevision(...args),
     submitControlWorkflowStage: (...args: unknown[]) => controlApi.submitControlWorkflowStage(...args),
     updateControlWorkflowDocumentPath: (...args: unknown[]) => controlApi.updateControlWorkflowDocumentPath(...args),
+    uploadControlWorkflowProof: (...args: unknown[]) => controlApi.uploadControlWorkflowProof(...args),
   };
 });
 
@@ -146,6 +156,8 @@ function buildCapabilities(overrides: Partial<ControlDesignCapabilities> = {}): 
     canStartStage: true,
     canSubmitStage: true,
     canUpdatePath: true,
+    canViewProof: true,
+    canUploadProof: true,
     canReview: false,
     canApprove: false,
     canRequestChanges: false,
@@ -188,12 +200,13 @@ function revision(overrides: Partial<ControlWorkflowRevision> = {}): ControlWork
     id: overrides.id || "revision-1",
     workflow_stage_id: overrides.workflow_stage_id || "stage-4",
     workflow_id: "workflow-1",
+    revision_number: 1,
     revision_reason: "Internal Correction",
     description: "Update drawing references",
     due_date: "2026-07-10T10:00:00.000Z",
     priority: "medium",
     affected_stage_ids: [],
-    status: "not_started",
+    status: "available",
     raised_by: "EMP-LEAD",
     raised_by_name: "Lead User",
     assigned_to: "EMP-OWNER",
@@ -218,12 +231,24 @@ function stage(overrides: Partial<ControlWorkflowStage>): ControlWorkflowStage {
     sequence_order: overrides.sequence_order || 1,
     is_required: true,
     status: overrides.status || "locked",
+    version: overrides.version ?? 0,
     current_document_path: overrides.current_document_path || null,
+    path_updated_by: null,
+    path_updated_by_name: null,
+    path_updated_at: null,
     started_at: null,
+    started_by: null,
+    started_by_name: null,
     submitted_at: null,
+    submitted_by: null,
+    submitted_by_name: null,
     approved_at: null,
     approved_by: null,
     approved_by_name: null,
+    rejected_at: null,
+    rejected_by: null,
+    rejected_by_name: null,
+    rejection_reason: null,
     due_date: null,
     remarks: null,
     revision_count: overrides.revision_count || 0,
@@ -231,6 +256,7 @@ function stage(overrides: Partial<ControlWorkflowStage>): ControlWorkflowStage {
     updated_at: now,
     submissions: overrides.submissions || [],
     revisions: overrides.revisions || [],
+    proofs: overrides.proofs || [],
     document_history: [],
     override_history: [],
     events: overrides.events || [],
@@ -246,7 +272,7 @@ function workflow(): ControlProjectWorkflow {
       id: "stage-3",
       stage_name: "CO Release",
       sequence_order: 3,
-      status: "submitted_for_approval",
+      status: "pending_approval",
       submitted_at: now,
       submissions: [{
         id: "submission-1",
@@ -255,6 +281,7 @@ function workflow(): ControlProjectWorkflow {
         submitted_by: "EMP-OWNER",
         submitted_by_name: "Owner User",
         submitted_document_path: "\\\\server\\control\\release.pdf",
+        stage_version: 0,
         remarks: "Ready",
         status: "pending",
         reviewed_by: null,
@@ -265,7 +292,7 @@ function workflow(): ControlProjectWorkflow {
         updated_at: now,
       }],
     }),
-    stage({ id: "stage-4", stage_name: "WBS Addition", sequence_order: 4, status: "revision_required", revision_count: 1, revisions: [revision()] }),
+    stage({ id: "stage-4", stage_name: "WBS Addition", sequence_order: 4, status: "update_required", revision_count: 1, revisions: [revision()] }),
     stage({ id: "stage-5", stage_name: "I/O List Preparation", sequence_order: 5, status: "approved", approved_at: now }),
     stage({ id: "stage-6", stage_name: "E-Plan Drawing Release", sequence_order: 6, status: "pre_completed", approved_at: now }),
     stage({ id: "stage-7", stage_name: "Panel Material Issue", sequence_order: 7, status: "skipped_by_override" }),
@@ -400,6 +427,7 @@ describe("ControlWorkflowSection", () => {
         submitted_by: "EMP-OWNER",
         submitted_by_name: "Owner User",
         submitted_document_path: "\\\\server\\control\\release.pdf",
+        stage_version: 0,
         remarks: "Ready",
         status: "pending",
         reviewed_by: null,
@@ -462,8 +490,8 @@ describe("ControlWorkflowSection", () => {
     expect(screen.getByRole("heading", { name: "CO Creation" })).toBeInTheDocument();
     expect(screen.getByText("Document Paths")).toBeInTheDocument();
     expect(screen.getByText("Stage Information")).toBeInTheDocument();
-    expect(screen.getByText("History")).toBeInTheDocument();
-    expect(screen.getByText("Comments")).toBeInTheDocument();
+    expect(screen.getByText(/History/)).toBeInTheDocument();
+    expect(screen.getByText(/Comments/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Add stage comment"), { target: { value: "Ready for internal review" } });
     fireEvent.click(screen.getByRole("button", { name: "Add Comment" }));
@@ -482,7 +510,7 @@ describe("ControlWorkflowSection", () => {
     expect(screen.getAllByText("Update Required").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/EMP-OWNER - Owner User/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^Approve$/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Raise Revision$/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /^Request Update$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: /^Override Unlock$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: /^Mark Pre-Completed$/i }).length).toBeGreaterThan(0);
 
@@ -499,6 +527,67 @@ describe("ControlWorkflowSection", () => {
     expect(screen.getByRole("heading", { name: "Mark Pre-Completed" })).toBeInTheDocument();
   }, 15000);
 
+  it("starts an available assigned stage through the backend action", async () => {
+    const availableWorkflow = workflow();
+    availableWorkflow.stages[0].status = "available";
+    availableWorkflow.stages[0].version = 2;
+    controlApi.fetchControlProjectWorkflow.mockResolvedValue(availableWorkflow);
+    controlApi.startControlWorkflowStage.mockResolvedValue(workflow());
+    renderSection();
+
+    const start = await screen.findByRole("button", { name: /^Start Stage$/i });
+    fireEvent.click(start);
+    await waitFor(() => expect(controlApi.startControlWorkflowStage).toHaveBeenCalledWith("stage-1", 2));
+  });
+
+  it("submits a required rejection reason and detailed instruction", async () => {
+    setLeaderAuth();
+    controlApi.markControlWorkflowStageRevisionRequired.mockResolvedValue(workflow());
+    renderSection();
+
+    const requestChanges = await screen.findByRole("button", { name: /^Request Changes$/i });
+    fireEvent.click(requestChanges);
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "Drawing mismatch" } });
+    fireEvent.change(screen.getByLabelText("Detailed instruction"), { target: { value: "Correct terminal references" } });
+    fireEvent.click(screen.getByRole("button", { name: "Revision Required" }));
+
+    await waitFor(() => expect(controlApi.markControlWorkflowStageRevisionRequired).toHaveBeenCalledWith("stage-3", expect.objectContaining({
+      reason: "Drawing mismatch",
+      detailed_instruction: "Correct terminal references",
+      version: 0,
+    })));
+  });
+
+  it("uploads image proof from the stage drawer", async () => {
+    controlApi.uploadControlWorkflowProof.mockResolvedValue({ id: "proof-1" });
+    renderSection();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "View Details" }))[0]);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const image = new File([new Uint8Array([1, 2, 3])], "panel.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [image] } });
+
+    await waitFor(() => expect(controlApi.uploadControlWorkflowProof).toHaveBeenCalledWith("stage-1", image, "", expect.any(Function)));
+  });
+  it("requires confirmation before reassigning the Control Design owner", async () => {
+    setLeaderAuth();
+    controlApi.fetchControlDesignAssignableUsers.mockResolvedValue([
+      { employee_id: "EMP-OWNER", name: "Owner User", role_id: "designer", department_id: "control", is_active: true, incomplete_task_count: 0 },
+      { employee_id: "EMP-NEW", name: "New Owner", role_id: "designer", department_id: "control", is_active: true, incomplete_task_count: 0 },
+    ]);
+    controlApi.reassignControlProjectWorkflowOwner.mockResolvedValue(workflow());
+    renderSection();
+
+    const [ownerSelect] = await screen.findAllByRole("combobox");
+    fireEvent.change(ownerSelect, { target: { value: "EMP-NEW" } });
+    fireEvent.change(screen.getByPlaceholderText("Reassignment reason"), { target: { value: "Capacity change" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+    expect(screen.getByRole("heading", { name: "Confirm reassignment" })).toBeInTheDocument();
+    expect(controlApi.reassignControlProjectWorkflowOwner).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Reassign" }));
+    await waitFor(() => expect(controlApi.reassignControlProjectWorkflowOwner).toHaveBeenCalledWith("workflow-1", "EMP-NEW", "Capacity change"));
+  });
   it("does not expose reviewer controls from generic fixture permissions alone", async () => {
     setLeaderAuth();
     sectionCapabilities = buildCapabilities({ canViewAllProjects: true });
@@ -506,7 +595,7 @@ describe("ControlWorkflowSection", () => {
 
     expect(await screen.findByRole("heading", { name: "Project Lifecycle" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Approve$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Raise Revision$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Request Update$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Override Unlock$/i })).not.toBeInTheDocument();
     expect(controlApi.fetchControlPendingApprovals).not.toHaveBeenCalled();
   }, 15000);

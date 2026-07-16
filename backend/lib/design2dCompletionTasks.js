@@ -1,12 +1,16 @@
+function activity(displayName, scope, isMandatory) {
+  return Object.freeze({ displayName, scope, isMandatory, required: isMandatory });
+}
+
 const DESIGN_2D_COMPLETION_TASKS = Object.freeze({
-  FIXTURE_DRAFTING_CHECKING: Object.freeze({ displayName: "Drafting Checking", scope: "fixture", required: false }),
-  FIXTURE_DRAWING_CORRECTION: Object.freeze({ displayName: "Drawing Correction", scope: "fixture", required: false }),
-  FIXTURE_AUTOCAD_PDF: Object.freeze({ displayName: "AutoCAD PDF", scope: "fixture", required: false }),
-  FIXTURE_IGES: Object.freeze({ displayName: "IGES", scope: "fixture", required: false }),
-  PROJECT_CMM_DATA: Object.freeze({ displayName: "CMM Data", scope: "fixture", required: false }),
-  PROJECT_LINE_LAYOUT: Object.freeze({ displayName: "Line Layout", scope: "fixture", required: false }),
-  PROJECT_MIMIC: Object.freeze({ displayName: "Mimic", scope: "fixture", required: false }),
-  PROJECT_WEAR_OUT_DATA: Object.freeze({ displayName: "Wear-Out Data", scope: "fixture", required: false }),
+  FIXTURE_DRAFTING_CHECKING: activity("Drafting Checking", "fixture", true),
+  FIXTURE_DRAWING_CORRECTION: activity("Drawing Correction", "fixture", true),
+  FIXTURE_AUTOCAD_PDF: activity("AutoCAD PDF", "fixture", true),
+  FIXTURE_IGES: activity("IGES", "fixture", true),
+  PROJECT_CMM_DATA: activity("CMM Data", "project", true),
+  PROJECT_LINE_LAYOUT: activity("Line Layout", "project", true),
+  PROJECT_WEAR_OUT_DATA: activity("Wear-Out Data", "project", true),
+  PROJECT_MIMIC: activity("Mimic", "project", false),
 });
 
 const FIXTURE_TASK_CODES = Object.freeze(
@@ -32,6 +36,14 @@ function isApprovedCompletionTask(task) {
   return task?.status === "closed" && task?.verification_status === "approved";
 }
 
+function isNotRequiredCompletionTask(task) {
+  return Boolean(task?.completion_task_not_required_at);
+}
+
+function isSatisfiedCompletionTask(task) {
+  return isApprovedCompletionTask(task) || isNotRequiredCompletionTask(task);
+}
+
 function isActiveCompletionTask(task) {
   return task && !["closed", "cancelled"].includes(task.status);
 }
@@ -54,31 +66,77 @@ function latestTasksByScope(tasks = []) {
   return latest;
 }
 
+function mandatoryCodesForScope(scope) {
+  return Object.keys(DESIGN_2D_COMPLETION_TASKS)
+    .filter((code) => DESIGN_2D_COMPLETION_TASKS[code].scope === scope)
+    .filter((code) => DESIGN_2D_COMPLETION_TASKS[code].isMandatory === true);
+}
+
+function latestTaskFor(latest, scope, fixtureId, code) {
+  return latest.get(scope === "fixture" ? `${fixtureId || ""}:${code}` : `project:${code}`) || null;
+}
+
+function aggregateCompletionState(latest, { scope, fixtureId = null } = {}) {
+  const mandatoryTasks = mandatoryCodesForScope(scope).map((code) => latestTaskFor(latest, scope, fixtureId, code));
+
+  if (mandatoryTasks.some((task) => task?.status === "rework" || task?.verification_status === "rejected")) {
+    return "REJECTED";
+  }
+  if (mandatoryTasks.some((task) => task?.status === "under_review")) {
+    return "VERIFICATION";
+  }
+  if (mandatoryTasks.some((task) => task && ["in_progress", "on_hold"].includes(task.status))) {
+    return "IN_PROGRESS";
+  }
+  if (mandatoryTasks.some((task) => task?.status === "assigned" || task?.status === "created")) {
+    return "ASSIGNED";
+  }
+  if (mandatoryTasks.every((task) => isSatisfiedCompletionTask(task))) {
+    return "WORKFLOW_COMPLETE";
+  }
+  return "UNASSIGNED";
+}
+
+function incompleteMandatoryMessages(latest, { scope, fixture = null, projectLabel = "Project" } = {}) {
+  return mandatoryCodesForScope(scope).flatMap((code) => {
+    const definition = DESIGN_2D_COMPLETION_TASKS[code];
+    const task = latestTaskFor(latest, scope, fixture?.fixture_id || null, code);
+    if (isSatisfiedCompletionTask(task)) return [];
+    const label = task?.title || formatDesign2DCompletionTaskName(code, Number(task?.completion_task_revision || 0)) || definition.displayName;
+    const owner = scope === "fixture" ? fixture?.fixture_no || fixture?.fixture_id || "Fixture" : projectLabel;
+    return [`${owner}: ${label} is incomplete`];
+  });
+}
+
 function buildDesign2DCompletionState({ fixtures = [], tasks = [] } = {}) {
   const eligibleFixtures = fixtures.filter((fixture) => fixture.two_d_complete === true);
   const latest = latestTasksByScope(tasks);
-  const activeTasks = tasks.filter(isActiveCompletionTask);
   const allFixtures2DComplete = fixtures.length > 0 && eligibleFixtures.length === fixtures.length;
   const allOriginalWorkflowsComplete = fixtures.length > 0
     && fixtures.every((fixture) => fixture.workflow_complete === true);
+  const fixtureMissingRequirements = eligibleFixtures.flatMap((fixture) => (
+    incompleteMandatoryMessages(latest, { scope: "fixture", fixture })
+  ));
+  const projectMissingRequirements = incompleteMandatoryMessages(latest, { scope: "project" });
   const missingRequirements = [];
 
   if (!allOriginalWorkflowsComplete) {
     missingRequirements.push("Every original fixture workflow must be completed");
   }
 
-  for (const task of activeTasks) {
-    missingRequirements.push(`${task.title || task.completion_task_code || "2D completion activity"} is incomplete`);
-  }
+  missingRequirements.push(...fixtureMissingRequirements, ...projectMissingRequirements);
+  const fixtureRequirementsComplete = fixtureMissingRequirements.length === 0;
+  const projectRequirementsComplete = projectMissingRequirements.length === 0;
 
   return {
     eligibleFixtures,
     latestTasks: latest,
     allFixtures2DComplete,
     allOriginalWorkflowsComplete,
-    fixtureRequirementsComplete: activeTasks.length === 0,
-    projectTasksUnlocked: true,
-    projectCompletionReady: allOriginalWorkflowsComplete && activeTasks.length === 0,
+    fixtureRequirementsComplete,
+    projectRequirementsComplete,
+    projectTasksUnlocked: allOriginalWorkflowsComplete && fixtureRequirementsComplete,
+    projectCompletionReady: allOriginalWorkflowsComplete && fixtureRequirementsComplete && projectRequirementsComplete,
     missingRequirements,
   };
 }
@@ -87,10 +145,12 @@ module.exports = {
   DESIGN_2D_COMPLETION_TASKS,
   FIXTURE_TASK_CODES,
   PROJECT_TASK_CODES,
+  aggregateCompletionState,
   buildDesign2DCompletionState,
   formatDesign2DCompletionTaskName,
   getDesign2DCompletionTaskDefinition,
   isActiveCompletionTask,
   isApprovedCompletionTask,
+  isSatisfiedCompletionTask,
   latestTasksByScope,
 };

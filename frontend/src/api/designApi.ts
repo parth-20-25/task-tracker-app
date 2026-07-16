@@ -260,6 +260,7 @@ export interface Design2DCompletionTaskDefinition {
   displayName: string;
   scope: "fixture" | "project";
   required: boolean;
+  isMandatory?: boolean;
 }
 
 export interface Design2DCompletionProjectState {
@@ -286,7 +287,9 @@ export interface AssignDesign2DCompletionTaskPayload {
   department_id?: string;
   project_id: string;
   fixture_id?: string | null;
-  task_code: Design2DCompletionTaskCode;
+  task_code?: Design2DCompletionTaskCode;
+  task_codes?: Design2DCompletionTaskCode[];
+  instructions?: string;
   assigned_to: string;
   priority: Task["priority"];
   deadline: string;
@@ -463,6 +466,13 @@ export function fetchDesign2DCompletionProjectState(projectId: string, departmen
 
 export function assignDesign2DCompletionTask(payload: AssignDesign2DCompletionTaskPayload) {
   return apiRequest<Task>("/design/2d-completion-tasks", {
+    method: "POST",
+    body: JSON.stringify(stripUndefined(payload)),
+  });
+}
+
+export function assignDesign2DCompletionTasks(payload: AssignDesign2DCompletionTaskPayload) {
+  return apiRequest<Task[]>("/design/2d-completion-tasks", {
     method: "POST",
     body: JSON.stringify(stripUndefined(payload)),
   });

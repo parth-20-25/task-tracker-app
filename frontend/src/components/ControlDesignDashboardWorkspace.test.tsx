@@ -13,6 +13,7 @@ const controlApi = vi.hoisted(() => ({
   fetchControlDesignAssignableUsers: vi.fn(),
   fetchControlDesignCapabilities: vi.fn(),
   fetchControlDesignProjects: vi.fn(),
+  fetchControlDesignSummary: vi.fn(),
   fetchControlPendingApprovals: vi.fn(),
   fetchControlProjectWorkflow: vi.fn(),
   fetchControlRevisionQueue: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock("@/api/controlWorkflowApi", async (importOriginal) => {
     fetchControlDesignAssignableUsers: (...args: unknown[]) => controlApi.fetchControlDesignAssignableUsers(...args),
     fetchControlDesignCapabilities: (...args: unknown[]) => controlApi.fetchControlDesignCapabilities(...args),
     fetchControlDesignProjects: (...args: unknown[]) => controlApi.fetchControlDesignProjects(...args),
+    fetchControlDesignSummary: (...args: unknown[]) => controlApi.fetchControlDesignSummary(...args),
     fetchControlPendingApprovals: (...args: unknown[]) => controlApi.fetchControlPendingApprovals(...args),
     fetchControlProjectWorkflow: (...args: unknown[]) => controlApi.fetchControlProjectWorkflow(...args),
     fetchControlRevisionQueue: (...args: unknown[]) => controlApi.fetchControlRevisionQueue(...args),
@@ -160,6 +162,8 @@ function buildCapabilities(overrides: Partial<ControlDesignCapabilities> = {}): 
     canStartStage: true,
     canSubmitStage: true,
     canUpdatePath: true,
+    canViewProof: true,
+    canUploadProof: true,
     canReview: false,
     canApprove: false,
     canRequestChanges: false,
@@ -258,12 +262,14 @@ function buildWorkflow(projectId = "project-1", workflowId = "workflow-1"): Cont
       stage_name: stageName,
       sequence_order: index + 1,
       is_required: true,
-      status: index === 0 ? "not_started" : "locked",
+      status: index === 0 ? "available" : "locked",
+      version: 0,
       revision_count: 0,
       created_at: "2026-07-01T00:00:00.000Z",
       updated_at: "2026-07-01T00:00:00.000Z",
       submissions: [],
       revisions: [],
+      proofs: [],
       document_history: [],
       override_history: [],
       events: [],
@@ -347,6 +353,7 @@ describe("ControlDesignDashboardWorkspace", () => {
     Element.prototype.scrollIntoView = vi.fn();
     controlApi.fetchControlDesignCapabilities.mockImplementation(() => Promise.resolve(mockCapabilities));
     controlApi.fetchControlDesignProjects.mockResolvedValue([project]);
+    controlApi.fetchControlDesignSummary.mockResolvedValue({ total: 1, active: 1, pending: 0, updates: 0, completed: 0 });
     controlApi.fetchControlSubDepartments.mockResolvedValue([
       { id: "sub-control-design", department_id: "control", subdivision_name: "Control Design", is_active: true },
     ]);
@@ -380,7 +387,7 @@ describe("ControlDesignDashboardWorkspace", () => {
     expect(screen.getByRole("button", { name: /Completed Projects/ })).toHaveTextContent("0");
     expect(screen.getByRole("heading", { name: "Control Design Projects" })).toBeInTheDocument();
     expect(screen.getAllByText("CO Creation").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Manual Preparation").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Manual Preparation")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/fixture/i)).not.toBeInTheDocument();
   }, 15000);
 
@@ -407,6 +414,7 @@ describe("ControlDesignDashboardWorkspace", () => {
       },
     });
     controlApi.fetchControlDesignProjects.mockResolvedValue([project, completedProject]);
+    controlApi.fetchControlDesignSummary.mockResolvedValue({ total: 2, active: 1, pending: 0, updates: 0, completed: 1 });
     renderWorkspace();
 
     expect(await screen.findByRole("button", { name: /Total Projects 2/ })).toBeInTheDocument();
@@ -415,7 +423,7 @@ describe("ControlDesignDashboardWorkspace", () => {
     fireEvent.click(completedFilter);
 
     expect(completedFilter).toHaveAttribute("aria-pressed", "true");
-    expect(await screen.findByText("Select a Control Design project to view its lifecycle.")).toBeInTheDocument();
+    expect(await screen.findByText("Completed Line")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Project" }));
     expect(await screen.findByRole("option", { name: /PARC-COMPLETE.*Completed Line/ })).toBeInTheDocument();
@@ -438,7 +446,10 @@ describe("ControlDesignDashboardWorkspace", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "New Control Design Project" })).toBeInTheDocument();
-    expect(within(dialog).getAllByRole("textbox")).toHaveLength(4);
+    expect(within(dialog).getByLabelText("Project root path")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Planned start date")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Target completion date")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Notes")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Project ID")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Project Name")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Customer")).toBeInTheDocument();
@@ -463,6 +474,11 @@ describe("ControlDesignDashboardWorkspace", () => {
       customer: "Tata Motors",
       budget: "1250000.00",
       assignedUserId: "EMP-CD-1",
+      priority: undefined,
+      plannedStartDate: undefined,
+      targetCompletionDate: undefined,
+      projectRootPath: undefined,
+      notes: undefined,
     }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "New Control Design Project" })).not.toBeInTheDocument());
     await waitFor(() => expect(controlApi.fetchControlDesignProjects).toHaveBeenCalledTimes(2));

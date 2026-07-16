@@ -1,7 +1,10 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const { OPERATIONAL_STATES, resolveFixtureOperationalState } = require("../services/operationalStateResolver");
+const { THREE_D_PROJECT_PROOF_OPTIONAL_KINDS } = require("../lib/taskProofPolicy");
 const {
   canCancelAssignedTask,
   canCancelOperationalTask,
@@ -75,6 +78,45 @@ test("case 4b: DAP can submit for verification at 100% without proof", () => {
   assert.equal(shouldSubmitForVerification(inProgressTask, 100), true);
 });
 
+test("case 4c: design 2D completion tasks can submit at 100% without proof", () => {
+  const inProgressTask = task({
+    task_type: "design_2d_completion",
+    status: "in_progress",
+    completion_percent: 100,
+    proof_url: [],
+    workflow_stage: "2D Finish",
+  });
+
+  assert.equal(shouldSubmitForVerification(inProgressTask, 100), true);
+});
+
+test("case 4d: 3D project additional tasks can submit at 100% without proof", () => {
+  for (const additionalTaskKind of THREE_D_PROJECT_PROOF_OPTIONAL_KINDS) {
+    assert.equal(shouldSubmitForVerification(task({
+      task_type: "additional_design",
+      additional_task_kind: additionalTaskKind,
+      design_team: "3D",
+      scope_type: "project",
+      fixture_id: null,
+      proof_required: true,
+      status: "in_progress",
+      completion_percent: 100,
+      proof_url: [],
+    }), 100), true, additionalTaskKind);
+  }
+});
+
+test("case 4e: main 3D fixture workflow tasks still require proof", () => {
+  assert.equal(shouldSubmitForVerification(task({
+    task_type: "department_workflow",
+    workflow_stage: "3D Finish",
+    proof_required: true,
+    status: "in_progress",
+    completion_percent: 100,
+    proof_url: [],
+  }), 100), false);
+});
+
 test("case 5: 100% with proof is eligible for Verification", () => {
   const inProgressTask = task({ status: "in_progress", completion_percent: 100, proof_url: ["/proof.png"] });
 
@@ -125,4 +167,13 @@ test("additional design task approval never advances fixture workflow", () => {
   assert.equal(shouldAdvanceFixtureWorkflow({ ...fixtureContext, task_type: "additional_design" }, "closed"), false);
   assert.equal(shouldAdvanceFixtureWorkflow({ ...fixtureContext, task_type: "department_workflow" }, "closed"), true);
   assert.equal(shouldAdvanceFixtureWorkflow({ ...fixtureContext, task_type: "department_workflow" }, "rework"), false);
+});
+test("low priority completion uses system auto-approval metadata instead of approval queue ownership", () => {
+  const taskService = fs.readFileSync(path.join(__dirname, "..", "services", "taskService.js"), "utf8");
+
+  assert.match(taskService, /approvalSource: "LOW_PRIORITY_POLICY"/);
+  assert.match(taskService, /approvedByType: "SYSTEM"/);
+  assert.match(taskService, /actionType: autoApproved[\s\S]*"task_auto_approved"/);
+  assert.match(taskService, /approved_by: nextStatus === TASK_STATUSES\.CLOSED \? \(autoApproved \? null : user\.employee_id\) : task\.approved_by/);
+  assert.match(taskService, /autoApprovedFromCompletion[\s\S]*approved_by: null/);
 });

@@ -231,6 +231,7 @@ describe("AdditionalDesignTaskAssignment subdivision catalog", () => {
       design_team: "3D",
       fixture_id: null,
       scope_type: "project",
+      proof_required: false,
     }));
   });
 

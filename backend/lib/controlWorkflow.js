@@ -42,10 +42,14 @@ const CONTROL_PROJECT_STATUSES = {
 
 const STAGE_STATUSES = {
   LOCKED: "locked",
-  NOT_STARTED: "not_started",
+  AVAILABLE: "available",
+  NOT_STARTED: "available",
   IN_PROGRESS: "in_progress",
-  SUBMITTED_FOR_APPROVAL: "submitted_for_approval",
-  REVISION_REQUIRED: "revision_required",
+  PENDING_APPROVAL: "pending_approval",
+  SUBMITTED_FOR_APPROVAL: "pending_approval",
+  CHANGES_REQUIRED: "changes_required",
+  REVISION_REQUIRED: "changes_required",
+  UPDATE_REQUIRED: "update_required",
   APPROVED: "approved",
   BLOCKED: "blocked",
   PRE_COMPLETED: "pre_completed",
@@ -78,7 +82,6 @@ const REVISION_REASONS = [
   "Vendor/Availability Issue",
   "Material Substitution",
   "Trial/Commissioning Feedback",
-  "Site Feedback",
   "Other",
 ];
 
@@ -198,11 +201,11 @@ function createInitialStageRows(templateStages = []) {
 }
 
 function canStartStage(stage) {
-  return [STAGE_STATUSES.NOT_STARTED, STAGE_STATUSES.REVISION_REQUIRED].includes(stage?.status);
+  return [STAGE_STATUSES.AVAILABLE, STAGE_STATUSES.CHANGES_REQUIRED].includes(stage?.status);
 }
 
 function canSubmitStage(stage) {
-  return [STAGE_STATUSES.IN_PROGRESS, STAGE_STATUSES.REVISION_REQUIRED].includes(stage?.status);
+  return [STAGE_STATUSES.IN_PROGRESS, STAGE_STATUSES.CHANGES_REQUIRED].includes(stage?.status);
 }
 
 function assertOtherReasonHasManualRemarks(reason, manualReason) {

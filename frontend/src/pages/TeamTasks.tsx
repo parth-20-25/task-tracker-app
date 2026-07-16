@@ -20,6 +20,7 @@ import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, projectQueryKeys, t
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { resolveImageUrl } from '@/lib/imageUrl';
 import { formatProjectNumber } from '@/lib/projectDisplay';
+import { requiresTaskWorkProof } from '@/lib/taskProofPolicy';
 import {
   isPendingVerificationTask,
   isTaskAssignedToEmployee,
@@ -122,6 +123,7 @@ interface ApprovalPendingCardProps {
 
 function ApprovalPendingCard({ task, canReview, isSubmitting, onApprove, onReject }: ApprovalPendingCardProps) {
   const proofLinks = getTaskProofLinks(task);
+  const showProofPanel = requiresTaskWorkProof(task) || proofLinks.length > 0;
   const submittedAt = task.submitted_at || task.completed_at || task.updated_at;
   const projectLabel = [formatProjectNumber({ project_no: task.project_no, project_is_modified: task.project_is_modified }), task.project_name]
     .filter(Boolean)
@@ -159,7 +161,7 @@ function ApprovalPendingCard({ task, canReview, isSubmitting, onApprove, onRejec
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-md border p-3">
+          {showProofPanel ? <div className="rounded-md border p-3">
             <div className="mb-2 flex items-center gap-1.5 text-sm font-medium">
               <FileText className="h-4 w-4 text-muted-foreground" />
               Work Proofs
@@ -188,7 +190,7 @@ function ApprovalPendingCard({ task, canReview, isSubmitting, onApprove, onRejec
                 ))}
               </div>
             )}
-          </div>
+          </div> : null}
 
           <div className="rounded-md border p-3">
             <p className="mb-2 text-sm font-medium">Completion Notes</p>

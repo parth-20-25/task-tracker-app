@@ -24,6 +24,11 @@ const {
   resolveAdditionalDesignTeamForUser,
   userBelongsToAdditionalDesignTeam,
 } = require("../lib/additionalDesignTasks");
+const {
+  hasTaskWorkProof,
+  isProofOptionalThreeDProjectAdditionalTask,
+  isTaskWorkProofRequired,
+} = require("../lib/taskProofPolicy");
 const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
 const {
   formatDesign2DCompletionTaskName,
@@ -302,32 +307,28 @@ function getTaskProofUrls(task) {
   return [];
 }
 
-function taskHasProof(task) {
-  return getTaskProofUrls(task).length > 0;
-}
-
 function isApprovalRequired(task) {
   return task?.approval_required !== false;
 }
 
-function isProofRequired(task) {
-  return task?.proof_required === true;
+function isLowPriorityTask(task) {
+  return String(task?.priority || "").trim().toLowerCase() === "low";
 }
 
-function isDapWorkflowTask(task) {
-  return normalizeDesignStageName(task?.workflow_stage || task?.stage || task?.current_stage_name) === "dap";
-}
-
-function isWorkProofRequiredForTask(task) {
-  return !isDapWorkflowTask(task);
+function lowPriorityApprovalMetadata() {
+  return {
+    autoApproved: true,
+    approvalSource: "LOW_PRIORITY_POLICY",
+    approvedByType: "SYSTEM",
+  };
 }
 
 function assertWorkProofUploaded(task) {
-  if (!isWorkProofRequiredForTask(task)) {
+  if (!isTaskWorkProofRequired(task)) {
     return;
   }
 
-  if (!taskHasProof(task)) {
+  if (!hasTaskWorkProof(task)) {
     throw new AppError(400, "Work proof image required before verification submission");
   }
 }
@@ -353,7 +354,12 @@ function isTaskProofAssignee(user, task) {
 }
 
 function canUpdateTaskProof(user, task) {
-  if (!hasPermission(user, PERMISSIONS.UPLOAD_PROOFS) || !isTaskProofAssignee(user, task) || task?.status === TASK_STATUSES.CLOSED) {
+  if (
+    isProofOptionalThreeDProjectAdditionalTask(task)
+    || !hasPermission(user, PERMISSIONS.UPLOAD_PROOFS)
+    || !isTaskProofAssignee(user, task)
+    || task?.status === TASK_STATUSES.CLOSED
+  ) {
     return false;
   }
 
@@ -711,13 +717,14 @@ function mapExecutionPayloadToStatus(task, payload) {
     case "hold":
       return TASK_STATUSES.ON_HOLD;
     case "submit":
-      return isApprovalRequired(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
+      return isApprovalRequired(task) && !isLowPriorityTask(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
     default:
       return null;
   }
 }
 
 async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
+  const submitRemarks = remarks === undefined ? undefined : String(remarks || "").trim() || null;
   if (!isTaskAssignee(user, task)) {
     throw new AppError(403, "Only the assignee can update task status");
   }
@@ -768,7 +775,7 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       }
       assertWorkProofUploaded(task);
       await submitFixtureStageForVerification({ task, actor: user });
-      nextStatus = isApprovalRequired(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
+      nextStatus = isApprovalRequired(task) && !isLowPriorityTask(task) ? TASK_STATUSES.UNDER_REVIEW : TASK_STATUSES.CLOSED;
       nextLifecycleStatus = nextStatus === TASK_STATUSES.CLOSED ? "completed" : TASK_STATUSES.IN_PROGRESS;
       nextVerificationStatus = nextStatus === TASK_STATUSES.CLOSED
         ? VERIFICATION_STATUSES.APPROVED
@@ -777,7 +784,7 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       completedAt = eventTime;
       closedAt = nextStatus === TASK_STATUSES.CLOSED ? eventTime : null;
       approvedAt = nextStatus === TASK_STATUSES.CLOSED ? eventTime : null;
-      approvedBy = nextStatus === TASK_STATUSES.CLOSED ? user.employee_id : null;
+      approvedBy = nextStatus === TASK_STATUSES.CLOSED && !isLowPriorityTask(task) ? user.employee_id : null;
       break;
     default:
       throw new AppError(400, `Unsupported workflow action "${action}"`);
@@ -825,24 +832,38 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
     submitted_at: nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED ? eventTime : task.submitted_at,
     approved_at: approvedAt,
     approved_by: approvedBy,
+    ...(action === "submit" && submitRemarks !== undefined ? { remarks: submitRemarks } : {}),
   });
+
+  const autoApproved = action === "submit" && nextStatus === TASK_STATUSES.CLOSED && isLowPriorityTask(task);
+
+  if (autoApproved && shouldAdvanceFixtureWorkflow(task, nextStatus)) {
+    await advanceWorkflowAfterTaskApproval({
+      project_id: task.project_id,
+      fixture_no: task.fixture_no,
+      department_id: task.department_id,
+      fixture_id: task.fixture_id,
+      task_id: task.id,
+    });
+  }
 
   await appendTaskActivity(task.id, {
     userEmployeeId: user.employee_id,
-    actionType: "status_changed",
-    notes: remarks || null,
+    actionType: autoApproved ? "task_auto_approved" : "status_changed",
+    notes: autoApproved ? "Automatically approved because task priority was Low." : remarks || null,
     metadata: {
       from: task.status,
       to: nextStatus,
       workflow_stage_id: task.current_stage_id,
       lifecycle_status: nextLifecycleStatus,
       workflow_action: action,
+      ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
 
   await createAuditLog({
     userEmployeeId: user.employee_id,
-    actionType: "task_status_updated",
+    actionType: autoApproved ? "task_auto_approved" : "task_status_updated",
     targetType: "task",
     targetId: task.id,
     metadata: {
@@ -851,6 +872,7 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       workflow_stage_id: task.current_stage_id,
       lifecycle_status: nextLifecycleStatus,
       workflow_action: action,
+      ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
 
@@ -1293,9 +1315,11 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
       ? (requestedApprovalRequired ?? workflowTemplate?.default_approval_required ?? true)
       : requestedApprovalRequired === true;
-  const resolvedProofRequired = [TASK_TYPES.ADDITIONAL_DESIGN, TASK_TYPES.DESIGN_2D_COMPLETION].includes(taskType)
+  const configuredProofRequired = taskType === TASK_TYPES.ADDITIONAL_DESIGN
     ? true
-    : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
+    : taskType === TASK_TYPES.DESIGN_2D_COMPLETION
+      ? false
+      : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
       ? (requestedProofRequired ?? workflowTemplate?.default_proof_required ?? true)
       : requestedProofRequired === true;
 
@@ -1328,6 +1352,15 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     : taskType === TASK_TYPES.DESIGN_2D_COMPLETION
       ? completionTaskDefinition.scope
     : normalizeTaskScopeType(requestedScopeType, fixtureId);
+  const resolvedProofRequired = isTaskWorkProofRequired({
+    task_type: taskType,
+    proof_required: configuredProofRequired,
+    design_team: designTeam,
+    scope_type: scopeType,
+    fixture_id: fixtureId,
+    additional_task_kind: additionalTaskKind,
+    workflow_stage: stage,
+  });
 
   if (taskType === TASK_TYPES.DEPARTMENT_WORKFLOW) {
     assertMultiAssigneeAllowedForStage(assigneeIds, stage);
@@ -1740,7 +1773,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
 
     if (nextStatus) {
       assertTaskProjectIsActive(taskForWorkflow);
-      await applyTaskStatusUpdate(user, taskForWorkflow, nextStatus);
+      await applyTaskStatusUpdate(user, taskForWorkflow, nextStatus, payload.remarks);
       handled = true;
     } else if (hasExecutionUpdate(payload)) {
       throw new AppError(400, "Invalid action for current task state");
@@ -2162,7 +2195,7 @@ async function transitionTaskForUser(user, taskId, nextStageId) {
   const transitionTime = new Date();
   const nextStatus = nextStage.is_final ? TASK_STATUSES.CLOSED : TASK_STATUSES.ASSIGNED;
 
-  if (nextStatus === TASK_STATUSES.CLOSED && isProofRequired(task) && isWorkProofRequiredForTask(task) && !taskHasProof(task)) {
+  if (nextStatus === TASK_STATUSES.CLOSED && isTaskWorkProofRequired(task) && !hasTaskWorkProof(task)) {
     throw new AppError(400, "Proof is required before completing the task");
   }
   const nextApprovalStage = nextStage.is_final ? "closed" : "execution";
@@ -2341,7 +2374,8 @@ async function cancelTaskForUser(user, taskId, reason) {
   return cancelledTask;
 }
 
-async function applyTaskStatusUpdate(user, task, nextStatus) {
+async function applyTaskStatusUpdate(user, task, nextStatus, remarks) {
+  const submitRemarks = remarks === undefined ? undefined : String(remarks || "").trim() || null;
   if (!isTaskAssignee(user, task)) {
     throw new AppError(403, "Only the assignee can update task status");
   }
@@ -2373,6 +2407,7 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
     : nextStatus === TASK_STATUSES.CLOSED
       ? "closed"
       : "execution";
+  const autoApproved = nextStatus === TASK_STATUSES.CLOSED && isLowPriorityTask(task);
 
   await updateTaskStatus(task.id, {
     status: nextStatus,
@@ -2384,29 +2419,33 @@ async function applyTaskStatusUpdate(user, task, nextStatus) {
     closed_at: nextStatus === TASK_STATUSES.CLOSED ? completionEventTime : task.closed_at || null,
     submitted_at: nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED ? completionEventTime : task.submitted_at,
     approved_at: nextStatus === TASK_STATUSES.CLOSED ? completionEventTime : task.approved_at,
-    approved_by: nextStatus === TASK_STATUSES.CLOSED ? user.employee_id : task.approved_by,
+    approved_by: nextStatus === TASK_STATUSES.CLOSED ? (autoApproved ? null : user.employee_id) : task.approved_by,
+    ...(nextStatus === TASK_STATUSES.UNDER_REVIEW || nextStatus === TASK_STATUSES.CLOSED ? { remarks: submitRemarks ?? null } : {}),
   });
 
   await appendTaskActivity(task.id, {
     userEmployeeId: user.employee_id,
-    actionType: "status_changed",
+    actionType: autoApproved ? "task_auto_approved" : "status_changed",
+    notes: autoApproved ? "Automatically approved because task priority was Low." : null,
     metadata: {
       from: task.status,
       to: nextStatus,
       workflow_id: task.workflow_id || null,
       current_stage_id: task.current_stage_id || null,
       current_stage_name: task.workflow_stage || null,
+      ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
 
   await createAuditLog({
     userEmployeeId: user.employee_id,
-    actionType: "task_status_updated",
+    actionType: autoApproved ? "task_auto_approved" : "task_status_updated",
     targetType: "task",
     targetId: task.id,
     metadata: {
       from: task.status,
       to: nextStatus,
+      ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
 
@@ -2770,6 +2809,7 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
   const completionPercent = normalizeCompletionPercent(payload.completion_percent);
   const client = await pool.connect();
   let submittedForVerification = false;
+  let autoApprovedFromCompletion = false;
   let autoStarted = false;
 
   try {
@@ -2824,20 +2864,34 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
     }
 
     if (isWorkflowManagedTask(lockedTask) && shouldSubmitForVerification(lockedTask, completionPercent)) {
+      const submittedAt = new Date();
+      autoApprovedFromCompletion = isLowPriorityTask(lockedTask);
       await submitFixtureStageForVerification({ task: lockedTask, actor: user, client });
       await updateTaskCompletionPercent(lockedTask.id, completionPercent, client);
       await updateTaskStatus(lockedTask.id, {
-        status: TASK_STATUSES.UNDER_REVIEW,
-        started_at: lockedTask.started_at || new Date(),
-        completed_at: new Date(),
-        verification_status: VERIFICATION_STATUSES.PENDING,
+        status: autoApprovedFromCompletion ? TASK_STATUSES.CLOSED : TASK_STATUSES.UNDER_REVIEW,
+        started_at: lockedTask.started_at || submittedAt,
+        completed_at: submittedAt,
+        verification_status: autoApprovedFromCompletion ? VERIFICATION_STATUSES.APPROVED : VERIFICATION_STATUSES.PENDING,
         actual_minutes: lockedTask.actual_minutes || 0,
-        approval_stage: "manager",
-        closed_at: null,
+        approval_stage: autoApprovedFromCompletion ? "closed" : "manager",
+        closed_at: autoApprovedFromCompletion ? submittedAt : null,
         current_stage_id: lockedTask.current_stage_id,
-        lifecycle_status: TASK_STATUSES.IN_PROGRESS,
-        submitted_at: new Date(),
+        lifecycle_status: autoApprovedFromCompletion ? "completed" : TASK_STATUSES.IN_PROGRESS,
+        submitted_at: submittedAt,
+        approved_at: autoApprovedFromCompletion ? submittedAt : null,
+        approved_by: null,
       }, client);
+      if (autoApprovedFromCompletion && shouldAdvanceFixtureWorkflow(lockedTask, TASK_STATUSES.CLOSED)) {
+        await advanceWorkflowAfterTaskApproval({
+          project_id: lockedTask.project_id,
+          fixture_no: lockedTask.fixture_no,
+          department_id: lockedTask.department_id,
+          fixture_id: lockedTask.fixture_id,
+          task_id: lockedTask.id,
+          client,
+        });
+      }
       submittedForVerification = true;
     } else {
       await updateTaskCompletionPercent(lockedTask.id, completionPercent, client);
@@ -2845,34 +2899,43 @@ async function applyTaskCompletionPercentUpdate(user, task, payload) {
 
     await appendTaskActivity(lockedTask.id, {
       userEmployeeId: user.employee_id,
-      actionType: submittedForVerification
-        ? "task_submitted_for_verification"
-        : autoStarted
-          ? "task_auto_started"
-          : "task_completion_percent_updated",
+      actionType: autoApprovedFromCompletion
+        ? "task_auto_approved"
+        : submittedForVerification
+          ? "task_submitted_for_verification"
+          : autoStarted
+            ? "task_auto_started"
+            : "task_completion_percent_updated",
+      notes: autoApprovedFromCompletion ? "Automatically approved because task priority was Low." : null,
       metadata: {
         from: lockedTask.completion_percent ?? 0,
         to: completionPercent,
-        workflow_status: submittedForVerification
-          ? WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
-          : autoStarted
-            ? WORKFLOW_STATUSES.IN_PROGRESS
-            : null,
+        workflow_status: autoApprovedFromCompletion
+          ? WORKFLOW_STATUSES.APPROVED
+          : submittedForVerification
+            ? WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION
+            : autoStarted
+              ? WORKFLOW_STATUSES.IN_PROGRESS
+              : null,
+        ...(autoApprovedFromCompletion ? lowPriorityApprovalMetadata() : {}),
       },
     }, client);
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
-      actionType: submittedForVerification
-        ? "task_submitted_for_verification"
-        : autoStarted
-          ? "task_auto_started"
-          : "task_completion_percent_updated",
+      actionType: autoApprovedFromCompletion
+        ? "task_auto_approved"
+        : submittedForVerification
+          ? "task_submitted_for_verification"
+          : autoStarted
+            ? "task_auto_started"
+            : "task_completion_percent_updated",
       targetType: "task",
       targetId: lockedTask.id,
       metadata: {
         from: lockedTask.completion_percent ?? 0,
         to: completionPercent,
+        ...(autoApprovedFromCompletion ? lowPriorityApprovalMetadata() : {}),
       },
     }, client);
 

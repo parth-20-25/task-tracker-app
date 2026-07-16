@@ -12,6 +12,10 @@ const {
   userBelongsToAdditionalDesignTeam,
 } = require("../lib/additionalDesignTasks");
 const { resolveTaskProofExtension } = require("../lib/taskProofUpload");
+const {
+  THREE_D_PROJECT_PROOF_OPTIONAL_KINDS,
+  isTaskWorkProofRequired,
+} = require("../lib/taskProofPolicy");
 const { mapTaskRow } = require("../repositories/mappers");
 
 test("additional design task catalog is subdivision specific", () => {
@@ -82,6 +86,36 @@ test("proof upload allowlist accepts required deliverables and rejects executabl
   assert.equal(resolveTaskProofExtension({ originalname: "surface.iges", mimetype: "application/octet-stream" }), ".iges");
   assert.equal(resolveTaskProofExtension({ originalname: "payload.exe", mimetype: "application/pdf" }), null);
   assert.equal(resolveTaskProofExtension({ originalname: "drawing.pdf.exe", mimetype: "application/octet-stream" }), null);
+});
+
+test("3D project additional proof policy makes only the requested project kinds proof optional", () => {
+  for (const additionalTaskKind of THREE_D_PROJECT_PROOF_OPTIONAL_KINDS) {
+    assert.equal(isTaskWorkProofRequired({
+      task_type: "additional_design",
+      proof_required: true,
+      design_team: "3D",
+      scope_type: "project",
+      fixture_id: null,
+      additional_task_kind: additionalTaskKind,
+    }), false, additionalTaskKind);
+  }
+
+  assert.equal(isTaskWorkProofRequired({
+    task_type: "additional_design",
+    proof_required: true,
+    design_team: "3D",
+    scope_type: "project",
+    fixture_id: null,
+    additional_task_kind: "Print & Drafting Checking",
+  }), true);
+  assert.equal(isTaskWorkProofRequired({
+    task_type: "additional_design",
+    proof_required: true,
+    design_team: "2D",
+    scope_type: "project",
+    fixture_id: null,
+    additional_task_kind: "Line Layout",
+  }), true);
 });
 
 test("task mapper preserves additional design category fields", () => {

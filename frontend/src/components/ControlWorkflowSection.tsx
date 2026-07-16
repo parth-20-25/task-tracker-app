@@ -1,11 +1,14 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Circle,
   Copy,
+  Download,
+  Eye,
   Clock3,
   FilePenLine,
+  FileText,
   GitBranch,
   Loader2,
   LockKeyhole,
@@ -14,6 +17,8 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Trash2,
+  Upload,
   Unlock,
 } from "lucide-react";
 import {
@@ -21,7 +26,9 @@ import {
   approveControlWorkflowRevision,
   approveControlWorkflowStage,
   createControlProjectWorkflow,
+  downloadControlWorkflowProof,
   fetchControlDesignAssignableUsers,
+  fetchControlWorkflowProofBlob,
   fetchControlProjectWorkflow,
   fetchControlSubDepartments,
   fetchControlWorkflowTemplate,
@@ -29,7 +36,9 @@ import {
   markControlWorkflowRevisionChangesRequired,
   markControlWorkflowStagePreCompleted,
   markControlWorkflowStageRevisionRequired,
+  openControlWorkflowProof,
   overrideUnlockControlWorkflowStage,
+  removeControlWorkflowProof,
   skipControlWorkflowStageByOverride,
   raiseControlWorkflowRevision,
   reassignControlProjectWorkflowOwner,
@@ -38,9 +47,11 @@ import {
   submitControlWorkflowRevision,
   submitControlWorkflowStage,
   updateControlWorkflowDocumentPath,
+  uploadControlWorkflowProof,
   type ControlDesignCapabilities,
   type ControlProjectWorkflow,
   type ControlRevisionReason,
+  type ControlWorkflowProof,
   type ControlWorkflowRevision,
   type ControlWorkflowStage,
 } from "@/api/controlWorkflowApi";
@@ -76,16 +87,16 @@ const REVISION_REASONS: ControlRevisionReason[] = [
   "Vendor/Availability Issue",
   "Material Substitution",
   "Trial/Commissioning Feedback",
-  "Site Feedback",
   "Other",
 ];
 
 const stageStatusLabels: Record<ControlWorkflowStage["status"], string> = {
   locked: "Locked",
-  not_started: "Not Started",
+  available: "Not Started",
   in_progress: "In Progress",
-  submitted_for_approval: "Submitted for Approval",
-  revision_required: "Revision Required",
+  pending_approval: "Pending Approval",
+  changes_required: "Changes Required",
+  update_required: "Update Required",
   approved: "Approved",
   blocked: "Blocked",
   pre_completed: "Pre-Completed",
@@ -95,15 +106,15 @@ const stageStatusLabels: Record<ControlWorkflowStage["status"], string> = {
 const stageStatusClasses: Record<ControlWorkflowStage["status"], string> = {
   approved: "border-emerald-200 bg-emerald-50 text-emerald-800",
   in_progress: "border-sky-200 bg-sky-50 text-sky-800",
-  submitted_for_approval: "border-amber-200 bg-amber-50 text-amber-900",
-  revision_required: "border-orange-200 bg-orange-50 text-orange-900",
+  pending_approval: "border-amber-200 bg-amber-50 text-amber-900",
+  changes_required: "border-orange-200 bg-orange-50 text-orange-900",
+  update_required: "border-orange-200 bg-orange-50 text-orange-900",
   locked: "border-slate-200 bg-slate-50 text-slate-500",
-  not_started: "border-slate-200 bg-white text-slate-700",
+  available: "border-blue-200 bg-blue-50 text-blue-800",
   pre_completed: "border-violet-200 bg-violet-50 text-violet-800",
   blocked: "border-red-200 bg-red-50 text-red-800",
   skipped_by_override: "border-zinc-200 bg-zinc-50 text-zinc-700",
 };
-
 type ModalState =
   | { type: "submit"; stage: ControlWorkflowStage }
   | { type: "review"; stage: ControlWorkflowStage }
@@ -203,12 +214,12 @@ function stageHistory(stage: ControlWorkflowStage): StageHistoryEntry[] {
   }
 
   const entries: StageHistoryEntry[] = [{
-    id: stage.id + "-created",
+    id: `${stage.id}-created`,
     type: "stage_initialized",
     details: stage.sequence_order === 1 ? "Available when the workflow was created." : "Locked when the workflow was created.",
     createdAt: stage.created_at,
   }];
-  if (stage.started_at) entries.push({ id: stage.id + "-started", type: "stage_started", createdAt: stage.started_at });
+  if (stage.started_at) entries.push({ id: `${stage.id}-started`, type: "stage_started", actorId: stage.started_by, actorName: stage.started_by_name, createdAt: stage.started_at });
   stage.document_history.forEach((item) => entries.push({
     id: item.id,
     type: "path_updated",
@@ -233,34 +244,33 @@ function stageHistory(stage: ControlWorkflowStage): StageHistoryEntry[] {
     details: item.description,
     createdAt: item.approved_at || item.submitted_at || item.created_at,
   }));
-  return entries.sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
   stage.override_history.forEach((item) => entries.push({
     id: item.id,
     type: "override_performed",
     actorId: item.unlocked_by,
     actorName: item.unlocked_by_name,
-    details: item.reason + (item.remarks ? " - " + item.remarks : ""),
+    details: item.reason + (item.remarks ? ` - ${item.remarks}` : ""),
     createdAt: item.created_at,
   }));
-
+  return entries.sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 }
 
 function stageView(stage: ControlWorkflowStage) {
   const revision = latestRevision(stage);
-  if (revision?.status === "submitted_for_approval") {
-    return { label: "Pending Approval", className: stageStatusClasses.submitted_for_approval, icon: Clock3, helper: "Updated work is waiting for approval." };
+  if (stage.status === "pending_approval") {
+    return { label: "Pending Approval", className: stageStatusClasses.pending_approval, icon: Clock3, helper: "Submitted work is awaiting approval." };
   }
   if (revision?.status === "in_progress") {
-    return { label: "Update In Progress", className: stageStatusClasses.in_progress, icon: FilePenLine, helper: "The requested update is being prepared." };
+    return { label: "Update In Progress", className: stageStatusClasses.update_required, icon: FilePenLine, helper: "The requested update is being prepared." };
   }
   if (revision && ["not_started", "changes_required"].includes(revision.status)) {
-    return { label: "Update Required", className: stageStatusClasses.revision_required, icon: RefreshCw, helper: "Approved work needs an update before this revision can close." };
+    return { label: "Update Required", className: stageStatusClasses.update_required, icon: RefreshCw, helper: "Approved work needs an update before this revision can close." };
   }
   const Icon = stage.status === "approved" ? CheckCircle2
     : stage.status === "in_progress" ? FilePenLine
-      : stage.status === "submitted_for_approval" ? Clock3
+      : stage.status === "pending_approval" ? Clock3
         : stage.status === "locked" ? LockKeyhole
-          : stage.status === "revision_required" ? RefreshCw
+          : ["changes_required", "update_required"].includes(stage.status) ? RefreshCw
             : Circle;
   return {
     label: stageStatusLabels[stage.status],
@@ -269,8 +279,32 @@ function stageView(stage: ControlWorkflowStage) {
     helper: stage.status === "locked" ? "Locked until the previous stage is approved." : null,
   };
 }
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+  return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
+}
 
-
+function ProofThumbnail({ proof }: { proof: ControlWorkflowProof }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const isImage = proof.mime_type.startsWith("image/");
+  useEffect(() => {
+    if (!isImage) return undefined;
+    let active = true;
+    let objectUrl: string | null = null;
+    void fetchControlWorkflowProofBlob(proof.open_url).then((blob) => {
+      if (!active) return;
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    }).catch(() => setUrl(null));
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [isImage, proof.open_url]);
+  if (isImage && url) return <img src={url} alt="" className="h-8 w-8 rounded border object-cover" />;
+  return <span className="flex h-8 w-8 items-center justify-center rounded border bg-slate-50"><FileText className="h-5 w-5 text-slate-500" /></span>;
+}
 export function ControlWorkflowSection({ project, capabilities }: ControlWorkflowSectionProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -278,6 +312,10 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
   const [ownerReason, setOwnerReason] = useState("");
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [comment, setComment] = useState("");
+  const proofInputId = useId();
+  const [proofComment, setProofComment] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [reassignConfirmOpen, setReassignConfirmOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [form, setForm] = useState<Record<string, string | boolean>>({});
 
@@ -324,6 +362,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["control-workflow"] }),
       queryClient.invalidateQueries({ queryKey: ["control-design", "projects"] }),
+      queryClient.invalidateQueries({ queryKey: ["control-design", "summary"] }),
       queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
     ]);
   };
@@ -336,6 +375,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
       setOwnerId("");
       setOwnerReason("");
       await invalidateControlWorkflow();
+      toast({ title: "Control workflow updated" });
     },
     onError: (error) => {
       toast({
@@ -350,6 +390,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
     onSuccess: async () => {
       setComment("");
       await invalidateControlWorkflow();
+      toast({ title: "Control workflow updated" });
     },
     onError: (error) => {
       toast({
@@ -362,6 +403,33 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
 
 
 
+  const proofUploadMutation = useMutation({
+    mutationFn: ({ stageId, file }: { stageId: string; file: File }) => uploadControlWorkflowProof(
+      stageId,
+      file,
+      proofComment,
+      setUploadProgress,
+    ),
+    onSuccess: async () => {
+      setProofComment("");
+      setUploadProgress(null);
+      await invalidateControlWorkflow();
+      toast({ title: "Work proof uploaded" });
+    },
+    onError: (error) => {
+      setUploadProgress(null);
+      toast({ title: "Work proof upload failed", description: error instanceof Error ? error.message : "Upload failed.", variant: "destructive" });
+    },
+  });
+
+  const proofRemoveMutation = useMutation({
+    mutationFn: (proofId: string) => removeControlWorkflowProof(proofId),
+    onSuccess: async () => {
+      await invalidateControlWorkflow();
+      toast({ title: "Work proof removed" });
+    },
+    onError: (error) => toast({ title: "Could not remove work proof", description: error instanceof Error ? error.message : "Remove failed.", variant: "destructive" }),
+  });
   const createMutation = useMutation({
     mutationFn: () => createControlProjectWorkflow({
       project_id: project.project_id,
@@ -387,6 +455,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
   const reassignMutation = useMutation({
     mutationFn: () => reassignControlProjectWorkflowOwner(workflow?.id || "", ownerId, ownerReason.trim() || undefined),
     onSuccess: async () => {
+      setReassignConfirmOpen(false);
       setOwnerId("");
       setOwnerReason("");
       await invalidateControlWorkflow();
@@ -413,7 +482,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
     } else if (nextModal.type === "document") {
       setForm({ document_path: nextModal.stage.current_document_path || "", remarks: "" });
     } else if (nextModal.type === "revisionRequired") {
-      setForm({ description: "", due_date: defaultDateTimeLocal(), remarks: "" });
+      setForm({ reason: "", detailed_instruction: "", correction_deadline: defaultDateTimeLocal() });
     } else if (nextModal.type === "raiseRevision") {
       setForm({
         stage_id: nextModal.stage?.id || workflow?.current_stage_id || "",
@@ -431,7 +500,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
     } else if (nextModal.type === "dispatch") {
       setForm({ dispatch_date: defaultDateTimeLocal(0), remarks: "" });
     } else if (nextModal.type === "revisionChangesRequired") {
-      setForm({ review_remarks: "" });
+      setForm({ reason: "", detailed_instruction: "", correction_deadline: defaultDateTimeLocal() });
     } else if (nextModal.type === "preCompleted") {
       setForm({
         completion_date: defaultDateTimeLocal(0),
@@ -458,23 +527,25 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
       workflowMutation.mutate(() => submitControlWorkflowStage(modal.stage.id, {
         submitted_document_path: String(form.submitted_document_path || ""),
         remarks: String(form.remarks || ""),
+        version: modal.stage.version,
       }));
     } else if (modal.type === "document") {
       workflowMutation.mutate(() => updateControlWorkflowDocumentPath(modal.stage.id, {
         document_path: String(form.document_path || ""),
         remarks: String(form.remarks || ""),
+        version: modal.stage.version,
       }));
     } else if (modal.type === "review") {
       workflowMutation.mutate(() => approveControlWorkflowStage(modal.stage.id, {
         review_remarks: String(form.review_remarks || ""),
+        version: modal.stage.version,
       }));
     } else if (modal.type === "revisionRequired") {
       workflowMutation.mutate(() => markControlWorkflowStageRevisionRequired(modal.stage.id, {
-        review_remarks: String(form.description || ""),
-        revision_reason: "Internal Correction",
-        description: String(form.description || ""),
-        due_date: new Date(String(form.due_date)).toISOString(),
-        remarks: String(form.remarks || ""),
+        reason: String(form.reason || ""),
+        detailed_instruction: String(form.detailed_instruction || ""),
+        correction_deadline: form.correction_deadline ? new Date(String(form.correction_deadline)).toISOString() : undefined,
+        version: modal.stage.version,
       }));
     } else if (modal.type === "raiseRevision") {
       const stageId = String(form.stage_id || modal.stage?.id || "");
@@ -486,6 +557,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
         priority: String(form.priority || ""),
         remarks: String(form.remarks || ""),
         affected_stage_ids: selectedAffectedStageIds(),
+        reference_path: String(form.reference_path || modal.stage?.current_document_path || "") || undefined,
       }));
     } else if (modal.type === "override") {
       workflowMutation.mutate(() => overrideUnlockControlWorkflowStage(modal.stage.id, {
@@ -508,13 +580,19 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
         remarks: String(form.remarks || ""),
       }));
     } else if (modal.type === "submitRevision") {
+      const stage = workflow?.stages.find((item) => item.id === modal.revision.workflow_stage_id);
       workflowMutation.mutate(() => submitControlWorkflowRevision(modal.revision.id, {
         submitted_document_path: String(form.submitted_document_path || ""),
         remarks: String(form.remarks || ""),
+        version: stage?.version,
       }));
     } else if (modal.type === "revisionChangesRequired") {
+      const stage = workflow?.stages.find((item) => item.id === modal.revision.workflow_stage_id);
       workflowMutation.mutate(() => markControlWorkflowRevisionChangesRequired(modal.revision.id, {
-        review_remarks: String(form.review_remarks || ""),
+        reason: String(form.reason || ""),
+        detailed_instruction: String(form.detailed_instruction || ""),
+        correction_deadline: form.correction_deadline ? new Date(String(form.correction_deadline)).toISOString() : undefined,
+        version: stage?.version,
       }));
     } else if (modal.type === "dispatch" && workflow) {
       workflowMutation.mutate(() => markControlWorkflowDispatched(workflow.id, {
@@ -527,9 +605,9 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
   const canRunModalAction = Boolean(!workflowMutation.isPending && (
     !modal
     || (modal.type === "review" && capabilities.canApprove)
-    || (modal.type === "submit" && capabilities.canSubmitStage && String(form.submitted_document_path || "").trim())
+    || (modal.type === "submit" && capabilities.canSubmitStage && (String(form.submitted_document_path || "").trim() || (modal.stage.proofs || []).some((proof) => proof.revision_number === 0)))
     || (modal.type === "document" && capabilities.canUpdatePath && String(form.document_path || "").trim())
-    || (modal.type === "revisionRequired" && capabilities.canRequestChanges && String(form.description || "").trim() && String(form.due_date || "").trim() && String(form.remarks || "").trim())
+    || (modal.type === "revisionRequired" && capabilities.canRequestChanges && String(form.reason || "").trim() && String(form.detailed_instruction || "").trim())
     || (
       modal.type === "raiseRevision"
       && capabilities.canRaiseRevision
@@ -542,13 +620,13 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
     || (modal.type === "override" && capabilities.canOverrideUnlock && String(form.reason || "").trim() && String(form.remarks || "").trim() && form.confirm_history_record === true)
     || (modal.type === "skipOverride" && capabilities.canSkipStage && String(form.reason || "").trim() && String(form.supporting_document_path || "").trim() && String(form.approved_by || "").trim() && String(form.remarks || "").trim())
     || (modal.type === "dispatch" && capabilities.canMarkDispatched && String(form.dispatch_date || "").trim() && String(form.remarks || "").trim())
-    || (modal.type === "revisionChangesRequired" && capabilities.canReviewRevision && String(form.review_remarks || "").trim())
+    || (modal.type === "revisionChangesRequired" && capabilities.canReviewRevision && String(form.reason || "").trim() && String(form.detailed_instruction || "").trim())
     || (modal.type === "preCompleted" && capabilities.canMarkPreCompleted && String(form.completion_date || "").trim() && String(form.document_path || "").trim() && String(form.approved_by || "").trim())
-    || (modal.type === "submitRevision" && capabilities.canExecuteRevision && String(form.submitted_document_path || "").trim())
+    || (modal.type === "submitRevision" && capabilities.canExecuteRevision && (String(form.submitted_document_path || "").trim() || workflow?.stages.find((stage) => stage.id === modal.revision.workflow_stage_id)?.proofs?.some((proof) => proof.revision_number === modal.revision.revision_number)))
   ));
 
   const startStage = (stage: ControlWorkflowStage) => {
-    workflowMutation.mutate(() => startControlWorkflowStage(stage.id));
+    workflowMutation.mutate(() => startControlWorkflowStage(stage.id, stage.version));
   };
 
   const startRevision = (revision: ControlWorkflowRevision) => {
@@ -556,7 +634,8 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
   };
 
   const approveRevision = (revision: ControlWorkflowRevision) => {
-    workflowMutation.mutate(() => approveControlWorkflowRevision(revision.id));
+    const stage = workflow?.stages.find((item) => item.id === revision.workflow_stage_id);
+    workflowMutation.mutate(() => approveControlWorkflowRevision(revision.id, { version: stage?.version }));
   };
 
   const copyPath = async (path: string) => {
@@ -583,7 +662,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
 
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
-      <CardHeader className="space-y-3 p-4 md:p-6">
+      <CardHeader className="space-y-2 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -611,7 +690,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
                 {ownerReasonRequired ? (
                   <Input className="h-9 w-[240px] text-xs" value={ownerReason} placeholder="Reassignment reason" onChange={(event) => setOwnerReason(event.target.value)} />
                 ) : null}
-                <Button size="sm" variant="outline" disabled={!ownerId || reassignMutation.isPending || (ownerReasonRequired && !ownerReason.trim())} onClick={() => reassignMutation.mutate()}>
+                <Button size="sm" variant="outline" disabled={!ownerId || reassignMutation.isPending || (ownerReasonRequired && !ownerReason.trim())} onClick={() => setReassignConfirmOpen(true)}>
                   {reassignMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
                   Reassign
                 </Button>
@@ -626,7 +705,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-4 p-4 pt-0 md:p-6 md:pt-0">
+      <CardContent className="space-y-3 p-4 pt-0">
         {workflowQuery.isLoading ? (
           <div className="flex min-h-40 items-center justify-center gap-2 text-sm text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading project lifecycle
@@ -654,7 +733,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
             </div>
           </div>
         ) : (
-          <ol className="space-y-3">
+          <ol className="space-y-2">
             {workflow.stages.map((stage, index) => {
               const pending = pendingSubmission(stage);
               const revision = latestRevision(stage);
@@ -675,14 +754,14 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
                 && (pending?.submitted_by !== user?.employee_id || canSelfApprove);
 
               return (
-                <li key={stage.id} className="grid grid-cols-[42px_minmax(0,1fr)] gap-3">
+                <li key={stage.id} className="grid grid-cols-[36px_minmax(0,1fr)] gap-2">
                   <div className="relative flex justify-center">
-                    {index < workflow.stages.length - 1 ? <span className="absolute top-10 h-[calc(100%+12px)] w-px bg-slate-200" aria-hidden="true" /> : null}
-                    <span className={cn("relative z-10 flex h-10 w-10 items-center justify-center rounded-full border bg-white", view.className)}>
-                      <Icon className="h-5 w-5" />
+                    {index < workflow.stages.length - 1 ? <span className="absolute top-8 h-[calc(100%+8px)] w-px bg-slate-200" aria-hidden="true" /> : null}
+                    <span className={cn("relative z-10 flex h-8 w-8 items-center justify-center rounded-full border bg-white", view.className)}>
+                      <Icon className="h-4 w-4" />
                     </span>
                   </div>
-                  <div className={cn("rounded-lg border bg-white p-4", stage.id === workflow.current_stage_id ? "border-blue-300 bg-blue-50/30" : "border-slate-200", locked && "bg-slate-50/70")}>
+                  <div className={cn("rounded-lg border bg-white p-3", stage.id === workflow.current_stage_id ? "border-blue-300 bg-blue-50/30" : "border-slate-200", locked && "bg-slate-50/70")}>
                     <button type="button" className="flex w-full flex-col gap-2 text-left sm:flex-row sm:items-start sm:justify-between" onClick={() => setSelectedStageId(stage.id)}>
                       <span className="min-w-0">
                         <span className="flex flex-wrap items-center gap-2">
@@ -697,7 +776,7 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
                         ) : null}
                       </span>
                       <span className="flex flex-wrap items-center gap-2">
-                        {stage.revision_count > 0 ? <Badge variant="outline" className="border-orange-200 bg-orange-50 text-orange-800">Rev: {stage.revision_count}</Badge> : null}
+                        {stage.revision_count > 0 ? <Badge variant="outline" className="border-orange-200 bg-orange-50 text-orange-800">Rev {stage.revision_count}</Badge> : null}
                         <Badge variant="outline" className={cn("whitespace-nowrap", view.className)}>{view.label}</Badge>
                       </span>
                     </button>
@@ -718,8 +797,8 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
                     ) : null}
 
                     <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                      {!revision && ownerActions && capabilities.canStartStage && stage.status === "not_started" ? (
-                        <Button size="sm" variant="outline" onClick={() => startStage(stage)}><Play className="mr-1.5 h-3.5 w-3.5" /> Start Stage</Button>
+                      {!revision && ownerActions && capabilities.canStartStage && ["available", "changes_required"].includes(stage.status) ? (
+                        <Button size="sm" variant="outline" onClick={() => startStage(stage)}><Play className="mr-1.5 h-3.5 w-3.5" /> {stage.status === "changes_required" ? "Continue Work" : "Start Stage"}</Button>
                       ) : null}
                       {!revision && ownerActions && capabilities.canSubmitStage && stage.status === "in_progress" ? (
                         <Button size="sm" onClick={() => openModal({ type: "submit", stage })}><Clock3 className="mr-1.5 h-3.5 w-3.5" /> Submit for Approval</Button>
@@ -743,11 +822,15 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
                         </>
                       ) : null}
                       {!revision && actionReady && capabilities.canRaiseRevision && ["approved", "pre_completed"].includes(stage.status) ? (
-                        <Button size="sm" variant="outline" onClick={() => openModal({ type: "raiseRevision", stage })}><FilePenLine className="mr-1.5 h-3.5 w-3.5" /> Raise Revision</Button>
+                        <Button size="sm" variant="outline" onClick={() => openModal({ type: "raiseRevision", stage })}><FilePenLine className="mr-1.5 h-3.5 w-3.5" /> Request Update</Button>
                       ) : null}
-                      {ownerActions && capabilities.canUpdatePath && !locked ? (
-                        <Button size="sm" variant="ghost" onClick={() => setSelectedStageId(stage.id)}><PencilLine className="mr-1.5 h-3.5 w-3.5" /> Update Path</Button>
+                      {ownerActions && capabilities.canUpdatePath && ["in_progress", "changes_required", "update_required"].includes(stage.status) ? (
+                        <Button size="sm" variant="ghost" onClick={() => openModal({ type: "document", stage })}><PencilLine className="mr-1.5 h-3.5 w-3.5" /> Update Path</Button>
                       ) : null}
+                      {ownerActions && capabilities.canUploadProof && ["in_progress", "changes_required", "update_required"].includes(stage.status) ? (
+                        <Button size="sm" variant="ghost" onClick={() => setSelectedStageId(stage.id)}><Upload className="mr-1.5 h-3.5 w-3.5" /> Upload Work Proof</Button>
+                      ) : null}
+                      {owner && stage.status === "pending_approval" ? <span className="inline-flex h-8 items-center px-2 text-xs font-medium text-amber-800">Awaiting Approval</span> : null}
                       {actionReady && capabilities.canOverrideUnlock && locked ? (
                         <Button size="sm" variant="ghost" onClick={() => openModal({ type: "override", stage })}><Unlock className="mr-1.5 h-3.5 w-3.5" /> Override Unlock</Button>
                       ) : null}
@@ -768,111 +851,179 @@ export function ControlWorkflowSection({ project, capabilities }: ControlWorkflo
       </CardContent>
 
       <Sheet open={Boolean(selectedStage)} onOpenChange={(open) => { if (!open) setSelectedStageId(null); }}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+        <SheetContent className="w-full overflow-y-auto p-0 sm:max-w-[440px]">
           {selectedStage ? (() => {
             const history = stageHistory(selectedStage);
             const comments = history.filter((entry) => entry.type === "comment_added");
-            const startedEvent = history.find((entry) => entry.type === "stage_started");
             const path = selectedStage.current_document_path || "";
             const canOpenPath = /^https?:\/\//i.test(path);
             const selectedView = stageView(selectedStage);
             const selectedRevision = latestRevision(selectedStage);
+            const currentRevisionNumber = selectedRevision?.revision_number || 0;
+            const proofs = selectedStage.proofs || [];
             const latestSubmissionDetails = [...selectedStage.submissions].sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0] || null;
+            const actionReady = !workflowMutation.isPending && !workflowClosed;
+            const ownerActions = owner && actionReady;
+            const proofEditable = ownerActions && capabilities.canUploadProof && ["in_progress", "changes_required", "update_required"].includes(selectedStage.status);
+            const pending = pendingSubmission(selectedStage);
+            const canReviewSubmission = actionReady && Boolean(pending) && (pending?.submitted_by !== user?.employee_id || canSelfApprove);
+            const instruction = selectedRevision?.description || selectedStage.remarks;
             return (
-              <div className="space-y-6">
-                <SheetHeader className="pr-8">
-                  <SheetTitle>{selectedStage.stage_name}</SheetTitle>
-                  <SheetDescription>Review document paths, stage details, history, and comments.</SheetDescription>
+              <div className="flex min-h-full flex-col">
+                <SheetHeader className="border-b p-4 pr-10 text-left">
                   <div className="flex flex-wrap items-center gap-2">
+                    <SheetTitle className="text-lg">{selectedStage.stage_name}</SheetTitle>
                     <Badge variant="outline" className={cn("whitespace-nowrap", selectedView.className)}>{selectedView.label}</Badge>
-                    <span>Revision {selectedStage.revision_count}</span>
+                    {selectedStage.revision_count > 0 ? <Badge variant="outline">Rev {selectedStage.revision_count}</Badge> : null}
                   </div>
+                  <SheetDescription>Stage actions, proof, paths, history, and comments.</SheetDescription>
                 </SheetHeader>
 
-                <section className="space-y-3">
-                  <h3 className="font-semibold text-slate-950">Document Paths</h3>
-                  <div className="rounded-lg border p-3 text-sm">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Project root path</p>
-                    <p className="mt-1 text-slate-700">Not configured</p>
-                  </div>
-                  <div className="rounded-lg border p-3 text-sm">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current stage path</p>
-                    <p className="mt-1 break-all text-slate-700">{path || "Not set"}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" disabled={!path} onClick={() => void copyPath(path)}><Copy className="mr-1.5 h-3.5 w-3.5" /> Copy path</Button>
-                      <Button size="sm" variant="outline" disabled={!canOpenPath} onClick={() => window.open(path, "_blank", "noopener,noreferrer")}>Open path</Button>
-                      {owner && capabilities.canUpdatePath && !workflowClosed && selectedStage.status !== "locked" ? (
-                        <Button size="sm" variant="outline" onClick={() => openModal({ type: "document", stage: selectedStage })}>Update path</Button>
+                <div className="space-y-4 p-4">
+                  <section className="space-y-2" aria-label="Primary Actions">
+                    <h3 className="text-sm font-semibold text-slate-950">Primary Actions</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {!selectedRevision && ownerActions && capabilities.canStartStage && ["available", "changes_required"].includes(selectedStage.status) ? (
+                        <Button size="sm" onClick={() => startStage(selectedStage)}><Play className="mr-1.5 h-3.5 w-3.5" />{selectedStage.status === "changes_required" ? "Continue Work" : "Start Stage"}</Button>
                       ) : null}
+                      {!selectedRevision && ownerActions && capabilities.canSubmitStage && ["in_progress", "changes_required"].includes(selectedStage.status) ? (
+                        <Button size="sm" onClick={() => openModal({ type: "submit", stage: selectedStage })}><Clock3 className="mr-1.5 h-3.5 w-3.5" />{selectedStage.status === "changes_required" ? "Submit Corrected Work" : "Submit for Approval"}</Button>
+                      ) : null}
+                      {!selectedRevision && canReviewSubmission && capabilities.canApprove ? (
+                        <Button size="sm" onClick={() => openModal({ type: "review", stage: selectedStage })}><CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />Approve</Button>
+                      ) : null}
+                      {!selectedRevision && canReviewSubmission && capabilities.canRequestChanges ? (
+                        <Button size="sm" variant="outline" onClick={() => openModal({ type: "revisionRequired", stage: selectedStage })}>Reject / Request Changes</Button>
+                      ) : null}
+                      {selectedRevision && ownerActions && capabilities.canExecuteRevision && ["not_started", "changes_required"].includes(selectedRevision.status) ? (
+                        <Button size="sm" onClick={() => startRevision(selectedRevision)}><Play className="mr-1.5 h-3.5 w-3.5" />{selectedRevision.status === "changes_required" ? "Continue Update" : "Start Update"}</Button>
+                      ) : null}
+                      {selectedRevision && ownerActions && capabilities.canExecuteRevision && selectedRevision.status === "in_progress" ? (
+                        <Button size="sm" onClick={() => openModal({ type: "submitRevision", revision: selectedRevision })}>Submit Updated Work</Button>
+                      ) : null}
+                      {selectedRevision?.status === "submitted_for_approval" && canReviewSubmission && capabilities.canReviewRevision ? (
+                        <><Button size="sm" onClick={() => approveRevision(selectedRevision)}>Approve Update</Button><Button size="sm" variant="outline" onClick={() => openModal({ type: "revisionChangesRequired", revision: selectedRevision })}>Reject Update</Button></>
+                      ) : null}
+                      {!selectedRevision && actionReady && capabilities.canRaiseRevision && ["approved", "pre_completed"].includes(selectedStage.status) ? (
+                        <Button size="sm" variant="outline" onClick={() => openModal({ type: "raiseRevision", stage: selectedStage })}><RefreshCw className="mr-1.5 h-3.5 w-3.5" />Request Update</Button>
+                      ) : null}
+                      {owner && selectedStage.status === "pending_approval" ? <span className="inline-flex h-8 items-center text-xs font-medium text-amber-800">Awaiting Approval</span> : null}
                     </div>
-                    {path && !canOpenPath ? <p className="mt-2 text-xs text-slate-500">Local and network paths can be copied, but browsers cannot open them directly.</p> : null}
-                  </div>
-                </section>
+                  </section>
 
-                <section className="space-y-3">
-                  <h3 className="font-semibold text-slate-950">Stage Information</h3>
-                  <dl className="grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-2">
-                    <div><dt className="text-xs text-slate-500">Assigned to</dt><dd className="font-medium">{formatEmployeeDisplay(workflow?.assigned_user_id, workflow?.assigned_user_name)}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Started by</dt><dd className="font-medium">{startedEvent ? formatEmployeeDisplay(startedEvent.actorId, startedEvent.actorName) : "Not started"}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Started</dt><dd className="font-medium">{formatDate(selectedStage.started_at)}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Submitted by</dt><dd className="font-medium">{latestSubmissionDetails ? formatEmployeeDisplay(latestSubmissionDetails.submitted_by, latestSubmissionDetails.submitted_by_name) : "Not submitted"}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Submitted at</dt><dd className="font-medium">{formatDate(selectedStage.submitted_at || latestSubmissionDetails?.created_at)}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Deadline</dt><dd className="font-medium">{formatDate(selectedRevision?.due_date || selectedStage.due_date)}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Revision</dt><dd className="font-medium">{selectedStage.revision_count}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Approved by</dt><dd className="font-medium">{formatEmployeeDisplay(selectedStage.approved_by, selectedStage.approved_by_name)}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Approved</dt><dd className="font-medium">{formatDate(selectedStage.approved_at)}</dd></div>
-                  </dl>
-                </section>
+                  {instruction || selectedStage.rejection_reason ? (
+                    <section className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+                      <h3 className="text-sm font-semibold text-orange-950">Current Instruction</h3>
+                      {selectedStage.rejection_reason ? <p className="mt-1 text-xs font-semibold text-orange-900">{selectedStage.rejection_reason}</p> : null}
+                      {instruction ? <p className="mt-1 whitespace-pre-wrap text-sm text-orange-900">{instruction}</p> : null}
+                    </section>
+                  ) : null}
 
-                <section className="space-y-3">
-                  <h3 className="font-semibold text-slate-950">History</h3>
-                  <ol className="space-y-3">
-                    {history.map((entry) => (
-                      <li key={entry.id} className="border-l-2 border-slate-200 pl-3 text-sm">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-medium text-slate-900">{formatEventLabel(entry.type)}</span>
-                          <span className="text-xs text-slate-500">{formatDate(entry.createdAt)}</span>
-                        </div>
-                        {entry.actorId ? <p className="text-xs text-slate-500">{formatEmployeeDisplay(entry.actorId, entry.actorName)}</p> : null}
-                        {entry.details ? <p className="mt-1 whitespace-pre-wrap text-slate-700">{entry.details}</p> : null}
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-
-                <section className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <MessageSquare className="h-4 w-4 text-blue-700" />
-                    <h3 className="font-semibold text-slate-950">Comments</h3>
-                  </div>
-                  {comments.length > 0 ? (
-                    <div className="space-y-2">
-                      {comments.map((entry) => (
-                        <div key={entry.id} className="rounded-lg bg-slate-50 p-3 text-sm">
-                          <div className="flex justify-between gap-2 text-xs text-slate-500">
-                            <span>{formatEmployeeDisplay(entry.actorId, entry.actorName)}</span>
-                            <span>{formatDate(entry.createdAt)}</span>
-                          </div>
-                          <p className="mt-1 whitespace-pre-wrap text-slate-800">{entry.details}</p>
-                        </div>
-                      ))}
+                  <section className="space-y-2">
+                    <h3 className="text-sm font-semibold text-slate-950">Document Paths</h3>
+                    <div className="grid gap-2 rounded-lg border p-3 text-sm">
+                      <div><p className="text-[11px] font-semibold uppercase text-slate-500">Project root</p><p className="mt-0.5 break-all text-slate-700">{workflow?.project_root_path || "Not configured"}</p></div>
+                      <div className="border-t pt-2"><p className="text-[11px] font-semibold uppercase text-slate-500">Current stage path</p><p className="mt-0.5 break-all text-slate-700">{path || "Not set"}</p></div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" disabled={!path} onClick={() => void copyPath(path)}><Copy className="mr-1.5 h-3.5 w-3.5" />Copy</Button>
+                        <Button size="sm" variant="outline" title={canOpenPath ? "Open path" : "Browsers cannot open local or network paths"} disabled={!canOpenPath} onClick={() => window.open(path, "_blank", "noopener,noreferrer")}>Open</Button>
+                        {ownerActions && capabilities.canUpdatePath && ["in_progress", "changes_required", "update_required"].includes(selectedStage.status) ? (
+                          <Button size="sm" variant="outline" onClick={() => openModal({ type: "document", stage: selectedStage })}><PencilLine className="mr-1.5 h-3.5 w-3.5" />Update</Button>
+                        ) : null}
+                      </div>
                     </div>
-                  ) : <p className="text-sm text-slate-500">No comments yet.</p>}
-                  <Textarea aria-label="Add stage comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment" rows={3} />
-                  <Button
-                    size="sm"
-                    disabled={!comment.trim() || commentMutation.isPending}
-                    onClick={() => commentMutation.mutate({ stageId: selectedStage.id, value: comment.trim() })}
-                  >
-                    {commentMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                    Add Comment
-                  </Button>
-                </section>
+                  </section>
+
+                  <section className="space-y-2">
+                    <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold text-slate-950">Work Proof</h3><Badge variant="outline">{proofs.length}</Badge></div>
+                    {proofEditable ? (
+                      <div className="space-y-2 rounded-lg border border-dashed p-3">
+                        <Input value={proofComment} onChange={(event) => setProofComment(event.target.value)} placeholder="Optional file comment" className="h-8 text-xs" disabled={proofUploadMutation.isPending} />
+                        <input
+                          id={proofInputId}
+                          type="file"
+                          className="sr-only"
+                          accept=".png,.jpg,.jpeg,.pdf,.xls,.xlsx,.doc,.docx,.dwg,.dxf,.igs,.iges,.step,.stp,.csv,.txt,.zip,.rar"
+                          disabled={proofUploadMutation.isPending}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            event.currentTarget.value = "";
+                            if (file) proofUploadMutation.mutate({ stageId: selectedStage.id, file });
+                          }}
+                        />
+                        <Button size="sm" variant="outline" disabled={proofUploadMutation.isPending} onClick={() => document.getElementById(proofInputId)?.click()}>
+                          {proofUploadMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-1.5 h-3.5 w-3.5" />}
+                          Upload Image / File
+                        </Button>
+                        {uploadProgress !== null ? <div className="h-1.5 overflow-hidden rounded bg-slate-100"><div className="h-full bg-blue-600 transition-all" style={{ width: `${uploadProgress}%` }} /></div> : null}
+                      </div>
+                    ) : null}
+                    {proofs.length > 0 ? (
+                      <ul className="space-y-2">
+                        {proofs.map((proof) => (
+                          <li key={proof.id} className="flex items-center gap-2 rounded-lg border p-2">
+                            <ProofThumbnail proof={proof} />
+                            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-slate-900">{proof.original_filename}</p><p className="text-[11px] text-slate-500">Rev {proof.revision_number} · {formatFileSize(proof.file_size)} · {formatDate(proof.uploaded_at)}</p><p className="truncate text-[11px] text-slate-500">{formatEmployeeDisplay(proof.uploaded_by, proof.uploaded_by_name)}</p></div>
+                            <div className="flex gap-1">
+                              {capabilities.canViewProof ? <Button size="icon" variant="ghost" title="Open proof" onClick={() => void openControlWorkflowProof(proof).catch((error) => toast({ title: "Could not open proof", description: error instanceof Error ? error.message : "Open failed.", variant: "destructive" }))}><Eye className="h-4 w-4" /></Button> : null}
+                              {capabilities.canViewProof ? <Button size="icon" variant="ghost" title="Download proof" onClick={() => void downloadControlWorkflowProof(proof).catch((error) => toast({ title: "Could not download proof", description: error instanceof Error ? error.message : "Download failed.", variant: "destructive" }))}><Download className="h-4 w-4" /></Button> : null}
+                              {proofEditable && proof.revision_number === currentRevisionNumber ? <Button size="icon" variant="ghost" title="Remove proof" disabled={proofRemoveMutation.isPending} onClick={() => proofRemoveMutation.mutate(proof.id)}><Trash2 className="h-4 w-4 text-red-600" /></Button> : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : <p className="text-xs text-slate-500">No work proof uploaded.</p>}
+                  </section>
+
+                  <section className="space-y-2">
+                    <h3 className="text-sm font-semibold text-slate-950">Stage Information</h3>
+                    <dl className="grid grid-cols-2 gap-2 rounded-lg border p-3 text-xs">
+                      <div><dt className="text-slate-500">Assignee</dt><dd className="font-medium">{formatEmployeeDisplay(workflow?.assigned_user_id, workflow?.assigned_user_name)}</dd></div>
+                      <div><dt className="text-slate-500">Revision</dt><dd className="font-medium">{selectedStage.revision_count}</dd></div>
+                      <div><dt className="text-slate-500">Started by / at</dt><dd className="font-medium">{formatEmployeeDisplay(selectedStage.started_by, selectedStage.started_by_name)} · {formatDate(selectedStage.started_at)}</dd></div>
+                      <div><dt className="text-slate-500">Submitted by / at</dt><dd className="font-medium">{formatEmployeeDisplay(selectedStage.submitted_by || latestSubmissionDetails?.submitted_by, selectedStage.submitted_by_name || latestSubmissionDetails?.submitted_by_name)} · {formatDate(selectedStage.submitted_at || latestSubmissionDetails?.created_at)}</dd></div>
+                      <div><dt className="text-slate-500">Approved by / at</dt><dd className="font-medium">{formatEmployeeDisplay(selectedStage.approved_by, selectedStage.approved_by_name)} · {formatDate(selectedStage.approved_at)}</dd></div>
+                      <div><dt className="text-slate-500">Deadline</dt><dd className="font-medium">{formatDate(selectedRevision?.due_date || selectedStage.due_date)}</dd></div>
+                    </dl>
+                  </section>
+
+                  <details className="rounded-lg border p-3" open>
+                    <summary className="cursor-pointer text-sm font-semibold text-slate-950">History ({history.length})</summary>
+                    <ol className="mt-3 space-y-2">
+                      {history.map((entry) => <li key={entry.id} className="border-l-2 border-slate-200 pl-3 text-xs"><div className="flex justify-between gap-2"><span className="font-medium">{formatEventLabel(entry.type)}</span><span className="text-slate-500">{formatDate(entry.createdAt)}</span></div>{entry.actorId ? <p className="text-slate-500">{formatEmployeeDisplay(entry.actorId, entry.actorName)}</p> : null}{entry.details ? <p className="mt-1 whitespace-pre-wrap text-slate-700">{entry.details}</p> : null}</li>)}
+                    </ol>
+                  </details>
+
+                  <details className="rounded-lg border p-3" open>
+                    <summary className="cursor-pointer text-sm font-semibold text-slate-950">Comments ({comments.length})</summary>
+                    <div className="mt-3 space-y-2">
+                      {comments.map((entry) => <div key={entry.id} className="rounded bg-slate-50 p-2 text-xs"><div className="flex justify-between text-slate-500"><span>{formatEmployeeDisplay(entry.actorId, entry.actorName)}</span><span>{formatDate(entry.createdAt)}</span></div><p className="mt-1 whitespace-pre-wrap">{entry.details}</p></div>)}
+                      <Textarea aria-label="Add stage comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment" rows={2} />
+                      <Button size="sm" disabled={!comment.trim() || commentMutation.isPending} onClick={() => commentMutation.mutate({ stageId: selectedStage.id, value: comment.trim() })}>{commentMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="mr-1.5 h-3.5 w-3.5" />}Add Comment</Button>
+                    </div>
+                  </details>
+                </div>
               </div>
             );
           })() : null}
         </SheetContent>
       </Sheet>
+
+      <Dialog open={reassignConfirmOpen} onOpenChange={setReassignConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Confirm reassignment</DialogTitle>
+            <DialogDescription>Reassign this Control Design project to {formatEmployeeDisplay(ownerId, assignees.find((candidate) => candidate.employee_id === ownerId)?.name)}?</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReassignConfirmOpen(false)} disabled={reassignMutation.isPending}>Cancel</Button>
+            <Button onClick={() => reassignMutation.mutate()} disabled={reassignMutation.isPending}>
+              {reassignMutation.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              Confirm Reassign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <WorkflowModal
         modal={modal}
@@ -975,9 +1126,9 @@ function WorkflowModal({
         {modal?.type === "revisionRequired" ? (
           <div className="space-y-3">
             <Field label="Stage name" value={modal.stage.stage_name} readOnly />
-            <TextField label="Required changes" value={String(form.description || "")} onChange={(value) => onFormChange("description", value)} />
-            <Field label="Due date/time" type="datetime-local" value={String(form.due_date || "")} onChange={(value) => onFormChange("due_date", value)} />
-            <TextField label="Remarks" value={String(form.remarks || "")} onChange={(value) => onFormChange("remarks", value)} />
+            <Field label="Reason" value={String(form.reason || "")} onChange={(value) => onFormChange("reason", value)} />
+            <TextField label="Detailed instruction" value={String(form.detailed_instruction || "")} onChange={(value) => onFormChange("detailed_instruction", value)} />
+            <Field label="Correction deadline optional" type="datetime-local" value={String(form.correction_deadline || "")} onChange={(value) => onFormChange("correction_deadline", value)} />
           </div>
         ) : null}
 
@@ -1006,7 +1157,8 @@ function WorkflowModal({
             {form.revision_reason === "Other" ? (
               <Field label="Manual reason" value={String(form.manual_reason || "")} onChange={(value) => onFormChange("manual_reason", value)} />
             ) : null}
-            <TextField label="Description" value={String(form.description || "")} onChange={(value) => onFormChange("description", value)} />
+            <TextField label="Detailed instructions" value={String(form.description || "")} onChange={(value) => onFormChange("description", value)} />
+            <Field label="Reference path optional" value={String(form.reference_path || stage?.current_document_path || "")} onChange={(value) => onFormChange("reference_path", value)} />
             <Field label="Due date/time" type="datetime-local" value={String(form.due_date || "")} onChange={(value) => onFormChange("due_date", value)} />
             <Field label="Priority optional" value={String(form.priority || "")} onChange={(value) => onFormChange("priority", value)} />
             <TextField label="Remarks optional" value={String(form.remarks || "")} onChange={(value) => onFormChange("remarks", value)} />
@@ -1065,7 +1217,9 @@ function WorkflowModal({
         {modal?.type === "revisionChangesRequired" ? (
           <div className="space-y-3">
             <Field label="Stage" value={modal.revision.stage_name || "Revision"} readOnly />
-            <TextField label="Required changes" value={String(form.review_remarks || "")} onChange={(value) => onFormChange("review_remarks", value)} />
+            <Field label="Reason" value={String(form.reason || "")} onChange={(value) => onFormChange("reason", value)} />
+            <TextField label="Detailed instruction" value={String(form.detailed_instruction || "")} onChange={(value) => onFormChange("detailed_instruction", value)} />
+            <Field label="Correction deadline optional" type="datetime-local" value={String(form.correction_deadline || "")} onChange={(value) => onFormChange("correction_deadline", value)} />
           </div>
         ) : null}
 

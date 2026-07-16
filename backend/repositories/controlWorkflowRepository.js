@@ -35,12 +35,24 @@ function mapStage(row) {
     sequence_order: Number(row.sequence_order),
     is_required: row.is_required !== false,
     status: row.status,
+    version: Number(row.version || 0),
     current_document_path: row.current_document_path || null,
+    path_updated_by: row.path_updated_by || null,
+    path_updated_by_name: row.path_updated_by_name || null,
+    path_updated_at: row.path_updated_at || null,
     started_at: row.started_at || null,
+    started_by: row.started_by || null,
+    started_by_name: row.started_by_name || null,
     submitted_at: row.submitted_at || null,
+    submitted_by: row.submitted_by || null,
+    submitted_by_name: row.submitted_by_name || null,
     approved_at: row.approved_at || null,
     approved_by: row.approved_by || null,
     approved_by_name: row.approved_by_name || null,
+    rejected_at: row.rejected_at || null,
+    rejected_by: row.rejected_by || null,
+    rejected_by_name: row.rejected_by_name || null,
+    rejection_reason: row.rejection_reason || null,
     due_date: row.due_date || null,
     remarks: row.remarks || null,
     revision_count: Number(row.revision_count || 0),
@@ -50,6 +62,7 @@ function mapStage(row) {
     revisions: [],
     document_history: [],
     override_history: [],
+    proofs: [],
     events: [],
   };
 }
@@ -71,6 +84,7 @@ function mapWorkflow(row, stages = []) {
     dispatched_by_name: row.dispatched_by_name || null,
     dispatched_at: row.dispatched_at || null,
     dispatch_remarks: row.dispatch_remarks || null,
+    project_root_path: row.project_root_path || null,
     department_id: row.department_id,
     department_name: row.department_name || null,
     sub_department_id: row.sub_department_id,
@@ -100,13 +114,16 @@ function mapSubmission(row) {
     revision_id: row.revision_id || null,
     submitted_by: row.submitted_by,
     submitted_by_name: row.submitted_by_name || null,
-    submitted_document_path: row.submitted_document_path,
+    submitted_document_path: row.submitted_document_path || null,
+    stage_version: Number(row.stage_version || 0),
     remarks: row.remarks || null,
     status: row.status,
     reviewed_by: row.reviewed_by || null,
     reviewed_by_name: row.reviewed_by_name || null,
     reviewed_at: row.reviewed_at || null,
     review_remarks: row.review_remarks || null,
+    rejection_reason: row.rejection_reason || null,
+    correction_deadline: row.correction_deadline || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -117,7 +134,9 @@ function mapRevision(row) {
     id: row.id,
     workflow_stage_id: row.workflow_stage_id,
     workflow_id: row.workflow_id,
+    revision_number: Number(row.revision_number || 0),
     revision_reason: row.revision_reason,
+    reference_path: row.reference_path || null,
     manual_reason: row.manual_reason || null,
     description: row.description,
     due_date: row.due_date,
@@ -143,6 +162,7 @@ function mapHistory(row) {
   return {
     id: row.id,
     workflow_stage_id: row.workflow_stage_id,
+    revision_number: Number(row.revision_number || 0),
     old_path: row.old_path || null,
     new_path: row.new_path,
     changed_by: row.changed_by,
@@ -150,6 +170,26 @@ function mapHistory(row) {
     change_remarks: row.change_remarks || null,
     created_at: row.created_at,
   };
+}
+
+function mapProof(row) {
+  return row ? {
+    id: row.id,
+    workflow_id: row.workflow_id,
+    project_id: row.project_id,
+    workflow_stage_id: row.workflow_stage_id,
+    revision_number: Number(row.revision_number || 0),
+    original_filename: row.original_filename,
+    storage_key: row.storage_key,
+    mime_type: row.mime_type,
+    file_size: Number(row.file_size),
+    uploaded_by: row.uploaded_by,
+    uploaded_by_name: row.uploaded_by_name || null,
+    uploaded_at: row.uploaded_at,
+    comment: row.comment || null,
+    open_url: `/control/workflow-proofs/${row.id}`,
+    download_url: `/control/workflow-proofs/${row.id}?download=1`,
+  } : null;
 }
 
 function mapOverride(row) {
@@ -411,6 +451,7 @@ function workflowSelectSql(whereClause) {
       dispatcher.name AS dispatched_by_name,
       pcr.dispatched_at,
       pcr.dispatch_remarks,
+      pcr.project_root_path,
       d.name AS department_name,
       ds.subdivision_name AS sub_department_name,
       wt.template_name,
@@ -469,6 +510,10 @@ async function listWorkflowStages(workflowId, client = pool) {
       SELECT
         pws.*,
         approver.name AS approved_by_name,
+        path_updater.name AS path_updated_by_name,
+        starter.name AS started_by_name,
+        submitter.name AS submitted_by_name,
+        rejecter.name AS rejected_by_name,
         (
           SELECT COUNT(*)::int
           FROM workflow_stage_revisions revision
@@ -476,6 +521,10 @@ async function listWorkflowStages(workflowId, client = pool) {
         ) AS revision_count
       FROM project_workflow_stages pws
       LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "pws.approved_by")}
+      LEFT JOIN users path_updater ON ${userIdentifierMatchSql("path_updater", "pws.path_updated_by")}
+      LEFT JOIN users starter ON ${userIdentifierMatchSql("starter", "pws.started_by")}
+      LEFT JOIN users submitter ON ${userIdentifierMatchSql("submitter", "pws.submitted_by")}
+      LEFT JOIN users rejecter ON ${userIdentifierMatchSql("rejecter", "pws.rejected_by")}
       WHERE pws.workflow_id = $1
       ORDER BY pws.sequence_order ASC
     `,
@@ -491,6 +540,10 @@ async function findWorkflowStage(stageId, client = pool) {
       SELECT
         pws.*,
         approver.name AS approved_by_name,
+        path_updater.name AS path_updated_by_name,
+        starter.name AS started_by_name,
+        submitter.name AS submitted_by_name,
+        rejecter.name AS rejected_by_name,
         (
           SELECT COUNT(*)::int
           FROM workflow_stage_revisions revision
@@ -498,6 +551,10 @@ async function findWorkflowStage(stageId, client = pool) {
         ) AS revision_count
       FROM project_workflow_stages pws
       LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "pws.approved_by")}
+      LEFT JOIN users path_updater ON ${userIdentifierMatchSql("path_updater", "pws.path_updated_by")}
+      LEFT JOIN users starter ON ${userIdentifierMatchSql("starter", "pws.started_by")}
+      LEFT JOIN users submitter ON ${userIdentifierMatchSql("submitter", "pws.submitted_by")}
+      LEFT JOIN users rejecter ON ${userIdentifierMatchSql("rejecter", "pws.rejected_by")}
       WHERE pws.id = $1
       LIMIT 1
       FOR UPDATE OF pws
@@ -509,37 +566,57 @@ async function findWorkflowStage(stageId, client = pool) {
 }
 
 async function updateStage(stageId, values, client = pool) {
-  await client.query(
+  const result = await client.query(
     `
       UPDATE project_workflow_stages
       SET status = COALESCE($2, status),
           current_document_path = CASE WHEN $3::boolean THEN $4 ELSE current_document_path END,
-          started_at = CASE WHEN $5::boolean THEN COALESCE(started_at, NOW()) ELSE started_at END,
-          submitted_at = CASE WHEN $6::boolean THEN NOW() ELSE submitted_at END,
-          approved_at = CASE WHEN $7::boolean THEN COALESCE($8::timestamptz, NOW()) ELSE approved_at END,
-          approved_by = CASE WHEN $9::boolean THEN $10 ELSE approved_by END,
-          due_date = CASE WHEN $11::boolean THEN $12::timestamptz ELSE due_date END,
-          remarks = CASE WHEN $13::boolean THEN $14 ELSE remarks END,
+          path_updated_by = CASE WHEN $3::boolean THEN $5 ELSE path_updated_by END,
+          path_updated_at = CASE WHEN $3::boolean THEN NOW() ELSE path_updated_at END,
+          started_at = CASE WHEN $6::boolean THEN COALESCE(started_at, NOW()) ELSE started_at END,
+          started_by = CASE WHEN $6::boolean THEN COALESCE(started_by, $7) ELSE started_by END,
+          submitted_at = CASE WHEN $8::boolean THEN NOW() ELSE submitted_at END,
+          submitted_by = CASE WHEN $8::boolean THEN $9 ELSE submitted_by END,
+          approved_at = CASE WHEN $10::boolean THEN COALESCE($11::timestamptz, NOW()) ELSE approved_at END,
+          approved_by = CASE WHEN $12::boolean THEN $13 ELSE approved_by END,
+          rejected_at = CASE WHEN $14::boolean THEN NOW() ELSE rejected_at END,
+          rejected_by = CASE WHEN $14::boolean THEN $15 ELSE rejected_by END,
+          rejection_reason = CASE WHEN $16::boolean THEN $17 ELSE rejection_reason END,
+          due_date = CASE WHEN $18::boolean THEN $19::timestamptz ELSE due_date END,
+          remarks = CASE WHEN $20::boolean THEN $21 ELSE remarks END,
+          version = version + 1,
           updated_at = NOW()
       WHERE id = $1
+        AND ($22::int IS NULL OR version = $22)
+      RETURNING *
     `,
     [
       stageId,
       values.status || null,
       Object.prototype.hasOwnProperty.call(values, "current_document_path"),
       values.current_document_path || null,
+      values.actor_id || null,
       values.touch_started_at === true,
+      values.actor_id || null,
       values.touch_submitted_at === true,
+      values.actor_id || null,
       values.touch_approved_at === true,
       values.approved_at || null,
       Object.prototype.hasOwnProperty.call(values, "approved_by"),
       values.approved_by || null,
+      values.touch_rejected_at === true,
+      values.actor_id || null,
+      Object.prototype.hasOwnProperty.call(values, "rejection_reason"),
+      values.rejection_reason || null,
       Object.prototype.hasOwnProperty.call(values, "due_date"),
       values.due_date || null,
       Object.prototype.hasOwnProperty.call(values, "remarks"),
       values.remarks || null,
+      Number.isInteger(values.expected_version) ? values.expected_version : null,
     ],
   );
+
+  return mapStage(result.rows[0]);
 }
 
 async function insertSubmission(values, client = pool) {
@@ -551,12 +628,13 @@ async function insertSubmission(values, client = pool) {
         revision_id,
         submitted_by,
         submitted_document_path,
+        stage_version,
         remarks,
         status,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW(), NOW())
       RETURNING id
     `,
     [
@@ -564,7 +642,8 @@ async function insertSubmission(values, client = pool) {
       values.workflow_id,
       values.revision_id || null,
       values.submitted_by,
-      values.submitted_document_path,
+      values.submitted_document_path || null,
+      values.stage_version || 0,
       values.remarks || null,
     ],
   );
@@ -599,10 +678,12 @@ async function updateSubmissionReview(submissionId, values, client = pool) {
           reviewed_by = $3,
           reviewed_at = NOW(),
           review_remarks = $4,
+          rejection_reason = $5,
+          correction_deadline = $6::timestamptz,
           updated_at = NOW()
       WHERE id = $1
     `,
-    [submissionId, values.status, values.reviewed_by, values.review_remarks || null],
+    [submissionId, values.status, values.reviewed_by, values.review_remarks || null, values.rejection_reason || null, values.correction_deadline || null],
   );
 }
 
@@ -612,7 +693,9 @@ async function insertRevision(values, client = pool) {
       INSERT INTO workflow_stage_revisions (
         workflow_stage_id,
         workflow_id,
+        revision_number,
         revision_reason,
+        reference_path,
         manual_reason,
         description,
         due_date,
@@ -625,13 +708,16 @@ async function insertRevision(values, client = pool) {
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid[], 'not_started', $9, $10, $11, NOW(), NOW())
-      RETURNING id
+      SELECT $1, $2, COALESCE(MAX(revision_number), 0) + 1, $3, $4, $5, $6, $7, $8, $9::uuid[], 'not_started', $10, $11, $12, NOW(), NOW()
+      FROM workflow_stage_revisions
+      WHERE workflow_stage_id = $1
+      RETURNING id, revision_number
     `,
     [
       values.workflow_stage_id,
       values.workflow_id,
       values.revision_reason,
+      values.reference_path || null,
       values.manual_reason || null,
       values.description,
       values.due_date,
@@ -643,7 +729,7 @@ async function insertRevision(values, client = pool) {
     ],
   );
 
-  return result.rows[0]?.id || null;
+  return result.rows[0] || null;
 }
 
 async function findRevisionById(revisionId, client = pool) {
@@ -666,6 +752,25 @@ async function findRevisionById(revisionId, client = pool) {
   );
 
   return result.rows[0] ? mapRevision(result.rows[0]) : null;
+}
+
+async function findLatestOpenRevisionForStage(stageId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT revision.*, raiser.name AS raised_by_name, assignee.name AS assigned_to_name, approver.name AS approved_by_name
+      FROM workflow_stage_revisions revision
+      LEFT JOIN users raiser ON ${userIdentifierMatchSql("raiser", "revision.raised_by")}
+      LEFT JOIN users assignee ON ${userIdentifierMatchSql("assignee", "revision.assigned_to")}
+      LEFT JOIN users approver ON ${userIdentifierMatchSql("approver", "revision.approved_by")}
+      WHERE revision.workflow_stage_id = $1
+        AND revision.status <> 'approved'
+      ORDER BY revision.revision_number DESC
+      LIMIT 1
+      FOR UPDATE OF revision
+    `,
+    [stageId],
+  );
+  return mapRevision(result.rows[0]);
 }
 
 async function updateRevision(revisionId, values, client = pool) {
@@ -700,16 +805,18 @@ async function insertDocumentHistory(values, client = pool) {
     `
       INSERT INTO workflow_document_path_history (
         workflow_stage_id,
+        revision_number,
         old_path,
         new_path,
         changed_by,
         change_remarks,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
     `,
     [
       values.workflow_stage_id,
+      values.revision_number || 0,
       values.old_path || null,
       values.new_path,
       values.changed_by,
@@ -752,12 +859,13 @@ async function hydrateWorkflowDetails(workflow, client = pool) {
     return null;
   }
 
-  const [stages, submissions, revisions, history, overrides, events] = await Promise.all([
+  const [stages, submissions, revisions, history, overrides, proofs, events] = await Promise.all([
     listWorkflowStages(workflow.id, client),
     listSubmissionsForWorkflow(workflow.id, client),
     listRevisionsForWorkflow(workflow.id, client),
     listDocumentHistoryForWorkflow(workflow.id, client),
     listOverridesForWorkflow(workflow.id, client),
+    listWorkflowProofs(workflow.id, client),
     listWorkflowEvents(workflow.id, client),
   ]);
 
@@ -766,6 +874,7 @@ async function hydrateWorkflowDetails(workflow, client = pool) {
   revisions.forEach((revision) => stageMap.get(revision.workflow_stage_id)?.revisions.push(revision));
   history.forEach((item) => stageMap.get(item.workflow_stage_id)?.document_history.push(item));
   overrides.forEach((item) => stageMap.get(item.workflow_stage_id)?.override_history.push(item));
+  proofs.forEach((item) => stageMap.get(item.workflow_stage_id)?.proofs.push(item));
   events.forEach((item) => stageMap.get(item.workflow_stage_id)?.events.push(item));
 
   return mapWorkflow(workflow, stages);
@@ -822,6 +931,79 @@ async function listDocumentHistoryForWorkflow(workflowId, client = pool) {
   );
 
   return result.rows.map(mapHistory);
+}
+
+async function listWorkflowProofs(workflowId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT proof.*, uploader.name AS uploaded_by_name
+      FROM control_workflow_proofs proof
+      LEFT JOIN users uploader ON ${userIdentifierMatchSql("uploader", "proof.uploaded_by")}
+      WHERE proof.workflow_id = $1
+      ORDER BY proof.uploaded_at DESC
+    `,
+    [workflowId],
+  );
+
+  return result.rows.map(mapProof);
+}
+
+async function insertWorkflowProof(values, client = pool) {
+  const result = await client.query(
+    `
+      INSERT INTO control_workflow_proofs (
+        workflow_id, project_id, workflow_stage_id, revision_number,
+        original_filename, storage_key, file_path, mime_type, file_size,
+        uploaded_by, comment, uploaded_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+      RETURNING *
+    `,
+    [
+      values.workflow_id,
+      values.project_id,
+      values.workflow_stage_id,
+      values.revision_number || 0,
+      values.original_filename,
+      values.storage_key,
+      values.file_path,
+      values.mime_type,
+      values.file_size,
+      values.uploaded_by,
+      values.comment || null,
+    ],
+  );
+  return mapProof(result.rows[0]);
+}
+
+async function findWorkflowProofById(proofId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT proof.*, uploader.name AS uploaded_by_name
+      FROM control_workflow_proofs proof
+      LEFT JOIN users uploader ON ${userIdentifierMatchSql("uploader", "proof.uploaded_by")}
+      WHERE proof.id = $1
+      LIMIT 1
+    `,
+    [proofId],
+  );
+  return mapProof(result.rows[0]);
+}
+
+async function countWorkflowProofs(stageId, revisionNumber, client = pool) {
+  const result = await client.query(
+    `SELECT COUNT(*)::int AS count FROM control_workflow_proofs WHERE workflow_stage_id = $1 AND revision_number = $2`,
+    [stageId, revisionNumber || 0],
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+async function deleteWorkflowProof(proofId, client = pool) {
+  const result = await client.query(
+    `DELETE FROM control_workflow_proofs WHERE id = $1 RETURNING *`,
+    [proofId],
+  );
+  return mapProof(result.rows[0]);
 }
 
 async function listOverridesForWorkflow(workflowId, client = pool) {
@@ -930,6 +1112,11 @@ function mapControlRecord(row) {
     budget_currency: row.control_record_budget_currency || "INR",
     status: row.control_record_status || "active",
     lifecycle_status: row.control_record_lifecycle_status || "unassigned",
+    priority: row.control_record_priority || null,
+    planned_start_date: row.control_record_planned_start_date || null,
+    target_completion_date: row.control_record_target_completion_date || null,
+    project_root_path: row.control_record_project_root_path || null,
+    notes: row.control_record_notes || null,
     created_by: row.control_record_created_by || null,
     dispatched_by: row.control_record_dispatched_by || null,
     dispatched_at: row.control_record_dispatched_at || null,
@@ -1004,6 +1191,11 @@ async function findProjectControlRecord(projectId, subDepartmentId, client = poo
         budget_currency AS control_record_budget_currency,
         status AS control_record_status,
         lifecycle_status AS control_record_lifecycle_status,
+        priority AS control_record_priority,
+        planned_start_date AS control_record_planned_start_date,
+        target_completion_date AS control_record_target_completion_date,
+        project_root_path AS control_record_project_root_path,
+        notes AS control_record_notes,
         created_by AS control_record_created_by,
         dispatched_by AS control_record_dispatched_by,
         dispatched_at AS control_record_dispatched_at,
@@ -1033,16 +1225,26 @@ async function upsertProjectControlRecord(values, client = pool) {
         status,
         lifecycle_status,
         created_by,
+        priority,
+        planned_start_date,
+        target_completion_date,
+        project_root_path,
+        notes,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, 'active', COALESCE($5, 'unassigned'), $6, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, 'active', COALESCE($5, 'unassigned'), $6, $7, $8::date, $9::date, $10, $11, NOW(), NOW())
       ON CONFLICT (project_id, sub_department_id)
       WHERE status = 'active'
       DO UPDATE
       SET budget_amount = EXCLUDED.budget_amount,
           budget_currency = EXCLUDED.budget_currency,
           lifecycle_status = COALESCE(NULLIF($5, ''), project_control_records.lifecycle_status),
+          priority = COALESCE($7, project_control_records.priority),
+          planned_start_date = COALESCE($8::date, project_control_records.planned_start_date),
+          target_completion_date = COALESCE($9::date, project_control_records.target_completion_date),
+          project_root_path = COALESCE($10, project_control_records.project_root_path),
+          notes = COALESCE($11, project_control_records.notes),
           updated_at = NOW()
       RETURNING
         id AS control_record_id,
@@ -1052,6 +1254,11 @@ async function upsertProjectControlRecord(values, client = pool) {
         budget_currency AS control_record_budget_currency,
         status AS control_record_status,
         lifecycle_status AS control_record_lifecycle_status,
+        priority AS control_record_priority,
+        planned_start_date AS control_record_planned_start_date,
+        target_completion_date AS control_record_target_completion_date,
+        project_root_path AS control_record_project_root_path,
+        notes AS control_record_notes,
         created_by AS control_record_created_by,
         dispatched_by AS control_record_dispatched_by,
         dispatched_at AS control_record_dispatched_at,
@@ -1066,6 +1273,11 @@ async function upsertProjectControlRecord(values, client = pool) {
       values.budget_currency,
       values.lifecycle_status || null,
       values.created_by || null,
+      values.priority || null,
+      values.planned_start_date || null,
+      values.target_completion_date || null,
+      values.project_root_path || null,
+      values.notes || null,
     ],
   );
 
@@ -1210,7 +1422,8 @@ function controlDesignProjectSelect(whereClause) {
         pws.workflow_id,
         COUNT(*) FILTER (WHERE pws.is_required)::int AS total_stage_count,
         COUNT(*) FILTER (WHERE pws.is_required AND pws.status = 'approved')::int AS approved_stage_count,
-        BOOL_OR(pws.status NOT IN ('locked', 'not_started')) AS lifecycle_started
+        BOOL_OR(pws.status NOT IN ('locked', 'available')) AS lifecycle_started,
+        COUNT(*) FILTER (WHERE pws.status IN ('changes_required', 'update_required'))::int AS stage_updates_required_count
       FROM project_workflow_stages pws
       GROUP BY pws.workflow_id
     ),
@@ -1241,6 +1454,11 @@ function controlDesignProjectSelect(whereClause) {
       pcr.budget_amount AS control_record_budget_amount,
       pcr.budget_currency AS control_record_budget_currency,
       pcr.status AS control_record_status,
+      pcr.priority AS control_record_priority,
+      pcr.planned_start_date AS control_record_planned_start_date,
+      pcr.target_completion_date AS control_record_target_completion_date,
+      pcr.project_root_path AS control_record_project_root_path,
+      pcr.notes AS control_record_notes,
       pcr.lifecycle_status AS control_record_lifecycle_status,
       pcr.created_by AS control_record_created_by,
       pcr.dispatched_by AS control_record_dispatched_by,
@@ -1265,7 +1483,7 @@ function controlDesignProjectSelect(whereClause) {
       COALESCE(sr.approved_stage_count, 0) AS approved_stage_count,
       COALESCE(sr.lifecycle_started, FALSE) AS lifecycle_started,
       COALESCE(psr.pending_approval_count, 0) AS pending_approval_count,
-      COALESCE(rr.updates_required_count, 0) AS updates_required_count
+      GREATEST(COALESCE(sr.stage_updates_required_count, 0), COALESCE(rr.updates_required_count, 0)) AS updates_required_count
     FROM design.projects p
     JOIN departments d ON d.id = p.department_id
     LEFT JOIN project_control_records pcr
@@ -1320,6 +1538,8 @@ async function findControlDesignProject(projectId, subDepartmentId, client = poo
 }
 module.exports = {
   findActiveProjectWorkflow,
+  findLatestOpenRevisionForStage,
+  findWorkflowProofById,
   findControlDesignProject,
   findProjectControlRecord,
   findPendingSubmissionForStage,
@@ -1327,6 +1547,9 @@ module.exports = {
   findSubDepartmentByName,
   findTemplateById,
   findTemplateBySubDepartment,
+  countWorkflowProofs,
+  deleteWorkflowProof,
+  insertWorkflowProof,
   findWorkflowById,
   findWorkflowStage,
   hydrateWorkflowDetails,
@@ -1342,6 +1565,7 @@ module.exports = {
   listControlSubDepartments,
   listPendingApprovalQueue,
   listRevisionQueue,
+  listWorkflowProofs,
   listTemplateStages,
   listWorkflowEvents,
   listWorkflowStages,

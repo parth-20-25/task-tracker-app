@@ -143,19 +143,42 @@ function canMarkMimicNotRequired(user) {
     && hasPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK);
 }
 
-async function assignDesign2DCompletionTaskForUser(user, payload = {}) {
+function normalizeSelectedCompletionTaskCodes(payload = {}) {
+  const values = Array.isArray(payload.task_codes)
+    ? payload.task_codes
+    : Array.isArray(payload.activity_codes)
+      ? payload.activity_codes
+      : [payload.task_code || payload.completion_task_code];
+  return [...new Set(values.map((code) => String(code || "").trim().toUpperCase()).filter(Boolean))];
+}
+
+function validateBulkScope(definitions) {
+  const scopes = [...new Set(definitions.map((definition) => definition.scope))];
+  if (scopes.length !== 1) {
+    throw new AppError(400, "Selected activities must all be fixture-level or all be project-level");
+  }
+  return scopes[0];
+}
+
+async function assignDesign2DCompletionTasksForUser(user, payload = {}) {
   const projectId = String(payload.project_id || "").trim();
-  const code = String(payload.task_code || payload.completion_task_code || "").trim().toUpperCase();
-  const definition = getDesign2DCompletionTaskDefinition(code);
-  const fixtureId = definition?.scope === "fixture" ? String(payload.fixture_id || "").trim() : null;
+  const codes = normalizeSelectedCompletionTaskCodes(payload);
+  const definitions = codes.map((code) => ({ code, definition: getDesign2DCompletionTaskDefinition(code) }));
+  const invalid = definitions.find((item) => !item.definition);
+  if (!projectId || codes.length === 0 || invalid) {
+    throw new AppError(400, "project_id, task_codes and assigned_to are required");
+  }
+  const scope = validateBulkScope(definitions.map((item) => item.definition));
+  const fixtureId = scope === "fixture" ? String(payload.fixture_id || "").trim() : null;
   const assignedTo = String(payload.assigned_to || "").trim();
   const deadline = new Date(payload.deadline);
   const supplierName = normalizeSupplierName(payload.supplier_name || payload.outsource_supplier_name);
+  const description = String(payload.description || payload.instructions || "").trim();
 
-  if (!projectId || !definition || !assignedTo) {
-    throw new AppError(400, "project_id, task_code and assigned_to are required");
+  if (!assignedTo) {
+    throw new AppError(400, "project_id, task_codes and assigned_to are required");
   }
-  if (definition.scope === "fixture" && !fixtureId) {
+  if (scope === "fixture" && !fixtureId) {
     throw new AppError(400, "fixture_id is required for fixture-level tasks");
   }
   if (Number.isNaN(deadline.getTime()) || deadline.getTime() <= Date.now()) {
@@ -184,43 +207,59 @@ async function assignDesign2DCompletionTaskForUser(user, payload = {}) {
     await requireDesignDepartmentProject(projectId, client);
 
     const state = await loadProjectCompletionState(projectId, client);
-    if (definition.scope === "fixture") {
+    if (scope === "fixture") {
       if (!state.eligibleFixtures.some((fixture) => fixture.fixture_id === fixtureId)) {
         throw new AppError(409, "This fixture has not completed its original 2D stage");
       }
     } else if (!state.projectTasksUnlocked) {
-      throw new AppError(409, "Project-level tasks are locked until all fixture-level requirements are approved");
+      throw new AppError(409, "Project-level tasks are locked until all mandatory fixture-level activities are approved");
     }
 
     await requireShared2DAssignee(user, project, assignedTo);
-    const latest = await getLatestDesign2DCompletionTask(projectId, fixtureId, code, client);
-    const revision = nextRevisionFor(latest);
-    const task = await createTaskForUser(user, {
-      task_type: TASK_TYPES.DESIGN_2D_COMPLETION,
-      department_id: project.department_id,
-      project_id: projectId,
-      fixture_id: fixtureId,
-      scope_type: definition.scope,
-      completion_task_code: code,
-      completion_task_revision: revision,
-      completion_task_outsource_supplier: supplierName,
-      assigned_to: assignedTo,
-      priority: payload.priority,
-      deadline: deadline.toISOString(),
-      description: String(payload.description || "").trim(),
-      approval_required: true,
-      proof_required: true,
-    }, {
-      client,
-      allowDesign2DCompletion: true,
-      skipAnalyticsRefresh: true,
-    });
+    const entries = [];
+    for (const { code, definition } of definitions) {
+      const latest = await getLatestDesign2DCompletionTask(projectId, fixtureId, code, client);
+      let revision;
+      try {
+        revision = nextRevisionFor(latest);
+      } catch (error) {
+        if (error instanceof AppError) {
+          throw new AppError(error.statusCode, definition.displayName + ": " + error.message);
+        }
+        throw error;
+      }
+      entries.push({ code, definition, revision });
+    }
+
+    const tasks = [];
+    for (const entry of entries) {
+      tasks.push(await createTaskForUser(user, {
+        task_type: TASK_TYPES.DESIGN_2D_COMPLETION,
+        department_id: project.department_id,
+        project_id: projectId,
+        fixture_id: fixtureId,
+        scope_type: entry.definition.scope,
+        completion_task_code: entry.code,
+        completion_task_revision: entry.revision,
+        completion_task_outsource_supplier: supplierName,
+        assigned_to: assignedTo,
+        priority: payload.priority,
+        deadline: deadline.toISOString(),
+        description,
+        approval_required: true,
+        proof_required: false,
+      }, {
+        client,
+        allowDesign2DCompletion: true,
+        skipAnalyticsRefresh: true,
+      }));
+    }
 
     if (supplierName) {
       await rememberRecentOutsourceSupplier(supplierName, client);
     }
     await client.query("COMMIT");
-    return task;
+    return tasks;
   } catch (error) {
     await client.query("ROLLBACK");
     if (String(error?.constraint || "").startsWith("uniq_design_2d_completion")) {
@@ -230,6 +269,11 @@ async function assignDesign2DCompletionTaskForUser(user, payload = {}) {
   } finally {
     client.release();
   }
+}
+
+async function assignDesign2DCompletionTaskForUser(user, payload = {}) {
+  const tasks = await assignDesign2DCompletionTasksForUser(user, payload);
+  return tasks[0];
 }
 
 async function markMimicNotRequiredForUser(user, payload = {}) {
@@ -333,6 +377,7 @@ async function assertDesign2DCompletionProjectReady(projectId, client = pool) {
 module.exports = {
   assertDesign2DCompletionProjectReady,
   assignDesign2DCompletionTaskForUser,
+  assignDesign2DCompletionTasksForUser,
   canMarkMimicNotRequired,
   getDesign2DCompletionProjectForUser,
   listEligibleDesign2DCompletionProjectsForUser,

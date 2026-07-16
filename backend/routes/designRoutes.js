@@ -46,6 +46,7 @@ const {
 } = require("../services/projectSubdivisionRoutingService");
 const {
   assignDesign2DCompletionTaskForUser,
+  assignDesign2DCompletionTasksForUser,
   getDesign2DCompletionProjectForUser,
   listEligibleDesign2DCompletionProjectsForUser,
   markMimicNotRequiredForUser,
@@ -311,6 +312,10 @@ router.post(
   authorize(PERMISSIONS.CREATE_TASK),
   authorize(PERMISSIONS.ASSIGN_TASK),
   asyncHandler(async (req, res) => {
+    if (Array.isArray(req.body?.task_codes) || Array.isArray(req.body?.activity_codes)) {
+      const tasks = await assignDesign2DCompletionTasksForUser(req.user, req.body);
+      return sendSuccess(res, tasks, 201);
+    }
     const task = await assignDesign2DCompletionTaskForUser(req.user, req.body);
     return sendSuccess(res, task, 201);
   }),

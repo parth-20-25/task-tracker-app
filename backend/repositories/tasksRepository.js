@@ -453,6 +453,7 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
   const hasSubmittedAt = hasOwn(incomingValues, "submitted_at");
   const hasApprovedAt = hasOwn(incomingValues, "approved_at");
   const hasApprovedBy = hasOwn(incomingValues, "approved_by");
+  const hasRemarks = hasOwn(incomingValues, "remarks");
   const values = {
     status: incomingValues.status,
     started_at: incomingValues.started_at ?? null,
@@ -494,9 +495,10 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
           submitted_at = CASE WHEN $10::boolean THEN $11::timestamp ELSE submitted_at END,
           approved_at = CASE WHEN $12::boolean THEN $13::timestamp ELSE approved_at END,
           approved_by = CASE WHEN $14::boolean THEN $15::varchar(50) ELSE approved_by END,
+          remarks = CASE WHEN $16::boolean THEN $17::text ELSE remarks END,
           completion_percent = CASE WHEN $1::text = 'closed' THEN 100 ELSE completion_percent END,
           updated_at = NOW()
-      WHERE id = $16::int
+      WHERE id = $18::int
     `,
     [
       values.status,
@@ -514,6 +516,8 @@ async function updateTaskStatus(taskId, incomingValues, client = pool) {
       values.approved_at ?? null,
       hasApprovedBy,
       values.approved_by ?? null,
+      hasRemarks,
+      incomingValues.remarks ?? null,
       taskId,
     ],
   );

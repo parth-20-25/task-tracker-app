@@ -1,5 +1,5 @@
 const ASSIGNED_TASK_STATUSES = new Set(["assigned", "pending"]);
-const { normalizeDesignStageName } = require("../lib/designWorkflowStages");
+const { hasTaskWorkProof, isDapWorkflowTask, isTaskWorkProofRequired } = require("../lib/taskProofPolicy");
 
 function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
@@ -15,19 +15,11 @@ function shouldAutoStartTask(task, completionPercent) {
 }
 
 function hasTaskProofForState(task) {
-  if (Array.isArray(task?.proof_url)) {
-    return task.proof_url.filter(Boolean).length > 0;
-  }
-
-  return Boolean(String(task?.proof_url || "").trim() || task?.latest_proof?.file_url);
-}
-
-function isDapWorkflowTask(task) {
-  return normalizeDesignStageName(task?.workflow_stage || task?.stage || task?.current_stage_name) === "dap";
+  return hasTaskWorkProof(task);
 }
 
 function isWorkProofRequiredForState(task) {
-  return !isDapWorkflowTask(task);
+  return isTaskWorkProofRequired(task);
 }
 
 function shouldSubmitForVerification(task, completionPercent) {

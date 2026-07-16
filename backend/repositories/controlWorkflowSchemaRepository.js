@@ -105,6 +105,11 @@ async function ensureControlWorkflowSchema(client) {
       sub_department_id UUID NOT NULL REFERENCES department_subdivisions(id),
       budget_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
       budget_currency TEXT NOT NULL DEFAULT 'INR',
+      priority TEXT,
+      planned_start_date DATE,
+      target_completion_date DATE,
+      project_root_path TEXT,
+      notes TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       lifecycle_status TEXT NOT NULL DEFAULT 'unassigned',
       created_by VARCHAR(50) REFERENCES users(employee_id),
@@ -138,6 +143,11 @@ async function ensureControlWorkflowSchema(client) {
   await client.query(`
     ALTER TABLE project_control_records
     ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'unassigned',
+    ADD COLUMN IF NOT EXISTS priority TEXT,
+    ADD COLUMN IF NOT EXISTS planned_start_date DATE,
+    ADD COLUMN IF NOT EXISTS target_completion_date DATE,
+    ADD COLUMN IF NOT EXISTS project_root_path TEXT,
+    ADD COLUMN IF NOT EXISTS notes TEXT,
     ADD COLUMN IF NOT EXISTS dispatched_by VARCHAR(50) REFERENCES users(employee_id),
     ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS dispatch_remarks TEXT
@@ -203,11 +213,19 @@ async function ensureControlWorkflowSchema(client) {
       sequence_order INTEGER NOT NULL,
       is_required BOOLEAN NOT NULL DEFAULT TRUE,
       status TEXT NOT NULL DEFAULT 'locked',
+      version INTEGER NOT NULL DEFAULT 0,
       current_document_path TEXT,
+      path_updated_by VARCHAR(50) REFERENCES users(employee_id),
+      path_updated_at TIMESTAMPTZ,
       started_at TIMESTAMPTZ,
+      started_by VARCHAR(50) REFERENCES users(employee_id),
       submitted_at TIMESTAMPTZ,
+      submitted_by VARCHAR(50) REFERENCES users(employee_id),
       approved_at TIMESTAMPTZ,
       approved_by VARCHAR(50) REFERENCES users(employee_id),
+      rejected_at TIMESTAMPTZ,
+      rejected_by VARCHAR(50) REFERENCES users(employee_id),
+      rejection_reason TEXT,
       due_date TIMESTAMPTZ,
       remarks TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -215,10 +233,11 @@ async function ensureControlWorkflowSchema(client) {
       CONSTRAINT project_workflow_stages_status_check CHECK (
         status IN (
           'locked',
-          'not_started',
+          'available',
           'in_progress',
-          'submitted_for_approval',
-          'revision_required',
+          'pending_approval',
+          'changes_required',
+          'update_required',
           'approved',
           'blocked',
           'pre_completed',
@@ -227,6 +246,36 @@ async function ensureControlWorkflowSchema(client) {
       ),
       CONSTRAINT project_workflow_stages_workflow_order_unique UNIQUE (workflow_id, sequence_order)
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE project_workflow_stages
+    ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS path_updated_by VARCHAR(50) REFERENCES users(employee_id),
+    ADD COLUMN IF NOT EXISTS path_updated_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS started_by VARCHAR(50) REFERENCES users(employee_id),
+    ADD COLUMN IF NOT EXISTS submitted_by VARCHAR(50) REFERENCES users(employee_id),
+    ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS rejected_by VARCHAR(50) REFERENCES users(employee_id),
+    ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+
+    ALTER TABLE project_workflow_stages
+    DROP CONSTRAINT IF EXISTS project_workflow_stages_status_check;
+
+    UPDATE project_workflow_stages
+    SET status = CASE status
+      WHEN 'not_started' THEN 'available'
+      WHEN 'submitted_for_approval' THEN 'pending_approval'
+      WHEN 'revision_required' THEN 'changes_required'
+      ELSE status
+    END;
+
+    ALTER TABLE project_workflow_stages
+    ADD CONSTRAINT project_workflow_stages_status_check
+    CHECK (status IN (
+      'locked', 'available', 'in_progress', 'pending_approval', 'approved',
+      'changes_required', 'update_required', 'blocked', 'pre_completed', 'skipped_by_override'
+    ));
   `);
 
   await client.query(`
@@ -249,7 +298,9 @@ async function ensureControlWorkflowSchema(client) {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       workflow_stage_id UUID NOT NULL REFERENCES project_workflow_stages(id) ON DELETE CASCADE,
       workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,
+      revision_number INTEGER NOT NULL,
       revision_reason TEXT NOT NULL,
+      reference_path TEXT,
       manual_reason TEXT,
       description TEXT NOT NULL,
       due_date TIMESTAMPTZ NOT NULL,
@@ -273,7 +324,9 @@ async function ensureControlWorkflowSchema(client) {
 
   await client.query(`
     ALTER TABLE workflow_stage_revisions
-    ADD COLUMN IF NOT EXISTS affected_stage_ids UUID[] NOT NULL DEFAULT '{}'::uuid[]
+    ADD COLUMN IF NOT EXISTS affected_stage_ids UUID[] NOT NULL DEFAULT '{}'::uuid[],
+    ADD COLUMN IF NOT EXISTS revision_number INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS reference_path TEXT
   `);
 
   await client.query(`
@@ -288,18 +341,37 @@ async function ensureControlWorkflowSchema(client) {
   `);
 
   await client.query(`
+    WITH numbered AS (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY workflow_stage_id ORDER BY created_at, id)::int AS revision_number
+      FROM workflow_stage_revisions
+    )
+    UPDATE workflow_stage_revisions revision
+    SET revision_number = numbered.revision_number
+    FROM numbered
+    WHERE revision.id = numbered.id
+  `);
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_stage_revisions_stage_number
+    ON workflow_stage_revisions (workflow_stage_id, revision_number)
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS workflow_stage_submissions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       workflow_stage_id UUID NOT NULL REFERENCES project_workflow_stages(id) ON DELETE CASCADE,
       workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,
       revision_id UUID REFERENCES workflow_stage_revisions(id) ON DELETE SET NULL,
       submitted_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
-      submitted_document_path TEXT NOT NULL,
+      submitted_document_path TEXT,
+      stage_version INTEGER NOT NULL DEFAULT 0,
       remarks TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
       reviewed_by VARCHAR(50) REFERENCES users(employee_id),
       reviewed_at TIMESTAMPTZ,
       review_remarks TEXT,
+      rejection_reason TEXT,
+      correction_deadline TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT workflow_stage_submissions_status_check CHECK (status IN ('pending', 'approved', 'revision_required'))
@@ -307,15 +379,54 @@ async function ensureControlWorkflowSchema(client) {
   `);
 
   await client.query(`
+    ALTER TABLE workflow_stage_submissions
+    ADD COLUMN IF NOT EXISTS stage_version INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
+    ADD COLUMN IF NOT EXISTS correction_deadline TIMESTAMPTZ;
+    ALTER TABLE workflow_stage_submissions
+    ALTER COLUMN submitted_document_path DROP NOT NULL;
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS workflow_document_path_history (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       workflow_stage_id UUID NOT NULL REFERENCES project_workflow_stages(id) ON DELETE CASCADE,
+      revision_number INTEGER NOT NULL DEFAULT 0,
       old_path TEXT,
       new_path TEXT NOT NULL,
       changed_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
       change_remarks TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE workflow_document_path_history
+    ADD COLUMN IF NOT EXISTS revision_number INTEGER NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS control_workflow_proofs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workflow_id UUID NOT NULL REFERENCES project_workflows(id) ON DELETE CASCADE,
+      project_id UUID NOT NULL REFERENCES design.projects(id) ON DELETE CASCADE,
+      workflow_stage_id UUID NOT NULL REFERENCES project_workflow_stages(id) ON DELETE CASCADE,
+      revision_number INTEGER NOT NULL DEFAULT 0,
+      original_filename TEXT NOT NULL,
+      storage_key TEXT NOT NULL UNIQUE,
+      file_path TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      file_size BIGINT NOT NULL,
+      uploaded_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      comment TEXT,
+      CONSTRAINT control_workflow_proofs_file_size_check CHECK (file_size > 0)
+    )
+  `);
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_control_workflow_proofs_stage_revision
+    ON control_workflow_proofs (workflow_stage_id, revision_number, uploaded_at DESC)
   `);
 
   await client.query(`

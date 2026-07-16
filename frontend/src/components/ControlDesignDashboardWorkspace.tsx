@@ -1,5 +1,5 @@
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -18,11 +18,13 @@ import {
   fetchControlDesignAssignableUsers,
   fetchControlDesignCapabilities,
   fetchControlDesignProjects,
+  fetchControlDesignSummary,
   fetchControlProjectWorkflow,
   fetchControlSubDepartments,
   fetchControlWorkflowTemplate,
   type ControlDesignCapabilities,
   type ControlDesignProject,
+  type ControlDesignSummary,
 } from "@/api/controlWorkflowApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
@@ -59,6 +62,8 @@ const EMPTY_CONTROL_DESIGN_CAPABILITIES: ControlDesignCapabilities = {
   canStartStage: false,
   canSubmitStage: false,
   canUpdatePath: false,
+  canViewProof: false,
+  canUploadProof: false,
   canReview: false,
   canApprove: false,
   canRequestChanges: false,
@@ -81,6 +86,11 @@ const emptyCreateForm = {
   customer: "",
   budget: "",
   assigned_user_id: "",
+  priority: "",
+  planned_start_date: "",
+  target_completion_date: "",
+  project_root_path: "",
+  notes: "",
 };
 
 const projectStatusClasses: Record<string, string> = {
@@ -131,7 +141,7 @@ const lifecycleMetrics: Array<{ key: LifecycleFilter; label: string; icon: Lucid
 function matchesLifecycleFilter(project: ControlDesignProject, filter: LifecycleFilter | null) {
   const summary = project.lifecycle_summary;
   if (!filter || filter === "total") return true;
-  if (filter === "active") return summary?.lifecycle_started === true && summary.completed !== true;
+  if (filter === "active") return summary?.completed !== true && !["cancelled", "completed", "dispatched"].includes(project.project_status);
   if (filter === "pending") return Number(summary?.pending_approval_count || 0) > 0;
   if (filter === "updates") return Number(summary?.updates_required_count || 0) > 0;
   return summary?.completed === true;
@@ -139,24 +149,26 @@ function matchesLifecycleFilter(project: ControlDesignProject, filter: Lifecycle
 
 function LifecycleSummaryCards({
   projects,
+  summary,
   activeFilter,
   onFilter,
 }: {
   projects: ControlDesignProject[];
+  summary?: ControlDesignSummary | null;
   activeFilter: LifecycleFilter | null;
   onFilter: (filter: LifecycleFilter | null) => void;
 }) {
-  const values: Record<LifecycleFilter, number> = {
+  const values: Record<LifecycleFilter, number> = summary ?? {
     total: projects.length,
     active: projects.filter((project) => matchesLifecycleFilter(project, "active")).length,
-    pending: projects.reduce((total, project) => total + Number(project.lifecycle_summary?.pending_approval_count || 0), 0),
-    updates: projects.reduce((total, project) => total + Number(project.lifecycle_summary?.updates_required_count || 0), 0),
+    pending: projects.filter((project) => matchesLifecycleFilter(project, "pending")).length,
+    updates: projects.filter((project) => matchesLifecycleFilter(project, "updates")).length,
     completed: projects.filter((project) => matchesLifecycleFilter(project, "completed")).length,
   };
 
   return (
     <section aria-label="Control Design lifecycle summary" className="space-y-2">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         {lifecycleMetrics.map(({ key, label, icon: Icon, tone }) => {
           const selected = activeFilter === key;
           return (
@@ -165,16 +177,16 @@ function LifecycleSummaryCards({
               type="button"
               aria-pressed={selected}
               className={cn(
-                "rounded-xl border bg-white p-4 text-left shadow-sm transition hover:border-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+                "min-h-[76px] rounded-lg border bg-white p-3 text-left shadow-sm transition hover:border-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
                 selected && CONTROL_DEPARTMENT_THEME.selectedCard,
               )}
               onClick={() => onFilter(selected ? null : key)}
             >
               <span className="flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-slate-600">{label}</span>
+                <span className="text-xs font-medium text-slate-600">{label}</span>
                 <Icon className={cn("h-5 w-5", tone)} />
               </span>
-              <span className={cn("mt-3 block text-3xl font-semibold", tone)}>{values[key]}</span>
+              <span className={cn("mt-1 block text-2xl font-semibold", tone)}>{values[key]}</span>
             </button>
           );
         })}
@@ -226,15 +238,15 @@ function ControlDesignProjectSummaryCard({
 
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
-      <CardContent className="p-4 md:p-6">
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.9fr)] lg:items-center">
-          <div className="min-w-0 space-y-4">
+      <CardContent className="p-4">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,1fr)] lg:items-center">
+          <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap items-start gap-3">
               <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-blue-900">
                 {projectCode}
               </span>
               <div className="min-w-0">
-                <h2 className="truncate text-2xl font-semibold leading-tight text-slate-950">{project.project_name || "Unnamed project"}</h2>
+                <h2 className="truncate text-xl font-semibold leading-tight text-slate-950">{project.project_name || "Unnamed project"}</h2>
                 <p className="mt-1 text-sm text-slate-600">{project.customer_name || "Customer not set"}</p>
               </div>
             </div>
@@ -251,7 +263,7 @@ function ControlDesignProjectSummaryCard({
             </div>
           </div>
 
-          <div className="grid gap-4 border-slate-200 lg:grid-cols-2 lg:border-l lg:pl-6">
+          <div className="grid gap-3 border-slate-200 sm:grid-cols-2 lg:border-l lg:pl-4">
             <SummaryMetric label="Project ID" value={projectCode} />
             <SummaryMetric label="Budget (INR)" value={formatBudget(project)} tone={project.control_record ? undefined : "warning"} />
             <SummaryMetric label="Assigned To" value={assignedTo} />
@@ -261,7 +273,7 @@ function ControlDesignProjectSummaryCard({
           </div>
         </div>
 
-        <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
           <ProjectStatusBadge status={project.project_status} />
           <div className="flex min-w-0 items-center gap-3 sm:min-w-[280px]">
             <Progress value={display.percent} className="h-2 bg-slate-100" />
@@ -334,7 +346,7 @@ function NewProjectDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New Control Design Project</DialogTitle>
           <DialogDescription className="sr-only">Create a Control Design project.</DialogDescription>
@@ -375,6 +387,35 @@ function NewProjectDialog({
             </Select>
             <FieldError message={errors.assigned_user_id} />
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="control-project-priority">Priority</Label>
+              <Select value={form.priority || "__none__"} onValueChange={(value) => onChange("priority", value === "__none__" ? "" : value)} disabled={pending}>
+                <SelectTrigger id="control-project-priority"><SelectValue placeholder="Optional" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Not set</SelectItem>
+                  {['low', 'medium', 'high', 'urgent'].map((priority) => <SelectItem key={priority} value={priority}>{formatStatusText(priority)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="control-project-root">Project root path</Label>
+              <Input id="control-project-root" value={form.project_root_path} onChange={(event) => onChange("project_root_path", event.target.value)} disabled={pending} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="control-project-start">Planned start date</Label>
+              <Input id="control-project-start" type="date" value={form.planned_start_date} onChange={(event) => onChange("planned_start_date", event.target.value)} disabled={pending} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="control-project-target">Target completion date</Label>
+              <Input id="control-project-target" type="date" value={form.target_completion_date} onChange={(event) => onChange("target_completion_date", event.target.value)} disabled={pending} />
+              <FieldError message={errors.target_completion_date} />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="control-project-notes">Notes</Label>
+            <Textarea id="control-project-notes" value={form.notes} onChange={(event) => onChange("notes", event.target.value)} disabled={pending} rows={2} />
+          </div>
           <FieldError message={errors.submit} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
@@ -399,6 +440,9 @@ function validateCreateForm(form: typeof emptyCreateForm) {
   if (!form.project_name.trim()) errors.project_name = "Project Name is required.";
   if (!form.customer.trim()) errors.customer = "Customer is required.";
   if (!form.assigned_user_id.trim()) errors.assigned_user_id = "Assigned Control Design member is required.";
+  if (form.planned_start_date && form.target_completion_date && form.target_completion_date < form.planned_start_date) {
+    errors.target_completion_date = "Target completion date cannot be before the planned start date.";
+  }
   if (!budget) {
     errors.budget = "Budget is required.";
   } else if (!/^\d+(?:\.\d{1,2})?$/.test(budget)) {
@@ -425,7 +469,6 @@ function createProjectErrorMessage(error: unknown) {
 export function ControlDesignDashboardWorkspace() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const didAutoSelectProject = useRef(false);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [activeFilter, setActiveFilter] = useState<LifecycleFilter | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -450,18 +493,24 @@ export function ControlDesignDashboardWorkspace() {
     staleTime: 60_000,
   });
 
+  const summaryQuery = useQuery({
+    queryKey: ["control-design", "summary"],
+    queryFn: fetchControlDesignSummary,
+    enabled: Boolean(user?.employee_id && canViewWorkspace),
+    staleTime: 60_000,
+  });
+
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
   const filteredProjects = useMemo(() => projects.filter((project) => matchesLifecycleFilter(project, activeFilter)), [activeFilter, projects]);
-  const selectedProject = projects.find((project) => project.project_id === selectedProjectId) || null;
+  const selectedProject = filteredProjects.find((project) => project.project_id === selectedProjectId) || null;
 
   useEffect(() => {
-    if (!didAutoSelectProject.current && filteredProjects.length > 0) {
-      didAutoSelectProject.current = true;
-      setSelectedProjectId(filteredProjects[0].project_id);
+    if (filteredProjects.length === 0) {
+      if (selectedProjectId) setSelectedProjectId("");
       return;
     }
-    if (selectedProjectId && !filteredProjects.some((project) => project.project_id === selectedProjectId)) {
-      setSelectedProjectId("");
+    if (!filteredProjects.some((project) => project.project_id === selectedProjectId)) {
+      setSelectedProjectId(filteredProjects[0].project_id);
     }
   }, [filteredProjects, selectedProjectId]);
 
@@ -506,6 +555,11 @@ export function ControlDesignDashboardWorkspace() {
       customer: createForm.customer.trim(),
       budget: createForm.budget.trim(),
       assignedUserId: createForm.assigned_user_id.trim(),
+      priority: createForm.priority || undefined,
+      plannedStartDate: createForm.planned_start_date || undefined,
+      targetCompletionDate: createForm.target_completion_date || undefined,
+      projectRootPath: createForm.project_root_path.trim() || undefined,
+      notes: createForm.notes.trim() || undefined,
     }),
     onSuccess: async (project) => {
       queryClient.setQueryData<ControlDesignProject[]>(["control-design", "projects"], (current = []) => {
@@ -519,6 +573,7 @@ export function ControlDesignDashboardWorkspace() {
       setCreateOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["control-design", "projects"] }),
+        queryClient.invalidateQueries({ queryKey: ["control-design", "summary"] }),
         queryClient.invalidateQueries({ queryKey: ["control-workflow", "project"] }),
       ]);
       toast({ title: "Control Design project created" });
@@ -592,7 +647,7 @@ export function ControlDesignDashboardWorkspace() {
         </div>
       </div>
 
-      <LifecycleSummaryCards projects={projects} activeFilter={activeFilter} onFilter={setActiveFilter} />
+      <LifecycleSummaryCards projects={projects} summary={summaryQuery.data} activeFilter={activeFilter} onFilter={setActiveFilter} />
 
       <section className="space-y-3" aria-labelledby="control-design-projects-heading">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

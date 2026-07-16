@@ -22,6 +22,7 @@ import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDispl
 import { adminQueryKeys, batchQueryKeys, taskAssignmentQueryKeys } from "@/lib/queryKeys";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
 import { resolveImageUrl } from "@/lib/imageUrl";
+import { hasTaskWorkProof, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from "@/lib/taskProofPolicy";
 
 
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -143,7 +144,9 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   const isAssignee = user
     ? user.employee_id === task.assigned_to || task.assignee_ids?.includes(user.employee_id)
     : false;
-  const canUploadProof = task.can_upload_proof === true;
+  const requiresWorkProof = requiresTaskWorkProof(task);
+  const proofOptionalAdditionalTask = isProofOptionalThreeDProjectAdditionalTask(task);
+  const canUploadProof = task.can_upload_proof === true && requiresWorkProof;
   const actorLevel = Number(user?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
   const assigneeLevel = Number(task.assignee?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
   const canEditCompletion = task.status !== "closed" && (
@@ -152,6 +155,8 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     || (access.canEditTasks && actorLevel < assigneeLevel)
   );
   const proofUrls = task.proof_url ?? [];
+  const hasKnownProof = hasTaskWorkProof(task);
+  const showProofTab = requiresWorkProof || hasKnownProof || attachments.length > 0;
   const canTransferTask = false;
   const transferCompletion = Number(completionInput);
   const transferRemaining = Number.isInteger(transferCompletion) ? Math.max(0, 100 - transferCompletion) : 0;
@@ -364,12 +369,12 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     void tryReadClipboardImage();
   }, [tryReadClipboardImage]);
 
-  const openProofDialog = useCallback(() => {
-    setActiveTab("proof");
-    if (canUploadProof) {
+  const openTaskDialog = useCallback(() => {
+    setActiveTab(showProofTab ? "proof" : "activity");
+    if (showProofTab && canUploadProof) {
       window.setTimeout(() => setProofPickerOpen(true), 0);
     }
-  }, [canUploadProof]);
+  }, [canUploadProof, showProofTab]);
 
   const handleDialogOpenChange = useCallback((nextOpen: boolean) => {
     setOpen(nextOpen);
@@ -530,10 +535,10 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
           size="sm"
           variant="ghost"
           className="h-7 w-7 p-0"
-          aria-label="Track proof"
-          onClick={openProofDialog}
+          aria-label={proofOptionalAdditionalTask ? "Task details" : "Track proof"}
+          onClick={openTaskDialog}
         >
-          <Camera className="h-3.5 w-3.5" />
+          {proofOptionalAdditionalTask ? <NotebookText className="h-3.5 w-3.5" /> : <Camera className="h-3.5 w-3.5" />}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-4xl">
@@ -592,7 +597,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
               <TabsTrigger value="logs"><NotebookText className="h-3.5 w-3.5 mr-1.5" />Logs</TabsTrigger>
               <TabsTrigger value="checklist"><CheckSquare className="h-3.5 w-3.5 mr-1.5" />Checklist</TabsTrigger>
               {canTransferTask ? <TabsTrigger value="transfer"><ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />Transfer</TabsTrigger> : null}
-              <TabsTrigger value="proof"><FileImage className="h-3.5 w-3.5 mr-1.5" />Proof</TabsTrigger>
+              {showProofTab ? <TabsTrigger value="proof">{proofOptionalAdditionalTask ? <FileText className="h-3.5 w-3.5 mr-1.5" /> : <FileImage className="h-3.5 w-3.5 mr-1.5" />}{proofOptionalAdditionalTask ? "Attachments" : "Proof"}</TabsTrigger> : null}
             </TabsList>
 
             <TabsContent value="activity" className="space-y-3 mt-4">
@@ -796,11 +801,13 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                   This task is completed. Proof documents are locked and available for viewing only.
                 </div>
               )}
-              {!canUploadProof && (
+              {requiresWorkProof && !canUploadProof && (
                 <div className="bg-muted border rounded-lg p-3 text-sm text-muted-foreground">
                   Only the assignee can upload or remove proof for this task.
                 </div>
               )}
+              {requiresWorkProof ? (
+                <>
               <div className="flex items-center gap-3">
                 <input
                   type="file"
@@ -872,8 +879,10 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                   ? `Images, PDF, CAD, spreadsheet, text, or archive files. Max ${MAX_TASK_PROOF_SIZE_MB} MB.`
                   : `Images only. Max ${MAX_TASK_PROOF_SIZE_MB} MB.`}
               </p>
+                </>
+              ) : null}
 
-              {pendingProofFile ? (
+              {requiresWorkProof && pendingProofFile ? (
                 <div className="rounded-lg border bg-slate-50/60 p-3">
                   <div className="flex flex-col gap-3 sm:flex-row">
                     <div className="h-40 w-full overflow-hidden rounded-md border bg-background sm:w-56">
@@ -920,14 +929,14 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                     </div>
                   </div>
                 </div>
-              ) : waitingForPaste ? (
+              ) : requiresWorkProof && waitingForPaste ? (
                 <div className="rounded-lg border border-dashed bg-slate-50/60 p-3 text-sm text-muted-foreground">
                   Waiting for pasted screenshot...
                 </div>
               ) : null}
 
               {attachments.length === 0 && !latestProof ? (
-                <p className="text-sm text-muted-foreground">No proof attachments yet.</p>
+                requiresWorkProof ? <p className="text-sm text-muted-foreground">No proof attachments yet.</p> : null
               ) : (
                 <div className="space-y-3">
                   {(attachments.length > 0 ? attachments : latestProof ? [latestProof] : []).map((attachment) => (

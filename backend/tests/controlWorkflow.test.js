@@ -31,14 +31,25 @@ const {
   normalizeRevisionReason,
 } = require("../lib/controlWorkflow");
 const { PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require("../config/constants");
+const { inspectControlWorkflowProof } = require("../lib/controlWorkflowProofUpload");
 const { syncControlDesignWorkspacePermissionForConfiguredRoles } = require("../repositories/permissionRepository");
+const controlWorkflowService = require("../services/controlWorkflowService");
 const {
   canCreateControlDesignProject,
   normalizeBudgetAmount,
   normalizeControlDesignProjectPayload,
   requireControlDesignCreatePermission,
-} = require("../services/controlWorkflowService");
-const { findWorkflowStage, insertProjectWorkflow, insertWorkflowEvent } = require("../repositories/controlWorkflowRepository");
+  uploadWorkflowProof,
+} = controlWorkflowService;
+const controlWorkflowRepository = require("../repositories/controlWorkflowRepository");
+const {
+  findWorkflowStage,
+  insertProjectWorkflow,
+  insertWorkflowEvent,
+  insertWorkflowProof,
+  updateStage,
+} = controlWorkflowRepository;
+const { pool } = require("../db");
 
 function templateStages() {
   return CONTROL_DESIGN_STAGES.map((stageName, index) => ({
@@ -281,6 +292,8 @@ test("Control Design permissions are seeded through role-id bundles", () => {
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_STAGES_SUBMIT), true);
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PATHS_UPDATE), true);
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROOFS_VIEW), true);
+    assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROOFS_UPLOAD), true);
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_CREATE), false);
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_PROJECTS_ASSIGN), false);
     assert.equal(hasPermission(roleId, PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE), false);
@@ -322,6 +335,8 @@ test("frontend and backend declare the same canonical Control Design permissions
     PERMISSIONS.CONTROL_DESIGN_PROJECTS_REASSIGN,
     PERMISSIONS.CONTROL_DESIGN_APPROVALS_APPROVE,
     PERMISSIONS.CONTROL_DESIGN_APPROVALS_REQUEST_CHANGES,
+    PERMISSIONS.CONTROL_DESIGN_PROOFS_VIEW,
+    PERMISSIONS.CONTROL_DESIGN_PROOFS_UPLOAD,
     PERMISSIONS.CONTROL_DESIGN_REVISIONS_RAISE,
     PERMISSIONS.CONTROL_DESIGN_REVISIONS_EXECUTE,
     PERMISSIONS.CONTROL_DESIGN_REVISIONS_REVIEW,
@@ -375,6 +390,11 @@ test("Control Design project creation validation trims required fields and norma
     customer_name: "Tata Motors",
     budget_amount: "1250000.50",
     assigned_user_id: "E0042",
+    priority: null,
+    planned_start_date: null,
+    target_completion_date: null,
+    project_root_path: null,
+    notes: null,
   });
 
   assert.equal(normalizeBudgetAmount("0"), "0.00");
@@ -391,6 +411,146 @@ test("Control Design project creation validation trims required fields and norma
   assert.throws(() => normalizeBudgetAmount("12.345"), /Budget must be a non-negative decimal amount/);
 });
 
+test("Control Design project creation normalizes optional scheduling and path fields", () => {
+  const normalized = normalizeControlDesignProjectPayload({
+    projectId: "P-1",
+    projectName: "Project",
+    customer: "Customer",
+    budget: "10",
+    assignedUserId: "E0042",
+    priority: " High ",
+    plannedStartDate: "2026-07-20",
+    targetCompletionDate: "2026-07-25",
+    projectRootPath: " \\\\server\\control ",
+    notes: " Initial scope ",
+  });
+
+  assert.equal(normalized.priority, "high");
+  assert.match(normalized.planned_start_date, /^2026-07-20T/);
+  assert.match(normalized.target_completion_date, /^2026-07-25T/);
+  assert.equal(normalized.project_root_path, "\\\\server\\control");
+  assert.equal(normalized.notes, "Initial scope");
+  assert.throws(() => normalizeControlDesignProjectPayload({
+    projectId: "P-1",
+    projectName: "Project",
+    customer: "Customer",
+    budget: "10",
+    assignedUserId: "E0042",
+    plannedStartDate: "2026-07-25",
+    targetCompletionDate: "2026-07-20",
+  }), /cannot be before/);
+});
+
+test("work-proof inspection accepts PNG content and rejects unsupported or mismatched files", () => {
+  const png = { originalname: "panel.png", buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]) };
+  assert.deepEqual(inspectControlWorkflowProof(png), {
+    extension: ".png",
+    mimeType: "image/png",
+    originalName: "panel.png",
+  });
+  assert.throws(() => inspectControlWorkflowProof({ originalname: "panel.exe", buffer: Buffer.from("MZ") }), /Unsupported/);
+  assert.throws(() => inspectControlWorkflowProof({ originalname: "panel.png", buffer: Buffer.from("not a png") }), /does not match/);
+});
+
+test("unauthorized Control Design work-proof upload is rejected before file persistence", async () => {
+  const originalConnect = pool.connect;
+  const originalFindStage = controlWorkflowRepository.findWorkflowStage;
+  const originalFindWorkflow = controlWorkflowRepository.findWorkflowById;
+  const client = {
+    async query() { return { rows: [] }; },
+    release() {},
+  };
+  pool.connect = async () => client;
+  controlWorkflowRepository.findWorkflowStage = async () => ({
+    id: "stage-1",
+    workflow_id: "workflow-1",
+    stage_name: "CO Creation",
+    sequence_order: 1,
+    status: STAGE_STATUSES.IN_PROGRESS,
+  });
+  controlWorkflowRepository.findWorkflowById = async () => ({
+    id: "workflow-1",
+    project_id: "project-1",
+    department_id: "control",
+    sub_department_id: "sub-control-design",
+    assigned_user_id: "E0042",
+    status: "active",
+  });
+
+  try {
+    await assert.rejects(
+      uploadWorkflowProof({
+        employee_id: "E0042",
+        department_id: "control",
+        department: { id: "control", name: "Control" },
+        subdivision_id: "sub-control-design",
+        subdivision: { id: "sub-control-design", department_id: "control", subdivision_name: "Control Design" },
+        permissions: [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW, PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED],
+      }, "stage-1", { originalname: "panel.png", buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]), size: 4 }),
+      (error) => error.statusCode === 403 && /proof upload permission/.test(error.message),
+    );
+  } finally {
+    pool.connect = originalConnect;
+    controlWorkflowRepository.findWorkflowStage = originalFindStage;
+    controlWorkflowRepository.findWorkflowById = originalFindWorkflow;
+  }
+});
+test("work-proof records expose authenticated API paths without duplicating the API prefix", async () => {
+  const proof = await insertWorkflowProof({
+    workflow_id: "workflow-1",
+    project_id: "project-1",
+    workflow_stage_id: "stage-1",
+    revision_number: 0,
+    original_filename: "panel.png",
+    storage_key: "proof-key.png",
+    file_path: "private/proof-key.png",
+    mime_type: "image/png",
+    file_size: 9,
+    uploaded_by: "E0042",
+  }, {
+    async query(_sql, params) {
+      return { rows: [{
+        id: "proof-1",
+        workflow_id: params[0],
+        project_id: params[1],
+        workflow_stage_id: params[2],
+        revision_number: params[3],
+        original_filename: params[4],
+        storage_key: params[5],
+        file_path: params[6],
+        mime_type: params[7],
+        file_size: params[8],
+        uploaded_by: params[9],
+        uploaded_at: "2026-07-15T10:00:00.000Z",
+      }] };
+    },
+  });
+
+  assert.equal(proof.open_url, "/control/workflow-proofs/proof-1");
+  assert.equal(proof.download_url, "/control/workflow-proofs/proof-1?download=1");
+});
+
+test("stage updates use actor metadata and reject stale versions in SQL", async () => {
+  let capturedSql = "";
+  let capturedParams = [];
+  const updated = await updateStage("stage-1", {
+    status: STAGE_STATUSES.IN_PROGRESS,
+    touch_started_at: true,
+    actor_id: "E0042",
+    expected_version: 3,
+  }, {
+    async query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params;
+      return { rows: [{ id: "stage-1", workflow_id: "workflow-1", stage_name: "CO Creation", sequence_order: 1, status: STAGE_STATUSES.IN_PROGRESS, version: 4 }] };
+    },
+  });
+
+  assert.equal(updated.version, 4);
+  assert.equal(capturedParams.at(-1), 3);
+  assert.match(capturedSql, /version = version \+ 1/);
+  assert.match(capturedSql, /version = \$22/);
+});
 test("Control Design completion requires all nine approved stages with no open work", () => {
   const approvedStages = CONTROL_DESIGN_STAGES.map((stageName, index) => ({
     id: "stage-" + (index + 1),

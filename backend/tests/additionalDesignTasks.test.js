@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -116,6 +118,33 @@ test("3D project additional proof policy makes only the requested project kinds 
     fixture_id: null,
     additional_task_kind: "Line Layout",
   }), true);
+});
+
+test("schema permits proof-free only for the six 3D project additional task kinds", () => {
+  const sources = [
+    fs.readFileSync(path.join(__dirname, "..", "migrations.js"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "..", "repositories", "bootstrapRepository.js"), "utf8"),
+  ];
+
+  for (const source of sources) {
+    const constraintStart = source.indexOf("ADD CONSTRAINT tasks_additional_design_fields_check");
+    const constraintEnd = source.indexOf(") NOT VALID", constraintStart);
+    const constraint = source.slice(constraintStart, constraintEnd);
+    const proofRuleStart = constraint.indexOf("proof_required = NOT (");
+    const proofRuleEnd = constraint.indexOf("AND requires_quality_approval = FALSE", proofRuleStart);
+    const proofRule = constraint.slice(proofRuleStart, proofRuleEnd);
+
+    assert.notEqual(constraintStart, -1);
+    assert.notEqual(constraintEnd, -1);
+    assert.notEqual(proofRuleStart, -1);
+    for (const additionalTaskKind of THREE_D_PROJECT_PROOF_OPTIONAL_KINDS) {
+      assert.match(proofRule, new RegExp(`'${additionalTaskKind}'`));
+    }
+    assert.match(proofRule, /design_team = '3D'/);
+    assert.match(proofRule, /scope_type = 'project'/);
+    assert.match(proofRule, /fixture_id IS NULL/);
+    assert.doesNotMatch(proofRule, /Print & Drafting Checking/);
+  }
 });
 
 test("task mapper preserves additional design category fields", () => {

@@ -1354,7 +1354,12 @@ async function ensureReferenceTables(client) {
             AND current_stage_id IS NULL
             AND stage IS NULL
             AND approval_required = TRUE
-            AND proof_required = TRUE
+            AND proof_required = NOT (
+              design_team = '3D'
+              AND additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM')
+              AND scope_type = 'project'
+              AND fixture_id IS NULL
+            )
             AND requires_quality_approval = FALSE
             AND (
               design_team <> '3D'

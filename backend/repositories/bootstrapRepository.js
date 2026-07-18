@@ -656,6 +656,100 @@ async function ensureTaskNotificationsTable(client) {
   `, "idx_task_notifications_task_recipient_type");
 }
 
+async function ensureDesktopNotificationTables(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_outbox (
+      id BIGSERIAL PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      actor_user_id VARCHAR(50),
+      payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      dedupe_key TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      processed_at TIMESTAMPTZ,
+      processing_error TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS desktop_notifications (
+      id BIGSERIAL PRIMARY KEY,
+      user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      event_type TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      deep_link TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      dedupe_key TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS desktop_notification_devices (
+      id BIGSERIAL PRIMARY KEY,
+      device_id UUID NOT NULL UNIQUE,
+      user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
+      device_name TEXT NOT NULL,
+      windows_username TEXT,
+      token_hash TEXT NOT NULL,
+      agent_version TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      last_connected_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS desktop_notification_deliveries (
+      id BIGSERIAL PRIMARY KEY,
+      notification_id BIGINT NOT NULL REFERENCES desktop_notifications(id) ON DELETE CASCADE,
+      device_id UUID NOT NULL REFERENCES desktop_notification_devices(device_id) ON DELETE CASCADE,
+      delivery_status TEXT NOT NULL DEFAULT 'pending',
+      sent_at TIMESTAMPTZ,
+      displayed_at TIMESTAMPTZ,
+      acknowledged_at TIMESTAMPTZ,
+      delivery_error TEXT,
+      UNIQUE (notification_id, device_id)
+    )
+  `);
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_notification_outbox_claim
+    ON notification_outbox (processed_at, id)
+    WHERE processed_at IS NULL
+  `, "idx_notification_outbox_claim");
+
+  await client.query(`ALTER TABLE desktop_notifications ADD COLUMN IF NOT EXISTS dedupe_key TEXT`);
+
+  await safeCreateIndex(client, `
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_desktop_notifications_dedupe_key
+    ON desktop_notifications (dedupe_key)
+    WHERE dedupe_key IS NOT NULL
+  `, "uniq_desktop_notifications_dedupe_key");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_desktop_notifications_user_created
+    ON desktop_notifications (user_id, created_at DESC)
+  `, "idx_desktop_notifications_user_created");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_desktop_notification_devices_user_enabled
+    ON desktop_notification_devices (user_id, enabled, revoked_at)
+  `, "idx_desktop_notification_devices_user_enabled");
+
+  await safeCreateIndex(client, `
+    CREATE INDEX IF NOT EXISTS idx_desktop_notification_deliveries_device_status
+    ON desktop_notification_deliveries (device_id, delivery_status, notification_id)
+  `, "idx_desktop_notification_deliveries_device_status");
+}
+
 async function ensureReferenceTables(client) {
   await client.query(`SET search_path TO public`);
   await ensurePerformanceAnalyticsTables(client);
@@ -1896,6 +1990,7 @@ async function syncTaskEscalationSchedule(client) {
 }
 
 module.exports = {
+  ensureDesktopNotificationTables,
   ensureReferenceTables,
   ensureTaskNotificationsTable,
   ensureTasksTable,

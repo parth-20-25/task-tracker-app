@@ -68,9 +68,9 @@ const SECTION_STYLES: Array<Omit<FixtureBoardSection<CompletionFixtureRow>, "fix
   { key: "ASSIGNED", label: "Assigned", background: "#E6F1FB", text: "#0B4F9C", accent: "#1E6FBB", description: "Ownership confirmed · not yet started" },
   { key: "IN_PROGRESS", label: "In Progress", background: "#EEEDFE", text: "#4B3FBF", accent: "#6A5ACD", description: "Actively being worked on" },
   { key: "OUTSOURCED", label: "Outsourced", background: "#FAEEDA", text: "#9A5A00", accent: "#D88900", description: "Delegated to external supplier" },
-  { key: "VERIFICATION", label: "Verification", background: "#E1F5EE", text: "#006B5B", accent: "#009688", description: "Done · waiting for sign-off" },
+  { key: "VERIFICATION", label: "Pending Approval", background: "#E1F5EE", text: "#006B5B", accent: "#009688", description: "Done · waiting for sign-off" },
   { key: "REJECTED", label: "Rejected", background: "#FCEBEB", text: "#B32626", accent: "#D32F2F", description: "Returned · needs correction" },
-  { key: "WORKFLOW_COMPLETE", label: "Workflow Complete", background: "#EAF3DE", text: "#2F6B16", accent: "#5E9F2B", description: "Fully done · signed off" },
+  { key: "WORKFLOW_COMPLETE", label: "Completed", background: "#EAF3DE", text: "#2F6B16", accent: "#5E9F2B", description: "Fully done · signed off" },
   { key: "CANCELLED", label: "Cancelled", background: "#F1EFE8", text: "#555555", accent: "#888888", description: "Stopped · revision retained in history" },
 ];
 
@@ -250,7 +250,21 @@ function assignmentFailureDescription(failures: PromiseRejectedResult[]) {
     .find((reason): reason is Error => reason instanceof Error)?.message;
   const count = `${failures.length} assignment${failures.length === 1 ? "" : "s"} failed.`;
   return firstMessage ? `${count} ${firstMessage}` : count;
-}function activeTasksForRow(row: CompletionFixtureRow) {
+}
+
+function projectLevelLockMessage(state: Design2DCompletionProjectState | undefined) {
+  if (!state || state.project_tasks_unlocked) return undefined;
+  if ((state.eligible_fixture_count ?? state.fixtures.length) === 0) {
+    return "Project-level tasks are locked: no eligible fixtures have completed the normal 2D workflow.";
+  }
+  const pending = Math.max(0, state.pending_mandatory_activity_count ?? (state.mandatory_activity_count - state.approved_mandatory_activity_count));
+  const fixtures = state.blocking_fixtures?.length ?? 0;
+  const activityWord = pending === 1 ? "activity is" : "activities are";
+  const fixtureWord = fixtures === 1 ? "fixture" : "fixtures";
+  return `Project-level tasks are locked: ${pending} mandatory fixture ${activityWord} pending across ${fixtures} ${fixtureWord}.`;
+}
+
+function activeTasksForRow(row: CompletionFixtureRow) {
   return row.options.map((option) => option.task).filter((task): task is Task => isActiveCompletionTask(task));
 }
 
@@ -386,6 +400,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
     assigned: rows.filter((row) => activeTasksForRow(row).length > 0).length,
     unassigned: rows.filter((row) => row.state === "UNASSIGNED").length,
   };
+  const projectLockMessage = projectLevelLockMessage(state);
 
   useEffect(() => {
     setSelectedFixtureIds((current) => current.filter((fixtureId) => eligibleIds.has(fixtureId)));
@@ -676,6 +691,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
           <ProjectLevelCompletionTasks
             disabled={!state.project_tasks_unlocked}
+            lockMessage={projectLockMessage}
             options={projectOptions}
             selectedKeys={selectedProjectActivityKeys}
             onSelectedKeysChange={setSelectedProjectActivityKeys}
@@ -858,6 +874,7 @@ function ActivityMultiSelect({ options, selectedKeys, onSelectedKeysChange, aria
 }
 function ProjectLevelCompletionTasks({
   disabled,
+  lockMessage,
   options,
   selectedKeys,
   onSelectedKeysChange,
@@ -865,6 +882,7 @@ function ProjectLevelCompletionTasks({
   selectedCount,
 }: {
   disabled: boolean;
+  lockMessage?: string;
   options: ActivityOption[];
   selectedKeys: string[];
   onSelectedKeysChange: (keys: string[]) => void;
@@ -879,7 +897,7 @@ function ProjectLevelCompletionTasks({
         <div className="min-w-0">
           <p className="text-sm font-semibold">Project-level 2D completion tasks</p>
           <p className="text-xs text-muted-foreground">
-            {disabled ? "Available after all mandatory fixture-level activities are approved." : "CMM Data, Line Layout, Mimic, and Wear-Out Data stay separate from fixture cards."}
+            {disabled ? lockMessage || "Available after all mandatory fixture-level activities are approved." : "CMM Data, Line Layout, Mimic, and Wear-Out Data stay separate from fixture cards."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

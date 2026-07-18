@@ -183,46 +183,77 @@ function buildFixtureCompletionAggregate(latest, fixture) {
   return buildCompletionAggregate(latest, { scope: "fixture", fixtureId: fixture?.fixture_id || null });
 }
 
-function incompleteMandatoryMessages(latest, { scope, fixture = null, projectLabel = "Project" } = {}) {
+function pendingMandatoryActivities(latest, { scope, fixture = null } = {}) {
   return mandatoryCodesForScope(scope).flatMap((code) => {
     const definition = DESIGN_2D_COMPLETION_TASKS[code];
     const task = latestTaskFor(latest, scope, fixture?.fixture_id || null, code);
     if (isSatisfiedCompletionTask(task)) return [];
-    const label = task?.title || formatDesign2DCompletionTaskName(code, Number(task?.completion_task_revision || 0)) || definition.displayName;
-    const owner = scope === "fixture" ? fixture?.fixture_no || fixture?.fixture_id || "Fixture" : projectLabel;
-    return [`${owner}: ${label} is incomplete`];
+    const revision = Number(task?.completion_task_revision ?? 0);
+    const label = task?.title || formatDesign2DCompletionTaskName(code, revision) || definition.displayName;
+    return [{ code, label, status: currentStatusForTask(task), taskId: task?.id || null }];
   });
+}
+
+function incompleteMandatoryMessages(latest, { scope, fixture = null, projectLabel = "Project" } = {}) {
+  const owner = scope === "fixture" ? fixture?.fixture_no || fixture?.fixture_id || "Fixture" : projectLabel;
+  return pendingMandatoryActivities(latest, { scope, fixture })
+    .map((activityItem) => `${owner}: ${activityItem.label} is incomplete`);
 }
 
 function buildDesign2DCompletionState({ fixtures = [], tasks = [] } = {}) {
   const eligibleFixtures = fixtures.filter((fixture) => fixture.two_d_complete === true);
   const latest = latestTasksByScope(tasks);
-  const allFixtures2DComplete = fixtures.length > 0 && eligibleFixtures.length === fixtures.length;
+  const fixtureMandatoryCodes = mandatoryCodesForScope("fixture");
+  const eligibleFixtureCount = eligibleFixtures.length;
+  const allFixtures2DComplete = fixtures.length > 0 && eligibleFixtureCount === fixtures.length;
   const allOriginalWorkflowsComplete = fixtures.length > 0
     && fixtures.every((fixture) => fixture.workflow_complete === true);
-  const fixtureMissingRequirements = eligibleFixtures.flatMap((fixture) => (
-    incompleteMandatoryMessages(latest, { scope: "fixture", fixture })
+  const blockingFixtures = eligibleFixtures.flatMap((fixture) => {
+    const pendingActivities = pendingMandatoryActivities(latest, { scope: "fixture", fixture });
+    if (!pendingActivities.length) return [];
+    return [{
+      fixture_id: fixture.fixture_id,
+      fixture_no: fixture.fixture_no,
+      pending_activity_count: pendingActivities.length,
+      pending_activities: pendingActivities,
+    }];
+  });
+  const fixtureMissingRequirements = blockingFixtures.flatMap((fixture) => (
+    fixture.pending_activities.map((activityItem) => `${fixture.fixture_no || fixture.fixture_id}: ${activityItem.label} is incomplete`)
   ));
   const projectMissingRequirements = incompleteMandatoryMessages(latest, { scope: "project" });
+  const mandatoryActivityCount = eligibleFixtureCount * fixtureMandatoryCodes.length;
+  const approvedMandatoryActivityCount = eligibleFixtures.reduce((count, fixture) => (
+    count + fixtureMandatoryCodes.filter((code) => isSatisfiedCompletionTask(
+      latestTaskFor(latest, "fixture", fixture.fixture_id, code),
+    )).length
+  ), 0);
+  const pendingMandatoryActivityCount = mandatoryActivityCount - approvedMandatoryActivityCount;
   const missingRequirements = [];
 
-  if (!allOriginalWorkflowsComplete) {
-    missingRequirements.push("Every original fixture workflow must be completed");
+  if (eligibleFixtureCount === 0) {
+    missingRequirements.push("At least one fixture must complete its original 2D stage");
   }
 
   missingRequirements.push(...fixtureMissingRequirements, ...projectMissingRequirements);
-  const fixtureRequirementsComplete = fixtureMissingRequirements.length === 0;
+  const fixtureRequirementsComplete = eligibleFixtureCount > 0 && blockingFixtures.length === 0;
   const projectRequirementsComplete = projectMissingRequirements.length === 0;
+  const projectTasksUnlocked = eligibleFixtureCount > 0 && fixtureRequirementsComplete;
 
   return {
     eligibleFixtures,
     latestTasks: latest,
     allFixtures2DComplete,
     allOriginalWorkflowsComplete,
+    eligibleFixtureCount,
+    mandatoryActivityCount,
+    approvedMandatoryActivityCount,
+    pendingMandatoryActivityCount,
+    blockingFixtures,
     fixtureRequirementsComplete,
     projectRequirementsComplete,
-    projectTasksUnlocked: allOriginalWorkflowsComplete && fixtureRequirementsComplete,
-    projectCompletionReady: allOriginalWorkflowsComplete && fixtureRequirementsComplete && projectRequirementsComplete,
+    projectTasksUnlocked,
+    projectCompletionReady: projectTasksUnlocked && projectRequirementsComplete,
     missingRequirements,
   };
 }

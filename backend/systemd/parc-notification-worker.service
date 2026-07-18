@@ -1,0 +1,19 @@
+[Unit]
+Description=PARC Task Tracker desktop notification worker
+After=network-online.target postgresql.service parc-task-tracker-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/parc-task-tracker/app/backend
+EnvironmentFile=/var/www/parc-task-tracker/app/backend/.env
+ExecStart=/usr/bin/npm run worker:desktop-notifications
+Restart=on-failure
+RestartSec=5
+User=www-data
+Group=www-data
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -85,6 +85,26 @@ test("only fixtures with a completed original 2D stage are exposed on the comple
 
   assert.deepEqual(state.eligibleFixtures.map((item) => item.fixture_id), ["fixture-1"]);
   assert.equal(state.allFixtures2DComplete, false);
+  assert.equal(state.eligibleFixtureCount, 1);
+});
+
+test("completed 2D fixtures with no completion rows stay visible as unassigned blockers", () => {
+  const fixtureRow = fixture("fixture-1", true);
+  const state = buildDesign2DCompletionState({ fixtures: [fixtureRow], tasks: [] });
+  const aggregate = buildFixtureCompletionAggregate(state.latestTasks, fixtureRow);
+
+  assert.equal(state.eligibleFixtureCount, 1);
+  assert.equal(state.mandatoryActivityCount, 4);
+  assert.equal(state.approvedMandatoryActivityCount, 0);
+  assert.equal(state.pendingMandatoryActivityCount, 4);
+  assert.equal(state.projectTasksUnlocked, false);
+  assert.equal(aggregate.aggregateSection, "UNASSIGNED");
+  assert.equal(aggregate.currentActivities.length, 4);
+  assert.equal(aggregate.currentActivities.every((activity) => activity.latestTask === null), true);
+  assert.deepEqual(state.blockingFixtures.map((item) => [item.fixture_id, item.pending_activity_count]), [["fixture-1", 4]]);
+
+  const repeatedState = buildDesign2DCompletionState({ fixtures: [fixtureRow], tasks: [] });
+  assert.deepEqual(repeatedState.eligibleFixtures.map((item) => item.fixture_id), ["fixture-1"]);
 });
 
 test("uncreated mandatory completion activities block final project completion", () => {
@@ -138,6 +158,19 @@ test("all four approved fixture activities give 100 percent and workflow complet
   assert.equal(aggregate.progressPercentage, 100);
   assert.equal(aggregate.aggregateSection, "WORKFLOW_COMPLETE");
   assert.equal(state.fixtureRequirementsComplete, true);
+});
+
+test("approved fixture mandatory activities unlock project-level assignment before project activities are done", () => {
+  const tasks = FIXTURE_TASK_CODES.map((code) => completionTask(code, 0, "fixture-1"));
+  const state = buildDesign2DCompletionState({ fixtures: [fixture("fixture-1")], tasks });
+
+  assert.equal(state.mandatoryActivityCount, 4);
+  assert.equal(state.approvedMandatoryActivityCount, 4);
+  assert.equal(state.fixtureRequirementsComplete, true);
+  assert.equal(state.projectTasksUnlocked, true);
+  assert.equal(state.projectRequirementsComplete, false);
+  assert.equal(state.projectCompletionReady, false);
+  assert.match(state.missingRequirements.join(" | "), /CMM Data 00 is incomplete/);
 });
 test("latest mandatory revision controls aggregate status even when an older revision is approved", () => {
   const tasks = [
@@ -287,6 +320,13 @@ test("completion assignment validates fixture membership without active-stage vi
   assert.match(completionBranch, /FROM design\.fixtures di/);
   assert.match(completionBranch, /AND di\.project_id = \$3/);
   assert.doesNotMatch(completionBranch, /findFixtureAssignmentContextByIdForUser/);
+});
+
+test("the eligibility query includes released fixtures even when 2D progress rows are missing", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "..", "repositories", "design2dCompletionTaskRepository.js"), "utf8");
+
+  assert.match(repository, /COALESCE\(fixture\.is_workflow_complete, FALSE\)[\s\S]*OR EXISTS/);
+  assert.match(repository, /fixture_workflow_progress/);
 });
 
 test("the idempotent schema keeps fixture and project completion codes separated without proof requirements", () => {

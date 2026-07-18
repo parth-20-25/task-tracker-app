@@ -6,6 +6,7 @@ const { env, validateBackendEnv } = require("./config/env");
 const { registerProcessErrorHandlers } = require("./lib/observability");
 const { ensureRuntimeDirectoriesWritable } = require("./lib/runtimePaths");
 const { createApp } = require("./app");
+const { initializeDesktopNotificationGateway } = require("./services/desktopNotificationGateway");
 
 // Services
 const { initDatabase } = require("./services/bootstrapService");

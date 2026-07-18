@@ -109,6 +109,7 @@ const {
   shouldAdvanceFixtureWorkflow,
   shouldSubmitForVerification,
 } = require("./taskStateRules");
+const { enqueueTaskAssignedOutbox } = require("./desktopNotificationService");
 const {
   DESIGN_2D_SUBDIVISION_NAME,
   is2DLeaderUser,
@@ -1436,7 +1437,15 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       : "");
 
   let taskId;
+  let task = null;
+  let mutationClient = db;
+  let localClient = null;
   try {
+    if (!options.client) {
+      localClient = await pool.connect();
+      mutationClient = localClient;
+      await mutationClient.query("BEGIN");
+    }
     taskId = await insertTask({
       title: resolvedTitle,
       internal_identifier: internalIdentifier,
@@ -1491,13 +1500,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       completion_task_outsource_supplier: taskType === TASK_TYPES.DESIGN_2D_COMPLETION
         ? String(requestedCompletionOutsourceSupplier || "").trim() || null
         : null,
-    }, db);
-  } catch (error) {
-    if (error?.code === "ACTIVE_TASK_STAGE_CONFLICT" || error?.constraint === "uniq_active_task_per_stage") {
-      throw new AppError(409, "Stage already assigned");
-    }
-    throw error;
-  }
+    }, mutationClient);
 
   await appendTaskActivity(taskId, {
     userEmployeeId: user.employee_id,
@@ -1511,7 +1514,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       completion_task_code: taskType === TASK_TYPES.DESIGN_2D_COMPLETION ? requestedCompletionTaskCode : null,
       completion_task_revision: completionTaskRevision,
     },
-  }, db);
+  }, mutationClient);
 
   await createAuditLog({
     userEmployeeId: user.employee_id,
@@ -1534,9 +1537,26 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       completion_task_code: taskType === TASK_TYPES.DESIGN_2D_COMPLETION ? requestedCompletionTaskCode : null,
       completion_task_revision: completionTaskRevision,
     },
-  }, db);
+  }, mutationClient);
 
-  const task = await findTaskById(taskId, db);
+    task = await findTaskById(taskId, mutationClient);
+    await enqueueTaskAssignedOutbox(task, user.employee_id, mutationClient);
+    if (localClient) {
+      await mutationClient.query("COMMIT");
+    }
+  } catch (error) {
+    if (localClient) {
+      await mutationClient.query("ROLLBACK");
+    }
+    if (error?.code === "ACTIVE_TASK_STAGE_CONFLICT" || error?.constraint === "uniq_active_task_per_stage") {
+      throw new AppError(409, "Stage already assigned");
+    }
+    throw error;
+  } finally {
+    if (localClient) {
+      localClient.release();
+    }
+  }
   if (!options.skipAnalyticsRefresh) {
     await refreshTaskPerformanceAnalytics(task);
   }

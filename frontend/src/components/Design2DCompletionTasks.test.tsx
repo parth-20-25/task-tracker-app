@@ -156,7 +156,13 @@ function state(tasks: Task[] = [completionTask()]): Design2DCompletionProjectSta
     project_task_types: projectDefinitions,
     all_fixtures_2d_complete: true,
     all_original_workflows_complete: true,
+    eligible_fixture_count: 1,
+    mandatory_activity_count: 4,
+    approved_mandatory_activity_count: 4,
+    pending_mandatory_activity_count: 0,
+    blocking_fixtures: [],
     fixture_requirements_complete: true,
+    project_requirements_complete: true,
     project_tasks_unlocked: true,
     project_completion_ready: true,
     missing_requirements: [],
@@ -215,7 +221,7 @@ describe("Design2DCompletionTasks", () => {
     expect(screen.getByRole("heading", { name: "2D Completion Tasks" })).toBeInTheDocument();
     await selectProject();
 
-    for (const label of ["Unassigned", "Assigned", "In Progress", "Outsourced", "Verification", "Rejected", "Workflow Complete", "Cancelled"]) {
+    for (const label of ["Unassigned", "Assigned", "In Progress", "Outsourced", "Pending Approval", "Rejected", "Completed", "Cancelled"]) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
     expect(screen.getByText("FX-1")).toBeInTheDocument();
@@ -356,6 +362,34 @@ describe("Design2DCompletionTasks", () => {
     expect(screen.getByText("Line Layout")).toBeInTheDocument();
     expect(screen.getByText("Mimic")).toBeInTheDocument();
     expect(screen.getByText("Wear-Out Data")).toBeInTheDocument();
+  });
+
+  it("shows backend blocker counts while no-row eligible fixtures stay visible", async () => {
+    api.fetchState.mockResolvedValue({
+      ...state([]),
+      fixtures: [
+        { fixture_id: "fixture-1", fixture_no: "FX-1", part_name: "Fixture One", workflow_complete: true, two_d_complete: true, aggregateSection: "UNASSIGNED", completedMandatoryCount: 2, totalMandatoryCount: 4, progressPercentage: 50, currentActivities: [], activeAssignments: [] },
+        { fixture_id: "fixture-2", fixture_no: "FX-2", part_name: "Fixture Two", workflow_complete: true, two_d_complete: true, aggregateSection: "UNASSIGNED", completedMandatoryCount: 3, totalMandatoryCount: 4, progressPercentage: 75, currentActivities: [], activeAssignments: [] },
+      ],
+      eligible_fixture_count: 2,
+      mandatory_activity_count: 8,
+      approved_mandatory_activity_count: 5,
+      pending_mandatory_activity_count: 3,
+      blocking_fixtures: [
+        { fixture_id: "fixture-1", fixture_no: "FX-1", pending_activity_count: 2, pending_activities: [] },
+        { fixture_id: "fixture-2", fixture_no: "FX-2", pending_activity_count: 1, pending_activities: [] },
+      ],
+      fixture_requirements_complete: false,
+      project_tasks_unlocked: false,
+      project_completion_ready: false,
+      missing_requirements: ["FX-1: Drafting Checking 00 is incomplete"],
+    });
+    renderBoard();
+    await selectProject(2);
+
+    expect(screen.getByText("Project-level tasks are locked: 3 mandatory fixture activities are pending across 2 fixtures.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Project-level activity" })).toBeDisabled();
+    expect(screen.getByText("2 unassigned")).toBeInTheDocument();
   });
   it("assigns IGES directly with no Drafting Checking sequence dependency", async () => {
     api.fetchState.mockResolvedValue(state([]));

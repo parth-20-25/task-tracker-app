@@ -3,6 +3,7 @@ const { ensureControlWorkflowSchema } = require("../repositories/controlWorkflow
 const { ensureDesignDepartmentSchema } = require("../repositories/designSchemaRepository");
 const { repairOrphanDesignProjects } = require("./workflowRecoveryService");
 const {
+  ensureDesktopNotificationTables,
   ensureReferenceTables,
   ensureTaskNotificationsTable,
   ensureTasksTable,
@@ -33,6 +34,7 @@ async function initDatabase() {
     await ensureUsersTable(client);
     await ensureTasksTable(client);
     await ensureTaskNotificationsTable(client);
+    await ensureDesktopNotificationTables(client);
     await ensureReferenceTables(client);
     await alignPermissionData(client);
     await ensurePerformanceAnalyticsTables(client);

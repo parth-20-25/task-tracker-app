@@ -5,14 +5,24 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 
 const { FIXTURE_TASK_CODES, PROJECT_TASK_CODES, DESIGN_2D_COMPLETION_TASKS } = require("../lib/design2dCompletionTasks");
 
-function installGateMocks({ department, fixtures = [], tasks = [] }) {
+function installGateMocks({ department, fixtures = [], tasks = [], project = null }) {
   const repository = require("../repositories/design2dCompletionTaskRepository");
+  const projectRepository = require("../repositories/designProjectCatalogRepository");
   const originals = {
     getDepartment: repository.getDesign2DCompletionProjectDepartment,
     listFixtures: repository.listProjectFixturesWith2DStatus,
     listTasks: repository.listDesign2DCompletionTasks,
+    findProject: projectRepository.findProjectByIdForUser,
   };
   const calls = { fixtures: 0, tasks: 0 };
+  const projectRow = project || {
+    project_id: "design-project",
+    project_code: "DES-1",
+    project_name: "Design Project",
+    company_name: "Customer",
+    department_id: department?.department_id || "design",
+    project_status: "active",
+  };
 
   repository.getDesign2DCompletionProjectDepartment = async () => department;
   repository.listProjectFixturesWith2DStatus = async () => {
@@ -23,6 +33,7 @@ function installGateMocks({ department, fixtures = [], tasks = [] }) {
     calls.tasks += 1;
     return tasks;
   };
+  projectRepository.findProjectByIdForUser = async () => projectRow;
   delete require.cache[require.resolve("../services/design2dCompletionTaskService")];
 
   return {
@@ -32,6 +43,7 @@ function installGateMocks({ department, fixtures = [], tasks = [] }) {
       repository.getDesign2DCompletionProjectDepartment = originals.getDepartment;
       repository.listProjectFixturesWith2DStatus = originals.listFixtures;
       repository.listDesign2DCompletionTasks = originals.listTasks;
+      projectRepository.findProjectByIdForUser = originals.findProject;
       delete require.cache[require.resolve("../services/design2dCompletionTaskService")];
     },
   };
@@ -91,6 +103,31 @@ test("a completed original Design workflow is blocked until mandatory completion
       () => mocks.service.assertDesign2DCompletionProjectReady("design-project"),
       (error) => error.statusCode === 409 && /Drafting Checking 00 is incomplete/.test(error.message),
     );
+  } finally {
+    mocks.restore();
+  }
+});
+
+test("the project state response exposes explicit mandatory counts and blockers", async () => {
+  const mocks = installGateMocks({
+    department: { department_id: "design", department_name: "Design" },
+    fixtures: [completedFixture],
+    tasks: [],
+  });
+  try {
+    const response = await mocks.service.getDesign2DCompletionProjectForUser(
+      { employee_id: "LEAD-1" },
+      "design-project",
+    );
+
+    assert.equal(response.eligible_fixture_count, 1);
+    assert.equal(response.mandatory_activity_count, 4);
+    assert.equal(response.approved_mandatory_activity_count, 0);
+    assert.equal(response.pending_mandatory_activity_count, 4);
+    assert.equal(response.project_tasks_unlocked, false);
+    assert.equal(response.fixtures.length, 1);
+    assert.equal(response.fixtures[0].aggregateSection, "UNASSIGNED");
+    assert.deepEqual(response.blocking_fixtures.map((fixture) => [fixture.fixture_id, fixture.pending_activity_count]), [["fixture-1", 4]]);
   } finally {
     mocks.restore();
   }

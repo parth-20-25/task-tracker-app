@@ -286,6 +286,20 @@ export interface Design2DCompletionActiveAssignment {
   supplierName: string | null;
 }
 
+export interface Design2DCompletionBlockingActivity {
+  code: Design2DCompletionTaskCode;
+  label: string;
+  status: string;
+  taskId: number | string | null;
+}
+
+export interface Design2DCompletionBlockingFixture {
+  fixture_id: string;
+  fixture_no: string;
+  pending_activity_count: number;
+  pending_activities: Design2DCompletionBlockingActivity[];
+}
+
 export interface Design2DCompletionProjectState {
   project: DesignProjectOption;
   fixtures: Array<{
@@ -317,7 +331,13 @@ export interface Design2DCompletionProjectState {
   project_task_types: Design2DCompletionTaskDefinition[];
   all_fixtures_2d_complete: boolean;
   all_original_workflows_complete: boolean;
+  eligible_fixture_count: number;
+  mandatory_activity_count: number;
+  approved_mandatory_activity_count: number;
+  pending_mandatory_activity_count?: number;
+  blocking_fixtures: Design2DCompletionBlockingFixture[];
   fixture_requirements_complete: boolean;
+  project_requirements_complete?: boolean;
   project_tasks_unlocked: boolean;
   project_completion_ready: boolean;
   missing_requirements: string[];

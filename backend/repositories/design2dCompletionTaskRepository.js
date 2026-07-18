@@ -31,13 +31,16 @@ async function listProjectFixturesWith2DStatus(projectId, client = pool) {
         fixture.fixture_no,
         fixture.part_name,
         fixture.is_workflow_complete AS workflow_complete,
-        EXISTS (
-          SELECT 1
-          FROM fixture_workflow_progress progress
-          WHERE progress.fixture_id = fixture.id
-            AND REGEXP_REPLACE(LOWER(COALESCE(progress.stage_name, '')), '[^a-z0-9]+', '', 'g')
-              IN ('2d', '2dfinish')
-            AND UPPER(COALESCE(progress.status, '')) IN ('APPROVED', 'COMPLETED')
+        (
+          COALESCE(fixture.is_workflow_complete, FALSE)
+          OR EXISTS (
+            SELECT 1
+            FROM fixture_workflow_progress progress
+            WHERE progress.fixture_id = fixture.id
+              AND REGEXP_REPLACE(LOWER(COALESCE(progress.stage_name, '')), '[^a-z0-9]+', '', 'g')
+                IN ('2d', '2dfinish')
+              AND UPPER(COALESCE(progress.status, '')) IN ('APPROVED', 'COMPLETED')
+          )
         ) AS two_d_complete
       FROM design.fixtures fixture
       WHERE fixture.project_id = $1

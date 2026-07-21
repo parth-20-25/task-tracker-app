@@ -428,7 +428,7 @@ async function runMigrations() {
               additional_task_kind IN (
                 'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
                 'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data',
-                'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM'
+                'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
               )
               AND design_team IN ('2D', '3D')
               AND project_id IS NOT NULL
@@ -446,7 +446,7 @@ async function runMigrations() {
               AND (
                 design_team <> '3D'
                 OR (
-                  additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print & Drafting Checking')
+                  additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking')
                   AND scope_type = 'project'
                   AND fixture_id IS NULL
                 )

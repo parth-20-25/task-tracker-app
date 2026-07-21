@@ -26,6 +26,7 @@ VALUES
   ('can_manage_escalation_rules', 'Manage Escalation Rules', 'Allows managing escalation rules.'),
   ('can_view_reports', 'View Reports', 'Allows viewing reports.'),
   ('can_export_reports', 'Export Reports', 'Allows exporting reports.'),
+  ('receive_executive_desktop_notifications', 'Receive Executive Desktop Notifications', 'Allows receiving executive desktop notifications for project release events.'),
   ('control_design.workspace.view', 'View Control Design Workspace', 'Allows entering the Control Design workspace within the Control Design subdivision.'),
   ('control_design.projects.view_assigned', 'View Assigned Control Design Projects', 'Allows viewing Control Design projects assigned to the current user.'),
   ('control_design.projects.view_all', 'View All Control Design Projects', 'Allows viewing all Control Design project workflows in scope.'),

@@ -320,6 +320,10 @@ test("authorized owner release preserves lifecycle transaction and audit behavio
     assert.equal(projectId, "project-1");
     assert.equal(employeeId, managerUser.employee_id);
     assert.equal(txClient, client);
+    return {
+      status_changed_at: "2026-07-18T10:30:00.000Z",
+      completed_at: "2026-07-18T10:30:00.000Z",
+    };
   };
   accessControlService.requireOwningLeaderPair = async (user, projectId) => {
     assert.equal(user, managerUser);
@@ -338,7 +342,10 @@ test("authorized owner release preserves lifecycle transaction and audit behavio
     const result = await releaseProjectForBatch(managerUser, "batch-1");
 
     assert.equal(result.status, "completed");
-    assert.deepEqual(tx, ["BEGIN", "COMMIT", "RELEASE"]);
+    assert.equal(tx[0], "BEGIN");
+    assert.match(tx[1], /INSERT INTO notification_outbox/);
+    assert.equal(tx[2], "COMMIT");
+    assert.equal(tx[3], "RELEASE");
     assert.equal(audits[0]?.actionType, "PROJECT_RELEASED");
   } finally {
     db.pool.connect = originals.connect;

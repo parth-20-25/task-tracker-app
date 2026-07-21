@@ -50,9 +50,9 @@ function createApp() {
 
   app.use("/api", retiredUploadRoutes);
   app.use("/api", authRoutes);
+  app.use("/api", desktopNotificationRoutes);
   app.use("/api", taskRoutes);
   app.use("/api", notificationRoutes);
-  app.use("/api", desktopNotificationRoutes);
   app.use("/api", nativeIngestionRoutes);
   app.use("/api", designRoutes);
   app.use("/api", workflowRoutes);

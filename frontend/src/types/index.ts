@@ -21,7 +21,9 @@ export type AdditionalDesignTaskKind =
   | 'Pin Matrix'
   | 'PPT'
   | 'CBO'
-  | 'CDRM';
+  | 'CDRM'
+  | 'Print'
+  | 'Drafting Checking';
 export type DesignTeam = '2D' | '3D';
 export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import' | 'design_2d_completion';
 export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';

@@ -16,6 +16,7 @@ const {
 } = require("../repositories/batchRepository");
 const { isAdmin, isProjectAuthorityRole, requireOwningLeaderPair } = require("./accessControlService");
 const { assertDesign2DCompletionProjectReady } = require("./design2dCompletionTaskService");
+const { enqueueProjectReleasedOutbox } = require("./desktopNotificationService");
 
 const PROJECT_REACTIVATION_REASONS = {
   customer_modification: "Customer modification",
@@ -350,7 +351,12 @@ async function releaseProjectForBatch(user, batchId) {
   try {
     await client.query("BEGIN");
     await assertDesign2DCompletionProjectReady(batch.project_id, client);
-    await releaseProject(batch.project_id, user.employee_id, client);
+    const releaseResult = await releaseProject(batch.project_id, user.employee_id, client);
+    await enqueueProjectReleasedOutbox({
+      projectId: batch.project_id,
+      actorUserId: user.employee_id,
+      releasedAt: releaseResult?.status_changed_at || releaseResult?.completed_at,
+    }, client);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");

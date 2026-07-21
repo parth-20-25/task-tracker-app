@@ -7,6 +7,10 @@ const {
   registerDeviceFromCredentials,
   revokeAuthenticatedDevice,
 } = require("../services/desktopNotificationService");
+const {
+  startCorrectionFromDesktopNotification,
+  startTaskFromDesktopNotification,
+} = require("../services/desktopNotificationActionService");
 
 const router = express.Router();
 
@@ -52,6 +56,24 @@ router.post(
   asyncHandler(async (req, res) => {
     const notification = await createTestNotificationForDevice(req.desktopDevice);
     return sendSuccess(res, { notification });
+  }),
+);
+
+router.post(
+  "/desktop-notifications/tasks/:taskId/start",
+  authenticateDesktopDeviceRequest,
+  asyncHandler(async (req, res) => {
+    const result = await startTaskFromDesktopNotification(req.desktopDevice, req.params.taskId);
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/desktop-notifications/tasks/:taskId/start-correction",
+  authenticateDesktopDeviceRequest,
+  asyncHandler(async (req, res) => {
+    const result = await startCorrectionFromDesktopNotification(req.desktopDevice, req.params.taskId);
+    return sendSuccess(res, result);
   }),
 );
 

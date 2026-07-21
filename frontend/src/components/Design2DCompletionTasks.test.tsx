@@ -317,8 +317,8 @@ describe("Design2DCompletionTasks", () => {
     renderBoard();
     await selectProject();
     fireEvent.click(screen.getByRole("button", { name: /Cancel Task/ }));
-    fireEvent.change(screen.getByPlaceholderText("Cancellation reason"), { target: { value: "Assigned by mistake" } });
-    const cancelButton = screen.getByRole("button", { name: "Cancel Activity" });
+    fireEvent.change(screen.getByLabelText("Cancellation reason"), { target: { value: "Assigned by mistake" } });
+    const cancelButton = screen.getAllByRole("button", { name: "Cancel Task" }).at(-1)!;
     await waitFor(() => expect(cancelButton).not.toBeDisabled());
     fireEvent.click(cancelButton);
     fireEvent.click(cancelButton);

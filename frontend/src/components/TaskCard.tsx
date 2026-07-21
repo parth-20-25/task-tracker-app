@@ -10,13 +10,14 @@ import { Calendar, User, PlayCircle, CheckCircle2, RotateCcw, MapPin, Timer, Ban
 import { cn } from '@/lib/utils';
 import { formatDurationMinutes } from '@/lib/formatDuration';
 import { TaskExecutionDialog } from '@/components/TaskExecutionDialog';
-import { isOperationalControllerUser, isProjectAuthorityUser } from '@/lib/permissions';
 import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { resolveImageUrl } from '@/lib/imageUrl';
+import { canShowTaskCancelAction } from '@/lib/taskCancellation';
 import { hasTaskWorkProof, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from '@/lib/taskProofPolicy';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { TaskCancelDialog } from '@/components/TaskCancelDialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 
@@ -29,7 +30,7 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, showActions = true, compact = false, extraActions, onActionComplete }: TaskCardProps) {
-  const { user } = useAuth();
+  const { user, access } = useAuth();
   const { cancelTask, executeTaskAction } = useTasks();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
@@ -39,15 +40,7 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
   const taskDisplay = getTaskCardDisplay(task);
   const isOverdue = new Date(task.deadline) < new Date() && !['closed', 'cancelled'].includes(task.status);
   const isOwnTask = user ? task.assigned_to === user.employee_id || task.assignee_ids?.includes(user.employee_id) : false;
-  const isOriginalAssigner = Boolean(user?.employee_id && user.employee_id === task.assigned_by);
-  const taskCompletion = Number(task.completion_percent ?? 0);
-  const canCancel = Boolean(user)
-    && task.status === 'assigned'
-    && taskCompletion === 0
-    && task.verification_status !== 'approved'
-    && !task.approved_at
-    && (task.task_type === 'design_2d_completion' || task.operational_state !== 'WORKFLOW_COMPLETE')
-    && (isOperationalControllerUser(user) || isProjectAuthorityUser(user) || isOriginalAssigner);
+  const canCancel = canShowTaskCancelAction(task, user, access);
   const proofUrls = task.proof_url ?? [];
   const requiresWorkProof = requiresTaskWorkProof(task);
   const hasWorkProof = hasTaskWorkProof(task);
@@ -275,7 +268,7 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
             )}
             </>
           )}
-          {showActions && canCancel && (
+          {canCancel && (
             <Button size="sm" variant="ghost" className="text-xs h-7 text-destructive hover:text-destructive" onClick={() => setCancelDialogOpen(true)}>
               <Ban className="h-3.5 w-3.5 mr-1" /> Cancel Task
             </Button>
@@ -284,36 +277,18 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
         </div>
       </CardContent>
     </Card>
-    <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Cancel Task</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-2">
-          <Label htmlFor={`cancel-reason-${task.id}`}>Reason</Label>
-          <Textarea
-            id={`cancel-reason-${task.id}`}
-            value={cancelReason}
-            onChange={(event) => setCancelReason(event.target.value)}
-            placeholder="Why is this task being cancelled?"
-            className="min-h-24"
-          />
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => setCancelDialogOpen(false)} disabled={isCancelling}>
-            Keep Task
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => { handleCancel().catch(() => undefined); }}
-            disabled={isCancelling || !cancelReason.trim()}
-          >
-            {isCancelling ? 'Cancelling...' : 'Cancel Task'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <TaskCancelDialog
+      open={cancelDialogOpen}
+      tasks={[task]}
+      reason={cancelReason}
+      isPending={isCancelling}
+      onReasonChange={setCancelReason}
+      onOpenChange={(open) => {
+        setCancelDialogOpen(open);
+        if (!open) setCancelReason('');
+      }}
+      onConfirm={() => { handleCancel().catch(() => undefined); }}
+    />
     <Dialog open={completionNoteDialogOpen} onOpenChange={setCompletionNoteDialogOpen}>
       <DialogContent>
         <DialogHeader>

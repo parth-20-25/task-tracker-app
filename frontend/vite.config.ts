@@ -30,26 +30,7 @@ export default defineConfig(({ mode }) => {
         filename: "sw.js",
         registerType: "prompt",
         includeAssets: ["icon-192.png", "icon-512.png"],
-        manifest: {
-          name: "PARC SYSTEMS",
-          short_name: "PARC",
-          start_url: "/",
-          theme_color: "#000000",
-          background_color: "#ffffff",
-          display: "standalone",
-          icons: [
-            {
-              src: "/icon-192.png",
-              sizes: "192x192",
-              type: "image/png",
-            },
-            {
-              src: "/icon-512.png",
-              sizes: "512x512",
-              type: "image/png",
-            },
-          ],
-        },
+        manifest: false,
         strategies: "injectManifest",
         injectManifest: {
           swSrc: "src/sw.js",

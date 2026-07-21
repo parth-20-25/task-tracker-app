@@ -31,7 +31,7 @@ describe("task proof policy", () => {
     })).toBe(true);
     expect(requiresTaskWorkProof({
       task_type: "additional_design",
-      additional_task_kind: "Print & Drafting Checking",
+      additional_task_kind: "Print",
       design_team: "3D",
       scope_type: "project",
       fixture_id: null,

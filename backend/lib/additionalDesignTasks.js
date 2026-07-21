@@ -18,7 +18,8 @@ const ADDITIONAL_DESIGN_3D_TASK_KINDS = Object.freeze([
   "CBO",
   "Line Layout",
   "CDRM",
-  "Print & Drafting Checking",
+  "Print",
+  "Drafting Checking",
 ]);
 
 const ADDITIONAL_DESIGN_TASK_CATALOG = Object.freeze({

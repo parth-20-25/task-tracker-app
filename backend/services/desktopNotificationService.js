@@ -1,13 +1,16 @@
 const crypto = require("crypto");
 const { pool } = require("../db");
 const { AppError } = require("../lib/AppError");
+const { PERMISSIONS } = require("../config/constants");
 const { createAuditLog } = require("../repositories/auditRepository");
 const {
   claimPendingOutbox,
   createDesktopNotification,
   enqueueOutboxEvent,
   findDeviceByDeviceId,
+  getProjectReleasedNotificationContext,
   listPendingNotificationsForDevice,
+  listUsersWithPermission,
   markDeliveryAcknowledged,
   markDeliveryDisplayed,
   markDeliverySent,
@@ -25,6 +28,7 @@ const { loginUser } = require("./authService");
 
 const EVENT_TYPES = {
   TASK_ASSIGNED: "TASK_ASSIGNED",
+  PROJECT_RELEASED: "PROJECT_RELEASED",
 };
 
 const REGISTRATION_WINDOW_MS = 15 * 60 * 1000;
@@ -73,6 +77,11 @@ function validateDeepLinkPath(deepLink) {
   return true;
 }
 
+function normalizeTimestamp(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  return String(value || "").trim();
+}
+
 function formatDueDate(task) {
   const value = task?.due_date || task?.deadline;
   if (!value) return null;
@@ -106,6 +115,25 @@ async function enqueueTaskAssignedOutbox(task, actorUserId, client = pool) {
   return enqueueOutboxEvent(buildTaskAssignedOutboxEvent(task, actorUserId), client);
 }
 
+function buildProjectReleasedOutboxEvent({ projectId, actorUserId, releasedAt }) {
+  const normalizedProjectId = String(projectId || "").trim();
+  const releaseVersion = normalizeTimestamp(releasedAt);
+  if (!normalizedProjectId || !releaseVersion) {
+    throw new AppError(400, "Project release notification requires a project and release timestamp");
+  }
+  return {
+    eventType: EVENT_TYPES.PROJECT_RELEASED,
+    entityType: "project",
+    entityId: normalizedProjectId,
+    actorUserId: actorUserId || null,
+    payload: { project_id: normalizedProjectId, released_at: releaseVersion },
+    dedupeKey: `project-released:${normalizedProjectId}:${releaseVersion}`,
+  };
+}
+
+async function enqueueProjectReleasedOutbox(input, client = pool) {
+  return enqueueOutboxEvent(buildProjectReleasedOutboxEvent(input), client);
+}
 function buildTaskAssignedNotification(task, dedupeKey) {
   const dueDate = formatDueDate(task);
   const title = `${task.title || task.workflow_stage || `Task #${task.id}`} assigned`;
@@ -129,6 +157,36 @@ function buildTaskAssignedNotification(task, dedupeKey) {
   };
 }
 
+function buildProjectReleasedNotification(project, userId, outboxRow) {
+  const releasedAt = normalizeTimestamp(outboxRow.payload_json?.released_at || project.released_at);
+  const deepLink = `/?project_id=${encodeURIComponent(project.project_id)}`;
+  const auditDeepLink = `/admin/audit?entity=project&id=${encodeURIComponent(project.project_id)}`;
+  if (!validateDeepLinkPath(deepLink) || !validateDeepLinkPath(auditDeepLink)) {
+    throw new AppError(500, "Generated project release notification deep link is invalid");
+  }
+  return {
+    userId,
+    eventType: EVENT_TYPES.PROJECT_RELEASED,
+    entityType: "project",
+    entityId: String(project.project_id),
+    title: "Project released",
+    body: `Project: ${project.project_no || project.project_id}`,
+    deepLink,
+    priority: "high",
+    expiresAt: null,
+    dedupeKey: `${outboxRow.dedupe_key}:${userId}`,
+    payload: {
+      projectNumber: project.project_no || null,
+      projectName: project.project_name || project.project_no || null,
+      customerName: project.customer_name || null,
+      releasedByName: project.released_by_name || null,
+      releasedAt,
+      deepLink,
+      auditDeepLink,
+      availableActions: ["OPEN_PROJECT", "VIEW_AUDIT"],
+    },
+  };
+}
 async function registerDeviceFromCredentials(payload, { ipAddress = "unknown" } = {}) {
   const employeeId = String(payload?.employeeId || payload?.employee_id || "").trim();
   const password = typeof payload?.password === "string" ? payload.password : "";
@@ -245,9 +303,27 @@ async function processTaskAssignedOutbox(outboxRow, client) {
   return notification;
 }
 
+async function processProjectReleasedOutbox(outboxRow, client) {
+  const project = await getProjectReleasedNotificationContext(outboxRow.entity_id, outboxRow.actor_user_id, client);
+  if (!project) return [];
+
+  const recipients = await listUsersWithPermission(PERMISSIONS.RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS, client);
+  const notifications = [];
+  for (const recipient of recipients) {
+    const userId = String(recipient.employee_id || "").trim();
+    if (!userId) continue;
+    const notification = await createDesktopNotification(buildProjectReleasedNotification(project, userId, outboxRow), client);
+    await notifyDesktopNotification({ ...notification, userId }, client);
+    notifications.push(notification);
+  }
+  return notifications;
+}
 async function processOutboxRow(outboxRow, client) {
   if (outboxRow.event_type === EVENT_TYPES.TASK_ASSIGNED && outboxRow.entity_type === "task") {
     return processTaskAssignedOutbox(outboxRow, client);
+  }
+  if (outboxRow.event_type === EVENT_TYPES.PROJECT_RELEASED && outboxRow.entity_type === "project") {
+    return processProjectReleasedOutbox(outboxRow, client);
   }
   return null;
 }
@@ -329,13 +405,17 @@ async function listPendingForDevice(device, limit = 100) {
 module.exports = {
   authenticateDesktopDevice,
   buildTaskAssignedOutboxEvent,
+  buildProjectReleasedNotification,
+  buildProjectReleasedOutboxEvent,
   createTestNotificationForDevice,
   enqueueTaskAssignedOutbox,
+  enqueueProjectReleasedOutbox,
   generateDeviceToken,
   hashDeviceToken,
   listPendingForDevice,
   markSentToDevice,
   processDesktopNotificationOutboxBatch,
+  processProjectReleasedOutbox,
   recordClicked,
   recordDisplayed,
   registerDeviceFromCredentials,

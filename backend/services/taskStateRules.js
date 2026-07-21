@@ -1,4 +1,5 @@
-const ASSIGNED_TASK_STATUSES = new Set(["assigned", "pending"]);
+const ASSIGNED_TASK_STATUSES = new Set(["assigned", "created", "pending"]);
+const CANCELLABLE_TASK_STATUSES = new Set(["assigned", "created", "pending", "in_progress", "rework"]);
 const { hasTaskWorkProof, isDapWorkflowTask, isTaskWorkProofRequired } = require("../lib/taskProofPolicy");
 
 function normalizeStatus(value) {
@@ -43,7 +44,7 @@ function canCancelAssignedTask(task) {
 
 function canCancelOperationalTask(task) {
   const status = normalizeStatus(task?.status);
-  return ["assigned", "in_progress"].includes(status)
+  return CANCELLABLE_TASK_STATUSES.has(status)
     && normalizeStatus(task?.verification_status || "pending") !== "approved"
     && !task?.approved_at;
 }

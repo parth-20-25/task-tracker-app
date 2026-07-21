@@ -1,8 +1,18 @@
 {
-  "name": "Parc Control Systems",
-  "short_name": "Parc Systems",
+  "name": "PARC Task Tracker",
+  "short_name": "PARC Task Tracker",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "protocol_handlers": [
+    {
+      "protocol": "web+parc",
+      "url": "/open?target=%s"
+    }
+  ],
   "background_color": "#ffffff",
   "theme_color": "#000000",
   "icons": [

@@ -8,7 +8,9 @@ function normalizePayload(value) {
 
 function mapNotification(row) {
   if (!row) return null;
+  const payload = normalizePayload(row.payload_json);
   return {
+    ...payload,
     id: Number(row.id),
     eventType: row.event_type,
     entityType: row.entity_type,
@@ -182,15 +184,17 @@ async function createDesktopNotification(values, client = pool) {
         title,
         body,
         deep_link,
+        payload_json,
         priority,
         expires_at,
         dedupe_key
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
       ON CONFLICT (dedupe_key) DO UPDATE
       SET title = EXCLUDED.title,
           body = EXCLUDED.body,
           deep_link = EXCLUDED.deep_link,
+          payload_json = EXCLUDED.payload_json,
           priority = EXCLUDED.priority,
           expires_at = EXCLUDED.expires_at
       RETURNING *
@@ -203,6 +207,7 @@ async function createDesktopNotification(values, client = pool) {
       values.title,
       values.body,
       values.deepLink,
+      JSON.stringify(normalizePayload(values.payload)),
       values.priority || "normal",
       values.expiresAt || null,
       values.dedupeKey,
@@ -244,6 +249,46 @@ async function createDeliveryRowForDevice(notificationId, deviceId, client = poo
   );
 }
 
+async function listUsersWithPermission(permissionId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT u.employee_id, u.name
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role
+      LEFT JOIN role_permissions rp ON rp.role_id = u.role
+      WHERE COALESCE(u.is_active, TRUE) = TRUE
+        AND (
+          rp.permission_id = $1
+          OR COALESCE(r.permissions ->> $1, 'false') = 'true'
+          OR COALESCE(r.permissions ->> 'all', 'false') = 'true'
+        )
+      GROUP BY u.employee_id, u.name
+      ORDER BY u.employee_id
+    `,
+    [permissionId],
+  );
+  return result.rows;
+}
+
+async function getProjectReleasedNotificationContext(projectId, actorUserId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        p.id::text AS project_id,
+        p.project_no,
+        COALESCE(NULLIF(BTRIM(p.project_name), ''), p.project_no) AS project_name,
+        COALESCE(p.customer_name, '') AS customer_name,
+        COALESCE(p.status_changed_at, p.completed_at, p.updated_at, NOW()) AS released_at,
+        COALESCE(actor.name, $2::text, '') AS released_by_name
+      FROM design.projects p
+      LEFT JOIN users actor ON actor.employee_id = $2
+      WHERE p.id = $1::uuid
+      LIMIT 1
+    `,
+    [String(projectId), actorUserId || null],
+  );
+  return result.rows[0] || null;
+}
 async function markDeliverySent(notificationId, deviceId, client = pool) {
   await client.query(
     `
@@ -345,7 +390,9 @@ module.exports = {
   enqueueOutboxEvent,
   findDeviceByDeviceId,
   getNotificationById,
+  getProjectReleasedNotificationContext,
   listPendingNotificationsForDevice,
+  listUsersWithPermission,
   markDeliveryAcknowledged,
   markDeliveryDisplayed,
   markDeliverySent,

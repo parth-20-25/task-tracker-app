@@ -44,6 +44,7 @@ const PERMISSIONS = {
   MANAGE_ESCALATION_RULES: "can_manage_escalation_rules",
   VIEW_REPORTS: "can_view_reports",
   EXPORT_REPORTS: "can_export_reports",
+  RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS: "receive_executive_desktop_notifications",
   
   // New Strict Analytics Permissions
   VIEW_SELF_ANALYTICS: "view_self_analytics",
@@ -175,6 +176,7 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.MANAGE_ESCALATION_RULES, "Manage Escalation Rules", "Allows managing escalation rules."],
   [PERMISSIONS.VIEW_REPORTS, "View Reports", "Allows viewing reports."],
   [PERMISSIONS.EXPORT_REPORTS, "Export Reports", "Allows exporting reports."],
+  [PERMISSIONS.RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS, "Receive Executive Desktop Notifications", "Allows receiving executive desktop notifications for project release events."],
   [PERMISSIONS.VIEW_SELF_ANALYTICS, "View Self Analytics", "Allows viewing own personal KPIs."],
   [PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS, "View Department Analytics", "Allows viewing department metrics and top 5 users."],
   [PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS, "View All Departments", "Allows cross-department comparison."],

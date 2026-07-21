@@ -763,7 +763,7 @@ async function updateTaskAssignmentForTransfer(taskId, { assignedTo, completionP
   );
 }
 
-async function cancelTask(taskId, { cancelledBy, reason, preserveAssignment = false }, client = pool) {
+async function cancelTask(taskId, { cancelledBy, reason, preserveAssignment = false, previousStatus = null }, client = pool) {
   const cancelledAt = new Date();
   const result = await client.query(
     `
@@ -802,6 +802,7 @@ async function cancelTask(taskId, { cancelledBy, reason, preserveAssignment = fa
     notes: reason || null,
     metadata: {
       status: "cancelled",
+      previous_status: previousStatus,
       cancelled_by: cancelledBy,
       cancelled_at: cancelledAt.toISOString(),
       reason: reason || null,

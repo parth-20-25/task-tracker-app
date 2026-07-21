@@ -31,6 +31,7 @@ async function startServer() {
     const HOST = env.host;
     const server = app.listen(PORT, HOST, () => {
       activeServer = server;
+      initializeDesktopNotificationGateway(server);
       startEscalationWorker();
       startPerformanceAnalyticsWorker();
       console.log(`Server running on ${HOST}:${PORT}`);

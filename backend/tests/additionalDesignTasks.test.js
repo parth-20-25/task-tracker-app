@@ -40,7 +40,8 @@ test("additional design task catalog is subdivision specific", () => {
     "CBO",
     "Line Layout",
     "CDRM",
-    "Print & Drafting Checking",
+    "Print",
+    "Drafting Checking",
   ]);
   assert.deepEqual(getAdditionalDesignTaskKindsForTeam("3d"), ADDITIONAL_DESIGN_3D_TASK_KINDS);
   assert.equal(new Set(ADDITIONAL_DESIGN_TASK_KINDS).has("Drafting"), true);
@@ -108,7 +109,7 @@ test("3D project additional proof policy makes only the requested project kinds 
     design_team: "3D",
     scope_type: "project",
     fixture_id: null,
-    additional_task_kind: "Print & Drafting Checking",
+    additional_task_kind: "Print",
   }), true);
   assert.equal(isTaskWorkProofRequired({
     task_type: "additional_design",
@@ -143,7 +144,8 @@ test("schema permits proof-free only for the six 3D project additional task kind
     assert.match(proofRule, /design_team = '3D'/);
     assert.match(proofRule, /scope_type = 'project'/);
     assert.match(proofRule, /fixture_id IS NULL/);
-    assert.doesNotMatch(proofRule, /Print & Drafting Checking/);
+    assert.doesNotMatch(proofRule, /Print/);
+    assert.doesNotMatch(proofRule, /Drafting Checking/);
   }
 });
 

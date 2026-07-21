@@ -685,12 +685,12 @@ async function setProjectLifecycleStatus(projectId, status, client = pool) {
           completed_at = CASE WHEN $2 IN ($3, $4) THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
           updated_at = NOW()
       WHERE id = $1
-      RETURNING id
+      RETURNING id, status, status_changed_at, completed_at
     `,
     [projectId, status, PROJECT_STATUSES.COMPLETED, PROJECT_STATUSES.RELEASED],
   );
 
-  return result.rowCount > 0;
+  return result.rows[0] || null;
 }
 
 async function reactivateProjectForModification(projectId, client = pool) {
@@ -1209,7 +1209,7 @@ async function restoreProjectWorkflowForReactivation(projectId, client = pool) {
 
 async function releaseProject(projectId, releasedBy, client = pool) {
   await captureProjectReleaseSnapshot(projectId, releasedBy, client);
-  await setProjectLifecycleStatus(projectId, PROJECT_STATUSES.COMPLETED, client);
+  const lifecycle = await setProjectLifecycleStatus(projectId, PROJECT_STATUSES.COMPLETED, client);
 
   await client.query(
     `
@@ -1252,6 +1252,8 @@ async function releaseProject(projectId, releasedBy, client = pool) {
     `,
     [projectId, releasedBy || null],
   );
+
+  return lifecycle;
 }
 
 async function deleteFromOptionalTaskTable(tableName, taskIds, client) {

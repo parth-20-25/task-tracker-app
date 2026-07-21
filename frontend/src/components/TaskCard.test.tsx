@@ -1,5 +1,5 @@
 import { act, type ReactNode } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TaskCard } from "@/components/TaskCard";
@@ -9,10 +9,13 @@ const executeTaskAction = vi.fn();
 const cancelTask = vi.fn();
 const toast = vi.fn();
 
+const auth = vi.hoisted(() => ({
+  user: { employee_id: "EMP-3D-1", id: "user-3d-1", is_active: true },
+  access: { canAssignTasks: false, canEditTasks: false, canDeleteTasks: false },
+}));
+
 vi.mock("@/contexts/useAuth", () => ({
-  useAuth: () => ({
-    user: { employee_id: "EMP-3D-1", id: "user-3d-1", is_active: true },
-  }),
+  useAuth: () => auth,
 }));
 
 vi.mock("@/contexts/useTasks", () => ({
@@ -36,6 +39,7 @@ vi.mock("@/components/ui/dialog", () => ({
   DialogFooter: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+  DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
 }));
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -70,6 +74,8 @@ describe("TaskCard proof policy", () => {
     executeTaskAction.mockReset();
     cancelTask.mockReset();
     toast.mockReset();
+    auth.user = { employee_id: "EMP-3D-1", id: "user-3d-1", is_active: true };
+    auth.access = { canAssignTasks: false, canEditTasks: false, canDeleteTasks: false };
   });
 
   it("hides proof upload and allows an optional completion note for 3D project additional tasks", async () => {
@@ -106,5 +112,35 @@ describe("TaskCard proof policy", () => {
       title: "Work proof required",
     }));
     expect(executeTaskAction).not.toHaveBeenCalled();
+  });
+  it("shows cancel for the original assigner even when task actions are hidden", async () => {
+    auth.user = { employee_id: "LEAD-3D", id: "lead-3d", is_active: true };
+    cancelTask.mockResolvedValue(undefined);
+
+    render(<TaskCard task={task({
+      status: "in_progress",
+      assigned_to: "EMP-3D-1",
+      assigned_by: "LEAD-3D",
+      assignee_names: "EMP-3D-1 - Designer One",
+      project_name: "Press Line",
+      fixture_no: "FX-1",
+    })} showActions={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Task" }));
+
+    expect(screen.getByText("Are you sure you want to cancel this task? The assignment will be removed, but the task history will remain available.")).toBeTruthy();
+    expect(screen.getAllByText("Project Process").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Press Line").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("FX-1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("EMP-3D-1 - Designer One").length).toBeGreaterThan(0);
+
+    const cancelButtons = screen.getAllByRole("button", { name: "Cancel Task" });
+    const confirmButton = cancelButtons[cancelButtons.length - 1];
+    expect(confirmButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Cancellation reason"), { target: { value: "Assigned by mistake" } });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(cancelTask).toHaveBeenCalledWith(1, "Assigned by mistake"));
   });
 });

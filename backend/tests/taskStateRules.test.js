@@ -153,7 +153,11 @@ test("case 7: cancel before work is allowed and released fixture resolves Unassi
 test("case 8: operational cancellation after start is allowed before verification", () => {
   assert.equal(canCancelAssignedTask(task({ status: "assigned", completion_percent: 1 })), false);
   assert.equal(canCancelOperationalTask(task({ status: "assigned", completion_percent: 1 })), true);
+  assert.equal(canCancelOperationalTask(task({ status: "created", completion_percent: 0 })), true);
+  assert.equal(canCancelOperationalTask(task({ status: "pending", completion_percent: 0 })), true);
   assert.equal(canCancelOperationalTask(task({ status: "in_progress", completion_percent: 1 })), true);
+  assert.equal(canCancelOperationalTask(task({ status: "rework", verification_status: "rejected", completion_percent: 100 })), true);
+  assert.equal(canCancelOperationalTask(task({ status: "on_hold", completion_percent: 1 })), false);
 });
 
 test("case 9: operational cancellation is blocked for verification and approved work", () => {

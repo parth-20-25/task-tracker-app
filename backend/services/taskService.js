@@ -510,6 +510,14 @@ function canCancelTask(actor, task) {
     return true;
   }
 
+  if (
+    hasPermission(actor, PERMISSIONS.ASSIGN_TASK)
+    || hasPermission(actor, PERMISSIONS.EDIT_TASK)
+    || hasPermission(actor, PERMISSIONS.DELETE_TASK)
+  ) {
+    return true;
+  }
+
   return Boolean(actor.employee_id && actor.employee_id === task.assigned_by);
 }
 
@@ -518,6 +526,20 @@ function isTaskApprovedOrWorkflowComplete(task) {
     || task?.verification_status === VERIFICATION_STATUSES.APPROVED
     || Boolean(task?.approved_at)
     || (task?.task_type !== TASK_TYPES.DESIGN_2D_COMPLETION && task?.operational_state === "WORKFLOW_COMPLETE");
+}
+
+function assertTaskCancellable(task, statusCode) {
+  if (isTaskApprovedOrWorkflowComplete(task)) {
+    throw new AppError(statusCode, "Completed or approved tasks cannot be cancelled");
+  }
+
+  if (task?.workflow_status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION || task?.operational_state === "VERIFICATION") {
+    throw new AppError(statusCode, "Tasks in verification cannot be cancelled");
+  }
+
+  if (!canCancelOperationalTask(task)) {
+    throw new AppError(statusCode, "Only assigned, pending, in-progress, rejected, or update-required tasks can be cancelled");
+  }
 }
 
 function resolveProgressRowForTask(task, progressRows) {
@@ -727,7 +749,7 @@ function mapExecutionPayloadToStatus(task, payload) {
   }
 }
 
-async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
+async function applyWorkflowActionUpdate(user, task, actionName, remarks, auditMetadata = {}) {
   const submitRemarks = remarks === undefined ? undefined : String(remarks || "").trim() || null;
   if (!isTaskAssignee(user, task)) {
     throw new AppError(403, "Only the assignee can update task status");
@@ -861,6 +883,7 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       workflow_stage_id: task.current_stage_id,
       lifecycle_status: nextLifecycleStatus,
       workflow_action: action,
+      ...auditMetadata,
       ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
@@ -876,6 +899,7 @@ async function applyWorkflowActionUpdate(user, task, actionName, remarks) {
       workflow_stage_id: task.current_stage_id,
       lifecycle_status: nextLifecycleStatus,
       workflow_action: action,
+      ...auditMetadata,
       ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
@@ -1729,7 +1753,7 @@ async function resolveDepartmentAssignmentContextForUser(user, departmentId) {
 }
 
 
-async function updateTaskForUser(user, taskId, payload = {}) {
+async function updateTaskForUser(user, taskId, payload = {}, options = {}) {
   validateTaskUpdatePayload(payload);
 
   if (Number.isNaN(Number(taskId))) {
@@ -1779,7 +1803,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
 
     if (workflowAction) {
       assertTaskProjectIsActive(taskForWorkflow);
-      await applyWorkflowActionUpdate(user, taskForWorkflow, workflowAction, payload.remarks);
+      await applyWorkflowActionUpdate(user, taskForWorkflow, workflowAction, payload.remarks, options.auditMetadata);
       handled = true;
     } else if (hasExecutionUpdate(payload)) {
       throw new AppError(400, "Invalid action for current task state");
@@ -1796,7 +1820,7 @@ async function updateTaskForUser(user, taskId, payload = {}) {
 
     if (nextStatus) {
       assertTaskProjectIsActive(taskForWorkflow);
-      await applyTaskStatusUpdate(user, taskForWorkflow, nextStatus, payload.remarks);
+      await applyTaskStatusUpdate(user, taskForWorkflow, nextStatus, payload.remarks, options.auditMetadata);
       handled = true;
     } else if (hasExecutionUpdate(payload)) {
       throw new AppError(400, "Invalid action for current task state");
@@ -2321,18 +2345,12 @@ async function cancelTaskForUser(user, taskId, reason) {
     throw new AppError(403, "You do not have permission to cancel this task");
   }
 
-  if (task.task_type === TASK_TYPES.DESIGN_2D_COMPLETION && task.status === TASK_STATUSES.CANCELLED) {
-    return task;
-  }
-
   const cancellationReason = typeof reason === "string" ? reason.trim() : "";
   if (!cancellationReason) {
     throw new AppError(400, "Cancellation reason is required");
   }
 
-  if (isTaskApprovedOrWorkflowComplete(task)) {
-    throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
-  }
+  assertTaskCancellable(task, 400);
 
   const client = await pool.connect();
   try {
@@ -2344,31 +2362,11 @@ async function cancelTaskForUser(user, taskId, reason) {
       throw new AppError(404, "Task not found");
     }
 
-    if (isTaskApprovedOrWorkflowComplete(lockedTask)) {
-      throw new AppError(409, "Approved or workflow-completed tasks cannot be cancelled");
-    }
-
-    if (lockedTask.task_type === TASK_TYPES.DESIGN_2D_COMPLETION) {
-      if (lockedTask.status === TASK_STATUSES.CANCELLED) {
-        await client.query("COMMIT");
-        return lockedTask;
-      }
-      if (![TASK_STATUSES.ASSIGNED, TASK_STATUSES.IN_PROGRESS, TASK_STATUSES.ON_HOLD, TASK_STATUSES.REWORK].includes(lockedTask.status)) {
-        throw new AppError(409, "Task cannot be cancelled in its current operational state");
-      }
-    } else {
-      if (lockedTask.workflow_status === WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION || lockedTask.operational_state === "VERIFICATION") {
-        throw new AppError(409, "Tasks in verification cannot be cancelled");
-      }
-
-      if (!canCancelOperationalTask(lockedTask)) {
-        throw new AppError(409, "Task cannot be cancelled in its current operational state");
-      }
-    }
+    assertTaskCancellable(lockedTask, 409);
 
     const cancelledTaskId = await cancelTask(lockedTask.id, {
       cancelledBy: user.employee_id,
-      preserveAssignment: lockedTask.task_type === TASK_TYPES.DESIGN_2D_COMPLETION,
+      previousStatus: lockedTask.status,
       reason: cancellationReason,
     }, client);
 
@@ -2386,10 +2384,16 @@ async function cancelTaskForUser(user, taskId, reason) {
 
     await createAuditLog({
       userEmployeeId: user.employee_id,
-      actionType: "task_cancelled",
+      actionType: "TASK_CANCELLED",
       targetType: "task",
       targetId: lockedTask.id,
       metadata: {
+        task_id: lockedTask.id,
+        task_name: lockedTask.title,
+        project_id: lockedTask.project_id || null,
+        fixture_id: lockedTask.fixture_id || null,
+        assignment_id: lockedTask.assignment_id || null,
+        assigned_employee: lockedTask.assigned_to || lockedTask.assigned_user_id || null,
         reason: cancellationReason,
         cancelled_by: user.employee_id,
         cancelled_at: new Date().toISOString(),
@@ -2413,7 +2417,7 @@ async function cancelTaskForUser(user, taskId, reason) {
   return design2DCompletionCancellationResponse(cancelledTask || task);
 }
 
-async function applyTaskStatusUpdate(user, task, nextStatus, remarks) {
+async function applyTaskStatusUpdate(user, task, nextStatus, remarks, auditMetadata = {}) {
   const submitRemarks = remarks === undefined ? undefined : String(remarks || "").trim() || null;
   if (!isTaskAssignee(user, task)) {
     throw new AppError(403, "Only the assignee can update task status");
@@ -2484,6 +2488,7 @@ async function applyTaskStatusUpdate(user, task, nextStatus, remarks) {
     metadata: {
       from: task.status,
       to: nextStatus,
+      ...auditMetadata,
       ...(autoApproved ? lowPriorityApprovalMetadata() : {}),
     },
   });
@@ -3174,6 +3179,7 @@ async function applyTaskDetailUpdate(user, task, payload) {
 
 module.exports = instrumentModuleExports("service.taskService", {
   cancelTaskForUser,
+  canCancelTask,
   canUpdateTaskProof,
   createTaskForUser,
   ensureTaskProofUpdateAllowed,

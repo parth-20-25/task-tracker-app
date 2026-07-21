@@ -20,7 +20,8 @@ export const ADDITIONAL_DESIGN_TASK_CATALOG: Record<DesignTeam, AdditionalDesign
     "CBO",
     "Line Layout",
     "CDRM",
-    "Print & Drafting Checking",
+    "Print",
+    "Drafting Checking",
   ],
 };
 

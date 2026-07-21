@@ -31,6 +31,7 @@ import {
 import { cancelTask as cancelTaskRequest, fetchTaskAssignmentUsers, fetchVerificationTasks, transferTask, updateTask } from "@/api/taskApi";
 import { FixtureBoardCard, FixtureStatusBoard } from "@/components/FixtureBoard";
 import { SafeImage } from "@/components/SafeImage";
+import { TaskCancelDialog } from "@/components/TaskCancelDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -51,6 +52,7 @@ import { adminQueryKeys, analyticsQueryKeys, batchQueryKeys, projectQueryKeys, t
 import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { cn } from "@/lib/utils";
 import { resolveImageUrl } from "@/lib/imageUrl";
+import { canShowTaskCancelAction } from "@/lib/taskCancellation";
 import {
   compactWorkflowCode,
   getCurrentFixtureStageLabel,
@@ -465,31 +467,11 @@ function canCancelFixtureOperationalTask(
   user: AppUser | null | undefined,
   access: ReturnType<typeof useAuth>["access"],
 ) {
-  if (!task || task.approved_at || task.verification_status === "approved") {
+  if (!["ASSIGNED", "IN_PROGRESS", "REWORK"].includes(state)) {
     return false;
   }
 
-  if (state !== "ASSIGNED" && state !== "IN_PROGRESS") {
-    return false;
-  }
-
-  if (["cancelled", "closed", "under_review", "rework"].includes(task.status)) {
-    return false;
-  }
-
-  const hasCancellationAccess = access.canAccessProjectFixtures
-    || access.canAssignTasks
-    || task.assigned_by === user?.employee_id;
-
-  if (!hasCancellationAccess) {
-    return false;
-  }
-
-  if (state === "ASSIGNED") {
-    return task.status === "assigned" || task.status === "in_progress";
-  }
-
-  return task.status === "assigned" || task.status === "in_progress";
+  return canShowTaskCancelAction(task, user, access);
 }
 
 interface ProjectFixtureOperationsGridProps {
@@ -2324,6 +2306,7 @@ function ProjectFixtureCard({
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
   const [cancellingTask, setCancellingTask] = useState<Task | null>(null);
+  const [cancellationReason, setCancellationReason] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
   const [inlineOperationalReason, setInlineOperationalReason] = useState<string | null>(null);
   const [openingAssign, setOpeningAssign] = useState(false);
@@ -2601,14 +2584,14 @@ function ProjectFixtureCard({
 
   const cancelMutation = useMutation({
     mutationFn: async (cancelTask: Task) => {
-      await cancelTaskRequest(
-        cancelTask.id,
-        "Cancel this assigned task and return fixture to Unassigned state?",
-      );
+      const reason = cancellationReason.trim();
+      if (!reason) throw new Error("Cancellation reason is required");
+      await cancelTaskRequest(cancelTask.id, reason);
     },
     onSuccess: async () => {
       await invalidateOperationalState();
       setCancellingTask(null);
+      setCancellationReason("");
       setExpanded(null);
       resetAssignForm();
       resetTransferForm();
@@ -3082,43 +3065,22 @@ function ProjectFixtureCard({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(cancellingTask)} onOpenChange={(open) => {
-        if (!open && !cancelMutation.isPending) {
-          setCancellingTask(null);
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Cancel Task</DialogTitle>
-            <DialogDescription>
-              Cancel this assigned task and return fixture to Unassigned state?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setCancellingTask(null)}
-              disabled={cancelMutation.isPending}
-            >
-              Keep Assignment
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={!cancellingTask || cancelMutation.isPending}
-              onClick={() => {
-                if (cancellingTask) {
-                  cancelMutation.mutate(cancellingTask);
-                }
-              }}
-            >
-              {cancelMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <XCircle className="mr-1.5 h-4 w-4" />}
-              Cancel Task
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <TaskCancelDialog
+        open={Boolean(cancellingTask)}
+        tasks={cancellingTask ? [cancellingTask] : []}
+        reason={cancellationReason}
+        isPending={cancelMutation.isPending}
+        onReasonChange={setCancellationReason}
+        onOpenChange={(open) => {
+          if (!open && !cancelMutation.isPending) {
+            setCancellingTask(null);
+            setCancellationReason("");
+          }
+        }}
+        onConfirm={() => {
+          if (cancellingTask) cancelMutation.mutate(cancellingTask);
+        }}
+      />
 
       <Dialog open={inHouseDialogOpen} onOpenChange={(open) => {
         if (!open && !bringInHouseMutation.isPending) {

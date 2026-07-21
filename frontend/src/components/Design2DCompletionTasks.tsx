@@ -17,6 +17,7 @@ import { Design2DCompletionDueDatePicker, normalizeDesign2DCompletionDeadline } 
 import { FixtureBoardCard, FixtureStatusBoard, type FixtureBoardSection } from "@/components/FixtureBoard";
 import { ProjectFixtureSectionHeader } from "@/components/ProjectFixtureSectionHeader";
 import { SafeImage } from "@/components/SafeImage";
+import { TaskCancelDialog } from "@/components/TaskCancelDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -32,6 +33,7 @@ import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { analyticsQueryKeys, executiveDashboardQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
 import { resolveImageUrl } from "@/lib/imageUrl";
+import { canShowTaskCancelAction } from "@/lib/taskCancellation";
 import { cn } from "@/lib/utils";
 import type { Priority, Task } from "@/types";
 
@@ -252,6 +254,14 @@ function assignmentFailureDescription(failures: PromiseRejectedResult[]) {
   return firstMessage ? `${count} ${firstMessage}` : count;
 }
 
+function cancellationFailureDescription(failures: PromiseRejectedResult[]) {
+  if (!failures.length) return undefined;
+  const firstMessage = failures
+    .map((failure) => failure.reason)
+    .find((reason): reason is Error => reason instanceof Error)?.message;
+  const count = `${failures.length} cancellation${failures.length === 1 ? "" : "s"} failed.`;
+  return firstMessage ? `${count} ${firstMessage}` : count;
+}
 function projectLevelLockMessage(state: Design2DCompletionProjectState | undefined) {
   if (!state || state.project_tasks_unlocked) return undefined;
   if ((state.eligible_fixture_count ?? state.fixtures.length) === 0) {
@@ -506,14 +516,23 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
   const cancelMutation = useMutation({
     mutationFn: () => {
-      if (!cancellingTasks.length || !cancellationReason.trim()) throw new Error("Cancellation reason is required");
-      return Promise.all(cancellingTasks.map((task) => cancelTask(task.id, cancellationReason.trim())));
+      const reason = cancellationReason.trim();
+      if (!cancellingTasks.length || !reason) throw new Error("Cancellation reason is required");
+      return Promise.allSettled(cancellingTasks.map((task) => cancelTask(task.id, reason)));
     },
-    onSuccess: async () => {
+    onSuccess: async (results) => {
       await refreshCompletionState();
-      setCancellingTasks([]);
-      setCancellationReason("");
-      toast({ title: cancellingTasks.length === 1 ? "Activity cancelled" : "Activities cancelled" });
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      const failedTasks = cancellingTasks.filter((_, index) => results[index]?.status === "rejected");
+      setCancellingTasks(failedTasks);
+      if (!failedTasks.length) setCancellationReason("");
+      toast(failures.length
+        ? {
+          title: failures.length === results.length ? "Cancellation failed" : "Some activities were not cancelled",
+          description: cancellationFailureDescription(failures),
+          variant: "destructive",
+        }
+        : { title: cancellingTasks.length === 1 ? "Activity cancelled" : "Activities cancelled" });
     },
     onError: (error) => toast({ title: "Cancellation failed", description: error instanceof Error ? error.message : "Could not cancel the activity.", variant: "destructive" }),
     onSettled: () => { cancelInFlightRef.current = false; },
@@ -539,7 +558,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
   function cardActions(row: CompletionFixtureRow) {
     const task = row.task;
     const activeTasks = activeTasksForRow(row);
-    const cancellableTasks = activeTasks.filter((item) => !["cancelled", "under_review"].includes(item.status) && !isCompletionLocked(item));
+    const cancellableTasks = activeTasks.filter((item) => canShowTaskCancelAction(item, user, access));
     const ownTask = activeTasks.some((item) => item.assigned_to === user?.employee_id || item.assignee_ids?.includes(user?.employee_id || ""));
     const canReview = task?.status === "under_review"
       && task.verification_status === "pending"
@@ -547,7 +566,7 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
       && (!ownTask || access.canSelfApprove);
     const canTransfer = Boolean(task && !["closed", "cancelled", "under_review"].includes(task.status)
       && (access.canTransferTasks || access.canAssignTasks));
-    const canCancel = Boolean(cancellableTasks.length && (access.canAssignTasks || ownTask));
+    const canCancel = cancellableTasks.length > 0;
 
     return (
       <>
@@ -751,7 +770,20 @@ export function Design2DCompletionTasks({ departmentId }: Design2DCompletionTask
 
       <Dialog open={Boolean(transferringTask)} onOpenChange={(open) => !open && setTransferringTask(null)}><DialogContent><DialogHeader><DialogTitle>Transfer Completion Activity</DialogTitle></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label>Employee</Label><Select value={transferTo || "__none__"} onValueChange={(value) => setTransferTo(value === "__none__" ? "" : value)}><SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger><SelectContent><SelectItem value="__none__">Select employee</SelectItem>{assignees.filter((employee) => employee.employee_id !== transferringTask?.assigned_to).map((employee) => <SelectItem key={employee.employee_id} value={employee.employee_id}>{employee.employee_id} — {employee.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-1.5"><Label>Reason</Label><Textarea value={transferReason} onChange={(event) => setTransferReason(event.target.value)} rows={3} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setTransferringTask(null)}>Cancel</Button><Button type="button" disabled={!transferTo || !transferReason.trim() || transferMutation.isPending} onClick={() => transferMutation.mutate()}>Transfer</Button></DialogFooter></DialogContent></Dialog>
 
-      <Dialog open={cancellingTasks.length > 0} onOpenChange={(open) => !open && setCancellingTasks([])}><DialogContent><DialogHeader><DialogTitle>{cancellingTasks.length === 1 ? "Cancel Completion Activity" : "Cancel Completion Activities"}</DialogTitle><DialogDescription>The cancelled revision remains in history and does not change the original fixture workflow.</DialogDescription></DialogHeader>{cancellingTasks.length ? <ul className="rounded-md border bg-slate-50 p-2 text-sm">{cancellingTasks.map((task) => <li key={task.id}>{task.title}</li>)}</ul> : null}<Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="Cancellation reason" rows={3} /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancellingTasks([])} disabled={cancelMutation.isPending}>Keep Activity</Button><Button type="button" variant="destructive" disabled={!cancellingTasks.length || !cancellationReason.trim() || cancelMutation.isPending} onClick={submitCancellation}>Cancel {cancellingTasks.length === 1 ? "Activity" : "Activities"}</Button></DialogFooter></DialogContent></Dialog>
+      <TaskCancelDialog
+        open={cancellingTasks.length > 0}
+        tasks={cancellingTasks}
+        reason={cancellationReason}
+        isPending={cancelMutation.isPending}
+        onReasonChange={setCancellationReason}
+        onOpenChange={(open) => {
+          if (!open && !cancelMutation.isPending) {
+            setCancellingTasks([]);
+            setCancellationReason("");
+          }
+        }}
+        onConfirm={submitCancellation}
+      />
 
       <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}><DialogContent className="max-w-3xl">{previewImage ? <SafeImage src={previewImage} alt="Completion activity proof" className="max-h-[70vh] w-full rounded-md object-contain" /> : null}</DialogContent></Dialog>
     </section>

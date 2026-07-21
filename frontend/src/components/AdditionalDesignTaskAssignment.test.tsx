@@ -171,11 +171,11 @@ describe("AdditionalDesignTaskAssignment subdivision catalog", () => {
   it("shows exactly the Design 3D project task catalog and hides Team and Fixture fields", async () => {
     renderAssignment();
 
-    for (const taskKind of ["Project Process", "Pin Matrix", "PPT", "CBO", "Line Layout", "CDRM", "Print & Drafting Checking"]) {
+    for (const taskKind of ["Project Process", "Pin Matrix", "PPT", "CBO", "Line Layout", "CDRM", "Print", "Drafting Checking"]) {
       expect(await screen.findByRole("option", { name: taskKind })).toBeInTheDocument();
     }
 
-    for (const old2DKind of ["Drafting", "BOM Checking", "Drawing Correction", "AutoCAD PDF", "IGES Data", "CMM Data", "Mimic Display", "Wear-Out Data"]) {
+    for (const old2DKind of ["Drafting", "Print & Drafting Checking", "BOM Checking", "Drawing Correction", "AutoCAD PDF", "IGES Data", "CMM Data", "Mimic Display", "Wear-Out Data"]) {
       expect(screen.queryByRole("option", { name: old2DKind })).not.toBeInTheDocument();
     }
 

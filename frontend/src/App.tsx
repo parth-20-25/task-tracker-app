@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,6 +13,7 @@ import { PWAUpdatePrompt } from "@/components/PWAUpdatePrompt";
 import React, { Suspense } from "react";
 import { isDesignDepartment } from "@/lib/departments";
 import { isProjectAuthorityUser } from "@/lib/permissions";
+import { getProtocolTargetPath } from "@/lib/protocolNavigation";
 
 const Dashboard = React.lazy(() => import("./pages/Dashboard"));
 const MyTasks = React.lazy(() => import("./pages/MyTasks"));
@@ -69,6 +70,11 @@ function AuthenticatedApp() {
 
 function AppRoutes() {
   const location = useLocation();
+
+  if (location.pathname === "/open") {
+    const target = new URLSearchParams(location.search).get("target");
+    return <Navigate to={getProtocolTargetPath(target) ?? "/"} replace />;
+  }
 
   if (location.pathname === "/login") {
     return <LoginRoute />;

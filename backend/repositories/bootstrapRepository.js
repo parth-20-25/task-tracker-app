@@ -683,6 +683,7 @@ async function ensureDesktopNotificationTables(client) {
       title TEXT NOT NULL,
       body TEXT NOT NULL,
       deep_link TEXT NOT NULL,
+      payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       priority TEXT NOT NULL DEFAULT 'normal',
       dedupe_key TEXT UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -727,6 +728,7 @@ async function ensureDesktopNotificationTables(client) {
   `, "idx_notification_outbox_claim");
 
   await client.query(`ALTER TABLE desktop_notifications ADD COLUMN IF NOT EXISTS dedupe_key TEXT`);
+  await client.query(`ALTER TABLE desktop_notifications ADD COLUMN IF NOT EXISTS payload_json JSONB NOT NULL DEFAULT '{}'::jsonb`);
 
   await safeCreateIndex(client, `
     CREATE UNIQUE INDEX IF NOT EXISTS uniq_desktop_notifications_dedupe_key
@@ -1346,7 +1348,7 @@ async function ensureReferenceTables(client) {
             additional_task_kind IN (
               'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
               'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data',
-              'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM'
+              'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
             )
             AND design_team IN ('2D', '3D')
             AND project_id IS NOT NULL
@@ -1364,7 +1366,7 @@ async function ensureReferenceTables(client) {
             AND (
               design_team <> '3D'
               OR (
-                additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print & Drafting Checking')
+                additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking')
                 AND scope_type = 'project'
                 AND fixture_id IS NULL
               )

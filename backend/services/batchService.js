@@ -15,7 +15,6 @@ const {
   setProjectLifecycleStatus,
 } = require("../repositories/batchRepository");
 const { isAdmin, isProjectAuthorityRole, requireOwningLeaderPair } = require("./accessControlService");
-const { assertDesign2DCompletionProjectReady } = require("./design2dCompletionTaskService");
 const { enqueueProjectReleasedOutbox } = require("./desktopNotificationService");
 
 const PROJECT_REACTIVATION_REASONS = {
@@ -350,7 +349,6 @@ async function releaseProjectForBatch(user, batchId) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await assertDesign2DCompletionProjectReady(batch.project_id, client);
     const releaseResult = await releaseProject(batch.project_id, user.employee_id, client);
     await enqueueProjectReleasedOutbox({
       projectId: batch.project_id,

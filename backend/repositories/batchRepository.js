@@ -1,5 +1,5 @@
 const { pool } = require("../db");
-const { PROJECT_STATUSES } = require("../config/constants");
+const { PROJECT_STATUSES, TASK_TYPES } = require("../config/constants");
 const { instrumentModuleExports } = require("../lib/observability");
 const {
   buildVisibleUsersCte,
@@ -1248,9 +1248,20 @@ async function releaseProject(projectId, releasedBy, client = pool) {
           approved_by = COALESCE(approved_by, $2),
           updated_at = NOW()
       WHERE project_id = $1
-        AND status <> 'cancelled'
+        AND COALESCE(status, '') <> 'cancelled'
+        AND NOT (
+          COALESCE(task_type, '') = $3
+          OR (COALESCE(task_type, '') = $4 AND UPPER(COALESCE(design_team, '')) = '2D')
+          OR REGEXP_REPLACE(LOWER(COALESCE(stage, '')), '[^a-z0-9]+', '', 'g') IN ('2d', '2dfinish')
+          OR EXISTS (
+            SELECT 1
+            FROM workflow_stages stage
+            WHERE stage.id = tasks.current_stage_id
+              AND REGEXP_REPLACE(LOWER(COALESCE(stage.stage_name, stage.name, '')), '[^a-z0-9]+', '', 'g') IN ('2d', '2dfinish')
+          )
+        )
     `,
-    [projectId, releasedBy || null],
+    [projectId, releasedBy || null, TASK_TYPES.DESIGN_2D_COMPLETION, TASK_TYPES.ADDITIONAL_DESIGN],
   );
 
   return lifecycle;

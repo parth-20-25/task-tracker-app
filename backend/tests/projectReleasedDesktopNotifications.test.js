@@ -138,13 +138,15 @@ function loadBatchServiceWithMocks({ readyImpl, releaseImpl } = {}) {
   };
 }
 
-test("successful project release creates PROJECT_RELEASED outbox inside the release transaction", async () => {
-  const mocks = loadBatchServiceWithMocks();
+test("successful project release skips 2D completion readiness and creates PROJECT_RELEASED outbox inside the release transaction", async () => {
+  const mocks = loadBatchServiceWithMocks({
+    readyImpl: async () => { throw new Error("2D completion gate should not run"); },
+  });
   try {
     const result = await mocks.service.releaseProjectForBatch({ employee_id: "501" }, "batch-1");
 
     assert.equal(result.status, "completed");
-    assert.deepEqual(mocks.calls.sequence, ["authorize", "ready", "release", "outbox"]);
+    assert.deepEqual(mocks.calls.sequence, ["authorize", "release", "outbox"]);
     assert.deepEqual(mocks.calls.tx.slice(0, 2), ["BEGIN", "COMMIT"]);
     assert.equal(mocks.calls.outbox.length, 1);
     assert.equal(mocks.calls.outbox[0].txClient, mocks.client);
@@ -160,15 +162,41 @@ test("successful project release creates PROJECT_RELEASED outbox inside the rele
 
 test("failed project release rolls back and creates no outbox event", async () => {
   const mocks = loadBatchServiceWithMocks({
-    readyImpl: async () => { throw new Error("not ready"); },
+    releaseImpl: async () => { throw new Error("release failed"); },
   });
   try {
-    await assert.rejects(() => mocks.service.releaseProjectForBatch({ employee_id: "501" }, "batch-1"), /not ready/);
+    await assert.rejects(() => mocks.service.releaseProjectForBatch({ employee_id: "501" }, "batch-1"), /release failed/);
     assert.equal(mocks.calls.outbox.length, 0);
     assert.ok(mocks.calls.tx.includes("ROLLBACK"));
   } finally {
     mocks.restore();
   }
+});
+test("project release leaves existing 2D task rows out of the bulk close update", async () => {
+  const { TASK_TYPES } = require("../config/constants");
+  const { releaseProject } = require("../repositories/batchRepository");
+  const queries = [];
+  const client = {
+    query: async (sql, params = []) => {
+      const statement = String(sql);
+      queries.push({ sql: statement, params });
+      if (statement.includes("information_schema.tables")) return { rows: [{ exists: 1 }], rowCount: 1 };
+      if (statement.includes("UPDATE design.projects")) {
+        return { rows: [{ status_changed_at: releaseTimestamp, completed_at: releaseTimestamp }], rowCount: 1 };
+      }
+      return { rows: [{ id: "snapshot-1" }], rowCount: 1 };
+    },
+  };
+
+  await releaseProject(projectId, "501", client);
+
+  const taskUpdate = queries.find((query) => /UPDATE\s+tasks\s+SET/.test(query.sql));
+  assert.ok(taskUpdate, "release should still bulk-close non-2D tasks");
+  assert.deepEqual(taskUpdate.params, [projectId, "501", TASK_TYPES.DESIGN_2D_COMPLETION, TASK_TYPES.ADDITIONAL_DESIGN]);
+  assert.match(taskUpdate.sql, /COALESCE\(task_type, ''\) = \$3/);
+  assert.match(taskUpdate.sql, /COALESCE\(task_type, ''\) = \$4 AND UPPER\(COALESCE\(design_team, ''\)\) = '2D'/);
+  assert.match(taskUpdate.sql, /REGEXP_REPLACE\(LOWER\(COALESCE\(stage, ''\)\)/);
+  assert.match(taskUpdate.sql, /FROM workflow_stages stage/);
 });
 
 test("PROJECT_RELEASED outbox and notification use stable dedupe keys", () => {

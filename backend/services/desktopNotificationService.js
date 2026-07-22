@@ -29,8 +29,11 @@ const { loginUser } = require("./authService");
 const EVENT_TYPES = {
   TASK_ASSIGNED: "TASK_ASSIGNED",
   PROJECT_RELEASED: "PROJECT_RELEASED",
+  ACTIVE_TASK_REMINDER: "ACTIVE_TASK_REMINDER",
 };
 
+const ACTIVE_TASK_REMINDER_STATUSES = new Set(["created", "pending", "assigned", "in_progress", "on_hold", "under_review", "rework", "update_required"]);
+const TERMINAL_TASK_STATUSES = new Set(["closed", "completed", "approved", "rejected", "cancelled"]);
 const REGISTRATION_WINDOW_MS = 15 * 60 * 1000;
 const MAX_REGISTRATION_ATTEMPTS = 5;
 const registrationAttempts = new Map();
@@ -93,6 +96,102 @@ function formatDueDate(task) {
     year: "numeric",
     timeZone: "Asia/Kolkata",
   }).format(date);
+}
+
+function taskAssignedToEmployee(task, employeeId) {
+  const assignees = Array.isArray(task?.assignee_ids) ? task.assignee_ids : [];
+  return String(task?.assigned_user_id || task?.assigned_to || "").trim() === employeeId
+    || String(task?.assigned_to || "").trim() === employeeId
+    || assignees.map((value) => String(value).trim()).includes(employeeId);
+}
+
+function isDesktopActiveTaskForUser(task, employeeId) {
+  const status = String(task?.status || "").trim().toLowerCase();
+  const lifecycleStatus = String(task?.lifecycle_status || "").trim().toLowerCase();
+  const verificationStatus = String(task?.verification_status || "pending").trim().toLowerCase();
+  return taskAssignedToEmployee(task, employeeId)
+    && ACTIVE_TASK_REMINDER_STATUSES.has(status)
+    && !TERMINAL_TASK_STATUSES.has(status)
+    && !["completed", "cancelled"].includes(lifecycleStatus)
+    && verificationStatus !== "approved"
+    && !task?.approved_at;
+}
+
+function listDesktopActiveTasksForUser(user, tasks) {
+  const employeeId = String(user?.employee_id || "").trim();
+  return (Array.isArray(tasks) ? tasks : [])
+    .filter((task) => isDesktopActiveTaskForUser(task, employeeId))
+    .sort((left, right) => new Date(left.due_date || left.deadline || "9999-12-31").getTime() - new Date(right.due_date || right.deadline || "9999-12-31").getTime());
+}
+
+function isOverdueTask(task, now = new Date()) {
+  const due = task?.due_date || task?.deadline;
+  if (!due) return false;
+  const dueDate = new Date(due);
+  return !Number.isNaN(dueDate.getTime()) && dueDate < now;
+}
+
+function isUpdateRequiredTask(task) {
+  const status = String(task?.status || "").trim().toLowerCase();
+  const verificationStatus = String(task?.verification_status || "").trim().toLowerCase();
+  return status === "rework" || status === "update_required" || verificationStatus === "rejected";
+}
+
+function summarizeTask(task) {
+  const name = task?.completion_task_display_name
+    || task?.additional_task_kind
+    || task?.workflow_stage
+    || task?.title
+    || `Task #${task?.id}`;
+  const project = task?.project_no || task?.project_name || null;
+  const fixture = task?.fixture_no || null;
+  return [name, project, fixture].filter(Boolean).join(" - ");
+}
+
+function buildActiveTaskReminderNotification(user, tasks, { now = new Date() } = {}) {
+  const activeTasks = listDesktopActiveTasksForUser(user, tasks);
+
+  if (activeTasks.length === 0) return null;
+
+  const overdueCount = activeTasks.filter((task) => isOverdueTask(task, now)).length;
+  const updateRequiredCount = activeTasks.filter(isUpdateRequiredTask).length;
+  const deepLink = activeTasks.length === 1 ? `/tasks/${activeTasks[0].id}` : "/tasks?status=active";
+  if (!validateDeepLinkPath(deepLink)) {
+    throw new AppError(500, "Generated active task reminder deep link is invalid");
+  }
+
+  return {
+    id: now.getTime(),
+    eventType: EVENT_TYPES.ACTIVE_TASK_REMINDER,
+    entityType: "local",
+    entityId: "active-tasks",
+    title: `You have ${activeTasks.length} active ${activeTasks.length === 1 ? "task" : "tasks"}`,
+    body: "Open My Tasks for details.",
+    deepLink,
+    priority: overdueCount || updateRequiredCount ? "high" : "normal",
+    createdAt: now.toISOString(),
+    taskCount: activeTasks.length,
+    taskItems: activeTasks.slice(0, 6).map(summarizeTask),
+    statusMessage: overdueCount
+      ? `${overdueCount} overdue ${overdueCount === 1 ? "task" : "tasks"} need action.`
+      : updateRequiredCount
+        ? `${updateRequiredCount} update-required ${updateRequiredCount === 1 ? "task" : "tasks"} need action.`
+        : "Review My Tasks for details.",
+    availableActions: [activeTasks.length === 1 ? "OPEN_TASK" : "OPEN_TASKS"],
+  };
+}
+
+function buildActiveTaskSyncPayload(user, device, tasks, options) {
+  const activeTasks = listDesktopActiveTasksForUser(user, tasks);
+  return {
+    employeeId: String(user.employee_id),
+    backendUserId: String(user.id || user.employee_id),
+    deviceId: String(device.device_id),
+    deviceRegistered: true,
+    activeTaskCount: activeTasks.length,
+    tasks: activeTasks,
+    notification: buildActiveTaskReminderNotification(user, activeTasks, options),
+  };
 }
 
 function buildTaskAssignedOutboxEvent(task, actorUserId) {
@@ -224,6 +323,8 @@ async function registerDeviceFromCredentials(payload, { ipAddress = "unknown" } 
     deviceToken,
     user: {
       id: user.employee_id,
+      employeeId: user.employee_id,
+      backendUserId: user.id || user.employee_id,
       name: user.name,
     },
   };
@@ -404,6 +505,8 @@ async function listPendingForDevice(device, limit = 100) {
 
 module.exports = {
   authenticateDesktopDevice,
+  buildActiveTaskReminderNotification,
+  buildActiveTaskSyncPayload,
   buildTaskAssignedOutboxEvent,
   buildProjectReleasedNotification,
   buildProjectReleasedOutboxEvent,
@@ -412,6 +515,7 @@ module.exports = {
   enqueueProjectReleasedOutbox,
   generateDeviceToken,
   hashDeviceToken,
+  listDesktopActiveTasksForUser,
   listPendingForDevice,
   markSentToDevice,
   processDesktopNotificationOutboxBatch,
@@ -422,5 +526,6 @@ module.exports = {
   revokeAuthenticatedDevice,
   safeTokenEqual,
   startDesktopNotificationWorker,
+  isDesktopActiveTaskForUser,
   validateDeepLinkPath,
 };

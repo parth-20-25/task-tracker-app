@@ -3,10 +3,13 @@ const { asyncHandler } = require("../lib/asyncHandler");
 const { sendSuccess } = require("../lib/response");
 const {
   authenticateDesktopDevice,
+  buildActiveTaskSyncPayload,
   createTestNotificationForDevice,
   registerDeviceFromCredentials,
   revokeAuthenticatedDevice,
 } = require("../services/desktopNotificationService");
+const { getAuthenticatedUser } = require("../services/authService");
+const { listTasksForUser } = require("../services/taskService");
 const {
   startCorrectionFromDesktopNotification,
   startTaskFromDesktopNotification,
@@ -56,6 +59,16 @@ router.post(
   asyncHandler(async (req, res) => {
     const notification = await createTestNotificationForDevice(req.desktopDevice);
     return sendSuccess(res, { notification });
+  }),
+);
+
+router.get(
+  "/desktop-notification-devices/active-tasks",
+  authenticateDesktopDeviceRequest,
+  asyncHandler(async (req, res) => {
+    const user = await getAuthenticatedUser(req.desktopDevice.user_id);
+    const data = buildActiveTaskSyncPayload(user, req.desktopDevice, await listTasksForUser(user));
+    return sendSuccess(res, data);
   }),
 );
 

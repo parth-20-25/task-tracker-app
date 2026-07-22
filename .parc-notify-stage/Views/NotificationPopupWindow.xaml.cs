@@ -37,9 +37,6 @@ public partial class NotificationPopupWindow : Window
         _autoStartTimer = autoStartTimer;
         _ = muteNotifications;
         DataContext = viewModel;
-        Width = viewModel.CardWidth;
-        MinHeight = viewModel.MinCardHeight;
-        MaxHeight = viewModel.MaxCardHeight;
         _remaining = viewModel.AutoDismissDuration;
         foreach (var action in viewModel.Actions)
         {

@@ -42,6 +42,10 @@ public sealed class NotificationPopupViewModel : INotifyPropertyChanged
     public double MinCardHeight { get; init; } = 350;
     public double MaxCardHeight { get; init; } = 410;
 
+    public string? PrimaryTaskText => TaskName ?? TaskItems.FirstOrDefault();
+    public bool HasPrimaryTaskText => !string.IsNullOrWhiteSpace(PrimaryTaskText);
+    public string? TaskSummary => string.IsNullOrWhiteSpace(MoreTasksText) ? PrimaryTaskText : $"{PrimaryTaskText}  {MoreTasksText}";
+    public bool HasTaskSummary => !string.IsNullOrWhiteSpace(TaskSummary);
     public bool HasTaskName => !string.IsNullOrWhiteSpace(TaskName);
     public bool HasTaskItems => TaskItems.Count > 0;
     public bool HasMoreTasksText => !string.IsNullOrWhiteSpace(MoreTasksText);

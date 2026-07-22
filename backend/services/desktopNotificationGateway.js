@@ -3,12 +3,15 @@ const { pool } = require("../db");
 const { logger } = require("../lib/logger");
 const {
   authenticateDesktopDevice,
+  buildActiveTaskSyncPayload,
   listPendingForDevice,
   markSentToDevice,
   recordClicked,
   recordDisplayed,
 } = require("../services/desktopNotificationService");
 const { getNotificationById } = require("../repositories/desktopNotificationRepository");
+const { getAuthenticatedUser } = require("./authService");
+const { listTasksForUser } = require("./taskService");
 
 const WS_PATH = "/ws/desktop-notifications";
 const MAX_PAYLOAD_BYTES = 16 * 1024;
@@ -90,6 +93,18 @@ async function sendPending(ws, device) {
   return pending.length;
 }
 
+async function sendActiveTaskSync(ws, device) {
+  const user = await getAuthenticatedUser(device.user_id);
+  const sync = buildActiveTaskSyncPayload(user, device, await listTasksForUser(user));
+  ws.send(JSON.stringify({ type: "active_task_sync", ...sync }));
+  logger.info("Desktop active task sync completed", {
+    user_id: device.user_id,
+    device_id: device.device_id,
+    active_task_count: sync.activeTaskCount,
+  });
+  return sync.activeTaskCount;
+}
+
 async function handleClientMessage(ws, raw) {
   let message;
   try {
@@ -107,6 +122,7 @@ async function handleClientMessage(ws, raw) {
 
   if (message.type === "sync_pending_notifications") {
     await sendPending(ws, device);
+    await sendActiveTaskSync(ws, device);
     return;
   }
 
@@ -197,6 +213,8 @@ function initializeDesktopNotificationGateway(server) {
     ws.on("error", () => removeConnection(device, ws));
 
     addConnection(device, ws);
+    logger.info("Desktop notification WebSocket connected", { user_id: device.user_id, device_id: device.device_id });
+    ws.on("close", () => logger.info("Desktop notification WebSocket disconnected", { user_id: device.user_id, device_id: device.device_id }));
     try {
       await sendPending(ws, device);
     } catch (error) {

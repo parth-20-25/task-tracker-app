@@ -3,10 +3,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:models="clr-namespace:ParcNotify.Agent.Models"
         Title="PARC Task Tracker notification"
-        Width="{Binding CardWidth}"
-        MinHeight="{Binding MinCardHeight}"
-        MaxHeight="{Binding MaxCardHeight}"
-        SizeToContent="Height"
+        Width="365"
+        Height="172"
+        MinWidth="365"
+        MaxWidth="365"
+        MinHeight="172"
+        MaxHeight="172"
+        SizeToContent="Manual"
         WindowStyle="None"
         AllowsTransparency="False"
         ShowInTaskbar="False"
@@ -38,43 +41,43 @@
         </Grid.RenderTransform>
 
         <Border x:Name="AcrylicBackdropLayer"
-                Margin="6"
+                Margin="4"
                 Background="{DynamicResource NotificationCardSurfaceBrush}"
-                CornerRadius="22"
+                CornerRadius="12"
                 IsHitTestVisible="False" />
 
         <Border x:Name="SeverityTintBorder"
-                Margin="6"
+                Margin="4"
                 Background="{Binding TintBrush}"
-                CornerRadius="22"
+                CornerRadius="12"
                 IsHitTestVisible="False" />
 
         <Border x:Name="InnerHighlightBorder"
-                Margin="7"
+                Margin="5"
                 BorderBrush="{DynamicResource NotificationInnerHighlightBrush}"
                 BorderThickness="1"
-                CornerRadius="21"
+                CornerRadius="11"
                 IsHitTestVisible="False" />
 
-        <Border x:Name="ContentCard" Margin="6" CornerRadius="22" Background="Transparent">
+        <Border x:Name="ContentCard" Margin="4" CornerRadius="12" Background="Transparent" ClipToBounds="True">
             <Grid x:Name="SharpContentGrid">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="82" />
+                    <RowDefinition Height="31" />
                     <RowDefinition Height="1" />
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="90" />
                     <RowDefinition Height="1" />
-                    <RowDefinition Height="80" />
+                    <RowDefinition Height="41" />
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Row="0" Margin="24,8,18,4">
+                <Grid Grid.Row="0" Margin="11,2,7,2">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="205" />
+                        <ColumnDefinition Width="92" />
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="38" />
+                        <ColumnDefinition Width="27" />
                     </Grid.ColumnDefinitions>
                     <Image x:Name="LogoImage"
-                           Width="195"
-                           Height="62"
+                           Width="86"
+                           Height="25"
                            HorizontalAlignment="Left"
                            VerticalAlignment="Center"
                            Stretch="Uniform"
@@ -83,12 +86,13 @@
                            Source="pack://application:,,,/ParcNotify.Agent;component/Assets/PARCLogo-Notification.png"
                            AutomationProperties.Name="PARC logo" />
                     <TextBlock Grid.Column="1"
-                               Text="{Binding HeaderApplicationName}"
-                               Margin="14,0,8,0"
+                               Text="{Binding EventTitle}"
+                               Margin="5,0"
                                VerticalAlignment="Center"
-                               FontSize="22"
+                               FontSize="14"
                                FontWeight="SemiBold"
-                               Foreground="{DynamicResource NotificationPrimaryTextBrush}"
+                               Foreground="{Binding AccentBrush}"
+                               TextWrapping="NoWrap"
                                TextTrimming="CharacterEllipsis" />
                     <Button Grid.Column="2"
                             Style="{StaticResource NotificationIconButtonStyle}"
@@ -96,10 +100,10 @@
                             ToolTip="Dismiss"
                             AutomationProperties.Name="Dismiss notification"
                             Click="CloseButton_Click">
-                        <Path Width="20"
-                              Height="20"
+                        <Path Width="12"
+                              Height="12"
                               Stroke="{DynamicResource NotificationPrimaryTextBrush}"
-                              StrokeThickness="2.2"
+                              StrokeThickness="2"
                               StrokeStartLineCap="Round"
                               StrokeEndLineCap="Round"
                               Data="M3,3 L17,17 M17,3 L3,17"
@@ -107,26 +111,26 @@
                     </Button>
                 </Grid>
 
-                <Border Grid.Row="1" Margin="24,0" Background="{DynamicResource NotificationDividerBrush}" />
+                <Border Grid.Row="1" Margin="11,0" Background="{DynamicResource NotificationDividerBrush}" />
 
-                <Grid Grid.Row="2" Margin="26,18,26,18">
+                <Grid Grid.Row="2" Margin="12,6">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="145" />
+                        <ColumnDefinition Width="40" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Border Width="124"
-                            Height="124"
-                            CornerRadius="22"
+                    <Border Width="32"
+                            Height="32"
+                            CornerRadius="8"
                             Background="{Binding IconContainerBrush}"
                             BorderBrush="{Binding BrightBorderBrush}"
-                            BorderThickness="1.5"
-                            VerticalAlignment="Top"
+                            BorderThickness="1"
+                            VerticalAlignment="Center"
                             HorizontalAlignment="Left">
-                        <Path Width="72"
-                              Height="72"
+                        <Path Width="18"
+                              Height="18"
                               Data="{Binding IconGlyph}"
                               Stroke="{Binding IconBrush}"
-                              StrokeThickness="2.8"
+                              StrokeThickness="2.3"
                               StrokeStartLineCap="Round"
                               StrokeEndLineCap="Round"
                               StrokeLineJoin="Round"
@@ -135,82 +139,68 @@
                               VerticalAlignment="Center" />
                     </Border>
 
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding EventTitle}"
-                                   FontSize="30"
-                                   FontWeight="Bold"
-                                   Foreground="{Binding AccentBrush}"
-                                   TextWrapping="Wrap"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding TaskName}"
-                                   Margin="0,5,0,0"
-                                   FontSize="24"
+                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="{Binding TaskSummary}"
+                                   FontSize="13"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource NotificationPrimaryTextBrush}"
-                                   TextWrapping="Wrap"
-                                   MaxHeight="60"
-                                   Visibility="{Binding HasTaskName, Converter={StaticResource BoolToVisibilityConverter}}" />
-                        <ItemsControl ItemsSource="{Binding TaskItems}"
-                                      Margin="0,5,0,0"
-                                      Visibility="{Binding HasTaskItems, Converter={StaticResource BoolToVisibilityConverter}}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#x2022;" Width="18" FontSize="18" Foreground="{DynamicResource NotificationPrimaryTextBrush}" />
-                                        <TextBlock Text="{Binding}" FontSize="18" Foreground="{DynamicResource NotificationPrimaryTextBrush}" TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <TextBlock Text="{Binding MoreTasksText}"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   Visibility="{Binding HasTaskSummary, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        <TextBlock Grid.Row="1"
+                                   Text="{Binding Metadata}"
                                    Margin="0,3,0,0"
-                                   FontSize="17"
+                                   FontSize="12"
                                    Foreground="{DynamicResource NotificationSecondaryTextBrush}"
-                                   Visibility="{Binding HasMoreTasksText, Converter={StaticResource BoolToVisibilityConverter}}" />
-                        <TextBlock Text="{Binding Metadata}"
-                                   Margin="0,6,0,0"
-                                   FontSize="19"
-                                   Foreground="{DynamicResource NotificationSecondaryTextBrush}"
-                                   TextWrapping="Wrap" />
-                        <StackPanel Margin="0,8,0,0"
-                                    Orientation="Horizontal"
-                                    Visibility="{Binding HasStatusText, Converter={StaticResource BoolToVisibilityConverter}}">
-                            <Path Width="20"
-                                  Height="20"
-                                  Margin="0,1,9,0"
-                                  Data="{Binding IconGlyph}"
-                                  Stroke="{Binding StatusBrush}"
-                                  StrokeThickness="2"
-                                  StrokeStartLineCap="Round"
-                                  StrokeEndLineCap="Round"
-                                  StrokeLineJoin="Round"
-                                  Stretch="Uniform" />
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis" />
+                        <Grid Grid.Row="2" Margin="0,3,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <TextBlock Text="{Binding StatusText}"
-                                       FontSize="19"
-                                       FontWeight="Medium"
+                                       FontSize="11"
                                        Foreground="{Binding StatusBrush}"
-                                       TextWrapping="Wrap"
-                                       MaxWidth="345"
-                                       MaxHeight="50" />
-                        </StackPanel>
-                        <TextBlock Text="{Binding ActionError}"
-                                   Margin="0,7,0,0"
-                                   FontSize="15"
+                                       TextWrapping="NoWrap"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="1"
+                                       Margin="8,0,0,0"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource NotificationSecondaryTextBrush}"
+                                       TextWrapping="NoWrap">
+                                <Run Text="Priority: " />
+                                <Run Text="{Binding Priority}" FontWeight="SemiBold" />
+                            </TextBlock>
+                        </Grid>
+                        <TextBlock Grid.Row="3"
+                                   Text="{Binding ActionError}"
+                                   Margin="0,3,0,0"
+                                   MaxHeight="14"
+                                   FontSize="10"
                                    Foreground="{Binding AccentBrush}"
-                                   TextWrapping="Wrap"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
                                    Visibility="{Binding HasActionError, Converter={StaticResource BoolToVisibilityConverter}}" />
-                    </StackPanel>
+                    </Grid>
                 </Grid>
 
-                <Border Grid.Row="3" Margin="24,0" Background="{DynamicResource NotificationDividerBrush}" />
+                <Border Grid.Row="3" Margin="11,0" Background="{DynamicResource NotificationDividerBrush}" />
 
                 <ItemsControl Grid.Row="4"
-                              Margin="18,13"
+                              Margin="8,5"
+                              HorizontalAlignment="Right"
                               ItemsSource="{Binding Actions}"
                               Visibility="{Binding HasActions, Converter={StaticResource BoolToVisibilityConverter}}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <UniformGrid Rows="1" />
+                            <StackPanel Orientation="Horizontal" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
@@ -219,6 +209,8 @@
                                     Command="{Binding Command}"
                                     AutomationProperties.Name="{Binding Label}">
                                 <TextBlock Text="{Binding DisplayLabel}"
+                                           TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                             </Button>
                         </DataTemplate>
@@ -228,15 +220,15 @@
         </Border>
 
         <Border x:Name="OuterGlowLayer"
-                Margin="6"
+                Margin="4"
                 BorderBrush="{Binding BrightBorderBrush}"
-                BorderThickness="2"
-                CornerRadius="22"
+                BorderThickness="1.5"
+                CornerRadius="12"
                 IsHitTestVisible="False">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="18"
+                <DropShadowEffect BlurRadius="10"
                                   ShadowDepth="0"
-                                  Opacity="0.62"
+                                  Opacity="0.55"
                                   Color="{Binding GlowColor}" />
             </Border.Effect>
         </Border>

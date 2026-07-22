@@ -10,9 +10,8 @@ namespace ParcNotify.Agent.Services;
 
 public sealed class NotificationPositioningService
 {
-    public const int RightMarginPx = 24;
-    public const int BottomMarginPx = 24;
-    public const int StackGapPx = 16;
+    public const double EdgeMarginDip = 16;
+    public const double StackGapDip = 16;
     private static readonly IntPtr HwndTopmost = new(-1);
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoActivate = 0x0010;
@@ -30,15 +29,7 @@ public sealed class NotificationPositioningService
         return LogWorkingArea(Screen.PrimaryScreen?.WorkingArea ?? Screen.AllScreens.First().WorkingArea, "fallback-primary");
     }
 
-    public double HeightInPixels(Window window)
-    {
-        var bounds = GetPhysicalBounds(window);
-        if (bounds.Height > 0) return bounds.Height;
-        var dpi = VisualTreeHelper.GetDpi(window);
-        return (window.ActualHeight > 0 ? window.ActualHeight : window.MinHeight) * dpi.DpiScaleY;
-    }
-
-    public void Position(NotificationPopupWindow window, double bottomOffsetPx, bool animate, NotificationAnimationService animation)
+    public void Position(NotificationPopupWindow window, double bottomOffsetDip, bool animate, NotificationAnimationService animation)
     {
         _ = animate;
         _ = animation;
@@ -46,12 +37,33 @@ public sealed class NotificationPositioningService
         var dpi = VisualTreeHelper.GetDpi(window);
         var widthPx = current.Width > 0 ? current.Width : (int)Math.Ceiling((window.ActualWidth > 0 ? window.ActualWidth : window.Width) * dpi.DpiScaleX);
         var heightPx = current.Height > 0 ? current.Height : (int)Math.Ceiling((window.ActualHeight > 0 ? window.ActualHeight : window.MinHeight) * dpi.DpiScaleY);
-        var target = CalculateBounds(window.WorkingArea, widthPx, heightPx, bottomOffsetPx);
+        var target = CalculateBounds(
+            window.WorkingArea,
+            widthPx,
+            heightPx,
+            Math.Ceiling(EdgeMarginDip * dpi.DpiScaleX),
+            Math.Ceiling(bottomOffsetDip * dpi.DpiScaleY));
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == IntPtr.Zero || !SetWindowPos(handle, HwndTopmost, target.Left, target.Top, 0, 0, SwpNoSize | SwpNoActivate | SwpShowWindow))
         {
             throw new InvalidOperationException("Unable to position the popup on the selected monitor.");
         }
+        window.UpdateLayout();
+
+        var targetDpi = VisualTreeHelper.GetDpi(window);
+        var targetBounds = GetPhysicalBounds(window);
+        var correctedTarget = CalculateBounds(
+            window.WorkingArea,
+            targetBounds.Width,
+            targetBounds.Height,
+            Math.Ceiling(EdgeMarginDip * targetDpi.DpiScaleX),
+            Math.Ceiling(bottomOffsetDip * targetDpi.DpiScaleY));
+        if (correctedTarget.Location != target.Location
+            && !SetWindowPos(handle, HwndTopmost, correctedTarget.Left, correctedTarget.Top, 0, 0, SwpNoSize | SwpNoActivate | SwpShowWindow))
+        {
+            throw new InvalidOperationException("Unable to correct the popup position for the selected monitor DPI.");
+        }
+
         window.UpdateLayout();
         LogBounds(window, GetPhysicalBounds(window));
     }
@@ -86,11 +98,11 @@ public sealed class NotificationPositioningService
             && workingArea.IntersectsWith(popupBounds);
     }
 
-    public static System.Drawing.Rectangle CalculateBounds(System.Drawing.Rectangle workingArea, int widthPx, int heightPx, double bottomOffsetPx)
+    public static System.Drawing.Rectangle CalculateBounds(System.Drawing.Rectangle workingArea, int widthPx, int heightPx, double rightMarginPx, double bottomOffsetPx)
     {
         var width = Math.Clamp(widthPx, 1, workingArea.Width);
         var height = Math.Clamp(heightPx, 1, workingArea.Height);
-        var left = Math.Clamp(workingArea.Right - RightMarginPx - width, workingArea.Left, workingArea.Right - width);
+        var left = Math.Clamp(workingArea.Right - (int)Math.Ceiling(rightMarginPx) - width, workingArea.Left, workingArea.Right - width);
         var top = Math.Clamp(workingArea.Bottom - (int)Math.Ceiling(bottomOffsetPx) - height, workingArea.Top, workingArea.Bottom - height);
         return new System.Drawing.Rectangle(left, top, width, height);
     }

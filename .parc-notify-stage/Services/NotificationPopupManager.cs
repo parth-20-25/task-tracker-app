@@ -66,7 +66,6 @@ public sealed class NotificationPopupManager : IDisposable
                 Opacity = _animationsEnabled ? 0 : 1,
                 Visibility = Visibility.Visible,
                 WindowState = WindowState.Normal,
-                Width = viewModel.CardWidth,
                 Topmost = true,
                 ShowActivated = false,
                 ShowInTaskbar = false,
@@ -189,11 +188,11 @@ public sealed class NotificationPopupManager : IDisposable
     {
         foreach (var group in _visible.GroupBy(window => window.WorkingArea))
         {
-            double offset = NotificationPositioningService.BottomMarginPx;
+            double offset = NotificationPositioningService.EdgeMarginDip;
             foreach (var window in group)
             {
                 _positioning.Position(window, offset, animate, _animation);
-                offset += _positioning.HeightInPixels(window) + NotificationPositioningService.StackGapPx;
+                offset += window.ActualHeight + NotificationPositioningService.StackGapDip;
             }
         }
     }

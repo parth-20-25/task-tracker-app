@@ -127,6 +127,10 @@ internal static class Program
             });
             Equal(assigned.EventTitle, "Task assigned", "assigned title");
             Equal(assigned.TaskName, "Drafting Checking 01", "assigned task name");
+            Equal(assigned.PrimaryTaskText, "Drafting Checking 01", "compact task summary");
+            var bulkSummary = factory.CreateSamples().Single(item => item.EventType == "TASKS_BULK_ASSIGNED");
+            Equal(bulkSummary.PrimaryTaskText, "Drafting Checking 01", "compact bulk primary task");
+            Equal(bulkSummary.TaskSummary, "Drafting Checking 01  +2 more tasks", "compact bulk task summary");
             Equal(assigned.Metadata, "Project 25-119  \u2022  Fixture OP20", "metadata format");
             Equal(assigned.Severity, NotificationSeverity.Info, "assigned info severity");
             Equal(assigned.Actions.Count, 2, "two action maximum");
@@ -189,9 +193,14 @@ internal static class Program
                 Equal(renderingWindow.AllowsTransparency, false, "popup preserves ClearType-compatible window");
                 Equal(renderingWindow.ShowActivated, false, "popup does not activate");
                 Equal(renderingWindow.Focusable, false, "popup cannot take keyboard focus");
-                Equal(testPopupTemplate.CardWidth, 600d, "standard card width");
-                Equal(testPopupTemplate.MinCardHeight, 350d, "standard minimum height");
-                Equal(testPopupTemplate.MaxCardHeight, 410d, "standard maximum height");
+                Equal(renderingWindow.Width, 365d, "fixed popup width");
+                Equal(renderingWindow.Height, 172d, "fixed popup height");
+                Equal(renderingWindow.MinWidth, 365d, "fixed minimum width");
+                Equal(renderingWindow.MaxWidth, 365d, "fixed maximum width");
+                Equal(renderingWindow.MinHeight, 172d, "fixed minimum height");
+                Equal(renderingWindow.MaxHeight, 172d, "fixed maximum height");
+                Equal(renderingWindow.SizeToContent, SizeToContent.Manual, "content cannot grow popup");
+                Equal(renderingWindow.ResizeMode, ResizeMode.NoResize, "manual resizing disabled");
                 Equal(TextOptions.GetTextFormattingMode(renderingWindow), TextFormattingMode.Display, "popup display text formatting");
                 Equal(TextOptions.GetTextRenderingMode(renderingWindow), TextRenderingMode.ClearType, "popup ClearType rendering");
                 Equal(TextOptions.GetTextHintingMode(renderingWindow), TextHintingMode.Fixed, "popup fixed text hinting");
@@ -206,8 +215,8 @@ internal static class Program
                 Equal(acrylic is not null, true, "acrylic layer present");
                 Equal(testPopupTemplate.FallbackBrush is LinearGradientBrush, true, "translucent gradient fallback present");
                 var logo = (WpfImage)renderingWindow.FindName("LogoImage");
-                Equal(logo.Width, 195d, "logo rendered width");
-                Equal(logo.Height, 62d, "logo rendered height");
+                Equal(logo.Width, 86d, "compact logo rendered width");
+                Equal(logo.Height, 25d, "compact logo rendered height");
                 Equal(logo.Stretch, Stretch.Uniform, "logo aspect ratio preserved");
                 Equal(RenderOptions.GetBitmapScalingMode(logo), BitmapScalingMode.HighQuality, "logo high-quality scaling");
                 using var logoResource = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/ParcNotify.Agent;component/Assets/PARCLogo-Notification.png"))?.Stream;
@@ -218,6 +227,7 @@ internal static class Program
                 Equal(renderingWindow.BackdropApplied || ReferenceEquals(renderingWindow.Background, testPopupTemplate.FallbackBrush), true, "backdrop or gradient fallback active");
                 var actionButtons = FindVisualChildren<WpfButton>(renderingWindow).Where(button => button.DataContext is NotificationActionViewModel).ToList();
                 Equal(actionButtons.Count, 2, "two real action buttons rendered");
+                Equal(actionButtons.All(button => button.ActualWidth <= 148), true, "actions fit compact row");
                 var secondaryButton = actionButtons.Single(button => ((NotificationActionViewModel)button.DataContext).IsPrimary is false);
                 var primaryButton = actionButtons.Single(button => ((NotificationActionViewModel)button.DataContext).IsPrimary);
                 Equal(((SolidColorBrush)secondaryButton.BorderBrush).Color, ((SolidColorBrush)testPopupTemplate.AccentBrush).Color, "secondary button severity outline");
@@ -267,13 +277,15 @@ internal static class Program
             }
 
             var workingArea = new System.Drawing.Rectangle(0, 0, 1920, 1040);
-            var correctedBounds = NotificationPositioningService.CalculateBounds(workingArea, 600, 350, 24);
+            var correctedBounds = NotificationPositioningService.CalculateBounds(workingArea, 456, 215, 20, 20);
             Equal(workingArea.Contains(correctedBounds), true, "off-screen coordinates corrected");
-            Equal(correctedBounds.Width, 600, "popup width valid");
-            Equal(correctedBounds.Height, 350, "popup height valid");
-            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 600, 350, false, correctedBounds, workingArea), true, "valid rendered popup accepted");
-            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 600, 350, true, correctedBounds, workingArea), false, "rendering failure blocks displayed acknowledgement");
-            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 600, 350, false, new System.Drawing.Rectangle(3000, 3000, 600, 350), workingArea), false, "off-screen popup blocks displayed acknowledgement");
+            Equal(correctedBounds.Width, 456, "125 percent popup width valid");
+            Equal(correctedBounds.Height, 215, "125 percent popup height valid");
+            Equal(workingArea.Right - correctedBounds.Right, 20, "16 DIP right margin at 125 percent");
+            Equal(workingArea.Bottom - correctedBounds.Bottom, 20, "16 DIP bottom margin at 125 percent");
+            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 365, 172, false, correctedBounds, workingArea), true, "valid rendered popup accepted");
+            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 365, 172, true, correctedBounds, workingArea), false, "rendering failure blocks displayed acknowledgement");
+            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 365, 172, false, new System.Drawing.Rectangle(3000, 3000, 456, 215), workingArea), false, "off-screen popup blocks displayed acknowledgement");
 
             var actionGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var actionExecutions = 0;
@@ -304,6 +316,10 @@ internal static class Program
                 Environment.SetEnvironmentVariable("PARC_NOTIFY_POPUP_SECONDS", null);
             }
 
+            if (args.Contains("--card-screenshots", StringComparer.OrdinalIgnoreCase))
+            {
+                RenderTemplateScreenshots(factory, Path.Combine(AppContext.BaseDirectory, "parc-notify-card-screenshots"));
+            }
             if (args.Contains("--desktop-screenshots", StringComparer.OrdinalIgnoreCase))
             {
                 RenderDesktopScreenshots(factory, @"C:\tmp\parc-notify-desktop-screenshots");
@@ -329,10 +345,10 @@ internal static class Program
         {
             var window = new NotificationPopupWindow(vm, (_, _) => Task.FromResult<string?>(null), (_, _) => { }, () => { }, new NotificationAnimationService(), autoStartTimer: false);
             var content = (FrameworkElement)window.Content;
-            content.Width = vm.CardWidth;
-            content.Measure(new System.Windows.Size(vm.CardWidth, vm.MaxCardHeight + 80));
-            var targetHeight = Math.Min(Math.Max(content.DesiredSize.Height, vm.MinCardHeight), vm.MaxCardHeight + 40);
-            content.Arrange(new Rect(0, 0, vm.CardWidth, targetHeight));
+            content.Width = 365;
+            content.Height = 172;
+            content.Measure(new System.Windows.Size(365, 172));
+            content.Arrange(new Rect(0, 0, 365, 172));
             content.UpdateLayout();
 
             var width = Math.Max(1, (int)Math.Ceiling(content.ActualWidth));
@@ -374,7 +390,7 @@ internal static class Program
             {
                 window.Show();
                 window.UpdateLayout();
-                positioning.Position(window, NotificationPositioningService.BottomMarginPx, false, animation);
+                positioning.Position(window, NotificationPositioningService.EdgeMarginDip, false, animation);
                 PumpDispatcher(TimeSpan.FromMilliseconds(350));
                 var bounds = NotificationPositioningService.GetPhysicalBounds(window);
                 CaptureVirtualScreen(Path.Combine(outputDir, fileNames[index]));
@@ -435,17 +451,17 @@ The captures use the real WPF `NotificationPopupWindow` at native desktop resolu
 
 | Element | Reference target | Implemented |
 | --- | ---: | ---: |
-| Card width | 600 DIPs | 600 DIPs |
-| Standard height | 350-410 DIPs | 350-410 DIPs |
-| Logo | 185-205 x 58-66 DIPs | 195 x 62 DIPs |
-| Header | about 82 DIPs | 82 DIPs |
-| Icon container | about 124 DIPs | 124 x 124 DIPs |
-| Button height | about 54 DIPs | 54 DIPs |
-| Button gap | about 24 DIPs | 24 DIPs |
-| Corner radius | about 22 DIPs | 22 DIPs |
-| Screen margin | 24 DIPs baseline | 24 physical px positioning margin |
+| Card width | 365 DIPs | 365 DIPs |
+| Fixed height | 172 DIPs | 172 DIPs |
+| Logo | Compact | 86 x 25 DIPs |
+| Header | Compact | 31 DIPs |
+| Icon container | Compact | 32 x 32 DIPs |
+| Button height | Compact | 30 DIPs |
+| Button gap | Compact | 6 DIPs |
+| Corner radius | Compact | 12 DIPs |
+| Screen margin | 16 DIPs | 16 DIPs converted per monitor |
 | Tint opacity | about 28%-38% | 34.5% |
-| Outer border | about 2 DIPs | 2 DIPs |
+| Outer border | Compact | 1.5 DIPs |
 
 Sharpness: PerMonitorV2, layout rounding, device-pixel snapping, Display/ClearType/Fixed text options, and zero residual entrance transform are enabled. No BlurEffect exists in the content tree.
 
@@ -497,7 +513,7 @@ Remaining differences: DWM acrylic strength and wallpaper colour vary by Windows
             };
             window.Show();
             window.UpdateLayout();
-            positioning.Position(window, NotificationPositioningService.BottomMarginPx, false, animation);
+            positioning.Position(window, NotificationPositioningService.EdgeMarginDip, false, animation);
             PumpDispatcher(TimeSpan.FromMilliseconds(250));
             CaptureVirtualScreen(Path.Combine(outputDir, vm.EventType.ToLowerInvariant() + ".png"));
             window.CloseNow();

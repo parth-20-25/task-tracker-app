@@ -1366,7 +1366,7 @@ async function ensureReferenceTables(client) {
             AND (
               design_team <> '3D'
               OR (
-                additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking')
+                additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
                 AND scope_type = 'project'
                 AND fixture_id IS NULL
               )

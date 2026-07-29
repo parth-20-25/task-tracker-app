@@ -104,11 +104,13 @@ export function PlannedTimeEditor({
     queryKey: ["project-planning", projectId],
     queryFn: () => fetchProjectPlannedTime(projectId as string),
     enabled: open && Boolean(projectId),
+    refetchOnWindowFocus: false,
   });
   const settingsQuery = useQuery({
     queryKey: ["project-planning", "pending"],
     queryFn: fetchPendingProjectPlanning,
     enabled: open && !projectId && localEditableStages.length > 0,
+    refetchOnWindowFocus: false,
   });
   const [unit, setUnit] = useState<PlannedUnit>(draft?.unit || "HOURS");
   const [values, setValues] = useState<Partial<Record<PlannedStage, string>>>(draft?.values || {});
@@ -199,7 +201,12 @@ export function PlannedTimeLoginPopup() {
   const { access, user } = useAuth();
   const queryClient = useQueryClient();
   const canPlan = access.canEditProjectPlannedTime && planningStagesForUser(user).length > 0;
-  const query = useQuery({ queryKey: ["project-planning", "pending"], queryFn: fetchPendingProjectPlanning, enabled: canPlan });
+  const query = useQuery({
+    queryKey: ["project-planning", "pending"],
+    queryFn: fetchPendingProjectPlanning,
+    enabled: canPlan,
+    refetchOnWindowFocus: false,
+  });
   const [dismissed, setDismissed] = useState(false);
   const [unit, setUnit] = useState<PlannedUnit>("HOURS");
   const [values, setValues] = useState<Record<string, Partial<Record<PlannedStage, string>>>>({});

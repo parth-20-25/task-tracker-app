@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
@@ -12,8 +12,9 @@ import { RouteContentSkeleton } from "@/components/LoadingSkeletons";
 import { PWAUpdatePrompt } from "@/components/PWAUpdatePrompt";
 import React, { Suspense } from "react";
 import { isDesignDepartment } from "@/lib/departments";
-import { isProjectAuthorityUser } from "@/lib/permissions";
+import { hasMappedTeamMembers, isProjectAuthorityUser } from "@/lib/permissions";
 import { getProtocolTargetPath } from "@/lib/protocolNavigation";
+import { queryClient } from "@/lib/queryClient";
 
 const Dashboard = React.lazy(() => import("./pages/Dashboard"));
 const MyTasks = React.lazy(() => import("./pages/MyTasks"));
@@ -27,13 +28,14 @@ const Batches = React.lazy(() => import("./pages/Batches"));
 const Issues = React.lazy(() => import("./pages/Issues"));
 const AdditionalDesignTasks = React.lazy(() => import("./pages/AdditionalDesignTasks"));
 const ViewScope = React.lazy(() => import("./pages/ViewScope"));
+const TeamActivity = React.lazy(() => import("./pages/TeamActivity"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
-const queryClient = new QueryClient();
 
 function AppLayoutRoutes() {
   const { access, user } = useAuth();
   const canAccessAdditionalDesignTasks = isDesignDepartment(user) || isProjectAuthorityUser(user);
+  const canViewTeamActivity = access.canViewTeamActivity && hasMappedTeamMembers(user);
 
   return (
     <AppLayout>
@@ -46,6 +48,7 @@ function AppLayoutRoutes() {
         {access.canViewProjectScope && <Route path="/view-scope" element={<ViewScope />} />}
         {canAccessAdditionalDesignTasks && <Route path="/additional-design-tasks" element={<AdditionalDesignTasks />} />}
         {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}
+        {canViewTeamActivity && <Route path="/team-activity" element={<TeamActivity />} />}
         {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}
         {access.canViewReports && <Route path="/reports" element={<Reports />} />}
         {access.canAccessAdminPanel && <Route path="/admin/*" element={<AdminPanel />} />}

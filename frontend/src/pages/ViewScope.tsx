@@ -33,7 +33,7 @@ function value(row: ProjectScopeRow, key: keyof ProjectScopeRow, decimals = fals
 }
 
 export default function ViewScope() {
-  const query = useQuery({ queryKey: ["project-scope"], queryFn: fetchProjectScope });
+  const query = useQuery({ queryKey: ["project-scope"], queryFn: fetchProjectScope, refetchOnWindowFocus: false });
   const projects = query.data?.projects ?? [];
 
   return (

@@ -33,6 +33,7 @@ export const PERMISSIONS = {
   RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS: "receive_executive_desktop_notifications",
   VIEW_PROJECT_SCOPE: "view_project_scope",
   EDIT_PROJECT_PLANNED_TIME: "edit_project_planned_time",
+  VIEW_TEAM_ACTIVITY: "view_team_activity",
   VIEW_SELF_ANALYTICS: "view_self_analytics",
   VIEW_DEPARTMENT_ANALYTICS: "view_department_analytics",
   VIEW_ALL_DEPARTMENTS_ANALYTICS: "view_all_departments_analytics",
@@ -83,6 +84,7 @@ export const PERMISSION_LABELS: Partial<Record<(typeof PERMISSION_OPTIONS)[numbe
   [PERMISSIONS.RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS]: "Receive Executive Desktop Notifications",
   [PERMISSIONS.VIEW_PROJECT_SCOPE]: "View Project Scope",
   [PERMISSIONS.EDIT_PROJECT_PLANNED_TIME]: "Edit Project Planned Time",
+  [PERMISSIONS.VIEW_TEAM_ACTIVITY]: "View Team Activity",
   [PERMISSIONS.CONTROL_DESIGN_WORKSPACE_VIEW]: "View Control Design Workspace",
   [PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ASSIGNED]: "View Assigned Control Design Projects",
   [PERMISSIONS.CONTROL_DESIGN_PROJECTS_VIEW_ALL]: "View All Control Design Projects",
@@ -194,6 +196,7 @@ export interface UiAccess {
   canViewControlDesignReports: boolean;
   canViewProjectScope: boolean;
   canEditProjectPlannedTime: boolean;
+  canViewTeamActivity: boolean;
 }
 
 const LEGACY_PERMISSION_MIGRATIONS: Record<string, string> = {
@@ -380,6 +383,12 @@ function normalizeRoleKey(value: unknown) {
     .replace(/^_+|_+$/g, "");
 }
 
+export function hasMappedTeamMembers(user: User | null | undefined) {
+  const employeeId = String(user?.employee_id || "").toLowerCase();
+  return (user?.visible_user_ids || []).some(
+    (visibleId) => String(visibleId || "").toLowerCase() !== employeeId,
+  );
+}
 export function buildUiAccess(user: User | null | undefined): UiAccess {
   const projectAuthority = isProjectAuthorityUser(user);
   const operationalController = isOperationalControllerUser(user);
@@ -435,6 +444,7 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canViewControlDesignReports = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REPORTS_VIEW);
   const canViewProjectScope = isProjectScopeExecutiveUser(user) && hasUserPermission(user, PERMISSIONS.VIEW_PROJECT_SCOPE);
   const canEditProjectPlannedTime = hasUserPermission(user, PERMISSIONS.EDIT_PROJECT_PLANNED_TIME);
+  const canViewTeamActivity = hasUserPermission(user, PERMISSIONS.VIEW_TEAM_ACTIVITY);
 
   return {
     canAssignTasks,
@@ -494,5 +504,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canViewControlDesignReports,
     canViewProjectScope,
     canEditProjectPlannedTime,
+    canViewTeamActivity,
   };
 }

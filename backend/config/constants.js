@@ -47,6 +47,7 @@ const PERMISSIONS = {
   RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS: "receive_executive_desktop_notifications",
   VIEW_PROJECT_SCOPE: "view_project_scope",
   EDIT_PROJECT_PLANNED_TIME: "edit_project_planned_time",
+  VIEW_TEAM_ACTIVITY: "view_team_activity",
   
   // New Strict Analytics Permissions
   VIEW_SELF_ANALYTICS: "view_self_analytics",
@@ -181,6 +182,7 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS, "Receive Executive Desktop Notifications", "Allows receiving executive desktop notifications for project release events."],
   [PERMISSIONS.VIEW_PROJECT_SCOPE, "View Project Scope", "Allows CEO and Director roles to view active project scope and planned hours."],
   [PERMISSIONS.EDIT_PROJECT_PLANNED_TIME, "Edit Project Planned Time", "Allows assigned Design leaders and co-leaders to edit authorized project planning stages."],
+  [PERMISSIONS.VIEW_TEAM_ACTIVITY, "View Team Activity", "Allows leaders and co-leaders to view activity for employees in their mapped team."],
   [PERMISSIONS.VIEW_SELF_ANALYTICS, "View Self Analytics", "Allows viewing own personal KPIs."],
   [PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS, "View Department Analytics", "Allows viewing department metrics and top 5 users."],
   [PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS, "View All Departments", "Allows cross-department comparison."],
@@ -264,6 +266,7 @@ const ROLE_DEFAULT_PERMISSIONS = {
     ...CONTROL_DESIGN_LEADERSHIP_PERMISSION_IDS,
   ],
   r3: [
+    PERMISSIONS.VIEW_TEAM_ACTIVITY,
     PERMISSIONS.ASSIGN_TASK,
     PERMISSIONS.TRANSFER_TASK,
     PERMISSIONS.APPROVE_COMPLETED_TASK,
@@ -282,6 +285,7 @@ const ROLE_DEFAULT_PERMISSIONS = {
     ...CONTROL_DESIGN_LEADERSHIP_PERMISSION_IDS,
   ],
   r4: [
+    PERMISSIONS.VIEW_TEAM_ACTIVITY,
     PERMISSIONS.ASSIGN_TASK,
     PERMISSIONS.TRANSFER_TASK,
     PERMISSIONS.APPROVE_COMPLETED_TASK,

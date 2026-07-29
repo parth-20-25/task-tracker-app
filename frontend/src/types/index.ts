@@ -68,6 +68,7 @@ export interface User {
   username?: string | null;
   username_changed_at?: string | null;
   bio?: string;
+  visible_user_ids?: string[];
   avatar_url?: string | null;
   avatar_bucket?: string | null;
   avatar_path?: string | null;

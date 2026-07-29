@@ -8,6 +8,10 @@ export const taskQueryKeys = {
   verificationQueue: ["tasks", "verification-queue"] as const,
 };
 
+export const teamActivityQueryKeys = {
+  all: ["team-activity"] as const,
+};
+
 export const notificationQueryKeys = {
   all: ["notifications"] as const,
   overdue: ["notifications", "overdue"] as const,

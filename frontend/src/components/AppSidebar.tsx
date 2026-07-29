@@ -16,13 +16,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { isDesignDepartment } from '@/lib/departments';
 import { shouldHideAdditionalDesignTasks } from '@/lib/additionalDesignTasks';
-import { isProjectAuthorityUser } from '@/lib/permissions';
+import { hasMappedTeamMembers, isProjectAuthorityUser } from '@/lib/permissions';
 import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
 
 export function AppSidebar() {
   const { user, role, access, logout } = useAuth();
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
+  const canViewTeamActivity = access.canViewTeamActivity && hasMappedTeamMembers(user);
   const includeTeamOverdueAlerts = Boolean(user?.employee_id)
     && (
       access.canViewTeamTasks
@@ -49,6 +50,7 @@ export function AppSidebar() {
 
   const workItems = [
     access.canViewTeamTasks ? { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList } : null,
+    canViewTeamActivity ? { title: 'Team Activity', url: '/team-activity', icon: Users } : null,
     access.canViewAnalytics ? { title: 'Analytics', url: '/analytics', icon: BarChart3 } : null,
     access.canViewReports ? { title: 'Reports', url: '/reports', icon: FileText } : null,
   ].filter(Boolean);

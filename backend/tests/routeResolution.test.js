@@ -159,3 +159,19 @@ test("control workflow API routes are mounted by createApp before auth", async (
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("project scope API routes are mounted by createApp before auth", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    for (const path of ["/api/project-scope", "/api/project-planning/pending"]) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`);
+
+      assert.equal(response.status, 401);
+      assert.match(await response.text(), /No token provided/);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

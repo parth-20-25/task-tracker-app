@@ -257,6 +257,15 @@ async function syncProjectScopePermissions(client) {
           IN ('team_leader', 'line_manager', 'co_leader', 'team_co_leader', 'shift_incharge')
     ON CONFLICT (role_id, permission_id) DO NOTHING
   `, [PERMISSIONS.EDIT_PROJECT_PLANNED_TIME]);
+
+  await client.query(`
+    INSERT INTO role_permissions (role_id, permission_id)
+    SELECT role.id, $1
+    FROM roles role
+    WHERE LOWER(BTRIM(REGEXP_REPLACE(COALESCE(role.name, role.id), '[^[:alnum:]]+', '_', 'g'), '_'))
+          IN ('team_leader', 'line_manager', 'co_leader', 'team_co_leader', 'shift_incharge')
+    ON CONFLICT (role_id, permission_id) DO NOTHING
+  `, [PERMISSIONS.VIEW_TEAM_ACTIVITY]);
 }
 async function syncRolePermissionJson(client) {
   await client.query(

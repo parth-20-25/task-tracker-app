@@ -28,6 +28,7 @@ const { controlWorkflowRoutes } = require("./routes/controlWorkflowRoutes");
 const workflowAnalyticsRoutes = require("./routes/workflowAnalyticsRoutes");
 const { batchRoutes } = require("./routes/batchRoutes");
 const { issueRoutes } = require("./routes/issueRoutes");
+const { projectScopeRoutes } = require("./routes/projectScopeRoutes");
 const { env } = require("./config/env");
 
 function createApp() {
@@ -59,6 +60,7 @@ function createApp() {
   app.use("/api", controlWorkflowRoutes);
   app.use("/api", batchRoutes);
   app.use("/api", issueRoutes);
+  app.use("/api", projectScopeRoutes);
   app.use("/api", analyticsRoutes);
   app.use("/api/analytics", overviewRoute);
   app.use("/api/analytics", deadlineHonestyRoute);

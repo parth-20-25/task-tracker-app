@@ -239,6 +239,25 @@ async function syncControlDesignProjectPermissions(client) {
   await syncControlDesignWorkspacePermissionForConfiguredRoles(client);
 }
 
+async function syncProjectScopePermissions(client) {
+  await client.query(`
+    INSERT INTO role_permissions (role_id, permission_id)
+    SELECT role.id, $1
+    FROM roles role
+    WHERE LOWER(BTRIM(REGEXP_REPLACE(COALESCE(role.name, role.id), '[^[:alnum:]]+', '_', 'g'), '_'))
+          IN ('ceo', 'director', 'director_ceo', 'ceo_director')
+    ON CONFLICT (role_id, permission_id) DO NOTHING
+  `, [PERMISSIONS.VIEW_PROJECT_SCOPE]);
+
+  await client.query(`
+    INSERT INTO role_permissions (role_id, permission_id)
+    SELECT role.id, $1
+    FROM roles role
+    WHERE LOWER(BTRIM(REGEXP_REPLACE(COALESCE(role.name, role.id), '[^[:alnum:]]+', '_', 'g'), '_'))
+          IN ('team_leader', 'line_manager', 'co_leader', 'team_co_leader', 'shift_incharge')
+    ON CONFLICT (role_id, permission_id) DO NOTHING
+  `, [PERMISSIONS.EDIT_PROJECT_PLANNED_TIME]);
+}
 async function syncRolePermissionJson(client) {
   await client.query(
     `
@@ -391,6 +410,7 @@ async function alignPermissionData(client) {
   );
 
   await syncControlDesignProjectPermissions(client);
+  await syncProjectScopePermissions(client);
   await syncNativeUploadPermissionFromLegacy(client);
   await syncRolePermissionJson(client);
 }
@@ -404,6 +424,7 @@ module.exports = {
   normalizeGrantablePermissionIds,
   normalizePermissionIds,
   seedPermissions,
+  syncProjectScopePermissions,
   syncControlDesignWorkspacePermissionForConfiguredRoles,
   syncNativeUploadPermissionFromLegacy,
 };

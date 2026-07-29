@@ -8,9 +8,12 @@ process.env.CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const {
   buildActiveTaskReminderNotification,
   buildActiveTaskSyncPayload,
+  buildCurrentTaskSelectionNotification,
   buildTaskAssignedOutboxEvent,
+  buildTaskUpdateRequiredOutboxEvent,
   hashDeviceToken,
   isDesktopActiveTaskForUser,
+  matchingReminderSlot,
   safeTokenEqual,
   validateDeepLinkPath,
 } = require("../services/desktopNotificationService");
@@ -68,7 +71,7 @@ test("active task reminder only includes actionable tasks assigned to the authen
   assert.equal(reminder.taskCount, 2);
   assert.equal(reminder.deepLink, "/tasks?status=active");
   assert.deepEqual(reminder.availableActions, ["OPEN_TASKS"]);
-  assert.deepEqual(reminder.taskItems, ["Drafting - 25-119 - OP20", "Correction - 25-119"]);
+  assert.deepEqual(reminder.taskItems, ["25-119 • OP20 • Drafting", "25-119 • Correction"]);
   assert.match(reminder.statusMessage, /1 overdue task/);
   assert.equal(isDesktopActiveTaskForUser(tasks[2], "940"), false);
   assert.equal(isDesktopActiveTaskForUser(tasks[3], "940"), false);
@@ -117,4 +120,26 @@ test("active task reminder is skipped when the employee has no actionable tasks"
   ]);
 
   assert.equal(reminder, null);
+});
+
+test("update-required outbox event is stable for one rejection cycle", () => {
+  const event = buildTaskUpdateRequiredOutboxEvent({ id: 607, assigned_user_id: "940", rejection_count: 1 }, "100", "Fix dimensions");
+  assert.equal(event.eventType, "TASK_UPDATE_REQUIRED");
+  assert.equal(event.dedupeKey, "task-update-required:607:940:2");
+  assert.equal(event.payload.reason, "Fix dimensions");
+});
+
+test("daily reminder slots use the Asia Kolkata clock and a bounded worker window", () => {
+  assert.deepEqual(matchingReminderSlot(["10:00", "15:00"], new Date("2026-07-22T04:31:00.000Z")), { slot: "10:00", localDate: "2026-07-22" });
+  assert.deepEqual(matchingReminderSlot(["10:00", "15:00"], new Date("2026-07-22T09:33:00.000Z")), { slot: "15:00", localDate: "2026-07-22" });
+  assert.equal(matchingReminderSlot(["10:00", "15:00"], new Date("2026-07-22T09:36:00.000Z")), null);
+});
+
+test("current-task selection exposes at most three server-authorized task choices", () => {
+  const tasks = [1, 2, 3, 4].map((id) => ({ id, title: `Task ${id}`, status: "assigned", assigned_to: "940", project_no: "25-119" }));
+  const notification = buildCurrentTaskSelectionNotification({ employee_id: "940" }, tasks, { now: new Date("2026-07-22T08:00:00.000Z") });
+  assert.equal(notification.eventType, "CURRENT_TASK_SELECTION");
+  assert.equal(notification.taskCount, 4);
+  assert.equal(notification.taskOptions.length, 3);
+  assert.deepEqual(notification.taskOptions.map((option) => option.taskId), ["1", "2", "3"]);
 });

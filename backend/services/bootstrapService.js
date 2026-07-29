@@ -1,6 +1,7 @@
 const { pool } = require("../db");
 const { ensureControlWorkflowSchema } = require("../repositories/controlWorkflowSchemaRepository");
 const { ensureDesignDepartmentSchema } = require("../repositories/designSchemaRepository");
+const { ensureProjectScopePlanningSchema } = require("../repositories/projectPlanningSchemaRepository");
 const { repairOrphanDesignProjects } = require("./workflowRecoveryService");
 const {
   ensureDesktopNotificationTables,
@@ -39,6 +40,7 @@ async function initDatabase() {
     await alignPermissionData(client);
     await ensurePerformanceAnalyticsTables(client);
     await ensureDesignDepartmentSchema(client);
+    await ensureProjectScopePlanningSchema(client);
     await ensureControlWorkflowSchema(client);
 
     console.log("[bootstrap] Skipping seed and demo data initialization.");

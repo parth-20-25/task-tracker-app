@@ -11,5 +11,10 @@ public enum NotificationActionType
     ReviewTask,
     ViewAudit,
     RemindMe,
+    SelectTask,
+    CompleteTask,
+    ContinueTask,
+    SwitchTask,
+    ViewDetails,
     OpenTracker,
 }

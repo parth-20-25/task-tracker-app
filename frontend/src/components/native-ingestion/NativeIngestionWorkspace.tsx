@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { fetchAllDepartments } from "@/api/adminApi";
+import { saveProjectPlannedTime } from "@/api/projectScopeApi";
 import {
   commitNativeIngestion,
   createNativeIngestionSession,
@@ -22,6 +23,7 @@ import {
   validateNativeIngestion,
 } from "@/api/nativeIngestionApi";
 import { Badge } from "@/components/ui/badge";
+import { PlannedTimeButton, type PlannedTimeDraft } from "@/components/ProjectPlannedTime";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,6 +39,7 @@ import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
 import { batchQueryKeys, projectQueryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
+import { classifyScopeFixture, planningStagesForUser } from "@/lib/projectScope";
 import type {
   NativeCommitResponse,
   NativeIngestionContext,
@@ -166,6 +169,8 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
   const [summary, setSummary] = useState<NativeValidationSummary | null>(null);
   const [busy, setBusy] = useState<BusyAction>("open");
   const [lastCommit, setLastCommit] = useState<NativeCommitResponse | null>(null);
+  const [plannedTimeDraft, setPlannedTimeDraft] = useState<PlannedTimeDraft | null>(null);
+  const editablePlanningStages = useMemo(() => planningStagesForUser(user), [user]);
 
   const needsDepartmentSelector = !context.department_id;
   const departmentsQuery = useQuery({
@@ -220,11 +225,13 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
     const populated = rows.filter(nativeRowHasData).length;
     const duplicateRows = rows.filter((row) => row.classification === "DUPLICATE").length;
     const invalidRows = rows.filter((row) => row.severity === "error").length;
+    const unclassifiedRows = rows.filter((row) => nativeRowHasData(row) && !classifyScopeFixture(row)).length;
     return {
       populated,
       valid: Math.max(0, populated - invalidRows),
       invalid: invalidRows,
       duplicate: duplicateRows,
+      unclassified: unclassifiedRows,
     };
   }, [rows]);
 
@@ -319,8 +326,27 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
     try {
       const result = await commitNativeIngestion(sessionId, context, rows);
       setLastCommit(result);
+      if (plannedTimeDraft) {
+        try {
+          await saveProjectPlannedTime(result.project_id, {
+            unit: plannedTimeDraft.unit,
+            stages: Object.fromEntries(editablePlanningStages.map((stage) => [stage, {
+              value: plannedTimeDraft.values[stage] === "" || plannedTimeDraft.values[stage] === undefined ? null : Number(plannedTimeDraft.values[stage]),
+              version: 0,
+            }])),
+          });
+          setPlannedTimeDraft(null);
+        } catch (planningError) {
+          toast({
+            title: "Project saved; planned time is still pending",
+            description: planningError instanceof Error ? planningError.message : "Planned time could not be saved.",
+            variant: "destructive",
+          });
+        }
+      }
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["project-planning"] });
       toast({
         title: "Native transaction committed",
         description: result.batch_id
@@ -540,6 +566,15 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
           <Download className="mr-2 h-4 w-4" />
           Download Template
         </Button>
+        {editablePlanningStages.length > 0 ? (
+          <PlannedTimeButton
+            projectId={context.project_id || lastCommit?.project_id}
+            projectNo={context.project_code}
+            projectName={context.project_name}
+            draft={plannedTimeDraft}
+            onDraftChange={setPlannedTimeDraft}
+          />
+        ) : null}
         <Button type="button" size="sm" variant="outline" disabled={isBusy || !sessionId || !contextReady(context)} onClick={runValidate}>
           <ShieldCheck className="mr-2 h-4 w-4" />
           Validate
@@ -558,6 +593,7 @@ function WorkspaceSurface({ onClose, mode = "upload", projectId, departmentId }:
           <SummaryPill label="Rows" value={summary?.total_rows ?? rowCounts.populated} tone="slate" />
           <SummaryPill label="Valid" value={summary?.valid_rows ?? rowCounts.valid} tone="green" />
           <SummaryPill label="Duplicates" value={summary?.duplicate_rows ?? rowCounts.duplicate} tone="amber" />
+          <SummaryPill label="Unclassified scope" value={rowCounts.unclassified} tone="amber" />
           <SummaryPill label="Invalid" value={summary?.invalid_rows ?? rowCounts.invalid} tone="red" />
         </div>
       </div>

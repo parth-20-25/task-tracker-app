@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { ensureDesignDepartmentSchema } = require('../backend/repositories/designSchemaRepository');
+const { ensureProjectScopePlanningSchema } = require('../backend/repositories/projectPlanningSchemaRepository');
 
 (async () => {
   const queries = [];
@@ -16,11 +17,12 @@ const { ensureDesignDepartmentSchema } = require('../backend/repositories/design
   try {
     console.log('Running ensureDesignDepartmentSchema with fake client...');
     await ensureDesignDepartmentSchema(fakeClient);
-    console.log('ensureDesignDepartmentSchema executed without throwing.');
+    await ensureProjectScopePlanningSchema(fakeClient);
+    console.log('Design and project-planning schema migrations executed without throwing.');
     console.log(`Total queries executed: ${queries.length}`);
     process.exit(0);
   } catch (err) {
-    console.error('Error executing ensureDesignDepartmentSchema:', err);
+    console.error('Error executing schema migration validation:', err);
     process.exit(1);
   }
 })();

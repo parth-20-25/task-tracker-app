@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, ClipboardList, Users, Settings, Shield, Building2, FileText, LogOut, ChevronDown, BarChart3,
-  MessageSquareWarning, PackageCheck, ListTodo,
+  MessageSquareWarning, PackageCheck, ListTodo, Table2,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/useAuth';
@@ -41,6 +41,7 @@ export function AppSidebar() {
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
     { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
     { title: 'Projects', url: '/batches', icon: PackageCheck },
+    ...(access.canViewProjectScope ? [{ title: 'View Scope', url: '/view-scope', icon: Table2 }] : []),
     ...((isDesignDepartment(user) || isProjectAuthorityUser(user)) && !shouldHideAdditionalDesignTasks(user)
       ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
       : []),

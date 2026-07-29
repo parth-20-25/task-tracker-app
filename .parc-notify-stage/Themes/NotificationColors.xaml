@@ -37,6 +37,17 @@
         <GradientStop Color="#EAE8D1BB" Offset="1" />
     </LinearGradientBrush>
 
+    <Color x:Key="NotificationCorrectionGlowColor">#E65A18</Color>
+    <SolidColorBrush x:Key="NotificationCorrectionAccentBrush" Color="#D94A16" />
+    <SolidColorBrush x:Key="NotificationCorrectionAccentHoverBrush" Color="#C53F12" />
+    <SolidColorBrush x:Key="NotificationCorrectionAccentPressedBrush" Color="#A93610" />
+    <SolidColorBrush x:Key="NotificationCorrectionBrightBorderBrush" Color="#FF9B58" />
+    <SolidColorBrush x:Key="NotificationCorrectionTintBrush" Color="#58F4A261" />
+    <SolidColorBrush x:Key="NotificationCorrectionIconContainerBrush" Color="#54FFFFFF" />
+    <LinearGradientBrush x:Key="NotificationCorrectionFallbackBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#F2FFE4D2" Offset="0" />
+        <GradientStop Color="#EAE6C4B5" Offset="1" />
+    </LinearGradientBrush>
     <Color x:Key="NotificationUrgentGlowColor">#D92D20</Color>
     <SolidColorBrush x:Key="NotificationUrgentAccentBrush" Color="#D92D20" />
     <SolidColorBrush x:Key="NotificationUrgentAccentHoverBrush" Color="#C7281D" />

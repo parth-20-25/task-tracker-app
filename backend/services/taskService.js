@@ -19,6 +19,7 @@ const {
 const { AppError } = require("../lib/AppError");
 const { isDesignDepartment } = require("../lib/designDepartment");
 const {
+  getAdditionalDesignTaskLabel,
   normalizeAdditionalDesignTaskKind,
   normalizeAdditionalDesignTeam,
   resolveAdditionalDesignTeamForUser,
@@ -109,7 +110,7 @@ const {
   shouldAdvanceFixtureWorkflow,
   shouldSubmitForVerification,
 } = require("./taskStateRules");
-const { enqueueTaskAssignedOutbox } = require("./desktopNotificationService");
+const { enqueueTaskAssignedOutbox, enqueueTaskUpdateRequiredOutbox } = require("./desktopNotificationService");
 const {
   DESIGN_2D_SUBDIVISION_NAME,
   is2DLeaderUser,
@@ -1447,7 +1448,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     deadline: resolvedDeadline.toISOString(),
   });
   const resolvedTitle = taskType === TASK_TYPES.ADDITIONAL_DESIGN
-    ? additionalTaskKind
+    ? getAdditionalDesignTaskLabel(additionalTaskKind)
     : taskType === TASK_TYPES.DESIGN_2D_COMPLETION
       ? formatDesign2DCompletionTaskName(requestedCompletionTaskCode, completionTaskRevision)
     : taskType === TASK_TYPES.DEPARTMENT_WORKFLOW
@@ -1455,7 +1456,7 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       : String(title || "").trim();
   const resolvedDescription = String(description || "").trim()
     || (taskType === TASK_TYPES.ADDITIONAL_DESIGN
-      ? `${additionalTaskKind} for ${resolvedFixtureNo || additionalProject?.project_name || resolvedProjectNo}`
+      ? `${getAdditionalDesignTaskLabel(additionalTaskKind)} for ${resolvedFixtureNo || additionalProject?.project_name || resolvedProjectNo}`
       : taskType === TASK_TYPES.DESIGN_2D_COMPLETION
         ? `${completionTaskDefinition.displayName} for ${resolvedFixtureNo || completionProject?.project_name || resolvedProjectNo}`
       : "");
@@ -2553,6 +2554,10 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
       submitted_at: lockedTask.submitted_at || lockedTask.completed_at || closedAt || new Date(),
       rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
     }, client);
+
+    if (next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
+      await enqueueTaskUpdateRequiredOutbox(lockedTask, user.employee_id, remarks, client);
+    }
 
     if (shouldAdvanceFixtureWorkflow(lockedTask, next.status)) {
       await advanceWorkflowAfterTaskApproval({

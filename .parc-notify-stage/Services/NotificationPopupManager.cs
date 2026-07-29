@@ -23,7 +23,7 @@ public sealed class NotificationPopupManager : IDisposable
     private DateTimeOffset _mutedUntil;
     private bool _disposed;
 
-    public NotificationPopupManager(NotificationActionHandler actions) : this((viewModel, action, cancellationToken) => actions.HandleAsync(viewModel, action.ActionType, cancellationToken)) { }
+    public NotificationPopupManager(NotificationActionHandler actions) : this((viewModel, action, cancellationToken) => actions.HandleAsync(viewModel, action, cancellationToken)) { }
 
     public NotificationPopupManager(Func<NotificationPopupViewModel, NotificationActionViewModel, CancellationToken, Task<string?>> executeAction, bool animationsEnabled = true, bool autoStartTimer = true, int maxVisible = 3)
     {
@@ -60,6 +60,7 @@ public sealed class NotificationPopupManager : IDisposable
         {
             LastPopupThreadId = Environment.CurrentManagedThreadId;
             var viewModel = _factory.Create(notification);
+            var captureMode = string.Equals(Environment.GetEnvironmentVariable("PARC_NOTIFY_CAPTURE_MODE"), "true", StringComparison.OrdinalIgnoreCase);
             window = new NotificationPopupWindow(viewModel, ExecuteActionAsync, ShowActionResult, MuteFor15Minutes, _animation, _autoStartTimer)
             {
                 WorkingArea = _positioning.ResolveActiveWorkingArea(),
@@ -67,8 +68,8 @@ public sealed class NotificationPopupManager : IDisposable
                 Visibility = Visibility.Visible,
                 WindowState = WindowState.Normal,
                 Topmost = true,
-                ShowActivated = false,
-                ShowInTaskbar = false,
+                ShowActivated = captureMode,
+                ShowInTaskbar = captureMode,
                 WindowStyle = WindowStyle.None,
                 ResizeMode = ResizeMode.NoResize,
             };
@@ -123,15 +124,14 @@ public sealed class NotificationPopupManager : IDisposable
         }
     }
 
-    private Task<string?> ExecuteActionAsync(NotificationPopupViewModel viewModel, NotificationActionViewModel action)
+    private async Task<string?> ExecuteActionAsync(NotificationPopupViewModel viewModel, NotificationActionViewModel action)
     {
-        if (action.ActionType != NotificationActionType.RemindMe)
+        var result = await _executeAction(viewModel, action, _lifetime.Token);
+        if (action.ActionType == NotificationActionType.RemindMe)
         {
-            return _executeAction(viewModel, action, CancellationToken.None);
+            _ = RemindLaterAsync(viewModel.Notification, _lifetime.Token);
         }
-
-        _ = RemindLaterAsync(viewModel.Notification, _lifetime.Token);
-        return Task.FromResult<string?>(null);
+        return result;
     }
 
     private async Task RemindLaterAsync(DesktopNotification notification, CancellationToken cancellationToken)
@@ -148,7 +148,7 @@ public sealed class NotificationPopupManager : IDisposable
     {
         return int.TryParse(Environment.GetEnvironmentVariable("PARC_NOTIFY_REMINDER_MINUTES"), out var minutes) && minutes > 0
             ? TimeSpan.FromMinutes(Math.Min(minutes, 1440))
-            : TimeSpan.FromMinutes(15);
+            : TimeSpan.FromMinutes(30);
     }
 
     private void ShowActionResult(string message, bool isError)

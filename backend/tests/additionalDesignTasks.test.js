@@ -7,6 +7,8 @@ const {
   ADDITIONAL_DESIGN_2D_TASK_KINDS,
   ADDITIONAL_DESIGN_3D_TASK_KINDS,
   ADDITIONAL_DESIGN_TASK_KINDS,
+  DESIGN_3D_ADDITIONAL_DAP_POINTS,
+  getAdditionalDesignTaskLabel,
   getAdditionalDesignTaskKindsForTeam,
   normalizeAdditionalDesignTaskKind,
   normalizeAdditionalDesignTeam,
@@ -34,6 +36,7 @@ test("additional design task catalog is subdivision specific", () => {
     "Wear-Out Data",
   ]);
   assert.deepEqual(ADDITIONAL_DESIGN_3D_TASK_KINDS, [
+    DESIGN_3D_ADDITIONAL_DAP_POINTS,
     "Project Process",
     "Pin Matrix",
     "PPT",
@@ -52,6 +55,8 @@ test("additional task kind and team normalization is canonical and rejects wrong
   assert.equal(normalizeAdditionalDesignTaskKind(" bom checking ", "2D"), "BOM Checking");
   assert.equal(normalizeAdditionalDesignTaskKind(" bom checking ", "3D"), null);
   assert.equal(normalizeAdditionalDesignTaskKind(" pin matrix ", "3D"), "Pin Matrix");
+  assert.equal(normalizeAdditionalDesignTaskKind("DAP Points", "3D"), DESIGN_3D_ADDITIONAL_DAP_POINTS);
+  assert.equal(getAdditionalDesignTaskLabel(DESIGN_3D_ADDITIONAL_DAP_POINTS), "DAP Points");
   assert.equal(normalizeAdditionalDesignTaskKind("Production Drawing", "3D"), null);
   assert.equal(normalizeAdditionalDesignTeam("2d"), "2D");
   assert.equal(normalizeAdditionalDesignTeam("4D"), null);
@@ -121,6 +126,22 @@ test("3D project additional proof policy makes only the requested project kinds 
   }), true);
 });
 
+test("DAP Points stays independent from the workflow DAP stage", () => {
+  assert.notEqual(DESIGN_3D_ADDITIONAL_DAP_POINTS.toLowerCase(), "dap");
+  assert.equal(isTaskWorkProofRequired({
+    task_type: "additional_design",
+    proof_required: true,
+    design_team: "3D",
+    scope_type: "project",
+    fixture_id: null,
+    additional_task_kind: DESIGN_3D_ADDITIONAL_DAP_POINTS,
+  }), true);
+  assert.equal(isTaskWorkProofRequired({
+    task_type: "department_workflow",
+    proof_required: true,
+    workflow_stage: "DAP",
+  }), false);
+});
 test("schema permits proof-free only for the six 3D project additional task kinds", () => {
   const sources = [
     fs.readFileSync(path.join(__dirname, "..", "migrations.js"), "utf8"),

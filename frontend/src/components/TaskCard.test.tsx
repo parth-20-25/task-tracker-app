@@ -113,6 +113,26 @@ describe("TaskCard proof policy", () => {
     }));
     expect(executeTaskAction).not.toHaveBeenCalled();
   });
+  it("shows DAP Upload Work Proof while allowing submission without a file", async () => {
+    executeTaskAction.mockResolvedValue(undefined);
+    render(<TaskCard task={task({
+      task_type: "department_workflow",
+      title: "DAP",
+      workflow_stage: "DAP",
+      additional_task_kind: undefined,
+      design_team: undefined,
+      scope_type: "fixture",
+      fixture_id: "fixture-1",
+      proof_required: true,
+      proof_url: [],
+    })} />);
+
+    expect(screen.getByText("Upload Work Proof")).toBeTruthy();
+    expect(screen.queryByText(/optional/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(executeTaskAction).toHaveBeenCalledWith(1, "submit", undefined));
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Work proof required" }));
+  });
   it("shows cancel for the original assigner even when task actions are hidden", async () => {
     auth.user = { employee_id: "LEAD-3D", id: "lead-3d", is_active: true };
     cancelTask.mockResolvedValue(undefined);

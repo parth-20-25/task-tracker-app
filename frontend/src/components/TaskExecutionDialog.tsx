@@ -22,7 +22,7 @@ import { formatAssigneeOption, formatEmployeeDisplay } from "@/lib/employeeDispl
 import { adminQueryKeys, batchQueryKeys, taskAssignmentQueryKeys } from "@/lib/queryKeys";
 import { getTaskCardDisplay } from "@/lib/taskDisplay";
 import { resolveImageUrl } from "@/lib/imageUrl";
-import { hasTaskWorkProof, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from "@/lib/taskProofPolicy";
+import { hasTaskWorkProof, isDapWorkflowTask, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from "@/lib/taskProofPolicy";
 
 
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -146,7 +146,9 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
     : false;
   const requiresWorkProof = requiresTaskWorkProof(task);
   const proofOptionalAdditionalTask = isProofOptionalThreeDProjectAdditionalTask(task);
-  const canUploadProof = task.can_upload_proof === true && requiresWorkProof;
+  const dapWorkflowTask = isDapWorkflowTask(task);
+  const showProofUpload = requiresWorkProof || dapWorkflowTask;
+  const canUploadProof = task.can_upload_proof === true && showProofUpload;
   const actorLevel = Number(user?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
   const assigneeLevel = Number(task.assignee?.role?.hierarchy_level ?? Number.POSITIVE_INFINITY);
   const canEditCompletion = task.status !== "closed" && (
@@ -156,7 +158,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
   );
   const proofUrls = task.proof_url ?? [];
   const hasKnownProof = hasTaskWorkProof(task);
-  const showProofTab = requiresWorkProof || hasKnownProof || attachments.length > 0;
+  const showProofTab = showProofUpload || hasKnownProof || attachments.length > 0;
   const canTransferTask = false;
   const transferCompletion = Number(completionInput);
   const transferRemaining = Number.isInteger(transferCompletion) ? Math.max(0, 100 - transferCompletion) : 0;
@@ -801,16 +803,18 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                   This task is completed. Proof documents are locked and available for viewing only.
                 </div>
               )}
-              {requiresWorkProof && !canUploadProof && (
+              {showProofUpload && !canUploadProof && (
                 <div className="bg-muted border rounded-lg p-3 text-sm text-muted-foreground">
                   Only the assignee can upload or remove proof for this task.
                 </div>
               )}
-              {requiresWorkProof ? (
+              {showProofUpload ? (
                 <>
-              <div className="flex items-center gap-3">
-                <input
-                  type="file"
+                  <Label htmlFor="task-work-proof" className="text-xs font-semibold">Upload Work Proof</Label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      id="task-work-proof"
+                      type="file"
                   accept={task.task_type === "additional_design" ? ADDITIONAL_DESIGN_FILE_ACCEPT : "image/*"}
                   ref={fileInputRef}
                   style={{ display: "none" }}
@@ -882,7 +886,7 @@ export function TaskExecutionDialog({ task }: TaskExecutionDialogProps) {
                 </>
               ) : null}
 
-              {requiresWorkProof && pendingProofFile ? (
+              {showProofUpload && pendingProofFile ? (
                 <div className="rounded-lg border bg-slate-50/60 p-3">
                   <div className="flex flex-col gap-3 sm:flex-row">
                     <div className="h-40 w-full overflow-hidden rounded-md border bg-background sm:w-56">

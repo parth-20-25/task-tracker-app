@@ -26,6 +26,7 @@ const DesignReportViewPage = React.lazy(() => import("./pages/DesignReportViewPa
 const Batches = React.lazy(() => import("./pages/Batches"));
 const Issues = React.lazy(() => import("./pages/Issues"));
 const AdditionalDesignTasks = React.lazy(() => import("./pages/AdditionalDesignTasks"));
+const ViewScope = React.lazy(() => import("./pages/ViewScope"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
@@ -42,6 +43,7 @@ function AppLayoutRoutes() {
         <Route path="/tasks/:taskId" element={<TaskDetail />} />
         <Route path="/issues" element={<Issues />} />
         <Route path="/batches" element={<Batches />} />
+        {access.canViewProjectScope && <Route path="/view-scope" element={<ViewScope />} />}
         {canAccessAdditionalDesignTasks && <Route path="/additional-design-tasks" element={<AdditionalDesignTasks />} />}
         {access.canViewTeamTasks && <Route path="/team-tasks" element={<TeamTasks />} />}
         {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}

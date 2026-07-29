@@ -11,7 +11,8 @@ public sealed class NotificationThemeService
     {
         "TASK_DUE_TODAY" or "APPROVAL_REQUESTED" or "APPROVAL_PENDING_TOO_LONG"
             or "TASK_OVERDUE_REMINDER_1" or "TASK_OVERDUE_REMINDER_2" => NotificationSeverity.Reminder,
-        "TASK_OVERDUE" or "TASK_REJECTED" or "TASK_UPDATE_REQUIRED" or "WORKFLOW_BLOCKED"
+        "TASK_UPDATE_REQUIRED" or "TASK_REJECTED" => NotificationSeverity.Correction,
+        "TASK_OVERDUE" or "WORKFLOW_BLOCKED"
             or "CRITICAL_TASK_ACTION_REQUIRED" or "ACTION_FAILED" => NotificationSeverity.Urgent,
         "TASK_OVERDUE_EXECUTIVE_ESCALATION" or "PROJECT_DEADLINE_AT_RISK"
             or "CRITICAL_WORKFLOW_ESCALATION" or "CEO_DIRECTOR_ESCALATION" => NotificationSeverity.Escalation,

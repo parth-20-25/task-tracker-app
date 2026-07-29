@@ -14,7 +14,7 @@ import { toast } from "@/hooks/use-toast";
 import { formatAssigneeOption } from "@/lib/employeeDisplay";
 import { formatProjectNumber } from "@/lib/projectDisplay";
 import { adminQueryKeys, analyticsQueryKeys, taskAssignmentQueryKeys, taskQueryKeys } from "@/lib/queryKeys";
-import { ADDITIONAL_DESIGN_TASK_CATALOG, resolveDesignTeamFromUser } from "@/lib/additionalDesignTasks";
+import { getAdditionalDesignTaskLabel, ADDITIONAL_DESIGN_TASK_CATALOG, resolveDesignTeamFromUser } from "@/lib/additionalDesignTasks";
 import { requiresTaskWorkProof } from "@/lib/taskProofPolicy";
 import type { AdditionalDesignTaskKind, Priority, Task } from "@/types";
 
@@ -135,7 +135,7 @@ export function AdditionalDesignTaskAssignment() {
       setDueDate(defaultDueDate());
       setPriority("medium");
       setNotes("");
-      toast({ title: "Additional task assigned", description: `${taskKind} was added to the ${designTeam} queue.` });
+      toast({ title: "Additional task assigned", description: `${getAdditionalDesignTaskLabel(taskKind)} was added to the ${designTeam} queue.` });
     },
     onError: (error) => {
       toast({
@@ -168,7 +168,7 @@ export function AdditionalDesignTaskAssignment() {
             <Select value={taskKind} onValueChange={(value) => setTaskKind(value as AdditionalDesignTaskKind)}>
               <SelectTrigger><SelectValue placeholder="Select task" /></SelectTrigger>
               <SelectContent>
-                {taskKinds.map((kind) => <SelectItem key={kind} value={kind}>{kind}</SelectItem>)}
+                {taskKinds.map((kind) => <SelectItem key={kind} value={kind}>{getAdditionalDesignTaskLabel(kind)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

@@ -4,8 +4,10 @@ const { findTaskById } = require("../repositories/tasksRepository");
 const { findUserByEmployeeId } = require("../repositories/usersRepository");
 const { canAccessTask, hasPermission, isTaskAssignee } = require("./accessControlService");
 const { updateTaskForUser } = require("./taskService");
+const { markTaskAsCurrent, recordActioned } = require("./desktopNotificationService");
 
 const ACTION_SOURCE = "desktop_notification_agent";
+const hasNotificationId = (value) => Number.isInteger(Number(value)) && Number(value) > 0;
 
 function normalizeTaskId(taskId) {
   const normalized = Number(taskId);
@@ -64,7 +66,7 @@ function auditMetadata(device) {
   };
 }
 
-async function applyDesktopTaskAction({ device, taskId, action, allowedStatus, idempotent, actionLabel, successMessage, invalidMessage }) {
+async function applyDesktopTaskAction({ device, taskId, notificationId, action, allowedStatus, idempotent, actionLabel, successMessage, invalidMessage }) {
   const normalizedTaskId = normalizeTaskId(taskId);
   const user = await resolveDeviceUser(device);
   const task = await findTaskById(normalizedTaskId);
@@ -76,6 +78,10 @@ async function applyDesktopTaskAction({ device, taskId, action, allowedStatus, i
   assertDesktopActionAllowed(user, task, actionLabel);
 
   if (idempotent(task)) {
+    if (hasNotificationId(notificationId)) {
+      await markTaskAsCurrent(device, normalizedTaskId);
+      await recordActioned(device, Number(notificationId), action);
+    }
     return success(task, successMessage);
   }
 
@@ -85,6 +91,7 @@ async function applyDesktopTaskAction({ device, taskId, action, allowedStatus, i
 
   try {
     const updatedTask = await updateTaskForUser(user, normalizedTaskId, { action }, { auditMetadata: auditMetadata(device) });
+    if (hasNotificationId(notificationId)) await recordActioned(device, Number(notificationId), action);
     return success(updatedTask, successMessage);
   } catch (error) {
     if (error instanceof AppError && error.statusCode === 400) {
@@ -94,10 +101,11 @@ async function applyDesktopTaskAction({ device, taskId, action, allowedStatus, i
   }
 }
 
-async function startTaskFromDesktopNotification(device, taskId) {
+async function startTaskFromDesktopNotification(device, taskId, notificationId = null) {
   return applyDesktopTaskAction({
     device,
     taskId,
+    notificationId,
     action: "start",
     allowedStatus: TASK_STATUSES.ASSIGNED,
     idempotent: (task) => task.status === TASK_STATUSES.IN_PROGRESS,
@@ -107,10 +115,11 @@ async function startTaskFromDesktopNotification(device, taskId) {
   });
 }
 
-async function startCorrectionFromDesktopNotification(device, taskId) {
+async function startCorrectionFromDesktopNotification(device, taskId, notificationId = null) {
   return applyDesktopTaskAction({
     device,
     taskId,
+    notificationId,
     action: "resume",
     allowedStatus: TASK_STATUSES.REWORK,
     idempotent: (task) => task.status === TASK_STATUSES.IN_PROGRESS
@@ -122,8 +131,37 @@ async function startCorrectionFromDesktopNotification(device, taskId) {
   });
 }
 
+async function selectCurrentTaskFromDesktopNotification(device, taskId, notificationId = null) {
+  const normalizedTaskId = normalizeTaskId(taskId);
+  const task = await findTaskById(normalizedTaskId);
+  if (!task) throw new AppError(404, "Task not found.");
+  if (task.status === TASK_STATUSES.IN_PROGRESS) {
+    const user = await resolveDeviceUser(device);
+    assertDesktopActionAllowed(user, task, "select this task");
+    await markTaskAsCurrent(device, normalizedTaskId);
+    if (hasNotificationId(notificationId)) await recordActioned(device, Number(notificationId), "select-current");
+    return success(task, "Current working task updated.");
+  }
+  if (task.status === TASK_STATUSES.ASSIGNED) return startTaskFromDesktopNotification(device, normalizedTaskId, notificationId);
+  if ([TASK_STATUSES.ON_HOLD, TASK_STATUSES.REWORK].includes(task.status)) {
+    return applyDesktopTaskAction({
+      device,
+      taskId: normalizedTaskId,
+      notificationId,
+      action: "resume",
+      allowedStatus: task.status,
+      idempotent: () => false,
+      actionLabel: "select this task",
+      successMessage: "Current working task updated.",
+      invalidMessage: "This task cannot be selected from its current status.",
+    });
+  }
+  throw new AppError(409, "This task cannot be selected from its current status.");
+}
+
 module.exports = {
   ACTION_SOURCE,
+  selectCurrentTaskFromDesktopNotification,
   startCorrectionFromDesktopNotification,
   startTaskFromDesktopNotification,
 };

@@ -102,7 +102,8 @@ internal static class Program
             {
                 [NotificationSeverity.Info] = ["TASK_ASSIGNED", "TASKS_BULK_ASSIGNED", "TASK_REASSIGNED", "TASK_CANCELLED", "PROJECT_RELEASED", "PROJECT_COMPLETED", "ECN_CREATED"],
                 [NotificationSeverity.Reminder] = ["TASK_DUE_TODAY", "APPROVAL_REQUESTED", "APPROVAL_PENDING_TOO_LONG", "TASK_OVERDUE_REMINDER_1", "TASK_OVERDUE_REMINDER_2"],
-                [NotificationSeverity.Urgent] = ["TASK_OVERDUE", "TASK_REJECTED", "TASK_UPDATE_REQUIRED", "WORKFLOW_BLOCKED", "CRITICAL_TASK_ACTION_REQUIRED"],
+                [NotificationSeverity.Correction] = ["TASK_REJECTED", "TASK_UPDATE_REQUIRED"],
+                [NotificationSeverity.Urgent] = ["TASK_OVERDUE", "WORKFLOW_BLOCKED", "CRITICAL_TASK_ACTION_REQUIRED"],
                 [NotificationSeverity.Escalation] = ["TASK_OVERDUE_EXECUTIVE_ESCALATION", "PROJECT_DEADLINE_AT_RISK", "CRITICAL_WORKFLOW_ESCALATION", "CEO_DIRECTOR_ESCALATION"],
             };
             foreach (var tier in expectedSeverities)
@@ -130,12 +131,26 @@ internal static class Program
             Equal(assigned.PrimaryTaskText, "Drafting Checking 01", "compact task summary");
             var bulkSummary = factory.CreateSamples().Single(item => item.EventType == "TASKS_BULK_ASSIGNED");
             Equal(bulkSummary.PrimaryTaskText, "Drafting Checking 01", "compact bulk primary task");
-            Equal(bulkSummary.TaskSummary, "Drafting Checking 01  +2 more tasks", "compact bulk task summary");
+            Equal(bulkSummary.TaskSummary, "Drafting Checking 01  +3 more tasks", "compact bulk task summary");
             Equal(assigned.Metadata, "Project 25-119  \u2022  Fixture OP20", "metadata format");
             Equal(assigned.Severity, NotificationSeverity.Info, "assigned info severity");
             Equal(assigned.Actions.Count, 2, "two action maximum");
             Equal(assigned.Actions[0].IsPrimary, false, "open task secondary");
-            Equal(assigned.Actions[1].IsPrimary, true, "start task primary");
+            Equal(assigned.Actions[1].IsPrimary, true, "start task primary");            Equal(assigned.CardWidth, 430d, "standard card width");
+            Equal(assigned.CardHeight, 285d, "standard card height");
+            var correction = factory.Create(new DesktopNotification { Id = 1846, EventType = "TASK_UPDATE_REQUIRED", EntityType = "task", EntityId = "608", TaskName = "Drawing Correction", StatusMessage = "Fix the marked dimensions", AvailableActions = ["OPEN_TASK", "START_CORRECTION"] });
+            Equal(correction.Severity, NotificationSeverity.Correction, "update required correction severity");
+            Equal(correction.EventTitle, "Update required", "update required exact title");
+            var summary = factory.Create(new DesktopNotification { Id = -2, EventType = "ACTIVE_TASK_REMINDER", EntityType = "local", EntityId = "active-tasks", Title = "You have 5 active tasks", TaskCount = 5, TaskItems = ["25-119 • OP20 • Drafting", "25-119 • OP30 • PDF", "25-120 • BOM"], AvailableActions = ["OPEN_TASKS"] });
+            Equal(summary.CardHeight, 300d, "summary card height");
+            Equal(summary.TaskItems.Count, 3, "summary maximum visible rows");
+            Equal(summary.MoreTasksText, "+2 more tasks", "summary remaining count");
+            var selection = factory.Create(new DesktopNotification { Id = -3, EventType = "CURRENT_TASK_SELECTION", EntityType = "local", EntityId = "current-task-selection", TaskCount = 4, TaskItems = ["A", "B", "C"], TaskOptions = [new("1", "A"), new("2", "B"), new("3", "C")], AvailableActions = ["OPEN_TASKS"] });
+            Equal(selection.TaskChoices.Count, 3, "current task selection choices");
+            Equal(selection.TaskItems.Count, 0, "selection rows are actionable only once");
+            var progress = factory.Create(new DesktopNotification { Id = 1847, EventType = "TASK_PROGRESS_UPDATE", EntityType = "task", EntityId = "607", TaskName = "Drafting", AvailableActions = ["COMPLETE_TASK", "CONTINUE", "SWITCH_TASK"] });
+            Equal(progress.Actions.Select(action => action.Label).SequenceEqual(["Complete Task", "Continue", "Switch Task"]), true, "two-hour progress actions");
+            Equal(progress.MaxCardHeight, 320d, "absolute popup height cap");
             Equal(((SolidColorBrush)priorities[0].AccentBrush).Color, (MediaColor)MediaColorConverter.ConvertFromString("#0878D1"), "info blue theme");
             Equal(((SolidColorBrush)priorities[1].AccentBrush).Color, (MediaColor)MediaColorConverter.ConvertFromString("#D98700"), "reminder amber theme");
             Equal(((SolidColorBrush)priorities[2].AccentBrush).Color, (MediaColor)MediaColorConverter.ConvertFromString("#D92D20"), "urgent red theme");
@@ -143,7 +158,7 @@ internal static class Program
             Equal(priorities[1].Actions.Select(action => action.Label).SequenceEqual(["Open Task", "Remind Me"]), true, "due-today reminder actions");
             Equal(priorities[2].Actions.Select(action => action.Label).SequenceEqual(["Open Task", "Start Now"]), true, "overdue actions");
             Equal(priorities[3].Actions.Select(action => action.Label).SequenceEqual(["Open Task", "View Details"]), true, "escalation actions");
-            Equal(NotificationPopupManager.ReminderDelay(), TimeSpan.FromMinutes(15), "remind me default delay");
+            Equal(NotificationPopupManager.ReminderDelay(), TimeSpan.FromMinutes(30), "remind me default delay");
             Equal(typeof(DesktopNotification).GetProperties().Any(property => property.Name.Contains("Color", StringComparison.OrdinalIgnoreCase) || property.Name.Contains("Brush", StringComparison.OrdinalIgnoreCase) || property.Name.Contains("Style", StringComparison.OrdinalIgnoreCase)), false, "server cannot supply visual styles");
 
             var released = factory.Create(new DesktopNotification
@@ -163,7 +178,7 @@ internal static class Program
             });
             Equal(released.EventTitle, "Project released", "released title");
             Equal(released.TaskName, "Project 25-119", "released primary text");
-            Equal(released.Metadata, "Customer Customer Name", "released customer metadata");
+            Equal(released.Metadata, "Project Name  •  Customer Customer Name", "released customer metadata");
             Equal(released.Actions.Count, 2, "released actions");
             Equal(released.Actions[0].ActionType, NotificationActionType.OpenProject, "open project action");
             Equal(released.Actions[1].ActionType, NotificationActionType.ViewAudit, "view audit action");
@@ -190,15 +205,15 @@ internal static class Program
             {
                 Equal(renderingWindow.UseLayoutRounding, true, "popup root layout rounding");
                 Equal(renderingWindow.SnapsToDevicePixels, true, "popup root pixel snapping");
-                Equal(renderingWindow.AllowsTransparency, false, "popup preserves ClearType-compatible window");
+                Equal(renderingWindow.AllowsTransparency, true, "popup uses transparent outer window");
                 Equal(renderingWindow.ShowActivated, false, "popup does not activate");
                 Equal(renderingWindow.Focusable, false, "popup cannot take keyboard focus");
-                Equal(renderingWindow.Width, 365d, "fixed popup width");
-                Equal(renderingWindow.Height, 172d, "fixed popup height");
-                Equal(renderingWindow.MinWidth, 365d, "fixed minimum width");
-                Equal(renderingWindow.MaxWidth, 365d, "fixed maximum width");
-                Equal(renderingWindow.MinHeight, 172d, "fixed minimum height");
-                Equal(renderingWindow.MaxHeight, 172d, "fixed maximum height");
+                Equal(renderingWindow.Width, 430d, "fixed popup width");
+                Equal(renderingWindow.Height, 285d, "fixed popup height");
+                Equal(renderingWindow.MinWidth, 430d, "fixed minimum width");
+                Equal(renderingWindow.MaxWidth, 430d, "fixed maximum width");
+                Equal(renderingWindow.MinHeight, 285d, "fixed minimum height");
+                Equal(renderingWindow.MaxHeight, 320d, "fixed maximum height");
                 Equal(renderingWindow.SizeToContent, SizeToContent.Manual, "content cannot grow popup");
                 Equal(renderingWindow.ResizeMode, ResizeMode.NoResize, "manual resizing disabled");
                 Equal(TextOptions.GetTextFormattingMode(renderingWindow), TextFormattingMode.Display, "popup display text formatting");
@@ -215,8 +230,8 @@ internal static class Program
                 Equal(acrylic is not null, true, "acrylic layer present");
                 Equal(testPopupTemplate.FallbackBrush is LinearGradientBrush, true, "translucent gradient fallback present");
                 var logo = (WpfImage)renderingWindow.FindName("LogoImage");
-                Equal(logo.Width, 86d, "compact logo rendered width");
-                Equal(logo.Height, 25d, "compact logo rendered height");
+                Equal(logo.Width, 136d, "compact logo rendered width");
+                Equal(logo.Height, 42d, "compact logo rendered height");
                 Equal(logo.Stretch, Stretch.Uniform, "logo aspect ratio preserved");
                 Equal(RenderOptions.GetBitmapScalingMode(logo), BitmapScalingMode.HighQuality, "logo high-quality scaling");
                 using var logoResource = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/ParcNotify.Agent;component/Assets/PARCLogo-Notification.png"))?.Stream;
@@ -283,9 +298,9 @@ internal static class Program
             Equal(correctedBounds.Height, 215, "125 percent popup height valid");
             Equal(workingArea.Right - correctedBounds.Right, 20, "16 DIP right margin at 125 percent");
             Equal(workingArea.Bottom - correctedBounds.Bottom, 20, "16 DIP bottom margin at 125 percent");
-            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 365, 172, false, correctedBounds, workingArea), true, "valid rendered popup accepted");
-            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 365, 172, true, correctedBounds, workingArea), false, "rendering failure blocks displayed acknowledgement");
-            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 365, 172, false, new System.Drawing.Rectangle(3000, 3000, 456, 215), workingArea), false, "off-screen popup blocks displayed acknowledgement");
+            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 430, 285, false, correctedBounds, workingArea), true, "valid rendered popup accepted");
+            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 430, 285, true, correctedBounds, workingArea), false, "rendering failure blocks displayed acknowledgement");
+            Equal(NotificationPositioningService.IsDisplayProofValid(true, true, true, Visibility.Visible, WindowState.Normal, 430, 285, false, new System.Drawing.Rectangle(3000, 3000, 456, 215), workingArea), false, "off-screen popup blocks displayed acknowledgement");
 
             var actionGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var actionExecutions = 0;
@@ -345,10 +360,10 @@ internal static class Program
         {
             var window = new NotificationPopupWindow(vm, (_, _) => Task.FromResult<string?>(null), (_, _) => { }, () => { }, new NotificationAnimationService(), autoStartTimer: false);
             var content = (FrameworkElement)window.Content;
-            content.Width = 365;
-            content.Height = 172;
-            content.Measure(new System.Windows.Size(365, 172));
-            content.Arrange(new Rect(0, 0, 365, 172));
+            content.Width = vm.CardWidth;
+            content.Height = vm.CardHeight;
+            content.Measure(new System.Windows.Size(vm.CardWidth, vm.CardHeight));
+            content.Arrange(new Rect(0, 0, vm.CardWidth, vm.CardHeight));
             content.UpdateLayout();
 
             var width = Math.Max(1, (int)Math.Ceiling(content.ActualWidth));
@@ -451,15 +466,15 @@ The captures use the real WPF `NotificationPopupWindow` at native desktop resolu
 
 | Element | Reference target | Implemented |
 | --- | ---: | ---: |
-| Card width | 365 DIPs | 365 DIPs |
-| Fixed height | 172 DIPs | 172 DIPs |
-| Logo | Compact | 86 x 25 DIPs |
-| Header | Compact | 31 DIPs |
-| Icon container | Compact | 32 x 32 DIPs |
+| Card width | 430 DIPs | 430 DIPs |
+| Fixed height | 285/300 DIPs | 285/300 DIPs |
+| Logo | Up to 140 x 48 DIPs | 136 x 42 DIPs |
+| Header | Compact | 58 DIPs |
+| Icon container | Compact | 58 x 58 DIPs |
 | Button height | Compact | 30 DIPs |
 | Button gap | Compact | 6 DIPs |
-| Corner radius | Compact | 12 DIPs |
-| Screen margin | 16 DIPs | 16 DIPs converted per monitor |
+| Corner radius | 18 DIPs | 18 DIPs |
+| Screen margin | 20 DIPs | 20 DIPs converted per monitor |
 | Tint opacity | about 28%-38% | 34.5% |
 | Outer border | Compact | 1.5 DIPs |
 

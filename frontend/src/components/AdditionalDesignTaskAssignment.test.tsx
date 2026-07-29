@@ -171,7 +171,7 @@ describe("AdditionalDesignTaskAssignment subdivision catalog", () => {
   it("shows exactly the Design 3D project task catalog and hides Team and Fixture fields", async () => {
     renderAssignment();
 
-    for (const taskKind of ["Project Process", "Pin Matrix", "PPT", "CBO", "Line Layout", "CDRM", "Print", "Drafting Checking"]) {
+    for (const taskKind of ["DAP Points", "Project Process", "Pin Matrix", "PPT", "CBO", "Line Layout", "CDRM", "Print", "Drafting Checking"]) {
       expect(await screen.findByRole("option", { name: taskKind })).toBeInTheDocument();
     }
 
@@ -227,11 +227,11 @@ describe("AdditionalDesignTaskAssignment subdivision catalog", () => {
       task_type: "additional_design",
       project_id: "project-1",
       assigned_to: "EMP-3D-1",
-      additional_task_kind: "Project Process",
+      additional_task_kind: "DESIGN_3D_ADDITIONAL_DAP_POINTS",
       design_team: "3D",
       fixture_id: null,
       scope_type: "project",
-      proof_required: false,
+      proof_required: true,
     }));
   });
 

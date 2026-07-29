@@ -10,8 +10,8 @@ namespace ParcNotify.Agent.Services;
 
 public sealed class NotificationPositioningService
 {
-    public const double EdgeMarginDip = 16;
-    public const double StackGapDip = 16;
+    public const double EdgeMarginDip = 20;
+    public const double StackGapDip = 12;
     private static readonly IntPtr HwndTopmost = new(-1);
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoActivate = 0x0010;

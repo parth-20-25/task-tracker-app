@@ -14,7 +14,7 @@ import { formatEmployeeDisplay } from '@/lib/employeeDisplay';
 import { getTaskCardDisplay } from '@/lib/taskDisplay';
 import { resolveImageUrl } from '@/lib/imageUrl';
 import { canShowTaskCancelAction } from '@/lib/taskCancellation';
-import { hasTaskWorkProof, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from '@/lib/taskProofPolicy';
+import { hasTaskWorkProof, isDapWorkflowTask, isProofOptionalThreeDProjectAdditionalTask, requiresTaskWorkProof } from '@/lib/taskProofPolicy';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TaskCancelDialog } from '@/components/TaskCancelDialog';
@@ -45,6 +45,7 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
   const requiresWorkProof = requiresTaskWorkProof(task);
   const hasWorkProof = hasTaskWorkProof(task);
   const proofOptionalAdditionalTask = isProofOptionalThreeDProjectAdditionalTask(task);
+  const dapWorkflowTask = isDapWorkflowTask(task);
   const isCompletionTask = task.task_type === 'design_2d_completion';
   const isCompletedRevision = isCompletionTask
     && task.status === 'closed'
@@ -242,7 +243,7 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
         )}
 
         <div className="flex gap-2 pt-1 flex-wrap">
-          {(requiresWorkProof || hasWorkProof) ? <TaskExecutionDialog task={task} /> : null}
+          {(requiresWorkProof || dapWorkflowTask || hasWorkProof) ? <TaskExecutionDialog task={task} /> : null}
           {showActions && isOwnTask && (
             <>
             {(task.status === 'assigned' || task.status === 'rework') && (

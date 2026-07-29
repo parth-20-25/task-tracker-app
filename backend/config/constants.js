@@ -45,6 +45,8 @@ const PERMISSIONS = {
   VIEW_REPORTS: "can_view_reports",
   EXPORT_REPORTS: "can_export_reports",
   RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS: "receive_executive_desktop_notifications",
+  VIEW_PROJECT_SCOPE: "view_project_scope",
+  EDIT_PROJECT_PLANNED_TIME: "edit_project_planned_time",
   
   // New Strict Analytics Permissions
   VIEW_SELF_ANALYTICS: "view_self_analytics",
@@ -177,6 +179,8 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.VIEW_REPORTS, "View Reports", "Allows viewing reports."],
   [PERMISSIONS.EXPORT_REPORTS, "Export Reports", "Allows exporting reports."],
   [PERMISSIONS.RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS, "Receive Executive Desktop Notifications", "Allows receiving executive desktop notifications for project release events."],
+  [PERMISSIONS.VIEW_PROJECT_SCOPE, "View Project Scope", "Allows CEO and Director roles to view active project scope and planned hours."],
+  [PERMISSIONS.EDIT_PROJECT_PLANNED_TIME, "Edit Project Planned Time", "Allows assigned Design leaders and co-leaders to edit authorized project planning stages."],
   [PERMISSIONS.VIEW_SELF_ANALYTICS, "View Self Analytics", "Allows viewing own personal KPIs."],
   [PERMISSIONS.VIEW_DEPARTMENT_ANALYTICS, "View Department Analytics", "Allows viewing department metrics and top 5 users."],
   [PERMISSIONS.VIEW_ALL_DEPARTMENTS_ANALYTICS, "View All Departments", "Allows cross-department comparison."],

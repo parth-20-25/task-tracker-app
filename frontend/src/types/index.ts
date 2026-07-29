@@ -7,6 +7,7 @@ export type LifecycleStatus = 'assigned' | 'in_progress' | 'rework' | 'completed
 export type TaskType = 'department_workflow' | 'custom' | 'additional_design' | 'design_2d_completion';
 export type TaskScopeType = 'project' | 'fixture';
 export type AdditionalDesignTaskKind =
+  | 'DESIGN_3D_ADDITIONAL_DAP_POINTS'
   | 'Drafting'
   | 'Print & Drafting Checking'
   | 'BOM Checking'

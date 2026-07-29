@@ -3,10 +3,11 @@ const { pool } = require("../db");
 const { logger } = require("../lib/logger");
 const {
   authenticateDesktopDevice,
-  buildActiveTaskSyncPayload,
+  buildActiveTaskSyncForDevice,
   listPendingForDevice,
   markSentToDevice,
   recordClicked,
+  recordDelivered,
   recordDisplayed,
 } = require("../services/desktopNotificationService");
 const { getNotificationById } = require("../repositories/desktopNotificationRepository");
@@ -90,12 +91,13 @@ async function sendToUser(userId, notification) {
 async function sendPending(ws, device) {
   const pending = await listPendingForDevice(device, 100);
   ws.send(JSON.stringify({ type: "pending_notifications", notifications: pending }));
+  for (const notification of pending) await markSentToDevice(device, notification.id);
   return pending.length;
 }
 
-async function sendActiveTaskSync(ws, device) {
+async function sendActiveTaskSync(ws, device, loginSessionId) {
   const user = await getAuthenticatedUser(device.user_id);
-  const sync = buildActiveTaskSyncPayload(user, device, await listTasksForUser(user));
+  const sync = await buildActiveTaskSyncForDevice(user, device, await listTasksForUser(user), { loginSessionId });
   ws.send(JSON.stringify({ type: "active_task_sync", ...sync }));
   logger.info("Desktop active task sync completed", {
     user_id: device.user_id,
@@ -122,7 +124,14 @@ async function handleClientMessage(ws, raw) {
 
   if (message.type === "sync_pending_notifications") {
     await sendPending(ws, device);
-    await sendActiveTaskSync(ws, device);
+    await sendActiveTaskSync(ws, device, message.loginSessionId);
+    return;
+  }
+
+  if (message.type === "notification_received") {
+    const notificationId = Number(message.notificationId);
+    if (!Number.isInteger(notificationId)) throw new Error("Invalid notificationId");
+    await recordDelivered(device, notificationId, message.receivedAt ? new Date(message.receivedAt) : new Date());
     return;
   }
 
@@ -215,14 +224,7 @@ function initializeDesktopNotificationGateway(server) {
     addConnection(device, ws);
     logger.info("Desktop notification WebSocket connected", { user_id: device.user_id, device_id: device.device_id });
     ws.on("close", () => logger.info("Desktop notification WebSocket disconnected", { user_id: device.user_id, device_id: device.device_id }));
-    try {
-      await sendPending(ws, device);
-    } catch (error) {
-      logger.warn("Desktop notification initial sync failed", {
-        device_id: device.device_id,
-        error: error?.message || "Unknown sync error",
-      });
-    }
+
   });
 
   const heartbeat = setInterval(() => {

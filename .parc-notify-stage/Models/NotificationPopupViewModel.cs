@@ -34,13 +34,16 @@ public sealed class NotificationPopupViewModel : INotifyPropertyChanged
     public required Geometry IconGlyph { get; init; }
     public IReadOnlyList<string> TaskItems { get; init; } = [];
     public string? MoreTasksText { get; init; }
+    public ObservableCollection<NotificationActionViewModel> TaskChoices { get; } = [];
     public ObservableCollection<NotificationActionViewModel> Actions { get; } = [];
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.Now;
     public TimeSpan AutoDismissDuration { get; init; } = TimeSpan.FromSeconds(15);
     public string Priority { get; init; } = "normal";
-    public double CardWidth { get; init; } = 600;
-    public double MinCardHeight { get; init; } = 350;
-    public double MaxCardHeight { get; init; } = 410;
+    public double CardWidth { get; init; } = 430;
+    public double CardHeight { get; init; } = 285;
+    public double MinCardHeight { get; init; } = 285;
+    public double MaxCardHeight { get; init; } = 320;
+    public bool IsPersistent { get; init; }
 
     public string? PrimaryTaskText => TaskName ?? TaskItems.FirstOrDefault();
     public bool HasPrimaryTaskText => !string.IsNullOrWhiteSpace(PrimaryTaskText);
@@ -50,6 +53,7 @@ public sealed class NotificationPopupViewModel : INotifyPropertyChanged
     public bool HasTaskItems => TaskItems.Count > 0;
     public bool HasMoreTasksText => !string.IsNullOrWhiteSpace(MoreTasksText);
     public bool HasStatusText => !string.IsNullOrWhiteSpace(StatusText);
+    public bool HasTaskChoices => TaskChoices.Count > 0;
     public bool HasActions => Actions.Count > 0;
     public bool HasActionError => !string.IsNullOrWhiteSpace(ActionError);
 

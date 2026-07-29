@@ -69,3 +69,13 @@ test("completed and approved tasks keep their proof lock", async () => {
   assert.equal(await canUpdateTaskProof(actor, completedTask), false);
   await assert.rejects(() => ensureTaskProofUpdateAllowed(actor, completedTask), { statusCode: 409 });
 });
+test("Design 3D workflow DAP keeps proof upload authorized even though proof is not required", async () => {
+  const actor = user();
+  const dapTask = task({
+    task_type: "department_workflow",
+    workflow_stage: "DAP",
+    proof_required: true,
+  });
+  assert.equal(await canUpdateTaskProof(actor, dapTask), true);
+  await assert.doesNotReject(() => ensureTaskProofUpdateAllowed(actor, dapTask));
+});

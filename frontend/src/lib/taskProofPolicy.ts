@@ -13,7 +13,7 @@ function normalize(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
 }
 
-function isDapTask(task: Partial<Task>) {
+export function isDapWorkflowTask(task: Partial<Task>) {
   const normalized = normalize(task.workflow_stage)
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
@@ -37,7 +37,7 @@ export function requiresTaskWorkProof(task: Partial<Task>) {
     return false;
   }
 
-  if (task.task_type === "design_2d_completion" || isDapTask(task)) {
+  if (task.task_type === "design_2d_completion" || isDapWorkflowTask(task)) {
     return false;
   }
 

@@ -4,13 +4,16 @@ const { sendSuccess } = require("../lib/response");
 const {
   authenticateDesktopDevice,
   buildActiveTaskSyncPayload,
+  continueCurrentTask,
   createTestNotificationForDevice,
   registerDeviceFromCredentials,
   revokeAuthenticatedDevice,
+  snoozeNotification,
 } = require("../services/desktopNotificationService");
 const { getAuthenticatedUser } = require("../services/authService");
 const { listTasksForUser } = require("../services/taskService");
 const {
+  selectCurrentTaskFromDesktopNotification,
   startCorrectionFromDesktopNotification,
   startTaskFromDesktopNotification,
 } = require("../services/desktopNotificationActionService");
@@ -76,7 +79,7 @@ router.post(
   "/desktop-notifications/tasks/:taskId/start",
   authenticateDesktopDeviceRequest,
   asyncHandler(async (req, res) => {
-    const result = await startTaskFromDesktopNotification(req.desktopDevice, req.params.taskId);
+    const result = await startTaskFromDesktopNotification(req.desktopDevice, req.params.taskId, req.body?.notificationId);
     return sendSuccess(res, result);
   }),
 );
@@ -85,9 +88,33 @@ router.post(
   "/desktop-notifications/tasks/:taskId/start-correction",
   authenticateDesktopDeviceRequest,
   asyncHandler(async (req, res) => {
-    const result = await startCorrectionFromDesktopNotification(req.desktopDevice, req.params.taskId);
+    const result = await startCorrectionFromDesktopNotification(req.desktopDevice, req.params.taskId, req.body?.notificationId);
     return sendSuccess(res, result);
   }),
+);
+
+router.post(
+  "/desktop-notifications/tasks/:taskId/select-current",
+  authenticateDesktopDeviceRequest,
+  asyncHandler(async (req, res) => {
+    const result = await selectCurrentTaskFromDesktopNotification(req.desktopDevice, req.params.taskId, req.body?.notificationId);
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  "/desktop-notifications/tasks/:taskId/continue",
+  authenticateDesktopDeviceRequest,
+  asyncHandler(async (req, res) => {
+    const result = await continueCurrentTask(req.desktopDevice, req.params.taskId, req.body?.notificationId);
+    return sendSuccess(res, { taskId: Number(req.params.taskId), nextCheckAt: result.progress_due_at });
+  }),
+);
+
+router.post(
+  "/desktop-notifications/:notificationId/snooze",
+  authenticateDesktopDeviceRequest,
+  asyncHandler(async (req, res) => sendSuccess(res, await snoozeNotification(req.desktopDevice, req.params.notificationId))),
 );
 
 module.exports = {

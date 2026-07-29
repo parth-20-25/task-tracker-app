@@ -32,7 +32,7 @@ public sealed class NotificationTemplateFactory
             Severity = severity,
             EventTitle = BuildTitle(notification, eventType),
             TaskName = ShowsTaskName(eventType) ? taskName : null,
-            Metadata = eventType == "PROJECT_RELEASED" ? BuildProjectReleaseMetadata(notification) : BuildMetadata(project, fixture),
+            Metadata = BuildMetadata(notification, eventType, project, fixture),
             StatusText = BuildStatus(notification, eventType, dueDate),
             StatusBrush = accent,
             IconBrush = accent,
@@ -45,14 +45,17 @@ public sealed class NotificationTemplateFactory
             FallbackBrush = _theme.FallbackBrushFor(severity),
             GlowColor = _theme.GlowColorFor(severity),
             IconGlyph = Geometry.Parse(IconPath(severity)),
-            TaskItems = BuildTaskItems(notification, out var moreText),
+            TaskItems = BuildTaskItems(notification, eventType, out var moreText),
             MoreTasksText = moreText,
             AutoDismissDuration = DurationFor(eventType),
             Priority = notification.Priority,
-            MinCardHeight = eventType == "TASKS_BULK_ASSIGNED" ? 380 : 350,
-            MaxCardHeight = eventType == "TASKS_BULK_ASSIGNED" ? 470 : 410,
+            CardHeight = eventType is "ACTIVE_TASK_REMINDER" or "CURRENT_TASK_SELECTION" ? 300 : 285,
+            MinCardHeight = eventType is "ACTIVE_TASK_REMINDER" or "CURRENT_TASK_SELECTION" ? 300 : 285,
+            MaxCardHeight = 320,
+            IsPersistent = eventType == "TASK_OVERDUE",
         };
 
+        foreach (var choice in BuildTaskChoices(eventType, notification.TaskOptions)) vm.TaskChoices.Add(choice);
         foreach (var action in BuildActions(eventType, notification.AvailableActions)) vm.Actions.Add(action);
         return vm;
     }
@@ -89,9 +92,12 @@ public sealed class NotificationTemplateFactory
         "TASK_ASSIGNED" => "Task assigned",
         "TASKS_BULK_ASSIGNED" => $"{Math.Max(notification.TaskCount ?? notification.TaskItems?.Count ?? 0, 1)} tasks assigned",
         "TASK_REJECTED" => "Task rejected",
-        "TASK_UPDATE_REQUIRED" => "Task update required",
+        "TASK_UPDATE_REQUIRED" => "Update required",
         "TASK_DUE_TODAY" => "Task due today",
         "TASK_OVERDUE" => "Task overdue",
+        "ACTIVE_TASK_REMINDER" => Clean(notification.Title) ?? "Active tasks",
+        "CURRENT_TASK_SELECTION" => "Which task are you working on now?",
+        "TASK_PROGRESS_UPDATE" => "Task progress update",
         "TASK_REASSIGNED" => "Task reassigned",
         "APPROVAL_REQUESTED" => "Approval requested",
         "APPROVAL_PENDING_TOO_LONG" => "Approval pending",
@@ -108,7 +114,7 @@ public sealed class NotificationTemplateFactory
         _ => Clean(notification.Title) ?? "PARC Task Tracker",
     };
 
-    private static bool ShowsTaskName(string eventType) => eventType is not "TASKS_BULK_ASSIGNED" and not "ACTION_CONFIRMED";
+    private static bool ShowsTaskName(string eventType) => eventType is not "TASKS_BULK_ASSIGNED" and not "ACTIVE_TASK_REMINDER" and not "CURRENT_TASK_SELECTION" and not "ACTION_CONFIRMED";
 
     private static string? InferTaskName(DesktopNotification notification, string eventType)
     {
@@ -120,40 +126,51 @@ public sealed class NotificationTemplateFactory
 
     private static string? BuildStatus(DesktopNotification notification, string eventType, string? dueDate) => eventType switch
     {
-        "TASK_ASSIGNED" => $"Due: {dueDate ?? "Not set"}",
+        "TASK_ASSIGNED" => $"Due: {dueDate ?? "Not set"}  •  Priority: {notification.Priority}",
         "TASK_REJECTED" => $"Reason: {Clean(notification.RejectionReason) ?? Clean(notification.StatusMessage) ?? Clean(notification.Body) ?? "Review the task details."}",
-        "TASK_UPDATE_REQUIRED" => Clean(notification.StatusMessage) ?? "Update requested by your leader",
+        "TASK_UPDATE_REQUIRED" => $"{Clean(notification.StatusMessage) ?? "Update requested by your leader"}  •  Due: {dueDate ?? "Not set"}",
+        "ACTIVE_TASK_REMINDER" or "CURRENT_TASK_SELECTION" or "TASK_PROGRESS_UPDATE" => Clean(notification.StatusMessage) ?? Clean(notification.Body),
         "TASK_DUE_TODAY" => "Due today at end of shift",
-        "TASK_OVERDUE" => $"Overdue since {dueDate ?? "the due date"}",
+        "TASK_OVERDUE" => Clean(notification.StatusMessage) ?? $"Overdue since {dueDate ?? "the due date"}",
         "TASK_REASSIGNED" => "This task has been reassigned to another user",
         "APPROVAL_REQUESTED" => "Please review and take action",
         "APPROVAL_PENDING_TOO_LONG" => "Approval has been pending too long",
-        "TASK_OVERDUE_EXECUTIVE_ESCALATION" or "CEO_DIRECTOR_ESCALATION" => "2 reminders sent  •  Escalated to CEO/Director",
+        "TASK_OVERDUE_EXECUTIVE_ESCALATION" or "CEO_DIRECTOR_ESCALATION" => Clean(notification.StatusMessage) ?? "2 reminders delivered  •  Employee action pending",
         "PROJECT_DEADLINE_AT_RISK" => Clean(notification.StatusMessage) ?? "Project deadline requires executive attention",
         "CRITICAL_WORKFLOW_ESCALATION" => Clean(notification.StatusMessage) ?? "Workflow requires executive attention",
-        "PROJECT_RELEASED" => $"Released by {Clean(notification.ReleasedByName) ?? "Unknown"}",
+        "PROJECT_RELEASED" => $"Released by {Clean(notification.ReleasedByName) ?? "Unknown"}  •  {FormatDateTime(notification.ReleasedAt)}",
         "TASK_CANCELLED" => "This task has been cancelled",
         "ACTION_CONFIRMED" => Clean(notification.Body) ?? "Action completed",
         "ACTION_FAILED" => Clean(notification.Body) ?? "Action failed",
         _ => Clean(notification.StatusMessage) ?? Clean(notification.Body),
     };
 
-    private static string BuildMetadata(string? project, string? fixture)
+    private static string BuildMetadata(DesktopNotification notification, string eventType, string? project, string? fixture)
     {
-        if (project is null) return "Project-level task";
-        return fixture is null ? $"Project {project}  •  Project-level task" : $"Project {project}  •  Fixture {fixture}";
+        if (eventType == "PROJECT_RELEASED") return $"{Clean(notification.ProjectName) ?? "Project"}  •  Customer {Clean(notification.CustomerName) ?? "Not recorded"}";
+        if (eventType is "ACTIVE_TASK_REMINDER" or "CURRENT_TASK_SELECTION") return Clean(notification.Body) ?? "Open My Tasks for details.";
+        var parts = new[]
+        {
+            project is null ? null : $"Project {project}",
+            fixture is null ? "Project-level task" : $"Fixture {fixture}",
+            Clean(notification.StageType),
+        };
+        var metadata = string.Join("  •  ", parts.Where(value => !string.IsNullOrWhiteSpace(value)));
+        if (eventType is "TASK_OVERDUE_EXECUTIVE_ESCALATION" or "CEO_DIRECTOR_ESCALATION")
+        {
+            var employee = string.Join(" ", new[] { Clean(notification.EmployeeName), Clean(notification.EmployeeNumber) is { } number ? $"({number})" : null }.Where(value => value is not null));
+            return string.IsNullOrWhiteSpace(employee) ? metadata : $"{employee}  •  {metadata}";
+        }
+        return string.IsNullOrWhiteSpace(metadata) ? "Project-level task" : metadata;
     }
 
-    private static string BuildProjectReleaseMetadata(DesktopNotification notification) =>
-        $"Customer {Clean(notification.CustomerName) ?? "Not recorded"}";
-
-    private static IReadOnlyList<string> BuildTaskItems(DesktopNotification notification, out string? moreText)
+    private static IReadOnlyList<string> BuildTaskItems(DesktopNotification notification, string eventType, out string? moreText)
     {
         var items = (notification.TaskItems ?? []).Select(Clean).Where(value => value is not null).Cast<string>().ToList();
-        var visible = items.Take(4).ToList();
+        var visible = items.Take(3).ToList();
         var hiddenCount = Math.Max((notification.TaskCount ?? items.Count) - visible.Count, 0);
         moreText = hiddenCount > 0 ? $"+{hiddenCount} more tasks" : null;
-        return visible;
+        return eventType == "CURRENT_TASK_SELECTION" ? [] : visible;
     }
 
     private static IReadOnlyList<NotificationActionViewModel> BuildActions(string eventType, IReadOnlyList<string>? availableActions)
@@ -167,15 +184,24 @@ public sealed class NotificationTemplateFactory
             "TASK_UPDATE_REQUIRED" => new[] { Action("Open Task", NotificationActionType.OpenTask, false, "OPEN_TASK"), Action("Start Correction", NotificationActionType.StartCorrection, true, "START_CORRECTION") },
             "TASK_DUE_TODAY" => new[] { Action("Open Task", NotificationActionType.OpenTask, false, "OPEN_TASK"), Action("Remind Me", NotificationActionType.RemindMe, true, null) },
             "TASK_OVERDUE" => new[] { Action("Open Task", NotificationActionType.OpenTask, false, "OPEN_TASK"), Action("Start Now", NotificationActionType.StartTask, true, "START_TASK") },
-            "TASK_OVERDUE_EXECUTIVE_ESCALATION" or "CEO_DIRECTOR_ESCALATION" or "PROJECT_DEADLINE_AT_RISK" or "CRITICAL_WORKFLOW_ESCALATION" => new[] { Action("Open Task", NotificationActionType.OpenTask, false, null), Action("View Details", NotificationActionType.OpenTask, true, null) },
+            "ACTIVE_TASK_REMINDER" => [Action("Open My Tasks", NotificationActionType.OpenTasks, true, "OPEN_TASKS")],
+            "CURRENT_TASK_SELECTION" => [Action("Open My Tasks", NotificationActionType.OpenTasks, false, "OPEN_TASKS")],
+            "TASK_PROGRESS_UPDATE" => new[] { Action("Complete Task", NotificationActionType.CompleteTask, false, "COMPLETE_TASK"), Action("Continue", NotificationActionType.ContinueTask, true, "CONTINUE"), Action("Switch Task", NotificationActionType.SwitchTask, false, "SWITCH_TASK") },
+            "TASK_OVERDUE_EXECUTIVE_ESCALATION" or "CEO_DIRECTOR_ESCALATION" or "PROJECT_DEADLINE_AT_RISK" or "CRITICAL_WORKFLOW_ESCALATION" => new[] { Action("Open Task", NotificationActionType.OpenTask, false, null), Action("View Details", NotificationActionType.ViewDetails, true, null) },
             "TASK_REASSIGNED" => [Action("Open Task Tracker", NotificationActionType.OpenTracker, true, "OPEN_TRACKER")],
             "APPROVAL_REQUESTED" or "APPROVAL_PENDING_TOO_LONG" => [Action("Review Task", NotificationActionType.ReviewTask, true, "REVIEW_TASK")],
-            "PROJECT_RELEASED" => new[] { Action("Open Project", NotificationActionType.OpenProject, false, "OPEN_PROJECT"), Action("View Audit", NotificationActionType.ViewAudit, true, "VIEW_AUDIT") },
+            "PROJECT_RELEASED" => new[] { Action("Open Project", NotificationActionType.OpenProject, false, "OPEN_PROJECT"), Action("View Details", NotificationActionType.ViewAudit, true, "VIEW_AUDIT") },
             "TASK_CANCELLED" => [Action("Open Task Tracker", NotificationActionType.OpenTracker, true, "OPEN_TRACKER")],
             _ => [Action("Open Task Tracker", NotificationActionType.OpenTracker, true, "OPEN_TRACKER")],
         };
-        return defaults.Where(item => item.ServerName is null || allowed is null || allowed.Contains(item.ServerName)).Take(2).Select(item => item.ViewModel).ToList();
+        var limit = eventType == "TASK_PROGRESS_UPDATE" ? 3 : 2;
+        return defaults.Where(item => item.ServerName is null || allowed is null || allowed.Contains(item.ServerName)).Take(limit).Select(item => item.ViewModel).ToList();
     }
+
+    private static IReadOnlyList<NotificationActionViewModel> BuildTaskChoices(string eventType, IReadOnlyList<NotificationTaskOption>? options) =>
+        eventType == "CURRENT_TASK_SELECTION"
+            ? (options ?? []).Take(3).Select(option => new NotificationActionViewModel(option.Label, NotificationActionType.SelectTask, true, targetTaskId: option.TaskId)).ToList()
+            : [];
 
     private static (NotificationActionViewModel ViewModel, string? ServerName) Action(string label, NotificationActionType type, bool isPrimary, string? serverName) =>
         (new NotificationActionViewModel(label, type, isPrimary), serverName);
@@ -199,10 +225,19 @@ public sealed class NotificationTemplateFactory
     private static string IconPath(NotificationSeverity severity) => severity switch
     {
         NotificationSeverity.Reminder => "M7,16 L17,16 M8,16 C8,19 16,19 16,16 M8,10 C8,6 10,4 12,4 C14,4 16,6 16,10 L17,15 L7,15 Z M12,2 L12,4",
+        NotificationSeverity.Correction => "M4,18 L7,18 L19,6 L16,3 L4,15 Z M14,5 L17,8",
         NotificationSeverity.Urgent => "M12,3 L22,20 L2,20 Z M12,8 L12,14 M12,17 L12,18",
         NotificationSeverity.Escalation => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M12,17 L12,8 M8,12 L12,8 L16,12",
         _ => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M12,10 L12,17 M12,7 L12,7.2",
     };
+
+    private static string FormatDateTime(string? value)
+    {
+        var clean = Clean(value);
+        return DateTimeOffset.TryParse(clean, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var date)
+            ? date.LocalDateTime.ToString("dd MMM yyyy, h:mm tt", DateCulture)
+            : clean ?? "Time not recorded";
+    }
 
     private static string? FormatDate(string? value)
     {

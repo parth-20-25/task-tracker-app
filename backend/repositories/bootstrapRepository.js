@@ -691,6 +691,15 @@ async function ensureDesktopNotificationTables(client) {
     )
   `);
 
+  await client.query(`ALTER TABLE desktop_notifications ADD COLUMN IF NOT EXISTS backend_user_id UUID REFERENCES users(id)`);
+  await client.query(`
+    UPDATE desktop_notifications notification
+    SET backend_user_id = users.id
+    FROM users
+    WHERE notification.backend_user_id IS NULL
+      AND users.employee_id = notification.user_id
+  `);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS desktop_notification_devices (
       id BIGSERIAL PRIMARY KEY,
@@ -719,6 +728,132 @@ async function ensureDesktopNotificationTables(client) {
       delivery_error TEXT,
       UNIQUE (notification_id, device_id)
     )
+  `);
+
+  await client.query(`ALTER TABLE desktop_notification_deliveries ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ`);
+  await client.query(`ALTER TABLE desktop_notification_deliveries ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMPTZ`);
+  await client.query(`ALTER TABLE desktop_notification_deliveries ADD COLUMN IF NOT EXISTS actioned_at TIMESTAMPTZ`);
+  await client.query(`ALTER TABLE desktop_notification_deliveries ADD COLUMN IF NOT EXISTS action_type TEXT`);
+  await client.query(`ALTER TABLE desktop_notification_devices ADD COLUMN IF NOT EXISTS last_login_session_id TEXT`);
+  await client.query(`ALTER TABLE desktop_notification_devices ADD COLUMN IF NOT EXISTS last_login_summary_at TIMESTAMPTZ`);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS desktop_notification_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    INSERT INTO desktop_notification_settings (setting_key, setting_value)
+    VALUES ('daily_reminder_times', '["10:00", "15:00"]'::jsonb)
+    ON CONFLICT (setting_key) DO NOTHING
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS desktop_current_tasks (
+      user_id VARCHAR(50) PRIMARY KEY REFERENCES users(employee_id) ON DELETE CASCADE,
+      backend_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      task_id INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+      selected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      progress_due_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '2 hours'),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(assigned_user_id, assigned_to)
+          ORDER BY started_at DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC
+        ) AS position
+      FROM tasks
+      WHERE LOWER(COALESCE(status, '')) = 'in_progress'
+        AND COALESCE(assigned_user_id, assigned_to) IS NOT NULL
+    )
+    UPDATE tasks task
+    SET status = 'on_hold', updated_at = NOW()
+    FROM ranked
+    WHERE ranked.id = task.id
+      AND ranked.position > 1
+  `);
+  await client.query(`
+    INSERT INTO desktop_current_tasks (user_id, backend_user_id, task_id, selected_at, progress_due_at)
+    SELECT
+      COALESCE(task.assigned_user_id, task.assigned_to),
+      users.id,
+      task.id,
+      COALESCE(task.started_at, task.updated_at, task.created_at, NOW()),
+      COALESCE(task.started_at, task.updated_at, task.created_at, NOW()) + INTERVAL '2 hours'
+    FROM tasks task
+    JOIN users ON users.employee_id = COALESCE(task.assigned_user_id, task.assigned_to)
+    WHERE LOWER(COALESCE(task.status, '')) = 'in_progress'
+    ON CONFLICT (user_id) DO NOTHING
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE FUNCTION enforce_single_desktop_current_task()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      previous_current desktop_current_tasks%ROWTYPE;
+      old_user_id VARCHAR(50) := COALESCE(OLD.assigned_user_id, OLD.assigned_to);
+      new_user_id VARCHAR(50) := COALESCE(NEW.assigned_user_id, NEW.assigned_to);
+      event_time TIMESTAMPTZ := NOW();
+    BEGIN
+      IF LOWER(COALESCE(OLD.status, '')) = 'in_progress'
+         AND (LOWER(COALESCE(NEW.status, '')) <> 'in_progress' OR old_user_id IS DISTINCT FROM new_user_id) THEN
+        SELECT * INTO previous_current
+        FROM desktop_current_tasks
+        WHERE user_id = old_user_id AND task_id = OLD.id
+        FOR UPDATE;
+
+        IF FOUND THEN
+          NEW.actual_minutes := COALESCE(OLD.actual_minutes, 0)
+            + GREATEST(0, ROUND(EXTRACT(EPOCH FROM (event_time - previous_current.selected_at)) / 60.0)::INTEGER);
+          DELETE FROM desktop_current_tasks WHERE user_id = old_user_id AND task_id = OLD.id;
+        END IF;
+      END IF;
+
+      IF LOWER(COALESCE(NEW.status, '')) = 'in_progress' AND new_user_id IS NOT NULL THEN
+        SELECT * INTO previous_current
+        FROM desktop_current_tasks
+        WHERE user_id = new_user_id
+        FOR UPDATE;
+
+        IF FOUND AND previous_current.task_id <> NEW.id THEN
+          UPDATE tasks
+          SET status = 'on_hold',
+              lifecycle_status = 'in_progress',
+              updated_at = event_time
+          WHERE id = previous_current.task_id
+            AND LOWER(COALESCE(status, '')) = 'in_progress';
+        END IF;
+
+        IF NOT FOUND OR previous_current.task_id <> NEW.id THEN
+          INSERT INTO desktop_current_tasks (user_id, backend_user_id, task_id, selected_at, progress_due_at, updated_at)
+          SELECT new_user_id, users.id, NEW.id, event_time, event_time + INTERVAL '2 hours', event_time
+          FROM users
+          WHERE users.employee_id = new_user_id
+          ON CONFLICT (user_id) DO UPDATE
+          SET backend_user_id = EXCLUDED.backend_user_id,
+              task_id = EXCLUDED.task_id,
+              selected_at = EXCLUDED.selected_at,
+              progress_due_at = EXCLUDED.progress_due_at,
+              updated_at = EXCLUDED.updated_at;
+        END IF;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await client.query(`DROP TRIGGER IF EXISTS trg_single_desktop_current_task ON tasks`);
+  await client.query(`
+    CREATE TRIGGER trg_single_desktop_current_task
+    BEFORE UPDATE OF status, assigned_user_id, assigned_to ON tasks
+    FOR EACH ROW EXECUTE FUNCTION enforce_single_desktop_current_task()
   `);
 
   await safeCreateIndex(client, `
@@ -1348,7 +1483,7 @@ async function ensureReferenceTables(client) {
             additional_task_kind IN (
               'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
               'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data',
-              'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
+              'DESIGN_3D_ADDITIONAL_DAP_POINTS', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
             )
             AND design_team IN ('2D', '3D')
             AND project_id IS NOT NULL
@@ -1366,7 +1501,7 @@ async function ensureReferenceTables(client) {
             AND (
               design_team <> '3D'
               OR (
-                additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
+                additional_task_kind IN ('DESIGN_3D_ADDITIONAL_DAP_POINTS', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
                 AND scope_type = 'project'
                 AND fixture_id IS NULL
               )

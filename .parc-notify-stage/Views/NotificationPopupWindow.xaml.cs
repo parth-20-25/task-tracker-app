@@ -31,6 +31,11 @@ public partial class NotificationPopupWindow : Window
     {
         InitializeComponent();
         ViewModel = viewModel;
+        Width = viewModel.CardWidth;
+        Height = viewModel.CardHeight;
+        MinWidth = MaxWidth = viewModel.CardWidth;
+        MinHeight = viewModel.MinCardHeight;
+        MaxHeight = viewModel.MaxCardHeight;
         _executeAction = executeAction;
         _showResult = showResult;
         _animation = animation;
@@ -38,7 +43,7 @@ public partial class NotificationPopupWindow : Window
         _ = muteNotifications;
         DataContext = viewModel;
         _remaining = viewModel.AutoDismissDuration;
-        foreach (var action in viewModel.Actions)
+        foreach (var action in viewModel.TaskChoices.Concat(viewModel.Actions))
         {
             var command = new AsyncCommand(() => ExecuteActionAsync(action), () => !ViewModel.IsActionProcessing);
             action.Command = command;
@@ -82,7 +87,7 @@ public partial class NotificationPopupWindow : Window
 
     private void StartTimer()
     {
-        if (!_autoStartTimer) return;
+        if (!_autoStartTimer || ViewModel.IsPersistent) return;
         _lastTick = DateTimeOffset.Now;
         _timer.Start();
     }
@@ -159,10 +164,13 @@ public partial class NotificationPopupWindow : Window
         var source = HwndSource.FromHwnd(handle);
         if (source?.CompositionTarget is not null) source.CompositionTarget.BackgroundColor = Colors.Transparent;
         BackdropApplied = NotificationBackdropService.TryApply(handle);
-        Background = BackdropApplied ? System.Windows.Media.Brushes.Transparent : ViewModel.FallbackBrush;
+        Background = System.Windows.Media.Brushes.Transparent;
 
-        var exStyle = GetWindowLong(handle, GwlExStyle);
-        SetWindowLong(handle, GwlExStyle, exStyle | WsExNoActivate | WsExToolWindow);
+        if (!string.Equals(Environment.GetEnvironmentVariable("PARC_NOTIFY_CAPTURE_MODE"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            var exStyle = GetWindowLong(handle, GwlExStyle);
+            SetWindowLong(handle, GwlExStyle, exStyle | WsExNoActivate | WsExToolWindow);
+        }
         LogLifecycle($"SourceInitialized backdrop={BackdropApplied}");
     }
 

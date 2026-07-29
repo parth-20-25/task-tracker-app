@@ -23,6 +23,7 @@ public partial class App : System.Windows.Application
     private NotificationPopupManager? _popupManager;
     private StartupTaskService _startup = null!;
     private SingleInstanceService? _singleInstance;
+    private StatusWindow? _statusWindow;
     private string _status = "Starting";
 
     protected override void OnStartup(StartupEventArgs e)
@@ -36,7 +37,8 @@ public partial class App : System.Windows.Application
         _singleInstance = new SingleInstanceService();
         if (!_singleInstance.IsFirstInstance)
         {
-            AgentLogger.Info("A PARC Notify instance is already running; duplicate process exiting.");
+            AgentLogger.Info("A PARC Notify instance is already running; signaling it and exiting.");
+            _singleInstance.SignalExisting();
             Shutdown();
             return;
         }
@@ -54,6 +56,7 @@ public partial class App : System.Windows.Application
         }
 
         var background = e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase);
+        if (background) AgentLogger.Info("Desktop client started from Windows login startup task.");
         _settings = new AgentSettings();
         _credentials = new CredentialStorageService();
         _state = new LocalStateService();
@@ -62,11 +65,17 @@ public partial class App : System.Windows.Application
         _notifications = new WindowsNotificationService();
         _deepLinks = new DeepLinkService(_settings);
         _desktopActions = new DesktopNotificationActionClient(_settings, _credentials);
-        _popupActions = new NotificationActionHandler(_deepLinks, _desktopActions);
+        _popupActions = new NotificationActionHandler(
+            _deepLinks,
+            _desktopActions,
+            () => _connection.RequestSynchronizationAsync(_shutdown.Token),
+            notification => Dispatcher.Invoke(() => _popupManager?.Show(notification)));
         _popupManager = new NotificationPopupManager(_popupActions);
         _popupManager.Displayed += PopupDisplayed;
         _popupManager.Clicked += PopupClicked;
         _popupManager.PopupClosed += PopupClosed;
+        _singleInstance.ActivationRequested += () => Dispatcher.InvokeAsync(ShowStatus);
+        _singleInstance.StartListening();
 
         _notifications.ShowStatusRequested += ShowStatus;
         _notifications.TestRequested += SendTest;
@@ -84,7 +93,9 @@ public partial class App : System.Windows.Application
         });
         _connection.NotificationReceived += notification => Dispatcher.InvokeAsync(() => ShowNotification(notification));
 
-        var hasCredentials = _credentials.Load() is not null;
+        var savedCredentials = _credentials.Load();
+        var hasCredentials = savedCredentials is not null;
+        if (savedCredentials is not null) AgentLogger.Info($"Loaded credentials employeeId={savedCredentials.EmployeeId} backendUserId={savedCredentials.BackendUserId ?? "unknown"}");
         if (!hasCredentials)
         {
             if (ShouldShowRegistration(background, hasCredentials) && ShowRegistration() is true)
@@ -160,6 +171,7 @@ public partial class App : System.Windows.Application
         var duration = ParsePriorityExamplesDuration(args);
         var samples = new NotificationTemplateFactory(new NotificationThemeService()).CreatePrioritySamples();
         Environment.SetEnvironmentVariable("PARC_NOTIFY_FORCE_PRIMARY_SCREEN", "true");
+        Environment.SetEnvironmentVariable("PARC_NOTIFY_CAPTURE_MODE", "true");
         Environment.SetEnvironmentVariable("PARC_NOTIFY_POPUP_SECONDS", Math.Max(duration / samples.Count, 5).ToString(CultureInfo.InvariantCulture));
         _popupManager = new NotificationPopupManager((viewModel, action, _) =>
         {
@@ -226,15 +238,24 @@ public partial class App : System.Windows.Application
 
     private void ShowNotification(DesktopNotification notification)
     {
-        if (_state.WasDisplayed(notification.Id) || !_pendingNotificationIds.Add(notification.Id)) return;
-        AgentLogger.Info($"Notification received notificationId={notification.Id} threadId={Environment.CurrentManagedThreadId} dispatcherAccess={Dispatcher.CheckAccess()}");
+        if (ShouldSuppressNotification(notification, _state, _pendingNotificationIds)) return;
+        AgentLogger.Info($"Notification received eventType={notification.EventType} notificationId={notification.Id} threadId={Environment.CurrentManagedThreadId} dispatcherAccess={Dispatcher.CheckAccess()}");
         if (_popupManager?.Show(notification) is not true) _pendingNotificationIds.Remove(notification.Id);
     }
 
+    public static bool ShouldSuppressNotification(DesktopNotification notification, LocalStateService state, ISet<long> pendingNotificationIds)
+    {
+        if (!IsReplayableLocalNotification(notification) && state.WasDisplayed(notification.Id)) return true;
+        return !pendingNotificationIds.Add(notification.Id);
+    }
+
+    private static bool IsReplayableLocalNotification(DesktopNotification notification) =>
+        string.Equals(notification.EntityType, "local", StringComparison.OrdinalIgnoreCase);
+
     private void PopupDisplayed(DesktopNotification notification)
     {
-        if (notification.EntityType == "local") return;
         _pendingNotificationIds.Remove(notification.Id);
+        if (IsReplayableLocalNotification(notification)) return;
         if (_state.WasDisplayed(notification.Id)) return;
         _state.MarkDisplayed(notification.Id);
         _ = _connection.AcknowledgeDisplayedAsync(notification.Id, _shutdown.Token);
@@ -242,7 +263,7 @@ public partial class App : System.Windows.Application
 
     private void PopupClicked(DesktopNotification notification, NotificationActionViewModel action)
     {
-        if (notification.EntityType == "local") return;
+        if (IsReplayableLocalNotification(notification)) return;
         AgentLogger.Info($"Popup explicitly clicked notificationId={notification.Id} action={action.ActionType}");
         _ = _connection.AcknowledgeClickedAsync(notification.Id, _shutdown.Token);
     }
@@ -253,7 +274,19 @@ public partial class App : System.Windows.Application
         AgentLogger.Info($"Notification popup closed notificationId={notification.Id} reason={reason}");
     }
 
-    private void ShowStatus() => new StatusWindow(_status, _credentials.Load()).Show();
+    private void ShowStatus()
+    {
+        if (_statusWindow is { IsVisible: true })
+        {
+            _statusWindow.Show();
+            _statusWindow.Activate();
+            return;
+        }
+        _statusWindow = new StatusWindow(_status, _credentials.Load(), _settings, _connection);
+        _statusWindow.Closed += (_, _) => _statusWindow = null;
+        _statusWindow.Show();
+        _statusWindow.Activate();
+    }
 
     private async void SendTest()
     {
@@ -315,9 +348,10 @@ public partial class App : System.Windows.Application
             catch (Exception error) { AgentLogger.Warn("Device revocation failed: " + error.Message); }
         }
         _credentials.Clear();
+        _connection.RequestReconnect();
         _status = "Not registered";
         _notifications?.SetStatus(_status);
-        ShowRegistration();
+        if (ShowRegistration() is true) _connection.RequestReconnect();
     }
 
     private void ExitAgent()

@@ -1,7 +1,8 @@
 const pool = require("./db");
 const { ensureControlWorkflowSchema } = require("./repositories/controlWorkflowSchemaRepository");
 const { ensureDesignDepartmentSchema } = require("./repositories/designSchemaRepository");
-const { seedPermissions } = require("./repositories/permissionRepository");
+const { ensureProjectScopePlanningSchema } = require("./repositories/projectPlanningSchemaRepository");
+const { alignPermissionData } = require("./repositories/permissionRepository");
 
 async function runMigrations() {
   const client = await pool.connect();
@@ -428,7 +429,7 @@ async function runMigrations() {
               additional_task_kind IN (
                 'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
                 'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data',
-                'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
+                'DESIGN_3D_ADDITIONAL_DAP_POINTS', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
               )
               AND design_team IN ('2D', '3D')
               AND project_id IS NOT NULL
@@ -446,7 +447,7 @@ async function runMigrations() {
               AND (
                 design_team <> '3D'
                 OR (
-                  additional_task_kind IN ('Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
+                  additional_task_kind IN ('DESIGN_3D_ADDITIONAL_DAP_POINTS', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
                   AND scope_type = 'project'
                   AND fixture_id IS NULL
                 )
@@ -842,6 +843,7 @@ async function runMigrations() {
     `);
 
     await ensureDesignDepartmentSchema(client);
+    await ensureProjectScopePlanningSchema(client);
     await ensureControlWorkflowSchema(client);
 
     await client.query(`
@@ -974,7 +976,7 @@ async function runMigrations() {
 
     // --- Seed Initial Permissions ---
     console.log("Seeding initial permissions...");
-    await seedPermissions(client);
+    await alignPermissionData(client);
 
     await client.query("COMMIT");
     console.log("Migrations completed successfully.");

@@ -12,12 +12,12 @@ const {
 } = require("../lib/projectScope");
 const { createAuditLog } = require("../repositories/auditRepository");
 const projectScopeRepository = require("../repositories/projectScopeRepository");
-const { hasPermission } = require("./accessControlService");
+const { hasPermission, isAdmin } = require("./accessControlService");
 const { pool } = require("../db");
 
 function assertProjectScopeAccess(user) {
-  if (!hasPermission(user, PERMISSIONS.VIEW_PROJECT_SCOPE) || !isScopeExecutiveRole(user)) {
-    throw new AppError(403, "View Scope is limited to CEO and Director users");
+  if (!isAdmin(user) && (!hasPermission(user, PERMISSIONS.VIEW_PROJECT_SCOPE) || !isScopeExecutiveRole(user))) {
+    throw new AppError(403, "Project Scope is limited to Admin, CEO, and Director users");
   }
 }
 

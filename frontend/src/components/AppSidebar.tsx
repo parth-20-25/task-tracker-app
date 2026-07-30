@@ -18,6 +18,20 @@ import { isDesignDepartment } from '@/lib/departments';
 import { shouldHideAdditionalDesignTasks } from '@/lib/additionalDesignTasks';
 import { hasMappedTeamMembers, isProjectAuthorityUser } from '@/lib/permissions';
 import { useMyOverdueAlertsQuery, useTeamOverdueAlertsQuery } from '@/hooks/queries/useOverdueNotificationsQuery';
+import type { User } from '@/types';
+
+export function getMainNavigationItems(user: User | null | undefined, canViewProjectScope: boolean) {
+  return [
+    { title: 'Dashboard', url: '/', icon: LayoutDashboard },
+    ...(canViewProjectScope ? [{ title: 'Project Scope', url: '/view-scope', icon: Table2 }] : []),
+    { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
+    { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
+    { title: 'Projects', url: '/batches', icon: PackageCheck },
+    ...((isDesignDepartment(user) || isProjectAuthorityUser(user)) && !shouldHideAdditionalDesignTasks(user)
+      ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
+      : []),
+  ];
+}
 
 export function AppSidebar() {
   const { user, role, access, logout } = useAuth();
@@ -37,16 +51,7 @@ export function AppSidebar() {
   const overdueAlertCount = (myOverdueAlertsQuery.data?.length || 0)
     + (includeTeamOverdueAlerts ? teamOverdueAlertsQuery.data?.length || 0 : 0);
 
-  const mainItems = [
-    { title: 'Dashboard', url: '/', icon: LayoutDashboard },
-    { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
-    { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
-    { title: 'Projects', url: '/batches', icon: PackageCheck },
-    ...(access.canViewProjectScope ? [{ title: 'View Scope', url: '/view-scope', icon: Table2 }] : []),
-    ...((isDesignDepartment(user) || isProjectAuthorityUser(user)) && !shouldHideAdditionalDesignTasks(user)
-      ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
-      : []),
-  ];
+  const mainItems = getMainNavigationItems(user, access.canViewProjectScope);
 
   const workItems = [
     access.canViewTeamTasks ? { title: 'Team Tasks', url: '/team-tasks', icon: ClipboardList } : null,

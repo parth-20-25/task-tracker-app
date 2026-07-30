@@ -19,17 +19,21 @@ function user(role, permissions = []) {
 }
 
 for (const role of ["CEO", "Director"]) {
-  test(`${role} can access View Scope with the explicit permission`, () => {
+  test(`${role} can access Project Scope with the explicit permission`, () => {
     assert.doesNotThrow(() => assertProjectScopeAccess(user(role, [PERMISSIONS.VIEW_PROJECT_SCOPE])));
   });
 }
 
-test("CEO without the explicit permission cannot access View Scope", () => {
+test("Admin can access the Project Scope API without missing role permission configuration", () => {
+  assert.doesNotThrow(() => assertProjectScopeAccess(user("Admin")));
+});
+
+test("CEO without the explicit permission cannot access Project Scope", () => {
   assert.throws(() => assertProjectScopeAccess(user("CEO")), (error) => error.statusCode === 403 || error.status === 403);
 });
 
-for (const role of ["Team Leader", "Co-Leader", "Employee", "Admin"]) {
-  test(`${role} cannot access View Scope`, () => {
+for (const role of ["Team Leader", "Co-Leader", "Employee"]) {
+  test(`${role} cannot access Project Scope`, () => {
     assert.throws(() => assertProjectScopeAccess(user(role, [PERMISSIONS.VIEW_PROJECT_SCOPE])), (error) => error.statusCode === 403 || error.status === 403);
   });
 }
@@ -76,7 +80,7 @@ test("common fixture spelling variations classify once", () => {
   for (const [fixture_type, expected] of cases) assert.equal(classifyProjectScopeFixture({ fixture_type }), expected);
 });
 
-test("fixture quantity changes immediately change View Scope totals", () => {
+test("fixture quantity changes immediately change Project Scope totals", () => {
   const base = { project_id: "p", project_no: "P", project_name: "Project", fixture_id: "f", fixture_type: "SPM" };
   assert.equal(buildScopeRows([{ ...base, qty: 1 }])[0].total_scope, 1);
   assert.equal(buildScopeRows([{ ...base, qty: 9 }])[0].total_scope, 9);

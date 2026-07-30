@@ -180,7 +180,7 @@ const PERMISSION_DEFINITIONS = [
   [PERMISSIONS.VIEW_REPORTS, "View Reports", "Allows viewing reports."],
   [PERMISSIONS.EXPORT_REPORTS, "Export Reports", "Allows exporting reports."],
   [PERMISSIONS.RECEIVE_EXECUTIVE_DESKTOP_NOTIFICATIONS, "Receive Executive Desktop Notifications", "Allows receiving executive desktop notifications for project release events."],
-  [PERMISSIONS.VIEW_PROJECT_SCOPE, "View Project Scope", "Allows CEO and Director roles to view active project scope and planned hours."],
+  [PERMISSIONS.VIEW_PROJECT_SCOPE, "View Project Scope", "Allows Admin, CEO, and Director roles to view active project scope and planned hours."],
   [PERMISSIONS.EDIT_PROJECT_PLANNED_TIME, "Edit Project Planned Time", "Allows assigned Design leaders and co-leaders to edit authorized project planning stages."],
   [PERMISSIONS.VIEW_TEAM_ACTIVITY, "View Team Activity", "Allows leaders and co-leaders to view activity for employees in their mapped team."],
   [PERMISSIONS.VIEW_SELF_ANALYTICS, "View Self Analytics", "Allows viewing own personal KPIs."],

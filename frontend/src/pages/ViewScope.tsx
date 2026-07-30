@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 import { fetchProjectScope, type ProjectScopeRow } from "@/api/projectScopeApi";
@@ -50,6 +50,11 @@ function value(row: ProjectScopeRow, key: keyof ProjectScopeRow, decimals = fals
 export default function ViewScope() {
   const [search, setSearch] = useState("");
   const query = useQuery({ queryKey: ["project-scope"], queryFn: fetchProjectScope, refetchOnWindowFocus: false });
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = "Project Scope";
+    return () => { document.title = previousTitle; };
+  }, []);
   const projects = query.data?.projects ?? [];
   const normalizedSearch = search.trim().toLowerCase();
   const filteredProjects = normalizedSearch
@@ -65,7 +70,7 @@ export default function ViewScope() {
   return (
     <div className="flex h-[calc(100vh-7rem)] min-h-0 min-w-0 flex-col gap-3">
       <div>
-        <h1 className="text-lg font-semibold">View Scope</h1>
+        <h1 className="text-lg font-semibold">Project Scope</h1>
         <p className="text-xs text-muted-foreground">Active project WBS scope and normalized planned hours</p>
       </div>
 

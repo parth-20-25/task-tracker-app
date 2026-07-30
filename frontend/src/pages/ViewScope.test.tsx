@@ -32,11 +32,19 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
-describe("View Scope sheet", () => {
+describe("Project Scope sheet", () => {
   beforeEach(() => {
     queryClient.clear();
     fetchProjectScope.mockReset();
     fetchProjectScope.mockResolvedValue(scopeResponse);
+  });
+
+  it("uses the Project Scope heading and document title", async () => {
+    render(<ViewScope />, { wrapper });
+
+    expect(await screen.findByRole("heading", { name: "Project Scope" })).toBeInTheDocument();
+    expect(document.title).toBe("Project Scope");
+    expect(screen.queryByText("View Scope")).not.toBeInTheDocument();
   });
 
   it("renders API data, grouped planning columns, and missing planned time", async () => {

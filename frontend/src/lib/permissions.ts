@@ -442,7 +442,8 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canMarkControlDesignDispatched = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_PROJECTS_MARK_DISPATCHED);
   const canViewControlDesignAudit = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_AUDIT_VIEW);
   const canViewControlDesignReports = hasUserPermission(user, PERMISSIONS.CONTROL_DESIGN_REPORTS_VIEW);
-  const canViewProjectScope = isProjectScopeExecutiveUser(user) && hasUserPermission(user, PERMISSIONS.VIEW_PROJECT_SCOPE);
+  const canViewProjectScope = isAdminUser(user)
+    || (isProjectScopeExecutiveUser(user) && hasUserPermission(user, PERMISSIONS.VIEW_PROJECT_SCOPE));
   const canEditProjectPlannedTime = hasUserPermission(user, PERMISSIONS.EDIT_PROJECT_PLANNED_TIME);
   const canViewTeamActivity = hasUserPermission(user, PERMISSIONS.VIEW_TEAM_ACTIVITY);
 

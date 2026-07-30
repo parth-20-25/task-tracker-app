@@ -32,7 +32,7 @@ const TeamActivity = React.lazy(() => import("./pages/TeamActivity"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
 
-function AppLayoutRoutes() {
+export function AppLayoutRoutes() {
   const { access, user } = useAuth();
   const canAccessAdditionalDesignTasks = isDesignDepartment(user) || isProjectAuthorityUser(user);
   const canViewTeamActivity = access.canViewTeamActivity && hasMappedTeamMembers(user);

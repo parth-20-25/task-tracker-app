@@ -8,6 +8,7 @@ export type TaskType = 'department_workflow' | 'custom' | 'additional_design' | 
 export type TaskScopeType = 'project' | 'fixture';
 export type AdditionalDesignTaskKind =
   | 'DESIGN_3D_ADDITIONAL_DAP_POINTS'
+  | 'DESIGN_3D_ADDITIONAL_MOM'
   | 'Drafting'
   | 'Print & Drafting Checking'
   | 'BOM Checking'

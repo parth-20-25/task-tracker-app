@@ -8,6 +8,7 @@ const {
   ADDITIONAL_DESIGN_3D_TASK_KINDS,
   ADDITIONAL_DESIGN_TASK_KINDS,
   DESIGN_3D_ADDITIONAL_DAP_POINTS,
+  DESIGN_3D_ADDITIONAL_MOM,
   getAdditionalDesignTaskLabel,
   getAdditionalDesignTaskKindsForTeam,
   normalizeAdditionalDesignTaskKind,
@@ -37,6 +38,7 @@ test("additional design task catalog is subdivision specific", () => {
   ]);
   assert.deepEqual(ADDITIONAL_DESIGN_3D_TASK_KINDS, [
     DESIGN_3D_ADDITIONAL_DAP_POINTS,
+    DESIGN_3D_ADDITIONAL_MOM,
     "Project Process",
     "Pin Matrix",
     "PPT",
@@ -57,6 +59,8 @@ test("additional task kind and team normalization is canonical and rejects wrong
   assert.equal(normalizeAdditionalDesignTaskKind(" pin matrix ", "3D"), "Pin Matrix");
   assert.equal(normalizeAdditionalDesignTaskKind("DAP Points", "3D"), DESIGN_3D_ADDITIONAL_DAP_POINTS);
   assert.equal(getAdditionalDesignTaskLabel(DESIGN_3D_ADDITIONAL_DAP_POINTS), "DAP Points");
+  assert.equal(normalizeAdditionalDesignTaskKind("MOM", "3D"), DESIGN_3D_ADDITIONAL_MOM);
+  assert.equal(getAdditionalDesignTaskLabel(DESIGN_3D_ADDITIONAL_MOM), "MOM");
   assert.equal(normalizeAdditionalDesignTaskKind("Production Drawing", "3D"), null);
   assert.equal(normalizeAdditionalDesignTeam("2d"), "2D");
   assert.equal(normalizeAdditionalDesignTeam("4D"), null);
@@ -142,6 +146,17 @@ test("DAP Points stays independent from the workflow DAP stage", () => {
     workflow_stage: "DAP",
   }), false);
 });
+test("MOM uses its stable 3D additional-task identity and standard proof-backed lifecycle", () => {
+  assert.notEqual(DESIGN_3D_ADDITIONAL_MOM, "MOM");
+  assert.equal(isTaskWorkProofRequired({
+    task_type: "additional_design",
+    proof_required: true,
+    design_team: "3D",
+    scope_type: "project",
+    fixture_id: null,
+    additional_task_kind: DESIGN_3D_ADDITIONAL_MOM,
+  }), true);
+});
 test("schema permits proof-free only for the six 3D project additional task kinds", () => {
   const sources = [
     fs.readFileSync(path.join(__dirname, "..", "migrations.js"), "utf8"),
@@ -167,6 +182,8 @@ test("schema permits proof-free only for the six 3D project additional task kind
     assert.match(proofRule, /fixture_id IS NULL/);
     assert.doesNotMatch(proofRule, /Print/);
     assert.doesNotMatch(proofRule, /Drafting Checking/);
+    assert.doesNotMatch(proofRule, /DESIGN_3D_ADDITIONAL_MOM/);
+    assert.match(constraint, /DESIGN_3D_ADDITIONAL_MOM/);
   }
 });
 

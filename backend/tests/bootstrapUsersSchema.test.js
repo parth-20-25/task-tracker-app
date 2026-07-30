@@ -5,16 +5,17 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 
 const { ensureUsersTable } = require("../repositories/bootstrapRepository");
 
-test("ensureUsersTable adds profile columns selected by shared user queries", async () => {
-  const statements = [];
+test("ensureUsersTable adds profile columns and applies the guarded employee name correction", async () => {
+  const queries = [];
   const client = {
-    async query(sql) {
-      statements.push(String(sql).replace(/\s+/g, " ").trim());
+    async query(sql, params) {
+      queries.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
       return { rows: [], rowCount: 0 };
     },
   };
 
   await ensureUsersTable(client);
+  const statements = queries.map((query) => query.sql);
 
   const expectedColumns = [
     "username TEXT",
@@ -33,4 +34,12 @@ test("ensureUsersTable adds profile columns selected by shared user queries", as
       `missing users.${column.split(" ")[0]} startup migration`,
     );
   }
+
+  const nameCorrection = queries.find((query) => query.sql.includes("UPDATE users SET name = $2"));
+  assert.deepEqual(
+    nameCorrection?.params,
+    ["650", "PRITHVIRAJ KHANDAGALE", "PRUTHIRAJ KHANDAGALE"],
+  );
+  assert.match(nameCorrection.sql, /WHERE employee_id = \$1 AND name = \$3/);
+  assert.match(nameCorrection.sql, /UPDATE users SET name = \$2, updated_at = NOW\(\) WHERE/);
 });

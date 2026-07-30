@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ADDITIONAL_DESIGN_TASK_CATALOG, DESIGN_3D_ADDITIONAL_DAP_POINTS, getAdditionalDesignTaskLabel, shouldHideAdditionalDesignTasks } from "@/lib/additionalDesignTasks";
+import { ADDITIONAL_DESIGN_TASK_CATALOG, DESIGN_3D_ADDITIONAL_DAP_POINTS, DESIGN_3D_ADDITIONAL_MOM, getAdditionalDesignTaskLabel, shouldHideAdditionalDesignTasks } from "@/lib/additionalDesignTasks";
 import type { User } from "@/types";
 
 function designUser(subdivision: string) {
@@ -25,5 +25,12 @@ describe("DAP Points catalog identity", () => {
     expect(ADDITIONAL_DESIGN_TASK_CATALOG["3D"]).toContain(DESIGN_3D_ADDITIONAL_DAP_POINTS);
     expect(DESIGN_3D_ADDITIONAL_DAP_POINTS).not.toBe("DAP");
     expect(getAdditionalDesignTaskLabel(DESIGN_3D_ADDITIONAL_DAP_POINTS)).toBe("DAP Points");
+  });
+});
+describe("MOM catalog identity", () => {
+  it("uses the stable 3D additional-task identifier and MOM label", () => {
+    expect(ADDITIONAL_DESIGN_TASK_CATALOG["3D"]).toContain(DESIGN_3D_ADDITIONAL_MOM);
+    expect(DESIGN_3D_ADDITIONAL_MOM).not.toBe("MOM");
+    expect(getAdditionalDesignTaskLabel(DESIGN_3D_ADDITIONAL_MOM)).toBe("MOM");
   });
 });

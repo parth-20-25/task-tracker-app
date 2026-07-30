@@ -92,6 +92,16 @@ async function ensureUsersTable(client) {
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_updated_at TIMESTAMP`);
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id VARCHAR(50)`);
   await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+  await client.query(
+    `
+      UPDATE users
+      SET name = $2,
+          updated_at = NOW()
+      WHERE employee_id = $1
+        AND name = $3
+    `,
+    ["650", "PRITHVIRAJ KHANDAGALE", "PRUTHIRAJ KHANDAGALE"],
+  );
 
   await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_users_parent_id
@@ -1483,7 +1493,7 @@ async function ensureReferenceTables(client) {
             additional_task_kind IN (
               'Drafting', 'Print & Drafting Checking', 'BOM Checking', 'Drawing Correction',
               'AutoCAD PDF', 'IGES Data', 'CMM Data', 'Line Layout', 'Mimic Display', 'Wear-Out Data',
-              'DESIGN_3D_ADDITIONAL_DAP_POINTS', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
+              'DESIGN_3D_ADDITIONAL_DAP_POINTS', 'DESIGN_3D_ADDITIONAL_MOM', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'CDRM', 'Print', 'Drafting Checking'
             )
             AND design_team IN ('2D', '3D')
             AND project_id IS NOT NULL
@@ -1501,7 +1511,7 @@ async function ensureReferenceTables(client) {
             AND (
               design_team <> '3D'
               OR (
-                additional_task_kind IN ('DESIGN_3D_ADDITIONAL_DAP_POINTS', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
+                additional_task_kind IN ('DESIGN_3D_ADDITIONAL_DAP_POINTS', 'DESIGN_3D_ADDITIONAL_MOM', 'Project Process', 'Pin Matrix', 'PPT', 'CBO', 'Line Layout', 'CDRM', 'Print', 'Drafting Checking', 'Print & Drafting Checking')
                 AND scope_type = 'project'
                 AND fixture_id IS NULL
               )

@@ -1,6 +1,7 @@
 import type { AdditionalDesignTaskKind, DesignTeam, User } from "@/types";
 
 export const DESIGN_3D_ADDITIONAL_DAP_POINTS = "DESIGN_3D_ADDITIONAL_DAP_POINTS" as const;
+export const DESIGN_3D_ADDITIONAL_MOM = "DESIGN_3D_ADDITIONAL_MOM" as const;
 
 export const ADDITIONAL_DESIGN_TASK_CATALOG: Record<DesignTeam, AdditionalDesignTaskKind[]> = {
   "2D": [
@@ -17,6 +18,7 @@ export const ADDITIONAL_DESIGN_TASK_CATALOG: Record<DesignTeam, AdditionalDesign
   ],
   "3D": [
     DESIGN_3D_ADDITIONAL_DAP_POINTS,
+    DESIGN_3D_ADDITIONAL_MOM,
     "Project Process",
     "Pin Matrix",
     "PPT",
@@ -48,5 +50,7 @@ export function shouldHideAdditionalDesignTasks(user: User | null | undefined) {
 }
 
 export function getAdditionalDesignTaskLabel(kind: AdditionalDesignTaskKind) {
-  return kind === DESIGN_3D_ADDITIONAL_DAP_POINTS ? "DAP Points" : kind;
+  if (kind === DESIGN_3D_ADDITIONAL_DAP_POINTS) return "DAP Points";
+  if (kind === DESIGN_3D_ADDITIONAL_MOM) return "MOM";
+  return kind;
 }

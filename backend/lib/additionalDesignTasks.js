@@ -1,4 +1,5 @@
 const DESIGN_3D_ADDITIONAL_DAP_POINTS = "DESIGN_3D_ADDITIONAL_DAP_POINTS";
+const DESIGN_3D_ADDITIONAL_MOM = "DESIGN_3D_ADDITIONAL_MOM";
 
 const ADDITIONAL_DESIGN_2D_TASK_KINDS = Object.freeze([
   "Drafting",
@@ -15,6 +16,7 @@ const ADDITIONAL_DESIGN_2D_TASK_KINDS = Object.freeze([
 
 const ADDITIONAL_DESIGN_3D_TASK_KINDS = Object.freeze([
   DESIGN_3D_ADDITIONAL_DAP_POINTS,
+  DESIGN_3D_ADDITIONAL_MOM,
   "Project Process",
   "Pin Matrix",
   "PPT",
@@ -38,13 +40,19 @@ const ADDITIONAL_DESIGN_TEAMS = Object.freeze(["2D", "3D"]);
 
 function normalizeAdditionalDesignTaskKind(value, team = null) {
   const normalized = String(value || "").trim().toLowerCase();
-  const canonicalValue = normalized === "dap points" ? DESIGN_3D_ADDITIONAL_DAP_POINTS.toLowerCase() : normalized;
+  const canonicalValue = normalized === "dap points"
+    ? DESIGN_3D_ADDITIONAL_DAP_POINTS.toLowerCase()
+    : normalized === "mom"
+      ? DESIGN_3D_ADDITIONAL_MOM.toLowerCase()
+      : normalized;
   const catalog = team ? ADDITIONAL_DESIGN_TASK_CATALOG[normalizeAdditionalDesignTeam(team)] || [] : ADDITIONAL_DESIGN_TASK_KINDS;
   return catalog.find((kind) => kind.toLowerCase() === canonicalValue) || null;
 }
 
 function getAdditionalDesignTaskLabel(kind) {
-  return kind === DESIGN_3D_ADDITIONAL_DAP_POINTS ? "DAP Points" : kind;
+  if (kind === DESIGN_3D_ADDITIONAL_DAP_POINTS) return "DAP Points";
+  if (kind === DESIGN_3D_ADDITIONAL_MOM) return "MOM";
+  return kind;
 }
 function normalizeAdditionalDesignTeam(value) {
   const normalized = String(value || "").trim().toUpperCase();
@@ -81,6 +89,7 @@ module.exports = {
   ADDITIONAL_DESIGN_TASK_KINDS,
   ADDITIONAL_DESIGN_TEAMS,
   DESIGN_3D_ADDITIONAL_DAP_POINTS,
+  DESIGN_3D_ADDITIONAL_MOM,
   getAdditionalDesignTaskKindsForTeam,
   getAdditionalDesignTaskLabel,
   normalizeAdditionalDesignTaskKind,

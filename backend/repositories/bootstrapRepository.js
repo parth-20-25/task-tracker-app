@@ -142,8 +142,6 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes INTEGER DEFAULT 0`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kpi_target NUMERIC`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kpi_status TEXT`,
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS machine_id TEXT`,
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS machine_name TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS location_tag TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_rule TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dependency_ids JSONB NOT NULL DEFAULT '[]'::jsonb`,
@@ -156,7 +154,6 @@ async function ensureTasksTable(client) {
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_mime TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof_size INTEGER`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP`,
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS shift_id TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_no TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_description TEXT`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_name TEXT`,
@@ -987,51 +984,6 @@ async function ensureReferenceTables(client) {
     )
   `);
 
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS issues (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      title TEXT NOT NULL,
-      description TEXT NOT NULL,
-      created_by VARCHAR(50) NOT NULL REFERENCES users(employee_id),
-      assigned_to VARCHAR(50) NOT NULL REFERENCES users(employee_id),
-      department_id TEXT REFERENCES departments(id),
-      priority TEXT NOT NULL DEFAULT 'MEDIUM',
-      status TEXT NOT NULL DEFAULT 'OPEN',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      CONSTRAINT issues_priority_check CHECK (priority IN ('LOW', 'MEDIUM', 'HIGH')),
-      CONSTRAINT issues_status_check CHECK (status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'))
-    )
-  `);
-
-  await safeCreateIndex(client, `
-    CREATE INDEX IF NOT EXISTS idx_issues_created_by_created_at
-    ON issues (created_by, created_at DESC)
-  `, "idx_issues_created_by_created_at");
-
-  await safeCreateIndex(client, `
-    CREATE INDEX IF NOT EXISTS idx_issues_assigned_to_created_at
-    ON issues (assigned_to, created_at DESC)
-  `, "idx_issues_assigned_to_created_at");
-
-  await safeCreateIndex(client, `
-    CREATE INDEX IF NOT EXISTS idx_issues_department_status
-    ON issues (department_id, status)
-  `, "idx_issues_department_status");
-
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS issue_comments (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      issue_id UUID NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
-      user_id VARCHAR(50) NOT NULL REFERENCES users(employee_id),
-      message TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await safeCreateIndex(client, `
-    CREATE INDEX IF NOT EXISTS idx_issue_comments_issue_created_at
-    ON issue_comments (issue_id, created_at ASC)
-  `, "idx_issue_comments_issue_created_at");
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS permissions (
@@ -1564,83 +1516,6 @@ async function ensureReferenceTables(client) {
     ) NOT VALID
   `);
 
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS shifts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      department_id TEXT REFERENCES departments(id),
-      start_time TIME,
-      end_time TIME,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await client.query(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS start_time TIME`);
-  await client.query(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS end_time TIME`);
-  await client.query(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
-  await client.query(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-  await client.query(`ALTER TABLE shifts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-  await client.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'shifts'
-          AND column_name = 'starts_at'
-      ) THEN
-        UPDATE shifts
-        SET start_time = COALESCE(start_time, starts_at);
-      END IF;
-    END $$;
-  `);
-  await client.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'shifts'
-          AND column_name = 'ends_at'
-      ) THEN
-        UPDATE shifts
-        SET end_time = COALESCE(end_time, ends_at);
-      END IF;
-    END $$;
-  `);
-
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS machines (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      department_id TEXT REFERENCES departments(id),
-      location TEXT,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await client.query(`ALTER TABLE machines ADD COLUMN IF NOT EXISTS location TEXT`);
-  await client.query(`ALTER TABLE machines ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
-  await client.query(`ALTER TABLE machines ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-  await client.query(`ALTER TABLE machines ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-  await client.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'machines'
-          AND column_name = 'location_tag'
-      ) THEN
-        UPDATE machines
-        SET location = COALESCE(location, location_tag);
-      END IF;
-    END $$;
-  `);
 
   await safeCreateIndex(client, `
     CREATE INDEX IF NOT EXISTS idx_users_role_department
@@ -1842,28 +1717,6 @@ async function seedPermissionsAndWorkflows(client) {
       default_proof_required: true,
       default_approval_required: true,
       default_due_days: 1,
-      escalation_level: 1,
-      eligible_role_ids: ["r4", "r7"],
-    },
-    {
-      departmentNames: ["production"],
-      template_name: "Shift Validation",
-      description: "Shift-level production validation for planned operational checks.",
-      default_priority: "medium",
-      default_proof_required: true,
-      default_approval_required: true,
-      default_due_days: 1,
-      escalation_level: 1,
-      eligible_role_ids: ["r4"],
-    },
-    {
-      departmentNames: ["production"],
-      template_name: "Machine Readiness",
-      description: "Pre-run machine readiness confirmation for production execution.",
-      default_priority: "high",
-      default_proof_required: true,
-      default_approval_required: true,
-      default_due_days: 0,
       escalation_level: 1,
       eligible_role_ids: ["r4", "r7"],
     },

@@ -78,3 +78,8 @@ screenshots/
 # local project notes
 PROJECT_INTELLIGENCE_DOCUMENT.md
 structure.txt
+
+# PARC Notify generated staging, validation, and release output
+.parc-notify-stage/
+.parc-notify-validation/
+PARC-Notify-*.zip

@@ -8,7 +8,8 @@ function user(role: string, permissions: string[] = []): User {
     employee_id: `${role}-1`,
     name: role,
     role_id: role,
-    role: { id: role, name: role, permissions: {}, scope: "global" },
+    department_id: "",
+    role: { id: role, name: role, hierarchy_level: role === "Admin" ? 1 : 6, permissions: {}, scope: "global" },
     permissions,
     is_active: true,
     created_at: "2026-01-01T00:00:00.000Z",
@@ -34,8 +35,15 @@ describe("Project Scope navigation", () => {
   });
 
   it("keeps unauthorized employees restricted even if the permission is misassigned", () => {
+
     expect(navigationFor(user("Employee", [PERMISSIONS.VIEW_PROJECT_SCOPE])).some(
       ({ title }) => title === "Project Scope",
     )).toBe(false);
+  });
+
+  it("never exposes removed feature navigation", () => {
+    const titles = navigationFor(user("Admin")).map(({ title }) => title);
+
+    expect(titles).not.toContain("Issues");
   });
 });

@@ -327,8 +327,6 @@ async function insertTask(task, client = pool) {
         approval_required,
         proof_required,
         planned_minutes,
-        machine_id,
-        machine_name,
         location_tag,
         recurrence_rule,
         dependency_ids,
@@ -371,9 +369,9 @@ async function insertTask(task, client = pool) {
       )
       VALUES (
         $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), $14,
-        $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24, $25::jsonb, $26, $27, $28,
-        $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43,
-        $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, NOW()
+        $15, $16, $17, $18, $19, $20::jsonb, $21, $22, $23::jsonb, $24, $25, $26,
+        $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41,
+        $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, NOW()
       )
       RETURNING id
     `;
@@ -395,8 +393,6 @@ async function insertTask(task, client = pool) {
     task.approval_required !== false,
     task.proof_required === true,
     task.planned_minutes,
-    task.machine_id,
-    task.machine_name,
     task.location_tag,
     task.recurrence_rule,
     JSON.stringify(task.dependency_ids || []),
@@ -648,8 +644,6 @@ async function updateTaskDetails(taskId, values, client = pool) {
   const hasDeadline = hasOwn(values, "deadline");
   const hasDepartmentId = hasOwn(values, "department_id");
   const hasPlannedMinutes = hasOwn(values, "planned_minutes");
-  const hasMachineId = hasOwn(values, "machine_id");
-  const hasMachineName = hasOwn(values, "machine_name");
   const hasLocationTag = hasOwn(values, "location_tag");
   const hasRecurrenceRule = hasOwn(values, "recurrence_rule");
   const hasDependencyIds = hasOwn(values, "dependency_ids");
@@ -672,23 +666,21 @@ async function updateTaskDetails(taskId, values, client = pool) {
           sla_due_date = CASE WHEN $7::boolean THEN COALESCE($8::timestamp, sla_due_date, due_date, deadline) ELSE sla_due_date END,
           department_id = CASE WHEN $9::boolean THEN $10::text ELSE department_id END,
           planned_minutes = CASE WHEN $11::boolean THEN $12::int ELSE planned_minutes END,
-          machine_id = CASE WHEN $13::boolean THEN $14::text ELSE machine_id END,
-          machine_name = CASE WHEN $15::boolean THEN $16::text ELSE machine_name END,
-          location_tag = CASE WHEN $17::boolean THEN $18::text ELSE location_tag END,
-          recurrence_rule = CASE WHEN $19::boolean THEN $20::text ELSE recurrence_rule END,
-          dependency_ids = CASE WHEN $21::boolean THEN $22::jsonb ELSE dependency_ids END,
-          requires_quality_approval = CASE WHEN $23::boolean THEN $24::boolean ELSE requires_quality_approval END,
-          approval_required = CASE WHEN $25::boolean THEN $26::boolean ELSE approval_required END,
-          proof_required = CASE WHEN $27::boolean THEN $28::boolean ELSE proof_required END,
-          tags = CASE WHEN $29::boolean THEN $30::jsonb ELSE tags END,
-          assigned_to = CASE WHEN $31::boolean THEN $32::text ELSE assigned_to END,
-          assignee_ids = CASE WHEN $33::boolean THEN $34::jsonb ELSE assignee_ids END,
-          assigned_user_id = CASE WHEN $35::boolean THEN $36::text ELSE assigned_user_id END,
-          assigned_at = CASE WHEN $31::boolean OR $33::boolean THEN NOW() ELSE assigned_at END,
-          next_escalation_at = CASE WHEN $37::boolean THEN $38::timestamp ELSE next_escalation_at END,
-          last_escalated_at = CASE WHEN $39::boolean THEN $40::timestamp ELSE last_escalated_at END,
+          location_tag = CASE WHEN $13::boolean THEN $14::text ELSE location_tag END,
+          recurrence_rule = CASE WHEN $15::boolean THEN $16::text ELSE recurrence_rule END,
+          dependency_ids = CASE WHEN $17::boolean THEN $18::jsonb ELSE dependency_ids END,
+          requires_quality_approval = CASE WHEN $19::boolean THEN $20::boolean ELSE requires_quality_approval END,
+          approval_required = CASE WHEN $21::boolean THEN $22::boolean ELSE approval_required END,
+          proof_required = CASE WHEN $23::boolean THEN $24::boolean ELSE proof_required END,
+          tags = CASE WHEN $25::boolean THEN $26::jsonb ELSE tags END,
+          assigned_to = CASE WHEN $27::boolean THEN $28::text ELSE assigned_to END,
+          assignee_ids = CASE WHEN $29::boolean THEN $30::jsonb ELSE assignee_ids END,
+          assigned_user_id = CASE WHEN $31::boolean THEN $32::text ELSE assigned_user_id END,
+          assigned_at = CASE WHEN $27::boolean OR $29::boolean THEN NOW() ELSE assigned_at END,
+          next_escalation_at = CASE WHEN $33::boolean THEN $34::timestamp ELSE next_escalation_at END,
+          last_escalated_at = CASE WHEN $35::boolean THEN $36::timestamp ELSE last_escalated_at END,
           updated_at = NOW()
-      WHERE id = $41::int
+      WHERE id = $37::int
     `,
     [
       hasTitle,
@@ -703,10 +695,6 @@ async function updateTaskDetails(taskId, values, client = pool) {
       values.department_id ?? null,
       hasPlannedMinutes,
       values.planned_minutes ?? null,
-      hasMachineId,
-      values.machine_id ?? null,
-      hasMachineName,
-      values.machine_name ?? null,
       hasLocationTag,
       values.location_tag ?? null,
       hasRecurrenceRule,

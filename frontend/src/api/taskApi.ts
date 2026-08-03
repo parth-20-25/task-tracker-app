@@ -30,8 +30,6 @@ interface UpdateTaskPayload {
   priority?: Task["priority"];
   deadline?: string;
   planned_minutes?: number;
-  machine_id?: string;
-  machine_name?: string;
   location_tag?: string;
   recurrence_rule?: string;
   dependency_ids?: number[];
@@ -57,8 +55,6 @@ export interface CreateTaskPayload {
   proof_required?: boolean;
   tags?: string[];
   planned_minutes?: number;
-  machine_id?: string;
-  machine_name?: string;
   location_tag?: string;
   recurrence_rule?: string;
   dependency_ids?: number[];
@@ -97,6 +93,29 @@ export function fetchTask(taskId: number | string) {
 
 export function fetchVerificationTasks() {
   return apiRequest<Task[]>("/tasks/verification-queue");
+}
+
+export interface BulkTaskApprovalResult {
+  requested_count: number;
+  eligible_count: number;
+  approved_count: number;
+  failed_count: number;
+  skipped_count: number;
+  approved_task_ids: number[];
+  results: Array<{
+    task_id: number;
+    status: "approved" | "failed" | "skipped";
+    title?: string | null;
+    message?: string;
+    eligible?: boolean;
+  }>;
+}
+
+export function approvePendingTasks(taskIds: number[]) {
+  return apiRequest<BulkTaskApprovalResult>("/tasks/verification-queue/approve-all", {
+    method: "POST",
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
 }
 
 export function createTask(task: CreateTaskPayload) {

@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchProjectDashboardSummary } from '@/api/designApi';
-import { updateTask } from '@/api/taskApi';
+import { approvePendingTasks, updateTask } from '@/api/taskApi';
 import { TaskGridSkeleton } from '@/components/LoadingSkeletons';
 import { TaskCard } from '@/components/TaskCard';
 import { SafeImage } from '@/components/SafeImage';
@@ -249,6 +249,7 @@ export default function TeamTasks() {
   const [groupByAssignee, setGroupByAssignee] = useState(false);
   const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
+  const approveAllInFlightRef = useRef(false);
 
   const teamTasks = access.canViewAllTasks ? tasks : [];
 
@@ -271,6 +272,26 @@ export default function TeamTasks() {
       return acc;
     }, {} as Record<TeamTaskStatusFilter, Task[]>);
   }, [filteredTasks]);
+  const reviewablePendingTasks = useMemo(() => {
+    return (groupedTasks.pending_verification || [])
+      .filter((task) => canReviewTask(task, user?.employee_id, access));
+  }, [access, groupedTasks, user?.employee_id]);
+
+  const refreshApprovalData = async () => {
+    await Promise.all([
+      refreshTasks(),
+      queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: taskQueryKeys.verificationQueue }),
+      queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
+      queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
+      queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: adminQueryKeys.users('assignable') }),
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "fixtures"] }),
+      queryClient.invalidateQueries({ queryKey: ["workflow"] }),
+    ]);
+  };
 
   const reviewMutation = useMutation({
     mutationFn: async ({ task, action, remarks }: { task: Task; action: 'approve' | 'reject'; remarks?: string }) => {
@@ -280,19 +301,8 @@ export default function TeamTasks() {
       });
     },
     onSuccess: async (result, variables) => {
-      await Promise.all([
-        refreshTasks(),
-        queryClient.invalidateQueries({ queryKey: taskQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: taskQueryKeys.verificationQueue }),
-        queryClient.invalidateQueries({ queryKey: ["projects", "summary"] }),
-        queryClient.invalidateQueries({ queryKey: projectQueryKeys.designProjectsRoot }),
-        queryClient.invalidateQueries({ queryKey: batchQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: analyticsQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: taskAssignmentQueryKeys.all }),
-        queryClient.invalidateQueries({ queryKey: adminQueryKeys.users('assignable') }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard", "fixtures"] }),
-        queryClient.invalidateQueries({ queryKey: ["workflow"] }),
-      ]);
+      await refreshApprovalData();
+
       setRejectingTask(null);
       setRejectionReason('');
       toast({
@@ -309,6 +319,45 @@ export default function TeamTasks() {
     },
   });
 
+  const bulkApproveMutation = useMutation({
+    mutationFn: (taskIds: number[]) => approvePendingTasks(taskIds),
+    onSuccess: async (result) => {
+      await refreshApprovalData();
+      const hasFailures = result.failed_count > 0;
+      toast({
+        title: hasFailures ? 'Approve all finished with failures' : 'Pending tasks approved',
+        description: hasFailures
+          ? `Approved ${result.approved_count} of ${result.eligible_count} eligible task(s). ${result.failed_count} failed and remain pending.`
+          : result.approved_count > 0
+            ? `Approved ${result.approved_count} pending task(s).`
+            : 'No eligible pending tasks to approve.',
+        variant: hasFailures ? 'destructive' : undefined,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: 'Approve all failed',
+        description: error instanceof Error ? error.message : 'Could not approve pending tasks.',
+        variant: 'destructive',
+      });
+    },
+    onSettled: () => {
+      approveAllInFlightRef.current = false;
+    },
+  });
+
+  const handleApproveAll = () => {
+    if (approveAllInFlightRef.current || bulkApproveMutation.isPending || reviewablePendingTasks.length === 0) {
+      return;
+    }
+
+    if (!window.confirm('Approve all eligible pending tasks?')) {
+      return;
+    }
+
+    approveAllInFlightRef.current = true;
+    bulkApproveMutation.mutate(reviewablePendingTasks.map((task) => task.id));
+  };
   const handleStatusChange = (value: string) => {
     const nextStatus = normalizeTeamTaskStatusFilter(value);
     const nextParams = new URLSearchParams(searchParams);
@@ -399,6 +448,20 @@ export default function TeamTasks() {
                 </div>
               ) : tab.value === 'pending_verification' ? (
                 <div className="space-y-3">
+                  {reviewablePendingTasks.length > 0 ? (
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-700"
+                        disabled={bulkApproveMutation.isPending || reviewMutation.isPending}
+                        onClick={handleApproveAll}
+                      >
+                        {bulkApproveMutation.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}
+                        {bulkApproveMutation.isPending ? 'Approving...' : 'Approve All'}
+                      </Button>
+                    </div>
+                  ) : null}
                   {list.map((task) => (
                     <ApprovalPendingCard
                       key={task.id}

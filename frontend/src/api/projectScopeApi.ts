@@ -26,6 +26,18 @@ export interface PendingProjectPlanningData {
   projects: Array<ProjectPlanningData["project"] & { stages: ProjectPlanningData["stages"] }>;
 }
 
+export interface ProjectScopeStageFixture {
+  fixture_no: string;
+  fixture_name: string;
+  assignee: string;
+}
+
+export interface ProjectScopeStageDetail {
+  label: string;
+  complete: boolean;
+  pending: ProjectScopeStageFixture[];
+  in_progress: ProjectScopeStageFixture[];
+}
 export interface ProjectScopeRow {
   project_id: string;
   sr_no: number;
@@ -47,6 +59,7 @@ export interface ProjectScopeRow {
   total_hours: number;
   days: number;
   unclassified_fixture_count: number;
+  stage_details: Record<"concept" | "dap" | "3d_finish" | "2d_finish", ProjectScopeStageDetail>;
 }
 
 export function fetchProjectScope() {

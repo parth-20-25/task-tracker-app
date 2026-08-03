@@ -24,8 +24,6 @@ export const PERMISSIONS = {
   MANAGE_ROLES: "can_manage_roles",
   MANAGE_WORKFLOWS: "can_manage_workflows",
   MANAGE_DEPARTMENTS: "can_manage_departments",
-  MANAGE_SHIFTS: "can_manage_shifts",
-  MANAGE_MACHINES: "can_manage_machines",
   MANAGE_KPIS: "can_manage_kpis",
   MANAGE_ESCALATION_RULES: "can_manage_escalation_rules",
   VIEW_REPORTS: "can_view_reports",
@@ -131,8 +129,6 @@ const ADMIN_PANEL_PERMISSIONS = [
   PERMISSIONS.MANAGE_USERS,
   PERMISSIONS.MANAGE_ROLES,
   PERMISSIONS.MANAGE_DEPARTMENTS,
-  PERMISSIONS.MANAGE_SHIFTS,
-  PERMISSIONS.MANAGE_MACHINES,
   PERMISSIONS.MANAGE_WORKFLOWS,
   PERMISSIONS.MANAGE_KPIS,
   PERMISSIONS.MANAGE_ESCALATION_RULES,
@@ -154,8 +150,6 @@ export interface UiAccess {
   canManageUsers: boolean;
   canManageRoles: boolean;
   canManageDepartments: boolean;
-  canManageShifts: boolean;
-  canManageMachines: boolean;
   canManageWorkflows: boolean;
   canUploadNativeDesignData: boolean;
   canUploadProofs: boolean;
@@ -407,8 +401,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
   const canManageUsers = hasUserPermission(user, PERMISSIONS.MANAGE_USERS);
   const canManageRoles = hasUserPermission(user, PERMISSIONS.MANAGE_ROLES);
   const canManageDepartments = hasUserPermission(user, PERMISSIONS.MANAGE_DEPARTMENTS);
-  const canManageShifts = hasUserPermission(user, PERMISSIONS.MANAGE_SHIFTS);
-  const canManageMachines = hasUserPermission(user, PERMISSIONS.MANAGE_MACHINES);
   const canManageWorkflows = hasUserPermission(user, PERMISSIONS.MANAGE_WORKFLOWS);
   const canUploadNativeDesignData = hasUserPermission(user, PERMISSIONS.UPLOAD_NATIVE_DESIGN_DATA);
   const canUploadProofs = hasUserPermission(user, PERMISSIONS.UPLOAD_PROOFS);
@@ -463,8 +455,6 @@ export function buildUiAccess(user: User | null | undefined): UiAccess {
     canManageUsers,
     canManageRoles,
     canManageDepartments,
-    canManageShifts,
-    canManageMachines,
     canManageWorkflows,
     canUploadNativeDesignData,
     canUploadProofs,

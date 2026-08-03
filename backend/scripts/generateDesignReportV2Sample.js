@@ -6,7 +6,7 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 const {
   buildDesignManagementReportModel,
   generateDesignProjectExecutionTemplateExcel,
-  generateDesignManagementPdf,
+
 } = require("../services/designReportService");
 const {
   buildDesignReportManagementSample,
@@ -502,12 +502,10 @@ async function main() {
   const sample = buildDesignReportManagementSample();
   const model = buildDesignManagementReportModel(sample);
   const xlsxPath = path.join(outputDir, "PARC2600M013_Rowa_4x2_Frunk_Project_Report_v2.xlsx");
-  const pdfPath = path.join(outputDir, "PARC2600M013_Rowa_4x2_Frunk_Project_Report_v2.pdf");
-  const htmlPath = path.join(outputDir, "PARC2600M013_Rowa_4x2_Frunk_Project_Report_v2_preview.html");
+const htmlPath = path.join(outputDir, "PARC2600M013_Rowa_4x2_Frunk_Project_Report_v2_preview.html");
   const jsonPath = path.join(outputDir, "PARC2600M013_Rowa_4x2_Frunk_Project_Report_v2_model.json");
 
-  await fs.writeFile(pdfPath, generateDesignManagementPdf(model));
-  await fs.writeFile(htmlPath, buildPreviewHtml(model), "utf8");
+await fs.writeFile(htmlPath, buildPreviewHtml(model), "utf8");
   await fs.writeFile(jsonPath, JSON.stringify(model, null, 2), "utf8");
   const screenshots = await maybeWriteScreenshots(htmlPath, outputDir)
     || await maybeWriteModelPreviewScreenshots(model, outputDir);

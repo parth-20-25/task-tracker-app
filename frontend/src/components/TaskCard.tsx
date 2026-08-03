@@ -201,10 +201,10 @@ export function TaskCard({ task, showActions = true, compact = false, extraActio
               <Timer className="h-3 w-3" />
               {formatDurationMinutes(task.actual_minutes)}/{formatDurationMinutes(task.planned_minutes)}
             </span>
-            {(task.machine_name || task.location_tag) && (
+            {task.location_tag && (
               <span className="flex items-center gap-1">
                 <MapPin className="h-3 w-3" />
-                {task.machine_name || task.location_tag}
+                {task.location_tag}
               </span>
             )}
             {task.requires_quality_approval && <span>Quality approval required</span>}

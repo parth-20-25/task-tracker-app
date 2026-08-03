@@ -58,6 +58,22 @@ describe("Project Scope sheet", () => {
     expect(screen.queryByText(/Kick Off|CDRM|BOM Date/i)).toBeNull();
   });
 
+  it("shows only pending and in-progress fixtures below the clicked stage cell", async () => {
+    fetchProjectScope.mockResolvedValue({ working_hours_per_day: 8, projects: [{ ...project, stage_details: {
+      concept: { label: "CONCEPT", complete: true, pending: [], in_progress: [] },
+      dap: { label: "DAP", complete: false, pending: [{ fixture_no: "F01", fixture_name: "Fixture One", assignee: "Neha" }], in_progress: [{ fixture_no: "F02", fixture_name: "Fixture Two", assignee: "Rahul" }] },
+      "3d_finish": { label: "3D Finish", complete: false, pending: [], in_progress: [] },
+      "2d_finish": { label: "2D Finish", complete: false, pending: [], in_progress: [] },
+    } }] });
+    render(<ViewScope />, { wrapper });
+    const conceptButton = await screen.findByRole("button", { name: "View CONCEPT fixtures for 25-119-LONG-PROJECT-NUMBER" });
+    expect(conceptButton.closest("td")).toHaveClass("bg-emerald-100");
+    fireEvent.click(screen.getByRole("button", { name: "View DAP fixtures for 25-119-LONG-PROJECT-NUMBER" }));
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getByText(/F01 · Fixture One · Neha/)).toBeInTheDocument();
+    expect(screen.getByText(/F02 · Fixture Two · Rahul/)).toBeInTheDocument();
+  });
   it("filters by project number and description, clears, and reports counts", async () => {
     render(<ViewScope />, { wrapper });
     const input = await screen.findByPlaceholderText("Search by project number or project name");

@@ -6,9 +6,7 @@ import {
   DepartmentSubdivision,
   EscalationRule,
   KpiDefinition,
-  Machine,
   Role,
-  Shift,
   User,
   Workflow,
   WorkflowStage,
@@ -119,39 +117,11 @@ export function deleteDepartmentSubdivision(departmentId: string, subdivisionId:
   );
 }
 
-export function fetchShifts() {
-  return apiRequest<Shift[]>("/shifts");
-}
 
-export function saveShift(shiftId: string, payload: Partial<Shift>) {
-  return apiRequest<Shift[]>(`/shifts/${shiftId}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-}
 
-export function deleteShift(shiftId: string) {
-  return apiRequest<{ success?: boolean }>(`/shifts/${shiftId}`, {
-    method: "DELETE",
-  });
-}
 
-export function fetchMachines() {
-  return apiRequest<Machine[]>("/machines");
-}
 
-export function saveMachine(machineId: string, payload: Partial<Machine>) {
-  return apiRequest<Machine[]>(`/machines/${machineId}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-}
 
-export function deleteMachine(machineId: string) {
-  return apiRequest<{ success?: boolean }>(`/machines/${machineId}`, {
-    method: "DELETE",
-  });
-}
 
 export function fetchKpiDefinitions() {
   return apiRequest<KpiDefinition[]>("/kpi-definitions");

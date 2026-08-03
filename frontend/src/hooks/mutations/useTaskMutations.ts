@@ -12,8 +12,6 @@ interface CreateTaskInput {
   priority: Task["priority"];
   deadline: string;
   planned_minutes?: number;
-  machine_id?: string;
-  machine_name?: string;
   location_tag?: string;
   recurrence_rule?: string;
   dependency_ids?: number[];
@@ -49,8 +47,6 @@ interface UpdateTaskInput {
   priority?: Task["priority"];
   deadline?: string;
   planned_minutes?: number;
-  machine_id?: string;
-  machine_name?: string;
   location_tag?: string;
   recurrence_rule?: string;
   dependency_ids?: number[];

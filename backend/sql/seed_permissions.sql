@@ -19,8 +19,6 @@ VALUES
   ('can_manage_roles', 'Manage Roles', 'Allows managing roles and permissions.'),
   ('can_manage_workflows', 'Manage Workflows', 'Allows managing workflow configuration.'),
   ('can_manage_departments', 'Manage Departments', 'Allows managing departments.'),
-  ('can_manage_shifts', 'Manage Shifts', 'Allows managing shifts.'),
-  ('can_manage_machines', 'Manage Machines', 'Allows managing machines.'),
   ('can_manage_task_templates', 'Manage Task Templates', 'Allows managing task templates.'),
   ('can_manage_kpis', 'Manage KPIs', 'Allows managing KPI definitions.'),
   ('can_manage_escalation_rules', 'Manage Escalation Rules', 'Allows managing escalation rules.'),

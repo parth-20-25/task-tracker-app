@@ -36,16 +36,6 @@ const {
 } = require("../repositories/usersRepository");
 const { filterUsersForScope } = require("./accessControlService");
 const {
-  deleteShift: deleteShiftRecord,
-  listShifts,
-  upsertShift,
-} = require("../repositories/shiftsRepository");
-const {
-  deleteMachine: deleteMachineRecord,
-  listMachines,
-  upsertMachine,
-} = require("../repositories/machinesRepository");
-const {
   deleteWorkflowTemplate: deleteWorkflowTemplateRecord,
   upsertWorkflowTemplate,
 } = require("../repositories/workflowTemplatesRepository");
@@ -415,55 +405,6 @@ async function deleteRole(actor, roleId) {
   return true;
 }
 
-async function saveShift(actor, payload) {
-  requireFields(payload, ["id", "name", "start_time", "end_time"]);
-  const shifts = await upsertShift(payload);
-  await createAuditLog({
-    userEmployeeId: actor.employee_id,
-    actionType: "shift_saved",
-    targetType: "shift",
-    targetId: payload.id,
-    metadata: payload,
-  });
-  return shifts;
-}
-
-async function deleteShift(actor, shiftId) {
-  await deleteShiftRecord(shiftId);
-  await createAuditLog({
-    userEmployeeId: actor.employee_id,
-    actionType: "shift_deleted",
-    targetType: "shift",
-    targetId: shiftId,
-    metadata: {},
-  });
-  return true;
-}
-
-async function saveMachine(actor, payload) {
-  requireFields(payload, ["id", "name"]);
-  const machines = await upsertMachine(payload);
-  await createAuditLog({
-    userEmployeeId: actor.employee_id,
-    actionType: "machine_saved",
-    targetType: "machine",
-    targetId: payload.id,
-    metadata: payload,
-  });
-  return machines;
-}
-
-async function deleteMachine(actor, machineId) {
-  await deleteMachineRecord(machineId);
-  await createAuditLog({
-    userEmployeeId: actor.employee_id,
-    actionType: "machine_deleted",
-    targetType: "machine",
-    targetId: machineId,
-    metadata: {},
-  });
-  return true;
-}
 
 async function deleteWorkflowTemplate(actor, templateId) {
   const deleted = await deleteWorkflowTemplateRecord(templateId);
@@ -538,9 +479,7 @@ module.exports = {
   deleteDepartment,
   deleteDepartmentSubdivision,
   deleteEscalationRule,
-  deleteMachine,
   deleteRole,
-  deleteShift,
   deleteUser,
   deleteWorkflowTemplate,
   getAdminReferenceData,
@@ -550,9 +489,7 @@ module.exports = {
   saveDepartmentSubdivision,
   saveEscalationRule,
   saveKpiDefinition,
-  saveMachine,
   saveRole,
-  saveShift,
   saveUser,
   saveWorkflowTemplate,
   toggleEscalationRule,

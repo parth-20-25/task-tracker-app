@@ -25,7 +25,6 @@ const Analytics = React.lazy(() => import("./pages/Analytics/AnalyticsDashboard"
 const Reports = React.lazy(() => import("./pages/Reports"));
 const DesignReportViewPage = React.lazy(() => import("./pages/DesignReportViewPage"));
 const Batches = React.lazy(() => import("./pages/Batches"));
-const Issues = React.lazy(() => import("./pages/Issues"));
 const AdditionalDesignTasks = React.lazy(() => import("./pages/AdditionalDesignTasks"));
 const ViewScope = React.lazy(() => import("./pages/ViewScope"));
 const TeamActivity = React.lazy(() => import("./pages/TeamActivity"));
@@ -43,7 +42,6 @@ export function AppLayoutRoutes() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/tasks" element={<MyTasks />} />
         <Route path="/tasks/:taskId" element={<TaskDetail />} />
-        <Route path="/issues" element={<Issues />} />
         <Route path="/batches" element={<Batches />} />
         {access.canViewProjectScope && <Route path="/view-scope" element={<ViewScope />} />}
         {canAccessAdditionalDesignTasks && <Route path="/additional-design-tasks" element={<AdditionalDesignTasks />} />}
@@ -51,7 +49,9 @@ export function AppLayoutRoutes() {
         {canViewTeamActivity && <Route path="/team-activity" element={<TeamActivity />} />}
         {access.canViewAnalytics && <Route path="/analytics/*" element={<Analytics />} />}
         {access.canViewReports && <Route path="/reports" element={<Reports />} />}
-        {access.canAccessAdminPanel && <Route path="/admin/*" element={<AdminPanel />} />}
+        {access.canAccessAdminPanel && ["/admin", "/admin/users", "/admin/roles", "/admin/departments", "/admin/workflows", "/admin/audit"].map((path) => (
+          <Route key={path} path={path} element={<AdminPanel />} />
+        ))}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </AppLayout>

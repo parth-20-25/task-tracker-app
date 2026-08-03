@@ -20,8 +20,6 @@ export const roles: Role[] = [
       can_manage_roles: true,
       can_manage_workflows: true,
       can_manage_departments: true,
-      can_manage_shifts: true,
-      can_manage_machines: true,
       can_manage_kpis: true,
       can_manage_escalation_rules: true,
       can_upload_proofs: true,

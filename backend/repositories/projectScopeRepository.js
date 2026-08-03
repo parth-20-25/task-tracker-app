@@ -23,14 +23,29 @@ async function listActiveProjectFixtureScopeRows(client = pool) {
       project.project_name AS project_description,
       NULL::text AS priority,
       fixture.id AS fixture_id,
+      fixture.fixture_no,
       fixture.fixture_type AS fixture_name,
       fixture.part_name AS fixture_description,
       fixture.fixture_type,
       fixture.part_name,
       fixture.remark,
-      fixture.qty AS quantity
+      fixture.qty AS quantity,
+      COALESCE(progress.stage_progress, '[]'::jsonb) AS stage_progress
     FROM design.projects project
     LEFT JOIN design.fixtures fixture ON fixture.project_id = project.id
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object(
+        'stage_name', workflow_progress.stage_name,
+        'status', workflow_progress.status,
+        'assigned_to', workflow_progress.assigned_to,
+        'assignee_name', assignee.name
+      ) ORDER BY workflow_progress.stage_order) AS stage_progress
+      FROM fixture_workflow_progress workflow_progress
+      LEFT JOIN users assignee
+        ON assignee.employee_id = workflow_progress.assigned_to
+        OR assignee.id::text = workflow_progress.assigned_to
+      WHERE workflow_progress.fixture_id = fixture.id
+    ) progress ON TRUE
     WHERE COALESCE(project.status, $1) = $1
     ORDER BY project.project_no, project.id, fixture.fixture_no
   `, [PROJECT_STATUSES.ACTIVE]);

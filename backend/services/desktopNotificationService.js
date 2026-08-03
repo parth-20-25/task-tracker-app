@@ -818,10 +818,13 @@ async function processDesktopNotificationOutboxBatch({ limit = 25 } = {}) {
       }
 
       try {
+        await client.query("SAVEPOINT desktop_notification_outbox_row");
         await processOutboxRow(rows[0], client);
         await markOutboxProcessed(rows[0].id, client);
+        await client.query("RELEASE SAVEPOINT desktop_notification_outbox_row");
         processed += 1;
       } catch (error) {
+        await client.query("ROLLBACK TO SAVEPOINT desktop_notification_outbox_row");
         await markOutboxFailed(rows[0].id, error, client);
         failed += 1;
       }

@@ -769,7 +769,6 @@ async function buildReport(user, reportType) {
     delay_minutes: isOverdue(task)
       ? Math.max(0, Math.round((Date.now() - new Date(task.deadline).getTime()) / 60000))
       : 0,
-    machine: task.machine_name || task.machine_id || "",
     location: task.location_tag || "",
   }));
 
@@ -791,7 +790,6 @@ async function buildReport(user, reportType) {
     { key: "planned_minutes", label: "Planned Minutes" },
     { key: "actual_minutes", label: "Actual Minutes" },
     { key: "delay_minutes", label: "Delay Minutes" },
-    { key: "machine", label: "Machine" },
     { key: "location", label: "Location" },
     { key: "deadline", label: "Deadline" },
     { key: "closed_at", label: "Closed At" },

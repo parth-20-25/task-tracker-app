@@ -386,8 +386,6 @@ function hasTaskDetailUpdate(payload) {
     "deadline",
     "department_id",
     "planned_minutes",
-    "machine_id",
-    "machine_name",
     "location_tag",
     "recurrence_rule",
     "dependency_ids",
@@ -1020,8 +1018,6 @@ async function createTaskForUser(user, payload = {}, options = {}) {
     proof_required: requestedProofRequired,
     source: requestedSource = null,
     tags: requestedTags = [],
-    machine_id: machineId = null,
-    machine_name: machineName = null,
     location_tag: locationTag = null,
     recurrence_rule: recurrenceRule = null,
     dependency_ids: dependencyIds = [],
@@ -1489,8 +1485,6 @@ async function createTaskForUser(user, payload = {}, options = {}) {
       approval_required: resolvedApprovalRequired,
       proof_required: resolvedProofRequired,
       planned_minutes: Number(payload.planned_minutes) || 0,
-      machine_id: machineId,
-      machine_name: machineName,
       location_tag: locationTag,
       recurrence_rule: recurrenceRule,
       dependency_ids: dependencyIds,
@@ -2497,113 +2491,10 @@ async function applyTaskStatusUpdate(user, task, nextStatus, remarks, auditMetad
 }
 
 async function applyTaskVerificationUpdate(user, task, verificationStatus, remarks) {
-  assertTaskPendingVerificationReview(user, task);
-  await resolveWorkflowReviewProgressRow(task, verificationStatus);
-
-  if (verificationStatus === VERIFICATION_STATUSES.REJECTED && !String(remarks || "").trim()) {
-    throw new AppError(400, "Remarks are required when rejecting a task");
-  }
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [task.id]);
-
-    const lockedTask = await findTaskById(task.id, client);
-    if (!lockedTask) {
-      throw new AppError(404, "Task not found");
-    }
-
-    assertTaskPendingVerificationReview(user, lockedTask);
-    let workflowProgressRow = await resolveWorkflowReviewProgressRow(lockedTask, verificationStatus, client);
-    const next = getVerificationOutcome(user, lockedTask, verificationStatus);
-    const closedAt = next.status === TASK_STATUSES.CLOSED ? new Date() : null;
-    const completionMetrics = next.status === TASK_STATUSES.CLOSED
-      ? await buildTaskCompletionMetrics(lockedTask, closedAt)
-      : {};
-
-    ensureTaskTransitionAllowed(lockedTask.status, next.status, { allowSameStatus: true });
-
-    if (
-      workflowProgressRow
-      && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS
-      && isCanonicalReviewTask(lockedTask)
-    ) {
-      await updateProgressRow(lockedTask.fixture_id, workflowProgressRow.stage_name, {
-        status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
-        completed_at: lockedTask.completed_at || lockedTask.submitted_at || new Date(),
-      }, client);
-      workflowProgressRow = {
-        ...workflowProgressRow,
-        status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
-      };
-    }
-
-    await updateTaskVerification(lockedTask.id, {
-      verification_status: next.verificationStatus,
-      remarks: remarks || null,
-      verified_at: closedAt,
-      status: next.status,
-      approval_stage: next.approvalStage,
-      closed_at: closedAt,
-      actual_minutes: completionMetrics.actual_minutes,
-      kpi_target: completionMetrics.kpi_target,
-      kpi_status: completionMetrics.kpi_status,
-      approved_at: next.status === TASK_STATUSES.CLOSED ? closedAt : null,
-      approved_by: next.status === TASK_STATUSES.CLOSED ? user.employee_id : null,
-      submitted_at: lockedTask.submitted_at || lockedTask.completed_at || closedAt || new Date(),
-      rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
-    }, client);
-
-    if (next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
-      await enqueueTaskUpdateRequiredOutbox(lockedTask, user.employee_id, remarks, client);
-    }
-
-    if (shouldAdvanceFixtureWorkflow(lockedTask, next.status)) {
-      await advanceWorkflowAfterTaskApproval({
-        project_id: lockedTask.project_id,
-        fixture_no: lockedTask.fixture_no,
-        department_id: lockedTask.department_id,
-        fixture_id: lockedTask.fixture_id,
-        task_id: lockedTask.id,
-        client,
-      });
-    } else if (workflowProgressRow && next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
-      await updateProgressRow(lockedTask.fixture_id, workflowProgressRow.stage_name, {
-        status: WORKFLOW_STATUSES.REJECTED,
-        completed_at: null,
-      }, client);
-      await rejectStageAttempt(lockedTask.fixture_id, workflowProgressRow.stage_name, new Date(), client);
-    }
-
-    await appendTaskActivity(lockedTask.id, {
-      userEmployeeId: user.employee_id,
-      actionType: next.activityType,
-      notes: remarks || null,
-      metadata: {
-        verification_status: next.verificationStatus,
-        workflow_status: next.status === TASK_STATUSES.CLOSED
-          ? WORKFLOW_STATUSES.APPROVED
-          : next.verificationStatus === VERIFICATION_STATUSES.REJECTED
-            ? WORKFLOW_STATUSES.REJECTED
-            : WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
-        workflow_id: lockedTask.workflow_id || null,
-        current_stage_id: lockedTask.current_stage_id || null,
-        current_stage_name: lockedTask.workflow_stage || null,
-      },
-    }, client);
-
-    await createAuditLog({
-      userEmployeeId: user.employee_id,
-      actionType: next.activityType,
-      targetType: "task",
-      targetId: lockedTask.id,
-      metadata: {
-        verification_status: verificationStatus,
-        remarks: remarks || null,
-      },
-    }, client);
-
+    await applyTaskVerificationUpdateInTransaction(user, task.id, verificationStatus, remarks, client);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2614,6 +2505,227 @@ async function applyTaskVerificationUpdate(user, task, verificationStatus, remar
 
 }
 
+async function applyTaskVerificationUpdateInTransaction(user, taskId, verificationStatus, remarks, client) {
+  await client.query("SELECT id FROM tasks WHERE id = $1::int FOR UPDATE", [taskId]);
+
+  const lockedTask = await findTaskById(taskId, client);
+  if (!lockedTask) {
+    throw new AppError(404, "Task not found");
+  }
+
+  assertTaskPendingVerificationReview(user, lockedTask);
+  let workflowProgressRow = await resolveWorkflowReviewProgressRow(lockedTask, verificationStatus, client);
+
+  if (verificationStatus === VERIFICATION_STATUSES.REJECTED && !String(remarks || "").trim()) {
+    throw new AppError(400, "Remarks are required when rejecting a task");
+  }
+
+  const next = getVerificationOutcome(user, lockedTask, verificationStatus);
+  const closedAt = next.status === TASK_STATUSES.CLOSED ? new Date() : null;
+  const completionMetrics = next.status === TASK_STATUSES.CLOSED
+    ? await buildTaskCompletionMetrics(lockedTask, closedAt)
+    : {};
+
+  ensureTaskTransitionAllowed(lockedTask.status, next.status, { allowSameStatus: true });
+
+  if (
+    workflowProgressRow
+    && workflowProgressRow.status === WORKFLOW_STATUSES.IN_PROGRESS
+    && isCanonicalReviewTask(lockedTask)
+  ) {
+    await updateProgressRow(lockedTask.fixture_id, workflowProgressRow.stage_name, {
+      status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+      completed_at: lockedTask.completed_at || lockedTask.submitted_at || new Date(),
+    }, client);
+    workflowProgressRow = {
+      ...workflowProgressRow,
+      status: WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+    };
+  }
+
+  await updateTaskVerification(lockedTask.id, {
+    verification_status: next.verificationStatus,
+    remarks: remarks || null,
+    verified_at: closedAt,
+    status: next.status,
+    approval_stage: next.approvalStage,
+    closed_at: closedAt,
+    actual_minutes: completionMetrics.actual_minutes,
+    kpi_target: completionMetrics.kpi_target,
+    kpi_status: completionMetrics.kpi_status,
+    approved_at: next.status === TASK_STATUSES.CLOSED ? closedAt : null,
+    approved_by: next.status === TASK_STATUSES.CLOSED ? user.employee_id : null,
+    submitted_at: lockedTask.submitted_at || lockedTask.completed_at || closedAt || new Date(),
+    rejection_count_increment: next.status === TASK_STATUSES.REWORK ? 1 : 0,
+  }, client);
+
+  if (next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
+    await enqueueTaskUpdateRequiredOutbox(lockedTask, user.employee_id, remarks, client);
+  }
+
+  if (shouldAdvanceFixtureWorkflow(lockedTask, next.status)) {
+    await advanceWorkflowAfterTaskApproval({
+      project_id: lockedTask.project_id,
+      fixture_no: lockedTask.fixture_no,
+      department_id: lockedTask.department_id,
+      fixture_id: lockedTask.fixture_id,
+      task_id: lockedTask.id,
+      client,
+    });
+  } else if (workflowProgressRow && next.verificationStatus === VERIFICATION_STATUSES.REJECTED) {
+    await updateProgressRow(lockedTask.fixture_id, workflowProgressRow.stage_name, {
+      status: WORKFLOW_STATUSES.REJECTED,
+      completed_at: null,
+    }, client);
+    await rejectStageAttempt(lockedTask.fixture_id, workflowProgressRow.stage_name, new Date(), client);
+  }
+
+  await appendTaskActivity(lockedTask.id, {
+    userEmployeeId: user.employee_id,
+    actionType: next.activityType,
+    notes: remarks || null,
+    metadata: {
+      verification_status: next.verificationStatus,
+      workflow_status: next.status === TASK_STATUSES.CLOSED
+        ? WORKFLOW_STATUSES.APPROVED
+        : next.verificationStatus === VERIFICATION_STATUSES.REJECTED
+          ? WORKFLOW_STATUSES.REJECTED
+          : WORKFLOW_STATUSES.SUBMITTED_FOR_VERIFICATION,
+      workflow_id: lockedTask.workflow_id || null,
+      current_stage_id: lockedTask.current_stage_id || null,
+      current_stage_name: lockedTask.workflow_stage || null,
+    },
+  }, client);
+
+  await createAuditLog({
+    userEmployeeId: user.employee_id,
+    actionType: next.activityType,
+    targetType: "task",
+    targetId: lockedTask.id,
+    metadata: {
+      verification_status: verificationStatus,
+      remarks: remarks || null,
+    },
+  }, client);
+}
+
+function normalizeBulkApprovalTaskIds(taskIds) {
+  if (!Array.isArray(taskIds)) {
+    throw new AppError(400, "task_ids must be an array");
+  }
+
+  const normalizedIds = [];
+  for (const value of taskIds) {
+    const taskId = Number(value);
+    if (!Number.isInteger(taskId) || taskId <= 0) {
+      throw new AppError(400, "task_ids must contain positive task ids");
+    }
+    normalizedIds.push(taskId);
+  }
+
+  return [...new Set(normalizedIds)];
+}
+
+function summarizeBulkApproval(results, requestedCount) {
+  const approved = results.filter((result) => result.status === "approved");
+  const failed = results.filter((result) => result.status === "failed");
+  const skipped = results.filter((result) => result.status === "skipped");
+  const eligible = results.filter((result) => result.eligible !== false && result.status !== "skipped");
+
+  return {
+    requested_count: requestedCount,
+    eligible_count: eligible.length,
+    approved_count: approved.length,
+    failed_count: failed.length,
+    skipped_count: skipped.length,
+    approved_task_ids: approved.map((result) => result.task_id),
+    results,
+  };
+}
+
+async function approvePendingTasksForUser(user, payload = {}) {
+  if (!hasPermission(user, PERMISSIONS.APPROVE_COMPLETED_TASK) && !hasPermission(user, PERMISSIONS.APPROVE_QUALITY)) {
+    throw new AppError(403, "Task approval permission is required");
+  }
+
+  const requestedTaskIds = hasOwn(payload, "task_ids")
+    ? normalizeBulkApprovalTaskIds(payload.task_ids)
+    : null;
+
+  if (requestedTaskIds && requestedTaskIds.length === 0) {
+    return summarizeBulkApproval([], 0);
+  }
+
+  const client = await pool.connect();
+  const results = [];
+  const approvedTaskIds = [];
+
+  try {
+    await client.query("BEGIN");
+    const queue = await listVerificationTasksByAccess(getTaskAccess(user), user.employee_id, client, {
+      excludeCurrentUser: !hasPermission(user, PERMISSIONS.SELF_APPROVE),
+    });
+    const queueById = new Map(queue.map((task) => [Number(task.id), task]));
+    const candidateIds = requestedTaskIds || queue.map((task) => Number(task.id));
+
+    if (requestedTaskIds) {
+      for (const taskId of requestedTaskIds) {
+        if (!queueById.has(taskId)) {
+          results.push({
+            task_id: taskId,
+            status: "failed",
+            eligible: false,
+            message: "Task is not pending or you are not authorized to approve it",
+          });
+        }
+      }
+    }
+
+    for (const taskId of candidateIds) {
+      const task = queueById.get(taskId);
+      if (!task) {
+        continue;
+      }
+
+      await client.query("SAVEPOINT approve_all_task");
+      try {
+        await applyTaskVerificationUpdateInTransaction(user, task.id, VERIFICATION_STATUSES.APPROVED, null, client);
+        await client.query("RELEASE SAVEPOINT approve_all_task");
+        approvedTaskIds.push(task.id);
+        results.push({
+          task_id: task.id,
+          status: "approved",
+          title: task.title || null,
+        });
+      } catch (error) {
+        await client.query("ROLLBACK TO SAVEPOINT approve_all_task");
+        await client.query("RELEASE SAVEPOINT approve_all_task").catch(() => undefined);
+        results.push({
+          task_id: task.id,
+          status: "failed",
+          title: task.title || null,
+          message: error instanceof Error ? error.message : "Approval failed",
+        });
+      }
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  for (const taskId of approvedTaskIds) {
+    const updatedTask = await findTaskById(taskId).catch(() => null);
+    if (updatedTask) {
+      await refreshTaskPerformanceAnalytics(updatedTask);
+    }
+  }
+
+  return summarizeBulkApproval(results, requestedTaskIds ? requestedTaskIds.length : results.length);
+}
 function getVerificationOutcome(user, task, requestedStatus) {
   if (requestedStatus === VERIFICATION_STATUSES.REJECTED) {
     return {
@@ -3183,6 +3295,7 @@ async function applyTaskDetailUpdate(user, task, payload) {
 }
 
 module.exports = instrumentModuleExports("service.taskService", {
+  approvePendingTasksForUser,
   cancelTaskForUser,
   canCancelTask,
   canUpdateTaskProof,

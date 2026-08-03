@@ -9,7 +9,7 @@ vi.mock("@/components/PWAUpdatePrompt", () => ({ PWAUpdatePrompt: () => null }))
 vi.mock("@/contexts/useAuth", () => ({
   useAuth: () => ({
     access: {
-      canAccessAdminPanel: false,
+      canAccessAdminPanel: true,
       canViewAnalytics: false,
       canViewProjectScope: true,
       canViewReports: false,
@@ -26,6 +26,8 @@ vi.mock("@/components/AppLayout", () => ({
 
 vi.mock("@/pages/ViewScope", () => ({ default: () => <h1>Project Scope route page</h1> }));
 
+vi.mock("@/pages/NotFound", () => ({ default: () => <h1>404 route page</h1> }));
+
 describe("Project Scope route compatibility", () => {
   it("opens the existing /view-scope route", async () => {
     render(
@@ -35,5 +37,17 @@ describe("Project Scope route compatibility", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Project Scope route page" })).toBeInTheDocument();
+  });
+});
+
+describe("Removed feature routes", () => {
+  it.each(["/issues", "/admin/shifts", "/admin/machines"])("renders the normal not-found route for %s", async (removedPath) => {
+    render(
+      <MemoryRouter initialEntries={[removedPath]}>
+        <Suspense><AppLayoutRoutes /></Suspense>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "404 route page" })).toBeInTheDocument();
   });
 });

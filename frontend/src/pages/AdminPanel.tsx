@@ -3,9 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   fetchAuditLogs,
   fetchAllDepartments,
-  fetchMachines,
   fetchRoles,
-  fetchShifts,
   fetchUsers,
   saveUser,
   updateUserStatus,
@@ -14,28 +12,22 @@ import {
   deleteRole,
   saveDepartment,
   deleteDepartment,
-  saveShift,
-  deleteShift,
-  saveMachine,
-  deleteMachine,
 } from "@/api/adminApi";
-import { AuditLog, Department, Machine, Role, Shift, User } from "@/types";
+import { AuditLog, Department, Role, User } from "@/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/useAuth";
 import { formatEmployeeDisplay } from "@/lib/employeeDisplay";
 import { RouteContentSkeleton } from "@/components/LoadingSkeletons";
-import { Building2, FileText, Settings, Shield, Users, Wrench, Clock3 } from "lucide-react";
+import { Building2, FileText, Settings, Shield, Users } from "lucide-react";
 
 const UsersTab = lazy(() => import("./admin/UsersTab"));
 const RolesTab = lazy(() => import("./admin/RolesTab"));
 const DepartmentsTab = lazy(() => import("./admin/DepartmentsTab"));
-const ShiftsTab = lazy(() => import("./admin/ShiftsTab"));
-const MachinesTab = lazy(() => import("./admin/MachinesTab"));
 const WorkflowsTab = lazy(() => import("./admin/WorkflowsTab"));
 const AuditTab = lazy(() => import("./admin/AuditTab"));
 
-const validTabs = ["users", "roles", "departments", "shifts", "machines", "workflows", "audit"] as const;
+const validTabs = ["users", "roles", "departments", "workflows", "audit"] as const;
 type AdminTab = typeof validTabs[number];
 
 export default function AdminPanel() {
@@ -47,8 +39,6 @@ export default function AdminPanel() {
     access.canManageUsers ? "users" : null,
     access.canManageRoles ? "roles" : null,
     access.canManageDepartments ? "departments" : null,
-    access.canManageShifts ? "shifts" : null,
-    access.canManageMachines ? "machines" : null,
     access.canManageWorkflows ? "workflows" : null,
     access.canViewAuditLogs ? "audit" : null,
   ].filter(Boolean) as AdminTab[]), [access]);
@@ -58,8 +48,6 @@ export default function AdminPanel() {
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [shifts, setShifts] = useState<Shift[]>([]);
-  const [machines, setMachines] = useState<Machine[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   useEffect(() => {
@@ -84,12 +72,6 @@ export default function AdminPanel() {
       case "departments":
         fetchAllDepartments().then(setDepartments).catch(() => undefined);
         break;
-      case "shifts":
-        fetchShifts().then(setShifts).catch(() => undefined);
-        break;
-      case "machines":
-        fetchMachines().then(setMachines).catch(() => undefined);
-        break;
       case "audit":
         fetchAuditLogs().then(setAuditLogs).catch(() => undefined);
         break;
@@ -109,8 +91,6 @@ export default function AdminPanel() {
           {access.canManageUsers && <TabsTrigger value="users"><Users className="h-3.5 w-3.5 mr-1.5" />Users</TabsTrigger>}
           {access.canManageRoles && <TabsTrigger value="roles"><Shield className="h-3.5 w-3.5 mr-1.5" />Roles</TabsTrigger>}
           {access.canManageDepartments && <TabsTrigger value="departments"><Building2 className="h-3.5 w-3.5 mr-1.5" />Departments</TabsTrigger>}
-          {access.canManageShifts && <TabsTrigger value="shifts"><Clock3 className="h-3.5 w-3.5 mr-1.5" />Shifts</TabsTrigger>}
-          {access.canManageMachines && <TabsTrigger value="machines"><Wrench className="h-3.5 w-3.5 mr-1.5" />Machines</TabsTrigger>}
           {access.canManageWorkflows && <TabsTrigger value="workflows"><Settings className="h-3.5 w-3.5 mr-1.5" />Workflows</TabsTrigger>}
           {access.canViewAuditLogs && <TabsTrigger value="audit"><FileText className="h-3.5 w-3.5 mr-1.5" />Audit Logs</TabsTrigger>}
         </TabsList>
@@ -214,60 +194,7 @@ export default function AdminPanel() {
           </Suspense>
         </TabsContent>}
 
-        {access.canManageShifts && <TabsContent value="shifts" className="mt-4">
-          <Suspense fallback={<RouteContentSkeleton />}>
-            <ShiftsTab
-              shifts={shifts}
-              onSave={async (payload) => {
-                try {
-                  setShifts(await saveShift(payload.id, payload));
-                  toast({ title: `Shift ${payload.id} saved` });
-                } catch (error) {
-                  toast({ title: "Shift save failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
-                  throw error;
-                }
-              }}
-              onDelete={async (shiftId) => {
-                try {
-                  await deleteShift(shiftId);
-                  setShifts(await fetchShifts());
-                  toast({ title: `Shift ${shiftId} deleted` });
-                } catch (error) {
-                  toast({ title: "Shift delete failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
-                  throw error;
-                }
-              }}
-            />
-          </Suspense>
-        </TabsContent>}
 
-        {access.canManageMachines && <TabsContent value="machines" className="mt-4">
-          <Suspense fallback={<RouteContentSkeleton />}>
-            <MachinesTab
-              machines={machines}
-              departments={departments}
-              onSave={async (payload) => {
-                try {
-                  setMachines(await saveMachine(payload.id, payload));
-                  toast({ title: `Machine ${payload.id} saved` });
-                } catch (error) {
-                  toast({ title: "Machine save failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
-                  throw error;
-                }
-              }}
-              onDelete={async (machineId) => {
-                try {
-                  await deleteMachine(machineId);
-                  setMachines(await fetchMachines());
-                  toast({ title: `Machine ${machineId} deleted` });
-                } catch (error) {
-                  toast({ title: "Machine delete failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
-                  throw error;
-                }
-              }}
-            />
-          </Suspense>
-        </TabsContent>}
 
         {access.canManageWorkflows && <TabsContent value="workflows" className="mt-4">
           <Suspense fallback={<RouteContentSkeleton />}>

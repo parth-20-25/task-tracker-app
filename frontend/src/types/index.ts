@@ -28,8 +28,6 @@ export type AdditionalDesignTaskKind =
   | 'Drafting Checking';
 export type DesignTeam = '2D' | '3D';
 export type TaskSource = 'admin_manual' | 'workflow_auto' | 'system_generated' | 'excel_import' | 'design_2d_completion';
-export type IssuePriority = 'LOW' | 'MEDIUM' | 'HIGH';
-export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 export type OutsourceStage = 'Concept' | '3D' | '2D';
 export type OutsourceStatus = 'outsourced' | 'completed' | 'brought_in_house';
 
@@ -134,8 +132,6 @@ export interface Task {
   actual_minutes: number;
   kpi_target?: number | null;
   kpi_status?: string | null;
-  machine_id?: string;
-  machine_name?: string;
   location_tag?: string;
   project_id?: string | null;
   project_status?: ProjectStatus;
@@ -367,30 +363,7 @@ export interface ProjectDashboardSummary {
   updated_at: string;
 }
 
-export interface IssueComment {
-  id: string;
-  issue_id: string;
-  user_id: string;
-  user_name?: string | null;
-  message: string;
-  created_at: string;
-}
 
-export interface Issue {
-  id: string;
-  title: string;
-  description: string;
-  created_by: string;
-  assigned_to: string;
-  department_id?: string | null;
-  priority: IssuePriority;
-  status: IssueStatus;
-  created_at: string;
-  creator?: User | null;
-  assignee?: User | null;
-  department?: Department | null;
-  comments?: IssueComment[];
-}
 
 export interface PerformanceAnalyticsContext {
   scope: "department_only" | "all_departments";
@@ -592,22 +565,6 @@ export interface Workflow {
   updated_at: string;
   stages?: WorkflowStage[];
   transitions?: WorkflowTransition[];
-}
-
-export interface Shift {
-  id: string;
-  name: string;
-  start_time: string;
-  end_time: string;
-  is_active?: boolean;
-}
-
-export interface Machine {
-  id: string;
-  name: string;
-  department_id?: string | null;
-  location?: string | null;
-  is_active?: boolean;
 }
 
 export interface TaskLog {

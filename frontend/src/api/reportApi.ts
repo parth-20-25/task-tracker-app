@@ -1,11 +1,11 @@
-import { apiDownload, apiRequest } from "@/api/http";
+import { apiRequest } from "@/api/http";
 import { DesignProjectOption } from "@/types";
 
 export interface DesignReportFilters {
   department_id?: string;
   project_id?: string;
   report_type: "project";
-  format?: "pdf";
+
 }
 
 export interface DesignReportValidation {
@@ -123,24 +123,6 @@ export interface DesignReportDataResponse {
   model: DesignReportModel;
 }
 
-export async function downloadDesignReport(filters: DesignReportFilters, fileName: string) {
-  const params = new URLSearchParams();
-  params.set("report_type", filters.report_type);
-  params.set("format", filters.format || "pdf");
-
-  if (filters.department_id) {
-    params.set("department_id", filters.department_id);
-  }
-
-  if (filters.project_id) {
-    params.set("project_id", filters.project_id);
-  }
-
-  await apiDownload(`/reports/design/export?${params.toString()}`, {
-    filename: fileName,
-  });
-}
-
 export function fetchDesignReportProjects(departmentId?: string) {
   const params = new URLSearchParams();
 
@@ -152,7 +134,7 @@ export function fetchDesignReportProjects(departmentId?: string) {
   return apiRequest<DesignProjectOption[]>(`/reports/design/projects${suffix}`);
 }
 
-export function fetchDesignReportData(filters: Omit<DesignReportFilters, "format">) {
+export function fetchDesignReportData(filters: DesignReportFilters) {
   const params = new URLSearchParams();
   params.set("report_type", filters.report_type);
 

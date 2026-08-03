@@ -1,4 +1,5 @@
 const DEFAULT_WORKING_HOURS_PER_DAY = 8;
+const { normalizeDesignStageName } = require("./designWorkflowStages");
 
 const PLANNING_STAGES = Object.freeze([
   "CONCEPT",
@@ -77,11 +78,19 @@ function buildScopeRows(rows, plannedTimeByProject = new Map(), workingHoursPerD
         robotic_cell_shuttle: 0,
         servo_pumatic_gantry: 0,
         unclassified_fixture_count: 0,
+        fixtures: new Map(),
       };
       projects.set(row.project_id, project);
     }
 
     if (!row.fixture_id || row.is_deleted === true || row.is_active === false || String(row.fixture_status || row.status || "").trim().toLowerCase() === "cancelled") continue;
+    if (!project.fixtures.has(row.fixture_id)) {
+      project.fixtures.set(row.fixture_id, {
+        fixture_no: row.fixture_no || "—",
+        fixture_name: row.fixture_description || row.fixture_name || "—",
+        stage_progress: Array.isArray(row.stage_progress) ? row.stage_progress : [],
+      });
+    }
     const category = classifyProjectScopeFixture(row);
     if (!category) {
       project.unclassified_fixture_count += 1;
@@ -98,9 +107,37 @@ function buildScopeRows(rows, plannedTimeByProject = new Map(), workingHoursPerD
     const twoD = planned.TWO_D_FINISH ?? null;
     const totalScope = SCOPE_CATEGORIES.reduce((sum, category) => sum + project[CATEGORY_RESPONSE_KEYS[category]], 0);
     const totalHours = [concept, dap, threeD, twoD].reduce((sum, value) => sum + Number(value || 0), 0);
+    const stage_details = Object.fromEntries([
+      ["concept", "CONCEPT"],
+      ["dap", "DAP"],
+      ["3d_finish", "3D Finish"],
+      ["2d_finish", "2D Finish"],
+    ].map(([key, label]) => {
+      const fixtures = [...project.fixtures.values()];
+      const pending = [];
+      const in_progress = [];
+      for (const fixture of fixtures) {
+        const progress = fixture.stage_progress.find((item) => normalizeDesignStageName(item?.stage_name) === key);
+        if (String(progress?.status || "").toUpperCase() === "APPROVED") continue;
+        const item = {
+          fixture_no: fixture.fixture_no,
+          fixture_name: fixture.fixture_name,
+          assignee: progress?.assignee_name || progress?.assigned_to || "Unassigned",
+        };
+        if (["IN_PROGRESS", "SUBMITTED_FOR_VERIFICATION"].includes(String(progress?.status || "").toUpperCase())) in_progress.push(item);
+        else pending.push(item);
+      }
+      return [key, {
+        label,
+        complete: fixtures.length > 0 && pending.length === 0 && in_progress.length === 0,
+        pending,
+        in_progress,
+      }];
+    }));
 
+    const { fixtures, ...scopeProject } = project;
     return {
-      ...project,
+      ...scopeProject,
       sr_no: index + 1,
       total_scope: totalScope,
       concept_hours: concept,
@@ -109,6 +146,7 @@ function buildScopeRows(rows, plannedTimeByProject = new Map(), workingHoursPerD
       two_d_finish_hours: twoD,
       total_hours: totalHours,
       days: totalHours / workingHoursPerDay,
+      stage_details,
     };
   });
 }

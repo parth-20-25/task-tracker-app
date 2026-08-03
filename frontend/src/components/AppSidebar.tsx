@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, ClipboardList, Users, Settings, Shield, Building2, FileText, LogOut, ChevronDown, BarChart3,
-  MessageSquareWarning, PackageCheck, ListTodo, Table2,
+  PackageCheck, ListTodo, Table2,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/useAuth';
@@ -25,7 +25,6 @@ export function getMainNavigationItems(user: User | null | undefined, canViewPro
     { title: 'Dashboard', url: '/', icon: LayoutDashboard },
     ...(canViewProjectScope ? [{ title: 'Project Scope', url: '/view-scope', icon: Table2 }] : []),
     { title: 'My Tasks', url: '/tasks', icon: ClipboardList },
-    { title: 'Issues', url: '/issues', icon: MessageSquareWarning },
     { title: 'Projects', url: '/batches', icon: PackageCheck },
     ...((isDesignDepartment(user) || isProjectAuthorityUser(user)) && !shouldHideAdditionalDesignTasks(user)
       ? [{ title: 'Additional Tasks', url: '/additional-design-tasks', icon: ListTodo }]
@@ -64,8 +63,6 @@ export function AppSidebar() {
     access.canManageUsers ? { title: 'Users', url: '/admin/users', icon: Users } : null,
     access.canManageRoles ? { title: 'Roles', url: '/admin/roles', icon: Shield } : null,
     access.canManageDepartments ? { title: 'Departments', url: '/admin/departments', icon: Building2 } : null,
-    access.canManageShifts ? { title: 'Shifts', url: '/admin/shifts', icon: Settings } : null,
-    access.canManageMachines ? { title: 'Machines', url: '/admin/machines', icon: Building2 } : null,
     access.canManageWorkflows ? { title: 'Workflow Rules', url: '/admin/workflows', icon: Settings } : null,
     access.canViewAuditLogs ? { title: 'Audit Logs', url: '/admin/audit', icon: FileText } : null,
   ].filter(Boolean);

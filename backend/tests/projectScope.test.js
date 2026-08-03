@@ -135,3 +135,18 @@ test("planned-time schema is reversible and updates are optimistic", () => {
   assert.match(repository, /AND version = \$7/);
   assert.match(repository, /ON CONFLICT \(project_id, stage\) DO NOTHING/);
 });
+test("scope response includes fixture drill-down details", () => {
+  const [row] = buildScopeRows([{
+    project_id: "p",
+    project_no: "P",
+    project_name: "Project",
+    fixture_id: "fixture-1",
+    fixture_no: "F-1",
+    fixture_description: "Fixture one",
+    fixture_type: "SPM",
+    stage_progress: [{ stage_name: "DAP", status: "IN_PROGRESS", assignee_name: "Ava" }],
+  }]);
+  assert.equal(row.stage_details.dap.complete, false);
+  assert.deepEqual(row.stage_details.dap.in_progress, [{ fixture_no: "F-1", fixture_name: "Fixture one", assignee: "Ava" }]);
+  assert.equal(row.stage_details.concept.pending.length, 1);
+});

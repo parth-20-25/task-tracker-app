@@ -437,8 +437,6 @@ function buildProjectSupplementsQuery({ includeSnapshots = true } = {}) {
         workflow_rollup.three_d_owner_names,
         workflow_rollup.control_owner_names,
         workflow_rollup.last_workflow_at,
-        issue_rollup.blocking_issue_count,
-        issue_rollup.last_issue_at,
         audit_rollup.last_audit_at,
         ${snapshotSelect},
         fixture_rollup.last_fixture_at
@@ -551,20 +549,6 @@ function buildProjectSupplementsQuery({ includeSnapshots = true } = {}) {
         LEFT JOIN current_stage ON TRUE
         GROUP BY current_stage.stage_name, current_stage.stage_order
       ) workflow_rollup ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT
-          COUNT(*) FILTER (
-            WHERE i.status IN ('OPEN', 'IN_PROGRESS')
-              AND i.priority = 'HIGH'
-          )::integer AS blocking_issue_count,
-          MAX(i.created_at) AS last_issue_at
-        FROM issues i
-        WHERE i.department_id = p.department_id
-          AND (
-            i.description ILIKE '%' || p.project_no || '%'
-            OR i.title ILIKE '%' || p.project_no || '%'
-          )
-      ) issue_rollup ON TRUE
       LEFT JOIN LATERAL (
         SELECT MAX(a.timestamp) AS last_audit_at
         FROM audit_logs a
@@ -763,7 +747,6 @@ function buildProjectModels(projectSummaries, supplementsByProject, eventsByProj
       supplement.last_task_at,
       supplement.last_workflow_at,
       supplement.last_fixture_at,
-      supplement.last_issue_at,
       supplement.last_audit_at,
       supplement.last_snapshot_at,
     ]) || toDate(project.created_at);
@@ -772,7 +755,6 @@ function buildProjectModels(projectSummaries, supplementsByProject, eventsByProj
     const pendingOver24 = Number(supplement.pending_over_24_count || 0);
     const pendingOver48 = Number(supplement.pending_over_48_count || 0);
     const reworkCount = Number(supplement.rework_count || 0);
-    const blockingIssueCount = Number(supplement.blocking_issue_count || 0);
     const activeTaskCount = Number(supplement.active_task_count || project.active_tasks || 0);
     const stale = Boolean(lastUpdated && now.getTime() - lastUpdated.getTime() >= 7 * DAY_MS);
     const dueSoon = Boolean(dueAt && dueAt >= now && dueAt.getTime() - now.getTime() <= 7 * DAY_MS);
@@ -780,7 +762,6 @@ function buildProjectModels(projectSummaries, supplementsByProject, eventsByProj
     const atRisk = active && !overdue && (
       pendingOver24 > 0
       || reworkCount > 0
-      || blockingIssueCount > 0
       || stale
       || (dueSoon && progress < 100)
     );
@@ -799,7 +780,7 @@ function buildProjectModels(projectSummaries, supplementsByProject, eventsByProj
       ...currentAssignees,
     ]);
     const missingOwner = active && primaryOwnerNames.length === 0 && !project.team_lead_id && !supplement.project_leader_id;
-    const risk = overdue || pendingOver48 > 0 || reworkCount > 0 || blockingIssueCount > 0
+    const risk = overdue || pendingOver48 > 0 || reworkCount > 0
       ? "high"
       : atRisk
         ? "medium"
@@ -809,7 +790,6 @@ function buildProjectModels(projectSummaries, supplementsByProject, eventsByProj
       if (overdue) return "overdue";
       if (pendingApprovalCount > 0) return "pending_approval";
       if (reworkCount > 0) return "rework_required";
-      if (blockingIssueCount > 0) return "blocked";
       if (notStarted) return "not_started";
       return "in_progress";
     })();
@@ -840,7 +820,6 @@ function buildProjectModels(projectSummaries, supplementsByProject, eventsByProj
       pending_over_24_count: pendingOver24,
       pending_over_48_count: pendingOver48,
       rework_count: reworkCount,
-      blocking_issue_count: blockingIssueCount,
       active_task_count: activeTaskCount,
       status,
       risk,
@@ -912,7 +891,7 @@ function buildKpis(projects, approvalTasks, user, periodRange, now = new Date())
       label: "At Risk",
       value: atRisk.length,
       detail: `${percent(atRisk.length, activeProjects.length)}% of active projects`,
-      tooltip: "Active projects with due-soon incomplete work, pending approvals over 24 hours, rework, blocking issues, or no recent activity.",
+      tooltip: "Active projects with due-soon incomplete work, pending approvals over 24 hours, rework, blockers, or no recent activity.",
       tone: "amber",
     },
     {

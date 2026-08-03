@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
@@ -142,4 +144,13 @@ test("current-task selection exposes at most three server-authorized task choice
   assert.equal(notification.taskCount, 4);
   assert.equal(notification.taskOptions.length, 3);
   assert.deepEqual(notification.taskOptions.map((option) => option.taskId), ["1", "2", "3"]);
+});
+
+test("desktop notification persistence uses stable SQL types and recovers failed outbox rows", () => {
+  const repository = fs.readFileSync(path.join(__dirname, "../repositories/desktopNotificationRepository.js"), "utf8");
+  const service = fs.readFileSync(path.join(__dirname, "../services/desktopNotificationService.js"), "utf8");
+  assert.match(repository, /\$1::text.*employee_id::text = \$1::text/);
+  assert.match(repository, /SET status = 'in_progress',[\s\S]*LOWER\(COALESCE\(status, ''\)\) IN \('created', 'pending', 'assigned', 'in_progress', 'on_hold', 'rework', 'update_required'\)/);
+  assert.match(service, /SAVEPOINT desktop_notification_outbox_row/);
+  assert.match(service, /ROLLBACK TO SAVEPOINT desktop_notification_outbox_row/);
 });

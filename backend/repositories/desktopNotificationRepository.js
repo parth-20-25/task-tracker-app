@@ -193,7 +193,7 @@ async function createDesktopNotification(values, client = pool) {
         expires_at,
         dedupe_key
       )
-      VALUES ($1, COALESCE($2::uuid, (SELECT id FROM users WHERE employee_id = $1)), $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
+      VALUES ($1::text, COALESCE($2::uuid, (SELECT id FROM users WHERE employee_id::text = $1::text)), $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
       ON CONFLICT (dedupe_key) DO UPDATE
       SET title = EXCLUDED.title,
           body = EXCLUDED.body,
@@ -469,11 +469,15 @@ async function selectCurrentTaskForUser(userId, taskId, client = pool) {
   const result = await client.query(
     `
       UPDATE tasks
-      SET status = status,
+      SET status = 'in_progress',
+          lifecycle_status = 'in_progress',
+          started_at = COALESCE(started_at, NOW()),
           updated_at = NOW()
       WHERE id = $2::int
         AND COALESCE(assigned_user_id, assigned_to) = $1
-        AND LOWER(COALESCE(status, '')) = 'in_progress'
+        AND LOWER(COALESCE(status, '')) IN ('created', 'pending', 'assigned', 'in_progress', 'on_hold', 'rework', 'update_required')
+        AND COALESCE(verification_status, '') <> 'approved'
+        AND approved_at IS NULL
       RETURNING *
     `,
     [userId, taskId],

@@ -190,8 +190,6 @@ function mapTaskRow(row) {
     actual_minutes: row.actual_minutes || 0,
     kpi_target: row.kpi_target === null || row.kpi_target === undefined ? null : Number(row.kpi_target),
     kpi_status: row.kpi_status || null,
-    machine_id: row.machine_id,
-    machine_name: row.machine_name,
     location_tag: row.location_tag,
     recurrence_rule: row.recurrence_rule,
     project_id: row.resolved_project_id || null,

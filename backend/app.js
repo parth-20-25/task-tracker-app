@@ -27,7 +27,6 @@ const { workflowRoutes } = require("./routes/workflowRoutes");
 const { controlWorkflowRoutes } = require("./routes/controlWorkflowRoutes");
 const workflowAnalyticsRoutes = require("./routes/workflowAnalyticsRoutes");
 const { batchRoutes } = require("./routes/batchRoutes");
-const { issueRoutes } = require("./routes/issueRoutes");
 const { projectScopeRoutes } = require("./routes/projectScopeRoutes");
 const { teamActivityRoutes } = require("./routes/teamActivityRoutes");
 const { env } = require("./config/env");
@@ -50,6 +49,13 @@ function createApp() {
     res.send("Backend is running");
   });
 
+  app.use((req, res, next) => {
+    if (/^\/api\/(?:issues|shifts|machines)(?:\/|$)/.test(req.path)) {
+      return res.status(404).json({ message: "Not Found" });
+    }
+    return next();
+  });
+
   app.use("/api", retiredUploadRoutes);
   app.use("/api", authRoutes);
   app.use("/api", desktopNotificationRoutes);
@@ -60,7 +66,6 @@ function createApp() {
   app.use("/api", workflowRoutes);
   app.use("/api", controlWorkflowRoutes);
   app.use("/api", batchRoutes);
-  app.use("/api", issueRoutes);
   app.use("/api", projectScopeRoutes);
   app.use("/api", teamActivityRoutes);
   app.use("/api", analyticsRoutes);

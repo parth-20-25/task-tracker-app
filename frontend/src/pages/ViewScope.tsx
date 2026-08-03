@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 import { fetchProjectScope, type ProjectScopeRow } from "@/api/projectScopeApi";
@@ -23,10 +23,10 @@ const scopeColumns = [
 ] as const;
 
 const hoursColumns = [
-  ["concept_hours", "CONCEPT", 110],
-  ["dap_hours", "DAP", 100],
-  ["three_d_finish_hours", "3D FINISH", 110],
-  ["two_d_finish_hours", "2D FINISH", 110],
+  ["concept_hours", "CONCEPT", 110, "concept"],
+  ["dap_hours", "DAP", 100, "dap"],
+  ["three_d_finish_hours", "3D FINISH", 110, "3d_finish"],
+  ["two_d_finish_hours", "2D FINISH", 110, "2d_finish"],
 ] as const;
 
 const totalScopeWidth = 100;
@@ -39,6 +39,7 @@ const tableWidth = frozen.reduce((total, column) => total + column.width, 0)
   + totalHoursWidth
   + daysWidth;
 const tableColumnCount = frozen.length + scopeColumns.length + 1 + hoursColumns.length + 2;
+type ScopeStageKey = typeof hoursColumns[number][3];
 
 function value(row: ProjectScopeRow, key: keyof ProjectScopeRow, decimals = false, missing = "") {
   const current = row[key];
@@ -49,6 +50,7 @@ function value(row: ProjectScopeRow, key: keyof ProjectScopeRow, decimals = fals
 
 export default function ViewScope() {
   const [search, setSearch] = useState("");
+  const [selectedStage, setSelectedStage] = useState<{ projectId: string; stage: ScopeStageKey } | null>(null);
   const query = useQuery({ queryKey: ["project-scope"], queryFn: fetchProjectScope, refetchOnWindowFocus: false });
   useEffect(() => {
     const previousTitle = document.title;
@@ -77,23 +79,8 @@ export default function ViewScope() {
       <div className="flex items-center justify-between gap-4">
         <div className="relative w-full max-w-md">
           <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by project number or project name"
-            className="h-9 bg-white pl-9 pr-9"
-          />
-          {search ? (
-            <button
-              type="button"
-              aria-label="Clear project search"
-              onClick={() => setSearch("")}
-              className="absolute right-2 top-1/2 rounded p-1 text-muted-foreground hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <X aria-hidden="true" className="h-4 w-4" />
-            </button>
-          ) : null}
+          <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by project number or project name" className="h-9 bg-white pl-9 pr-9" />
+          {search ? <button type="button" aria-label="Clear project search" onClick={() => setSearch("")} className="absolute right-2 top-1/2 rounded p-1 text-muted-foreground hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
         </div>
         <span className="shrink-0 text-xs font-medium text-slate-600">{count}</span>
       </div>
@@ -116,11 +103,7 @@ export default function ViewScope() {
               <th colSpan={2} className="sticky top-0 z-40 box-border border-b border-r border-emerald-600 bg-emerald-800 px-2 text-center font-semibold">TOTALS</th>
             </tr>
             <tr className="h-14">
-              {frozen.map((column) => (
-                <th key={column.key} style={{ left: column.left, width: column.width, minWidth: column.width }} className={`sticky top-8 z-50 box-border border-b border-r border-slate-300 bg-slate-200 px-2 py-1 font-semibold leading-[1.15] ${column.align} ${column.key === "project_description" ? "shadow-[5px_0_7px_-5px_rgba(15,23,42,0.75)]" : ""}`}>
-                  {column.label}
-                </th>
-              ))}
+              {frozen.map((column) => <th key={column.key} style={{ left: column.left, width: column.width, minWidth: column.width }} className={`sticky top-8 z-50 box-border border-b border-r border-slate-300 bg-slate-200 px-2 py-1 font-semibold leading-[1.15] ${column.align} ${column.key === "project_description" ? "shadow-[5px_0_7px_-5px_rgba(15,23,42,0.75)]" : ""}`}>{column.label}</th>)}
               {scopeColumns.map(([key, label]) => <th key={key} className="sticky top-8 z-40 box-border border-b border-r border-slate-300 bg-slate-100 px-2 py-1 text-center font-semibold leading-[1.15]">{label}</th>)}
               <th className="sticky top-8 z-40 box-border border-b border-r border-slate-300 bg-blue-100 px-2 py-1 text-center font-bold leading-[1.15]">TOTAL SCOPE</th>
               {hoursColumns.map(([key, label]) => <th key={key} className="sticky top-8 z-40 box-border border-b border-r border-slate-300 bg-slate-100 px-2 py-1 text-center font-semibold leading-[1.15]">{label}</th>)}
@@ -131,24 +114,24 @@ export default function ViewScope() {
           <tbody>
             {filteredProjects.map((row, index) => {
               const rowBackground = index % 2 === 0 ? "bg-white" : "bg-slate-50";
-              return (
-                <tr key={row.project_id} className={`group h-10 ${rowBackground} hover:bg-blue-50`}>
-                  {frozen.map((column) => (
-                    <td key={column.key} style={{ left: column.left, width: column.width, minWidth: column.width }} className={`sticky z-20 box-border overflow-hidden whitespace-nowrap border-b border-r border-slate-200 px-2 py-1 group-hover:bg-blue-50 ${column.align} ${rowBackground} ${column.key === "project_description" ? "shadow-[5px_0_7px_-5px_rgba(15,23,42,0.45)]" : ""}`} title={String(row[column.key] ?? "")}>
-                      <span className="block overflow-hidden text-ellipsis whitespace-nowrap">{value(row, column.key)}</span>
-                    </td>
-                  ))}
+              const detail = selectedStage?.projectId === row.project_id ? row.stage_details?.[selectedStage.stage] : null;
+              return <Fragment key={row.project_id}>
+                <tr className={`group h-10 ${rowBackground} hover:bg-blue-50`}>
+                  {frozen.map((column) => <td key={column.key} style={{ left: column.left, width: column.width, minWidth: column.width }} className={`sticky z-20 box-border overflow-hidden whitespace-nowrap border-b border-r border-slate-200 px-2 py-1 group-hover:bg-blue-50 ${column.align} ${rowBackground} ${column.key === "project_description" ? "shadow-[5px_0_7px_-5px_rgba(15,23,42,0.45)]" : ""}`} title={String(row[column.key] ?? "")}><span className="block overflow-hidden text-ellipsis whitespace-nowrap">{value(row, column.key)}</span></td>)}
                   {scopeColumns.map(([key]) => <td key={key} className="box-border overflow-hidden border-b border-r border-slate-200 px-2 py-1 text-center tabular-nums">{value(row, key)}</td>)}
                   <td className="box-border overflow-hidden border-b border-r border-blue-200 bg-blue-50 px-2 py-1 text-center font-bold tabular-nums group-hover:bg-blue-100">{value(row, "total_scope")}</td>
-                  {hoursColumns.map(([key]) => <td key={key} className="box-border overflow-hidden border-b border-r border-slate-200 px-2 py-1 text-center tabular-nums">{value(row, key, true, "—")}</td>)}
+                  {hoursColumns.map(([key, label, , stage]) => {
+                    const stageDetail = row.stage_details?.[stage];
+                    const isSelected = selectedStage?.projectId === row.project_id && selectedStage.stage === stage;
+                    return <td key={key} className={`box-border overflow-hidden border-b border-r border-slate-200 p-0 text-center tabular-nums ${stageDetail?.complete ? "bg-emerald-100 text-emerald-950" : ""}`}><button type="button" aria-label={`View ${label} fixtures for ${row.project_no}`} onClick={() => setSelectedStage(isSelected ? null : { projectId: row.project_id, stage })} className="h-full w-full px-2 py-1 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600">{value(row, key, true, "—")}</button></td>;
+                  })}
                   <td className="box-border overflow-hidden border-b border-r border-emerald-200 bg-emerald-50 px-2 py-1 text-center font-bold tabular-nums group-hover:bg-emerald-100">{value(row, "total_hours", true, "—")}</td>
                   <td className="box-border overflow-hidden border-b border-r border-emerald-200 bg-emerald-50 px-2 py-1 text-center font-bold tabular-nums group-hover:bg-emerald-100">{value(row, "days", true, "—")}</td>
                 </tr>
-              );
+                {detail ? <tr><td colSpan={tableColumnCount} className="border-b border-slate-200 bg-slate-50 px-4 py-3"><div className="grid gap-3 md:grid-cols-2">{(["in_progress", "pending"] as const).map((group) => detail[group].length ? <div key={group}><p className="mb-1 font-semibold text-slate-700">{group === "in_progress" ? "In Progress" : "Pending"}</p><div className="space-y-1">{detail[group].map((fixture) => <p key={`${group}-${fixture.fixture_no}`} className="text-slate-600">{fixture.fixture_no} · {fixture.fixture_name} · {fixture.assignee}</p>)}</div></div> : null)}</div>{detail.pending.length || detail.in_progress.length ? null : <p className="text-slate-600">No pending or in-progress fixtures for {detail.label}.</p>}</td></tr> : null}
+              </Fragment>;
             })}
-            {!query.isLoading && filteredProjects.length === 0 ? (
-              <tr><td colSpan={tableColumnCount} className="border-b border-r border-slate-200 p-6 text-center text-sm text-muted-foreground">0 projects found</td></tr>
-            ) : null}
+            {!query.isLoading && filteredProjects.length === 0 ? <tr><td colSpan={tableColumnCount} className="border-b border-r border-slate-200 p-6 text-center text-sm text-muted-foreground">0 projects found</td></tr> : null}
           </tbody>
         </table>
         {query.isLoading ? <p className="p-6 text-center text-sm text-muted-foreground">Loading project scope…</p> : null}

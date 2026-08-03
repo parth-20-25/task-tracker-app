@@ -50,7 +50,6 @@ function inferFeature(route) {
   if (normalizedRoute.includes("/batches")) return "batch-management";
   if (normalizedRoute.includes("/reports")) return "reporting";
   if (normalizedRoute.includes("/login") || normalizedRoute.includes("/me")) return "authentication";
-  if (normalizedRoute.includes("/issues")) return "issues";
   if (normalizedRoute.includes("/admin")) return "admin";
 
   return "general";

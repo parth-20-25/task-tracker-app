@@ -84,9 +84,3 @@ export const batchQueryKeys = {
   all: ["batches"] as const,
 };
 
-export const issueQueryKeys = {
-  my: ["issues", "my"] as const,
-  assigned: ["issues", "assigned"] as const,
-  comments: (issueId: string) => ["issues", issueId, "comments"] as const,
-};
-

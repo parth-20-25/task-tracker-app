@@ -29,9 +29,6 @@ const {
   buildDesignManagementReportModel,
 } = require("./designReport/designReportManagementModel");
 const {
-  generateDesignManagementPdf,
-} = require("./designReport/designReportManagementPdf");
-const {
   assertDesignReportExportIntegrity,
   assertDesignReportTruthLayerComplete: assertWorkflowTruthLayerComplete,
   collectDesignReportTruthLayerErrors: collectWorkflowTruthLayerErrors,
@@ -886,12 +883,6 @@ function buildReportTitle(context) {
   const middleSegment = context.project_name;
 
   return `WBS-${context.project_no}-${middleSegment}-${context.customer_name}`;
-}
-
-function buildReportFileName(context, extension = "xlsx") {
-  const targetName = context.project_name;
-  const suffix = "Project_Wise_Design_Report_v2";
-  return `${sanitizeFileNamePart(context.project_no)}_${sanitizeFileNamePart(targetName)}_${suffix}.${extension}`;
 }
 
 function applyLinkCell(cell, url) {
@@ -2262,51 +2253,12 @@ async function getDesignReportData(user, query = {}, options = {}) {
   };
 }
 
-async function exportDesignReport(user, query = {}, options = {}) {
-  const requestedFormat = String(query.format || query.export_format || "xlsx").trim().toLowerCase();
-  const exportFormat = requestedFormat === "pdf" ? "pdf" : "xlsx";
-  const snapshot = await buildDesignReportSnapshot(user, query, options);
-  const { context, fixtures, reportData, model } = snapshot;
-
-  if (exportFormat === "pdf") {
-    return {
-      filename: buildReportFileName(context, "pdf"),
-      contentType: "application/pdf",
-      buffer: generateDesignManagementPdf(model),
-    };
-  }
-
-  const tempDirectory = await fs.mkdtemp(path.join(getReportTempRoot(), "design-report-"));
-  const finalPath = path.join(tempDirectory, buildReportFileName(context, "xlsx"));
-
-  try {
-    await generateTemplateExport({
-      context,
-      fixtures,
-      reportData,
-      filePath: finalPath,
-    });
-
-    const buffer = await fs.readFile(finalPath);
-
-    return {
-      filename: buildReportFileName(context, "xlsx"),
-      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      buffer,
-    };
-  } finally {
-    await fs.rm(tempDirectory, { recursive: true, force: true });
-  }
-}
-
 module.exports = {
   assertDesignReportExportIntegrity,
   assertDesignReportTruthLayerComplete: assertWorkflowTruthLayerComplete,
   buildDesignManagementReportModel,
   collectDesignReportTruthLayerErrors: collectWorkflowTruthLayerErrors,
-  exportDesignReport,
   getDesignReportData,
-  generateDesignManagementPdf,
   generateDesignProjectExecutionTemplateExcel: generateTemplateExport,
   generateRawScopeExcel,
   normalizeStoredImageUrl,

@@ -14,6 +14,7 @@ const {
 const { authenticate } = require("../middleware/authenticate");
 const { PERMISSIONS, PROJECT_STATUSES, TASK_TYPES } = require("../config/constants");
 const {
+  approvePendingTasksForUser,
   cancelTaskForUser,
   createTaskForUser,
   ensureTaskProofUpdateAllowed,
@@ -97,6 +98,14 @@ router.get(
   }),
 );
 
+router.post(
+  "/tasks/verification-queue/approve-all",
+  requireAnyPermission([PERMISSIONS.APPROVE_COMPLETED_TASK, PERMISSIONS.APPROVE_QUALITY]),
+  asyncHandler(async (req, res) => {
+    const result = await approvePendingTasksForUser(req.user, req.body || {});
+    return sendSuccess(res, result);
+  }),
+);
 router.get(
   "/task-assignment/reference-data",
   authorize(PERMISSIONS.ASSIGN_TASK),

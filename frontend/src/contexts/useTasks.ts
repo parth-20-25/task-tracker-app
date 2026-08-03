@@ -15,8 +15,6 @@ export interface NewTaskInput {
   proof_required?: boolean;
   tags?: string[];
   planned_minutes?: number;
-  machine_id?: string;
-  machine_name?: string;
   location_tag?: string;
   recurrence_rule?: string;
   dependency_ids?: number[];

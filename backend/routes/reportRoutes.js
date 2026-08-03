@@ -4,11 +4,10 @@ const { asyncHandler } = require("../lib/asyncHandler");
 const { authenticate } = require("../middleware/authenticate");
 const { authorize } = require("../middleware/authorize");
 const { listDesignProjectsForUser } = require("../services/projectCatalogService");
-const { exportDesignReport, getDesignReportData } = require("../services/designReportService");
+const { getDesignReportData } = require("../services/designReportService");
 const { buildReport, exportTaskReport, listTaskReportRows } = require("../services/reportService");
 
 const router = express.Router();
-
 router.use(authenticate);
 
 function getRequestOrigin(req) {
@@ -17,72 +16,20 @@ function getRequestOrigin(req) {
   return `${protocol}://${req.get("host")}`;
 }
 
-router.get(
-  "/reports/tasks",
-  authorize(PERMISSIONS.VIEW_REPORTS),
-  asyncHandler(async (req, res) => {
-    const reportRows = await listTaskReportRows(req.user, req.query);
-    return res.status(200).json(reportRows);
-  }),
-);
+router.get("/reports/tasks", authorize(PERMISSIONS.VIEW_REPORTS), asyncHandler(async (req, res) => res.status(200).json(await listTaskReportRows(req.user, req.query))));
+router.get("/reports/tasks/export", authorize(PERMISSIONS.EXPORT_REPORTS), asyncHandler(async (req, res) => {
+  const report = await exportTaskReport(req.user, req.query);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
+  return res.status(200).send(report.csv);
+}));
+router.get("/reports/design/projects", authorize(PERMISSIONS.EXPORT_REPORTS), asyncHandler(async (req, res) => res.status(200).json(await listDesignProjectsForUser(req.user, req.query.department_id, { activeOnly: false }))));
+router.get("/reports/design/data", authorize(PERMISSIONS.EXPORT_REPORTS), asyncHandler(async (req, res) => res.status(200).json(await getDesignReportData(req.user, req.query, { publicOrigin: getRequestOrigin(req) }))));
+router.get("/reports/:reportType.csv", authorize(PERMISSIONS.VIEW_REPORTS), asyncHandler(async (req, res) => {
+  const report = await buildReport(req.user, req.params.reportType);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
+  return res.status(200).send(report.csv);
+}));
 
-router.get(
-  "/reports/tasks/export",
-  authorize(PERMISSIONS.EXPORT_REPORTS),
-  asyncHandler(async (req, res) => {
-    const report = await exportTaskReport(req.user, req.query);
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
-    return res.status(200).send(report.csv);
-  }),
-);
-
-router.get(
-  "/reports/design/projects",
-  authorize(PERMISSIONS.EXPORT_REPORTS),
-  asyncHandler(async (req, res) => {
-    const projects = await listDesignProjectsForUser(req.user, req.query.department_id, {
-      activeOnly: false,
-    });
-    return res.status(200).json(projects);
-  }),
-);
-
-router.get(
-  "/reports/design/data",
-  authorize(PERMISSIONS.EXPORT_REPORTS),
-  asyncHandler(async (req, res) => {
-    const report = await getDesignReportData(req.user, req.query, {
-      publicOrigin: getRequestOrigin(req),
-    });
-    return res.status(200).json(report);
-  }),
-);
-
-router.get(
-  "/reports/design/export",
-  authorize(PERMISSIONS.EXPORT_REPORTS),
-  asyncHandler(async (req, res) => {
-    const report = await exportDesignReport(req.user, req.query, {
-      publicOrigin: getRequestOrigin(req),
-    });
-    res.setHeader("Content-Type", report.contentType);
-    res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
-    return res.status(200).send(report.buffer);
-  }),
-);
-
-router.get(
-  "/reports/:reportType.csv",
-  authorize(PERMISSIONS.VIEW_REPORTS),
-  asyncHandler(async (req, res) => {
-    const report = await buildReport(req.user, req.params.reportType);
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
-    return res.status(200).send(report.csv);
-  }),
-);
-
-module.exports = {
-  reportRoutes: router,
-};
+module.exports = { reportRoutes: router };

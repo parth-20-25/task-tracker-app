@@ -22,11 +22,7 @@ async function listTeamActivityRows(employeeId, client = pool) {
           member.name
         FROM visible_users visible
         JOIN users member ON member.employee_id = visible.employee_id
-        LEFT JOIN roles member_role ON member_role.id = member.role
-        WHERE member.employee_id <> $1
-          AND COALESCE(member.is_active, TRUE) = TRUE
-          AND LOWER(BTRIM(REGEXP_REPLACE(COALESCE(member_role.name, member.role, ''), '[^[:alnum:]]+', '_', 'g'), '_'))
-              NOT IN ('team_leader', 'line_manager', 'co_leader', 'team_co_leader', 'shift_incharge')
+        WHERE COALESCE(member.is_active, TRUE) = TRUE
       ),
       assigned_tasks AS (
         SELECT DISTINCT
@@ -61,6 +57,7 @@ async function listTeamActivityRows(employeeId, client = pool) {
         task.deadline,
         task.submitted_at,
         task.approved_at,
+        COALESCE(task.proof_url, '{}'::text[]) AS proof_url,
         COALESCE(project.project_no, NULLIF(task.project_no, '')) AS resolved_project_no,
         COALESCE(fixture.fixture_no, NULLIF(task.fixture_no, ''), NULLIF(task.quantity_index, '')) AS resolved_fixture_no,
         fixture.part_name AS resolved_fixture_name,
@@ -93,11 +90,7 @@ async function listTeamActivityRows(employeeId, client = pool) {
           member.name
         FROM visible_users visible
         JOIN users member ON member.employee_id = visible.employee_id
-        LEFT JOIN roles member_role ON member_role.id = member.role
-        WHERE member.employee_id <> $1
-          AND COALESCE(member.is_active, TRUE) = TRUE
-          AND LOWER(BTRIM(REGEXP_REPLACE(COALESCE(member_role.name, member.role, ''), '[^[:alnum:]]+', '_', 'g'), '_'))
-              NOT IN ('team_leader', 'line_manager', 'co_leader', 'team_co_leader', 'shift_incharge')
+        WHERE COALESCE(member.is_active, TRUE) = TRUE
       )
       SELECT
         member.employee_id,
@@ -117,6 +110,7 @@ async function listTeamActivityRows(employeeId, client = pool) {
         stage.due_date AS deadline,
         stage.submitted_at,
         stage.approved_at,
+        '{}'::text[] AS proof_url,
         project.project_no AS resolved_project_no,
         NULL::text AS resolved_fixture_no,
         NULL::text AS resolved_fixture_name,
@@ -149,6 +143,7 @@ async function listTeamActivityRows(employeeId, client = pool) {
         revision.due_date AS deadline,
         revision.submitted_at,
         revision.approved_at,
+        '{}'::text[] AS proof_url,
         project.project_no AS resolved_project_no,
         NULL::text AS resolved_fixture_no,
         NULL::text AS resolved_fixture_name,

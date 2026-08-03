@@ -166,9 +166,6 @@ async function loadUserReferenceDiagnostics() {
       UNION ALL SELECT 'fixture_workflow_revisions.requested_by', r.id::text, r.stage_name, r.requested_by::text FROM fixture_workflow_revisions r
       UNION ALL SELECT 'fixture_workflow_revisions.approved_by', r.id::text, r.stage_name, r.approved_by::text FROM fixture_workflow_revisions r
       UNION ALL SELECT 'fixture_workflow_revisions.changed_by', r.id::text, r.stage_name, r.changed_by::text FROM fixture_workflow_revisions r
-      UNION ALL SELECT 'issues.created_by', i.id::text, i.title, i.created_by::text FROM issues i
-      UNION ALL SELECT 'issues.assigned_to', i.id::text, i.title, i.assigned_to::text FROM issues i
-      UNION ALL SELECT 'issue_comments.user_id', ic.id::text, ic.issue_id::text, ic.user_id::text FROM issue_comments ic
       UNION ALL SELECT 'audit_logs.user_employee_id', a.id::text, a.action_type, a.user_employee_id::text FROM audit_logs a
       UNION ALL SELECT 'design.project_subdivision_assignments.assigned_leader_id', psa.id::text, psa.project_id::text, psa.assigned_leader_id::text FROM design.project_subdivision_assignments psa
       UNION ALL SELECT 'design.project_subdivision_assignments.assigned_by', psa.id::text, psa.project_id::text, psa.assigned_by::text FROM design.project_subdivision_assignments psa

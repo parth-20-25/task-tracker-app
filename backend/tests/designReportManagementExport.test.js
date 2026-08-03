@@ -9,7 +9,6 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@loc
 const {
   buildDesignManagementReportModel,
   generateDesignProjectExecutionTemplateExcel,
-  generateDesignManagementPdf,
 } = require("../services/designReportService");
 const {
   STATUS_COLORS,
@@ -383,17 +382,6 @@ async function run() {
     assert.equal(releasedTemplate.getCell("G14").value, "Status: Closed\nCurrent Stage: Completed");
     assert.equal(releasedTemplate.autoFilter, "A13:AM18");
 
-    const pdfBuffer = generateDesignManagementPdf(model);
-    assert.ok(pdfBuffer.length > 5000);
-    assert.equal(pdfBuffer.subarray(0, 8).toString("utf8"), "%PDF-1.4");
-    const pdfText = pdfBuffer.toString("utf8");
-    assert.match(pdfText, /Executive Summary/);
-    assert.match(pdfText, /PARC Task Control System/);
-    assert.match(pdfText, /SECTION 6 - FIXTURE BREAKDOWN/);
-    assert.match(pdfText, /FIXTURE STAGE DETAILS/);
-    assert.match(pdfText, /Fixture Stage Execution Audit/);
-    assert.match(pdfText, /Contribution % Not Recorded/);
-    assert.match(pdfText, /WORK PROOF HISTORY/);
   } finally {
     await fs.rm(tempDirectory, { recursive: true, force: true });
   }

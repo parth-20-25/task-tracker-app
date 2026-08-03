@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/tasktracker_test";
@@ -174,4 +176,48 @@ test("project scope API routes are mounted by createApp before auth", async () =
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("removed feature API paths return 404 before authentication", async () => {
+  const server = await listen(createApp());
+
+  try {
+    const { port } = server.address();
+    for (const removedPath of ["/api/issues", "/api/issues/123/comments", "/api/shifts", "/api/machines/123"]) {
+      const response = await fetch(`http://127.0.0.1:${port}${removedPath}`);
+      assert.equal(response.status, 404, removedPath);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("active bootstrap and permissions no longer recreate removed features", () => {
+  const bootstrap = fs.readFileSync(path.join(__dirname, "..", "repositories", "bootstrapRepository.js"), "utf8");
+  const constants = fs.readFileSync(path.join(__dirname, "..", "config", "constants.js"), "utf8");
+
+  for (const obsolete of [
+    "CREATE TABLE IF NOT EXISTS issues",
+    "CREATE TABLE IF NOT EXISTS issue_comments",
+    "CREATE TABLE IF NOT EXISTS shifts",
+    "CREATE TABLE IF NOT EXISTS machines",
+    "ADD COLUMN IF NOT EXISTS shift_id",
+    "ADD COLUMN IF NOT EXISTS machine_id",
+    "ADD COLUMN IF NOT EXISTS machine_name",
+    "can_manage_shifts",
+    "can_manage_machines",
+  ]) {
+    assert.equal(bootstrap.includes(obsolete) || constants.includes(obsolete), false, obsolete);
+  }
+});
+
+test("forward cleanup migration drops only feature-owned schema in dependency order", () => {
+  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "20260731_remove_issues_shifts_machines.sql"), "utf8");
+
+  assert.ok(migration.indexOf("DROP TABLE IF EXISTS issue_comments") < migration.indexOf("DROP TABLE IF EXISTS issues"));
+  assert.match(migration, /DROP COLUMN IF EXISTS shift_id/);
+  assert.match(migration, /DROP COLUMN IF EXISTS machine_id/);
+  assert.match(migration, /DELETE FROM role_permissions/);
+  assert.doesNotMatch(migration, /DROP TABLE[^;]+CASCADE/i);
+  assert.match(migration, /COMMIT;\s*$/);
 });

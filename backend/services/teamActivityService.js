@@ -38,6 +38,23 @@ function formatCurrentTask(task) {
   return `${fixture ? `${project} · ${fixture}` : project}\n${taskName(task)}`;
 }
 
+function taskSummary(task, employeeName) {
+  const proofUrls = Array.isArray(task.proof_url)
+    ? task.proof_url.filter(Boolean)
+    : task.proof_url ? [task.proof_url] : [];
+  const project = task.resolved_project_no || task.project_no || "—";
+  const fixture = task.resolved_fixture_no || task.resolved_fixture_name || task.fixture_no || task.quantity_index;
+
+  return {
+    task_id: String(task.task_id),
+    project_no: project,
+    task_or_fixture: fixture || task.title || task.internal_identifier || task.description || "—",
+    stage: task.resolved_stage_name || task.stage || "—",
+    status: task.status || "—",
+    assignee: employeeName,
+    proof_urls: proofUrls,
+  };
+}
 function buildTeamActivity(rows, now = new Date()) {
   const employees = new Map();
 
@@ -83,6 +100,7 @@ function buildTeamActivity(rows, now = new Date()) {
             : "No assigned tasks",
       total_active_tasks: tasks.length,
       status,
+      tasks: tasks.map((task) => taskSummary(task, employee.employee_name)),
     };
   });
 }
@@ -98,4 +116,5 @@ module.exports = {
   formatCurrentTask,
   isActiveTeamTask,
   listTeamActivity,
+  taskSummary,
 };

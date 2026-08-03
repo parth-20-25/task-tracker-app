@@ -19,10 +19,6 @@ const {
   deleteDepartmentSubdivision,
   deleteRole,
   deleteUser,
-  saveShift,
-  deleteShift,
-  saveMachine,
-  deleteMachine,
   toggleEscalationRule,
   deleteEscalationRule,
   updateUserStatus,
@@ -46,8 +42,6 @@ const {
 const { listRoles } = require("../repositories/rolesRepository");
 const { listDepartments, listAllDepartments } = require("../repositories/departmentsRepository");
 const { listAuditLogs } = require("../repositories/auditRepository");
-const { listShifts } = require("../repositories/shiftsRepository");
-const { listMachines } = require("../repositories/machinesRepository");
 const { HasPermission, isProjectAuthorityRole } = require("../services/accessControlService");
 const {
   listEscalationRules,
@@ -145,47 +139,6 @@ router.delete(
   asyncHandler(async (req, res) => sendSuccess(res, await deleteDepartment(req.user, req.params.departmentId))),
 );
 
-router.get(
-  "/shifts",
-  authorize(PERMISSIONS.MANAGE_SHIFTS),
-  asyncHandler(async (_req, res) => sendSuccess(res, await listShifts())),
-);
-
-router.put(
-  "/shifts/:shiftId",
-  authorize(PERMISSIONS.MANAGE_SHIFTS),
-  asyncHandler(async (req, res) => sendSuccess(res, await saveShift(req.user, {
-    ...req.body,
-    id: req.params.shiftId,
-  }))),
-);
-
-router.delete(
-  "/shifts/:shiftId",
-  authorize(PERMISSIONS.MANAGE_SHIFTS),
-  asyncHandler(async (req, res) => sendSuccess(res, await deleteShift(req.user, req.params.shiftId))),
-);
-
-router.get(
-  "/machines",
-  authorize(PERMISSIONS.MANAGE_MACHINES),
-  asyncHandler(async (_req, res) => sendSuccess(res, await listMachines())),
-);
-
-router.put(
-  "/machines/:machineId",
-  authorize(PERMISSIONS.MANAGE_MACHINES),
-  asyncHandler(async (req, res) => sendSuccess(res, await saveMachine(req.user, {
-    ...req.body,
-    id: req.params.machineId,
-  }))),
-);
-
-router.delete(
-  "/machines/:machineId",
-  authorize(PERMISSIONS.MANAGE_MACHINES),
-  asyncHandler(async (req, res) => sendSuccess(res, await deleteMachine(req.user, req.params.machineId))),
-);
 
 router.get(
   "/audit-logs",

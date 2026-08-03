@@ -77,6 +77,7 @@ test("repository scopes both set-based queries to the authenticated employee and
   assert.deepEqual(calls[1].params, ["LEAD-1"]);
   assert.match(calls[0].sql, /build self \+ descendant tree only|visible_users = self \+ descendants/i);
   assert.match(calls[0].sql, /SELECT DISTINCT/);
+  assert.doesNotMatch(calls[0].sql, /NOT IN \('team_leader'/);
 });
 
 test("Leader sees only rows returned from the authenticated team mapping", async () => {
@@ -101,6 +102,10 @@ test("duplicate mappings and task joins do not duplicate employees or counts", (
   assert.equal(result[0].total_active_tasks, 1);
 });
 
+test("expanded task details preserve the scoped employee and proof links", () => {
+  const result = buildTeamActivity([row({ proof_url: ["/uploads/task-proofs/proof.png"] })], now)[0];
+  assert.deepEqual(result.tasks, [{ task_id: "1", project_no: "25-119", task_or_fixture: "F01", stage: "Drafting", status: "assigned", assignee: "Rahul Patil", proof_urls: ["/uploads/task-proofs/proof.png"] }]);
+});
 test("Current Task uses the selected single-current-task record", () => {
   const result = buildTeamActivity([row({ status: "in_progress", current_task_id: 1 })], now)[0];
   assert.equal(result.current_task, "25-119 · F01\nDrafting");
